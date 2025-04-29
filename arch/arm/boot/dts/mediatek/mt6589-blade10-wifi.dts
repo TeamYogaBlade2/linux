@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Copyright (c) 2025 akku
+ * Author: akku <akkun11.open@gmail.com>
+ *
+ */
+
+/dts-v1/;
+#include "mt6589-blade10.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
+	compatible = "lenovo,blade10_wifi", "lenovo,blade10", "mediatek,mt6589";
+};

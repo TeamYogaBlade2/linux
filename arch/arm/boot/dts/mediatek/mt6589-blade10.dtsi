@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Copyright (c) 2025 akku
+ * Author: akku <akkun11.open@gmail.com>
+ *
+ */
+
+/dts-v1/;
+#include "mt6589.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 10";
+	compatible = "lenovo,blade10", "mediatek,mt6589";
+
+	memory {
+		device_type = "memory";
+		reg = <0x80000000 0x40000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		mtkfb_region: memory@bf600000{
+			reg = <0xbf600000 (1280 * 800 * 2 * 2)>;
+			no-map;
+		};
+	};
+
+	aliases {
+		display0 = &framebuffer0;
+	};
+
+	chosen {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		framebuffer0: framebuffer@bf600000 {
+			compatible = "simple-framebuffer";
+			reg = <0xbf600000 (1280 * 800 * 2)>;
+			width = <1280>;
+			height = <800>;
+			stride = <(1280 * 2)>;
+			format = "r5g6b5";
+		};
+
+	};
+};
+
