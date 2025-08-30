@@ -17,6 +17,9 @@
 	};
 
 	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
 		ranges;
 
 		mtkfb_region: memory@bf600000{
