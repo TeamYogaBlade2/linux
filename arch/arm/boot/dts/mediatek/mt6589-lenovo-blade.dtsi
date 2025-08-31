@@ -11,6 +11,10 @@
 	#size-cells = <1>;
 	compatible = "lenovo,blade", "mediatek,mt6589";
 
+	chosen {
+		linux,initrd-start = <0x82600000>;
+	};
+
 	memory {
 		device_type = "memory";
 		reg = <0x80000000 0x40000000>;
