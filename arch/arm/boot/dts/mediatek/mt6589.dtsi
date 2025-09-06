@@ -65,14 +65,6 @@
 			clock-frequency = <26000000>;
 			#clock-cells = <0>;
 		};
-
-		topckgen: syscon@f0000000 {
-			compatible = "mediatek,mt6589-topckgen",
-				     "mediatek,mt2701-topckgen",
-				     "syscon";
-			reg = <0xf0000000 0x1000>;
-			#clock-cells = <1>;
-		};
 	};
 
 	soc {
