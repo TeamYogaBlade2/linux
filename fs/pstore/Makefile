@@ -18,3 +18,6 @@ obj-$(CONFIG_PSTORE_ZONE)	+= pstore_zone.o
 
 pstore_blk-objs += blk.o
 obj-$(CONFIG_PSTORE_BLK)	+= pstore_blk.o
+
+pstore_mtk_ram-objs += mtk_ram.o
+obj-$(CONFIG_PSTORE_MTK_RAM)	+= pstore_mtk_ram.o

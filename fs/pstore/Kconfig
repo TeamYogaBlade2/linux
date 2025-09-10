@@ -189,3 +189,13 @@ config PSTORE_BLK_FTRACE_SIZE
 
 	  NOTE that, both Kconfig and module parameters can configure
 	  pstore/blk, but module parameters have priority over Kconfig.
+
+config PSTORE_MTK_RAM
+	tristate "Pstore for MediaTek ramconsole"
+	depends on PSTORE
+	depends on HAS_IOMEM
+	depends on ARCH_MEDIATEK
+	depends on !PSTORE_COMPRESS
+	help
+	  based on mediatek/kernel/drivers/ram_console/mtk_ram_console.c
+	  Compression is not supported for compatibility with the downstream kernel.
