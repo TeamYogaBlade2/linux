@@ -65,6 +65,26 @@
 			clock-frequency = <26000000>;
 			#clock-cells = <0>;
 		};
+
+		topckgen: syscon@10000000 {
+			compatible = "mediatek,mt6589-topckgen", "syscon";
+			reg = <0x10000000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		infracfg: syscon@10001000 {
+			compatible = "mediatek,mt6589-infracfg", "syscon";
+			reg = <0x10001000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+		};
+
+		pericfg: syscon@10003000 {
+			compatible = "mediatek,mt6589-pericfg", "syscon";
+			reg = <0x10003000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+		};
 	};
 
 	soc {

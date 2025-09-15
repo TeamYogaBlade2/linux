@@ -2,3 +2,66 @@
 /*
  * Author: akku <akkun11.open@gmail.com>
  */
+
+/* clock IDs from mt_clkmgr.h */
+
+/* INFRACFG */
+#define CLK_INFRA_DBGCLK	64
+#define CLK_INFRA_SMI		65
+#define CLK_INFRA_SPI0	66
+#define CLK_INFRA_AUDIO	69
+#define CLK_INFRA_CEC	70
+#define CLK_INFRA_MFGAXI	71
+#define CLK_INFRA_M4U	72
+#define CLK_INFRA_MD1MCUAXI	73
+#define CLK_INFRA_MD1HWMIXAXI	74
+#define CLK_INFRA_MD1AHB	75
+#define CLK_INFRA_MD2MCUAXI	76
+#define CLK_INFRA_MD2HWMIXAXI	77
+#define CLK_INFRA_MD2AHB	78
+#define CLK_INFRA_CPUM	79
+#define CLK_INFRA_KP	80
+#define CLK_INFRA_CCIF0	84
+#define CLK_INFRA_CCIF1	85
+#define CLK_INFRA_PMICSPI	86
+#define CLK_INFRA_PMICWRAP	87
+
+/* PERICFG */
+#define CLK_PERI0_NFI	 0
+#define CLK_PERI0_THERM	 1
+#define CLK_PERI0_PWM1	 2
+#define CLK_PERI0_PWM2	 3
+#define CLK_PERI0_PWM3	 4
+#define CLK_PERI0_PWM4	 5
+#define CLK_PERI0_PWM5	 6
+#define CLK_PERI0_PWM6	 7
+#define CLK_PERI0_PWM7	 8
+#define CLK_PERI0_PWM	 9
+#define CLK_PERI0_USB0	 10
+#define CLK_PERI0_USB1	 11
+#define CLK_PERI0_APDMA	 12
+#define CLK_PERI0_MSDC0	 13
+#define CLK_PERI0_MSDC1	 14
+#define CLK_PERI0_MSDC2	 15
+#define CLK_PERI0_MSDC3	 16
+#define CLK_PERI0_MSDC4	 17
+#define CLK_PERI0_APHIF	 18
+#define CLK_PERI0_MDHIF	 19
+#define CLK_PERI0_NLI	 20
+#define CLK_PERI0_IRDA	 21
+#define CLK_PERI0_UART0	 22
+#define CLK_PERI0_UART1	 23
+#define CLK_PERI0_UART2	 24
+#define CLK_PERI0_UART3	 25
+#define CLK_PERI0_I2C0	 26
+#define CLK_PERI0_I2C1	 27
+#define CLK_PERI0_I2C2	 28
+#define CLK_PERI0_I2C3	 29
+#define CLK_PERI0_I2C4	 30
+#define CLK_PERI0_I2C5	 31
+    
+#define CLK_PERI1_I2C6	 32
+#define CLK_PERI1_WRAP	 33
+#define CLK_PERI1_AUXADC	 34
+#define CLK_PERI1_SPI1	 35
+#define CLK_PERI1_FHCTL	 36
