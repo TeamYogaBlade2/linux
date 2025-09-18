@@ -10,6 +10,30 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+
+/* TOPRGU - topckgen? */
+
+static struct mtk_composite top_muxes[] = {
+	/* CLK_CFG_0 */
+	/* CLK_CFG_1 */
+	/* CLK_CFG_2 */
+	/* CLK_CFG_3 */
+	/* CLK_CFG_4 */
+	/* CLK_CFG_5 */
+	/* CLK_CFG_6 */
+	/* CLK_CFG_7 */
+	/* CLK_MISC_CFG_2 */
+	/* CLK_CFG_8 */
+};
+
+static const struct mtk_clk_desc topck_desc = {
+	.composite_clks = top_muxes,
+	.num_composite_clks = ARRAY_SIZE(top_muxes),
+};
+
+
+/* INFRACFG */
+
 #define GATE_INFRA(_id, _name, _parent, _shift)				\
 	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
@@ -45,6 +69,7 @@ static const struct mtk_clk_desc infra_desc = {
 	.clks = infra_clks,
 	.num_clks = ARRAY_SIZE(infra_clks),
 };
+
 
 static const struct of_device_id of_match_clk_mt6589[] = {
 	{ .compatible = "mediatek,mt6589-topckgen", .data = &topck_desc },

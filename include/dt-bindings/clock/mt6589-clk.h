@@ -5,6 +5,48 @@
 
 /* clock IDs from mt_clkmgr.h */
 
+
+/* MUXs */
+/* CLK_CFG_0 */
+#define CLK_TOP_MUX_MFG	0
+#define CLK_TOP_MUX_IRDA	1
+
+/* CLK_CFG_1 */
+#define CLK_TOP_MUX_CAM	2
+#define CLK_TOP_MUX_AUDINTBUS	3
+#define CLK_TOP_MUX_JPG	4
+#define CLK_TOP_MUX_DISP	5
+
+/* CLK_CFG_2 */
+#define CLK_TOP_MUX_MSDC1	6
+#define CLK_TOP_MUX_MSDC2	7
+#define CLK_TOP_MUX_MSDC3	8
+#define CLK_TOP_MUX_MSDC4	9
+
+/* CLK_CFG_3 */
+#define CLK_TOP_MUX_USB20	10
+
+/* CLK_CFG_4 */
+#define CLK_TOP_MUX_HYD	11
+#define CLK_TOP_MUX_VENC	12
+#define CLK_TOP_MUX_SPI	13
+#define CLK_TOP_MUX_UART	14
+
+/* CLK_CFG_6 */
+#define CLK_TOP_MUX_CAMTG	15
+// #define CLK_TOP_MUX_FD	16 */
+#define CLK_TOP_MUX_AUDIO	16
+
+/* CLK_CFG_7 */
+#define CLK_TOP_MUX_VDEC	17
+#define CLK_TOP_MUX_DPILVDS	18
+
+/* CLK_CFG_8 */
+#define CLK_TOP_MUX_PMICSPI	19
+#define CLK_TOP_MUX_MSDC0	20
+#define CLK_TOP_MUX_SMI_MFG_AS	21
+
+
 /* INFRACFG */
 #define CLK_INFRA_DBGCLK	64
 #define CLK_INFRA_SMI		65
@@ -25,6 +67,7 @@
 #define CLK_INFRA_CCIF1	85
 #define CLK_INFRA_PMICSPI	86
 #define CLK_INFRA_PMICWRAP	87
+
 
 /* PERICFG */
 #define CLK_PERI0_NFI	 0
