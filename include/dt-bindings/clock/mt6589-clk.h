@@ -6,6 +6,18 @@
 /* clock IDs from mt_clkmgr.h */
 
 
+/* APMIXEDSYS */
+#define CLK_APMIXED_ARMPLL	0
+#define CLK_APMIXED_MAINPLL	1
+#define CLK_APMIXED_MSDCPLL	2
+#define CLK_APMIXED_TVDPLL	3
+#define CLK_APMIXED_LVDSPLL	4
+#define CLK_APMIXED_UNIVPLL	5
+#define CLK_APMIXED_MMPLL	6
+#define CLK_APMIXED_ISPPLL	7
+#define CLK_APMIXED_NR_CLK	8
+
+
 /* MUXs */
 /* CLK_CFG_0 */
 #define CLK_TOP_MUX_MFG	0
