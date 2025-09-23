@@ -17,6 +17,7 @@
  *	> #define CLK_CFG_0           (TOPRGU_BASE + 0x0140)
  *	but many SoCs use 0x0040 as CLK_CFG_0
  * FIXME: ops and flags
+ * FIXME: MUX_AUDINTBUS siblings
  */
 
 static struct mtk_composite top_muxes[] = {
