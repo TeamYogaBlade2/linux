@@ -15,8 +15,9 @@
 #define MT8590_PLL_FMAX		(2000 * MHZ)
 #define CON0_MT8590_RST_BAR	BIT(27)
 
-#define PLL(_id, _name, _reg, _pwr_reg, _en_mask, _flags, _pcwbits, _pd_reg, \
-			_pd_shift, _tuner_reg, _pcw_reg, _pcw_shift) {	\
+#define PLL(_id, _name, _reg, _pwr_reg, _en_mask, \
+			_flags, _pcwbits, _pd_reg, _pd_shift, \
+			_tuner_reg, _pcw_reg, _pcw_shift) {	\
 		.id = _id,						\
 		.name = _name,						\
 		.reg = _reg,						\
@@ -34,22 +35,24 @@
 	}
 
 static const struct mtk_pll_data plls[] = {
-	// PLL(CLK_APMIXED_ARMPLL,  "armpll",  0x0200, 0x0218, 0x80000001,
-	// 	PLL_AO, <unknown>,),
-	// PLL(CLK_APMIXED_MAINPLL, "mainpll", 0x021C, 0x0234, 0xF0000001,
-	// 	HAVE_RST_BAR, <unknown>,),
-	// PLL(CLK_APMIXED_MSDCPLL, "msdcpll", 0x0250, 0x0268, 0x80000001,
-	// 	0, <unknown>,),
-	// PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  0x026C, 0x0284, 0x80000001,
-	// 	0, <unknown>,),
-	// PLL(CLK_APMIXED_LVDSPLL, "lvdspll", 0x0288, 0x02A0, 0x80000001,
-	// 	0, <unknown>),
-	// PLL(CLK_APMIXED_UNIVPLL, "univpll", 0x0238, <unknown>, 0xF3000001,
-	// 	HAVE_RST_BAR, <unknown>),
-	// PLL(CLK_APMIXED_MMPLL,   "mmpll",   0x0240, <unknown>, 0xF0000001,
-	// 	0, <unknown>),
-	// PLL(CLK_APMIXED_ISPPLL,  "ispll",   0x0248, <unknown>, 0x80000001,
-	// 	0, <unknown>),
+/*
+	PLL(CLK_APMIXED_ARMPLL,  "armpll",  0x0200, 0x0218, 0x80000001,
+		PLL_AO, <unknown>,),
+	PLL(CLK_APMIXED_MAINPLL, "mainpll", 0x021C, 0x0234, 0xF0000001,
+		PLL_AO | HAVE_RST_BAR, <unknown>,),
+	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", 0x0250, 0x0268, 0x80000001,
+		PLL_AO, <unknown>,),
+	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  0x026C, 0x0284, 0x80000001,
+		PLL_AO, <unknown>,),
+	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", 0x0288, 0x02A0, 0x80000001,
+		PLL_AO, <unknown>),
+	PLL(CLK_APMIXED_UNIVPLL, "univpll", 0x0238, <unknown>, 0xF3000001,
+		HAVE_RST_BAR, <unknown>),
+	PLL(CLK_APMIXED_MMPLL,   "mmpll",   0x0240, <unknown>, 0xF0000001,
+		HAVE_RST_BAR, <unknown>),
+	PLL(CLK_APMIXED_ISPPLL,  "ispll",   0x0248, <unknown>, 0x80000001,
+		0, <unknown>),
+*/
 };
 
 /* init logic from MT2712 */
