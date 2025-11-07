@@ -35,23 +35,23 @@
 	}
 
 static const struct mtk_pll_data plls[] = {
-/*
 	PLL(CLK_APMIXED_ARMPLL,  "armpll",  0x0200, 0x0218, 0x80000001,
-		PLL_AO, 21, 0x0218, <unknown>, <unknown>, 0x0204, <unknown>),
+		PLL_AO, 21, 0x0218, 0, 0x0, 0x0204, 0),
 	PLL(CLK_APMIXED_MAINPLL, "mainpll", 0x021C, 0x0234, 0xF0000001,
-		HAVE_RST_BAR, 21, 0x0234, <unknown>, <unknown>, 0x0220, <unknown>),
+		HAVE_RST_BAR, 21, 0x0234, 0, 0x0, 0x0220, 0),
 	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", 0x0250, 0x0268, 0x80000001,
-		0, 21, 0x0268, <unknown>, <unknown>, 0x0254, <unknown>),
+		0, 21, 0x0268, 0, 0x0, 0x0254, 0),
 	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  0x026C, 0x0284, 0x80000001,
-		0, 21, 0x0284, <unknown>, <unknown>, 0x0270, <unknown>),
+		0, 21, 0x0284, 0, 0x0, 0x0270, 0),
 	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", 0x0288, 0x02A0, 0x80000001,
-		0, 21, 0x02A0, <unknown>, <unknown>, 0x028C, <unknown>),
+		0, 21, 0x02A0, 0, 0x0, 0x028C, 0),
+/*
 	PLL(CLK_APMIXED_UNIVPLL, "univpll", 0x0238, <unknown>, 0xF3000001,
-		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>),
+		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
 	PLL(CLK_APMIXED_MMPLL,   "mmpll",   0x0240, <unknown>, 0xF0000001,
-		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>),
+		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
 	PLL(CLK_APMIXED_ISPPLL,  "ispll",   0x0248, <unknown>, 0x80000001,
-		0, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>, <unknown>),
+		0, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
 */
 };
 
