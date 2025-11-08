@@ -13,7 +13,7 @@
 
 /* FIXME: MT6589 config */
 #define MT8590_PLL_FMAX		(2000 * MHZ)
-#define CON0_MT8590_RST_BAR	BIT(27)
+#define CON0_MT6589_RST_BAR	BIT(27)
 
 #define PLL(_id, _name, _reg, _pwr_reg, _en_mask, \
 			_flags, _pcwbits, _pd_reg, _pd_shift, \
