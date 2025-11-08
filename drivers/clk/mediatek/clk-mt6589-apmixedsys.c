@@ -50,7 +50,7 @@ static const struct mtk_pll_data plls[] = {
 		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
 	PLL(CLK_APMIXED_MMPLL,   "mmpll",   0x0240, <unknown>, 0xF0000001,
 		HAVE_RST_BAR, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
-	PLL(CLK_APMIXED_ISPPLL,  "ispll",   0x0248, <unknown>, 0x80000001,
+	PLL(CLK_APMIXED_ISPPLL,  "isppll",   0x0248, <unknown>, 0x80000001,
 		0, <unknown>, <unknown>, <unknown>, 0x0, <unknown>, <unknown>),
 */
 };
