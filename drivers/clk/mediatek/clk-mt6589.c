@@ -20,6 +20,14 @@
  * FIXME: MUX_AUDINTBUS siblings
  */
 
+static const struct mtk_fixed_factor top_divs[] = {
+	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "mainpll", 1, 6),
+	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "mainpll", 1, 8),
+	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "mainpll", 1, 12),
+	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5),
+	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll", 1, 6),
+};
+
 static struct mtk_composite top_muxes[] = {
 	// /* CLK_CFG_0 */
 	// MUX_GATE(CLK_TOP_MUX_MFG, "mfg_sel", mfg_parents,
@@ -87,8 +95,17 @@ static struct mtk_composite top_muxes[] = {
 };
 
 static const struct mtk_clk_desc topck_desc = {
+	// .clks = top_clks,
+	// .num_clks = ARRAY_SIZE(top_clks),
+	// .fixed_clks = top_fixed_clks,
+	// .num_fixed_clks = ARRAY_SIZE(top_fixed_clks),
+	.factor_clks = top_divs,
+	.num_factor_clks = ARRAY_SIZE(top_divs),
 	.composite_clks = top_muxes,
 	.num_composite_clks = ARRAY_SIZE(top_muxes),
+	// .divider_clks = top_adj_divs,
+	// .num_divider_clks = ARRAY_SIZE(top_adj_divs),
+	// .clk_lock = &mt6589_clk_lock,
 };
 
 

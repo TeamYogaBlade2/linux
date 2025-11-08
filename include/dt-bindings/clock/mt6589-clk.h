@@ -18,6 +18,14 @@
 #define CLK_APMIXED_NR_CLK	8
 
 
+/* TOPCKGEN */
+#define CLK_TOP_SYSPLL_D3	1
+#define CLK_TOP_SYSPLL_D4	4
+#define CLK_TOP_SYSPLL_D6	6
+#define CLK_TOP_UNIVPLL_D5	7
+#define CLK_TOP_UNIVPLL2_D2	8
+
+
 /* MUXs */
 /* CLK_CFG_0 */
 #define CLK_TOP_MUX_MFG	0
