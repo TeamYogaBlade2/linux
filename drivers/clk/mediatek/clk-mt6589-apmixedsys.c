@@ -34,7 +34,8 @@
 		.pcw_shift = _pcw_shift,				\
 	}
 
-// FIXME: pd_reg/pd_shift, comments are from tooniis port.
+// FIXME: pd_reg/pd_shift, comments are from tooniis port. 
+// pd is Post-Divider, not Power-Down
 
 static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_ARMPLL,  "armpll",  0x0200, 0x0218, 0x80000001,
