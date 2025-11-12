@@ -48,6 +48,13 @@
 		compatible = "simple-bus";
 		ranges;
 
+		clk26m: oscillator@0 {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <26000000>;
+			clock-output-names = "clk26m";
+		};
+
 		system_clk: dummy13m {
 			compatible = "fixed-clock";
 			clock-frequency = <13000000>;
