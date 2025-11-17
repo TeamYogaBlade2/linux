@@ -19,6 +19,7 @@
 
 
 /* TOPCKGEN */
+#deine CLK_TOP_SYSPLL		1
 /* FIXME: Frequency could be GPU clock */
 /* 403MHz */
 #define CLK_TOP_SYSPLL_D2	2

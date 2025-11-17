@@ -21,9 +21,10 @@
  */
 
 static const struct mtk_fixed_factor top_divs[] = {
-	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "mainpll", 1, 6),
-	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "mainpll", 1, 8),
-	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "mainpll", 1, 12),
+	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2),
+	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "syspll_ck", 1, 3),
+	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "syspll_ck", 1, 4),
+	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "syspll_ck", 1, 6),
 	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5),
 	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll", 1, 6),
 };
