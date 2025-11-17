@@ -28,6 +28,7 @@ properties:
               - mediatek,mt2712-mfgcfg
               - mediatek,mt2712-vdecsys
               - mediatek,mt2712-vencsys
+              - mediatek,mt6589-audsys
               - mediatek,mt6589-dispsys
               - mediatek,mt6589-imgsys
               - mediatek,mt6589-mfgsys

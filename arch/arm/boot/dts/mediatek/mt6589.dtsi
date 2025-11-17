@@ -105,6 +105,12 @@
 			#clock-cells = <1>;
 		};
 
+		audsys: syscon@0x12070000 {
+			compatible = "mediatek,mt6589-audsys", "syscon";
+			reg = <0x12070000, 0x1000>;
+			#clock-cells = <1>;
+		};
+
 		dispsys: syscon@0x14000000 {
 			compatible = "mediatek,mt6589-dispsys", "syscon";
 			reg = <0x14000000, 0x1000>;
