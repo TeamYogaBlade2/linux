@@ -11,12 +11,21 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 
 static const struct mtk_gate_regs disp0_cg_regs = {
-	.set_ofs = 0x0100,
-	.clr_ofs = 0x0104,
-	.sta_ofs = 0x0108,
+	.set_ofs = 0x0104,
+	.clr_ofs = 0x0108,
+	.sta_ofs = 0x0100,
+};
+
+static const struct mtk_gate_regs disp1_cg_regs = {
+	.set_ofs = 0x0114,
+	.clr_ofs = 0x0118,
+	.sta_ofs = 0x0110,
 };
 
 #define GATE_DISP0(_id, _name, _parent, _shift)				\
+	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr_inv)
+
+#define GATE_DISP1(_id, _name, _parent, _shift)				\
 	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr_inv)
 
 static const struct mtk_gate disp_clks[] = {

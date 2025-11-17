@@ -11,13 +11,13 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 
 static const struct mtk_gate_regs vdec_cg_regs = {
-	.set_ofs = 0x0000,
-	.clr_ofs = 0x0004,
+	.set_ofs = 0x0004,
+	.clr_ofs = 0x0000,
 };
 
 static const struct mtk_gate_regs larb_cg_regs = {
-	.set_ofs = 0x0008,
-	.clr_ofs = 0x000C,
+	.set_ofs = 0x000c,
+	.clr_ofs = 0x0008,
 };
 
 #define GATE_VDEC(_id, _name, _parent, _shift)				\

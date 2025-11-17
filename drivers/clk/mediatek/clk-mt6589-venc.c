@@ -11,8 +11,8 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 
 static const struct mtk_gate_regs venc_cg_regs = {
-	.set_ofs = 0x0004,
-	.clr_ofs = 0x0008,
+	.set_ofs = 0x0008,
+	.clr_ofs = 0x0004,
 	.sta_ofs = 0x0000,
 };
 
