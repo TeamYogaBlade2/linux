@@ -24,7 +24,7 @@
 		.pwr_reg = _pwr_reg,					\
 		.en_mask = _en_mask,					\
 		.flags = _flags,					\
-		.rst_bar_mask = CON0_MT8590_RST_BAR,			\
+		.rst_bar_mask = CON0_MT6589_RST_BAR,			\
 		.fmax = MT8590_PLL_FMAX,				\
 		.pcwbits = _pcwbits,					\
 		.pd_reg = _pd_reg,					\
