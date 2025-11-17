@@ -29,6 +29,8 @@
 /* MAINPLL /2 / 6 */
 #define CLK_TOP_SYSPLL_D6	6
 
+/* must be univpll2 parent */
+#define CLK_TOP_UNIVPLL_D3	16
 /* UNIVPLL / 5 */
 #define CLK_TOP_UNIVPLL_D5	7
 /* GPU: 312MHz */
