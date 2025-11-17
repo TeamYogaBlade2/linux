@@ -129,7 +129,50 @@ config COMMON_CLK_MT6589
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	select COMMON_CLK_MEDIATEK
 	help
-	  This enables drivers for clocks on the MediaTek MT6735 SoC.
+	  This enables drivers for main clocks (topckgen, pericfg,
+	  infracfg) on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_AUDSYS
+	tristate "Clock driver for MediaTek MT6589 audsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by audsys
+	  on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_DISPSYS
+	tristate "Clock driver for MediaTek MT6589 dispsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by dispsys
+	  on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_IMGSYS
+	tristate "Clock driver for MediaTek MT6589 imgsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by imgsys
+	  on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_MFGSYS
+	tristate "Clock driver for MediaTek MT6589 mfgsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by mfgsys
+	  on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_VDECSYS
+	tristate "Clock driver for MediaTek MT6589 vdecsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by vdecsys
+	  on the MediaTek MT6589 SoC.
+
+config COMMON_CLK_MT6589_VENCSYS
+	tristate "Clock driver for MediaTek MT6589 vencsys"
+	depends on COMMON_CLK_MT6589
+	help
+	  This enables a driver for clocks provided by vencsys
+	  on the MediaTek MT6589 SoC.
 
 config COMMON_CLK_MT6735
 	tristate "Main clock drivers for MediaTek MT6735"
