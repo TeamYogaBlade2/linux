@@ -21,9 +21,9 @@
 /* TOPCKGEN */
 #deine CLK_TOP_SYSPLL		1
 /* FIXME: Frequency could be GPU clock */
-/* 403MHz */
+/* GPU: 403MHz */
 #define CLK_TOP_SYSPLL_D2	2
-/* MAINPLL / 3 / 2 = 268MHz */
+/* MAINPLL / 3 / 2 = GPU: 268MHz */
 #define CLK_TOP_SYSPLL_D3	3
 /* MAINPLL / 2 / 4 */
 #define CLK_TOP_SYSPLL_D4	4
@@ -32,22 +32,22 @@
 
 /* UNIVPLL / 5 */
 #define CLK_TOP_UNIVPLL_D5	7
-/* 312MHz */
+/* GPU: 312MHz */
 #define CLK_TOP_UNIVPLL1_D2	8
-/* 156MHz */
+/* GPU: 156MHz */
 #define CLK_TOP_UNIVPLL1_D4	9
 /* UNIVPLL / 3 / 2 */
 #define CLK_TOP_UNIVPLL2_D2	10
 /* unknown */
 #define CLK_TOP_UNIVPLL2_D4	15
 
-/* 476MHz */
+/* GPU: 476MHz */
 #define CLK_TOP_MMPLL_D3	11
-/* 357MHz */
+/* GPU: 357MHz */
 #define CLK_TOP_MMPLL_D4	12
-/* 286MHz */
+/* GPU: 286MHz */
 #define CLK_TOP_MMPLL_D5	13
-/* 238MHz */
+/* GPU: 238MHz */
 #define CLK_TOP_MMPLL_D6	14
 
 /* MUXs */
