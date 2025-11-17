@@ -29,6 +29,8 @@
 /* MAINPLL /2 / 6 */
 #define CLK_TOP_SYSPLL_D6	6
 
+/* may be univpll1 parent */
+#define CLK_TOP_UNIVPLL_D2	17
 /* must be univpll2 parent */
 #define CLK_TOP_UNIVPLL_D3	16
 /* UNIVPLL / 5 */
