@@ -105,9 +105,22 @@ static struct mtk_composite top_muxes[] = {
 	// 	0x0164, 16, 2, 23),
 };
 
+static const struct mtk_gate_regs topck_cg_regs = {
+	.set_ofs = 0x0170,
+	.clr_ofs = 0x0174,
+	.sta_ofs = 0x0178,
+};
+
+#define GATE_TOPCK(_id, _name, _parent, _shift)				\
+	GATE_MTK(_id, _name, _parent, &topck_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+
+static const struct mtk_gate top_clks[] = {
+	GATE_TOPCK(CLK_TOPCK_PMICSPI, "topck_pmicspi", "pmicspi_sel", 0),
+};
+
 static const struct mtk_clk_desc topck_desc = {
-	// .clks = top_clks,
-	// .num_clks = ARRAY_SIZE(top_clks),
+	.clks = top_clks,
+	.num_clks = ARRAY_SIZE(top_clks),
 	// .fixed_clks = top_fixed_clks,
 	// .num_fixed_clks = ARRAY_SIZE(top_fixed_clks),
 	.factor_clks = top_divs,
