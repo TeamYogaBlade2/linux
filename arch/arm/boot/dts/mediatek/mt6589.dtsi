@@ -93,6 +93,12 @@
 			#reset-cells = <1>;
 		};
 
+		mfgsys: syscon@0x10206000 {
+			compatible = "mediatek,mt6589-mfgsys", "syscon";
+			reg = <0x10206000, 0x1000>;
+			#clock-cells = <1>;
+		};
+
 		apmixedsys: syscon@10209000 {
 			compatible = "mediatek,mt6589-apmixedsys", "syscon";
 			reg = <0x10209000 0x1000>;
