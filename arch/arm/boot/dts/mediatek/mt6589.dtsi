@@ -104,6 +104,12 @@
 			reg = <0x14000000, 0x1000>;
 			#clock-cells = <1>;
 		};
+
+		imgsys: syscon@0x15000000 {
+			compatible = "mediatek,mt6589-imgsys", "syscon";
+			reg = <0x15000000, 0x1000>;
+			#clock-cells = <1>;
+		};
 	};
 
 	soc {
