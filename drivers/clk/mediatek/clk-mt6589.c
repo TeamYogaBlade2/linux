@@ -20,6 +20,8 @@
  * FIXME: MUX_AUDINTBUS siblings
  */
 
+static DEFINE_SPINLOCK(mt6589_clk_lock);
+
 static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2),
 	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "syspll_ck", 1, 2),
@@ -129,7 +131,7 @@ static const struct mtk_clk_desc topck_desc = {
 	.num_composite_clks = ARRAY_SIZE(top_muxes),
 	// .divider_clks = top_adj_divs,
 	// .num_divider_clks = ARRAY_SIZE(top_adj_divs),
-	// .clk_lock = &mt6589_clk_lock,
+	.clk_lock = &mt6589_clk_lock,
 };
 
 
