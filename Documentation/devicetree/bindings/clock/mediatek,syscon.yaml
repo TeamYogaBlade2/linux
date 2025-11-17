@@ -32,6 +32,7 @@ properties:
               - mediatek,mt6589-dispsys
               - mediatek,mt6589-imgsys
               - mediatek,mt6589-mfgsys
+              - mediatek,mt6589-vdecsys
               - mediatek,mt6735-imgsys
               - mediatek,mt6735-mfgcfg
               - mediatek,mt6735-vdecsys
