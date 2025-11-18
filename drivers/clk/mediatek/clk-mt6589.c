@@ -41,14 +41,19 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_MMPLL_D6, "mmpll_d6", "mmpll", 1, 6),
 };
 
+static const char * const uart_parents[] = {
+	"clk26m",
+	"univpll2_d8", // unknown
+};
+
 static struct mtk_composite top_muxes[] = {
-	// /* CLK_CFG_0 */
+	/* CLK_CFG_0 */
 	// MUX_GATE(CLK_TOP_MUX_MFG, "mfg_sel", mfg_parents,
 	// 	0x0140, 16, 3, 23),
 	// MUX_GATE(CLK_TOP_MUX_IRDA, "irda_sel", irda_parents,
 	// 	0x0140, 24, 2, 31),
-	//
-	// /* CLK_CFG_1 */
+
+	/* CLK_CFG_1 */
 	// MUX_GATE(CLK_TOP_MUX_CAM, "cam_sel", cam_parents,
 	// 	0x0144, 0, 4, 7),
 	// MUX_GATE(CLK_TOP_MUX_AUDINTBUS, "audintbus_sel", audintbus_parents,
@@ -57,8 +62,8 @@ static struct mtk_composite top_muxes[] = {
 	// 	0x0144, 16, 3, 23),
 	// MUX_GATE(CLK_TOP_MUX_DISP, "disp_sel", disp_parents,
 	// 	0x0144, 24, 3, 31),
-	//
-	// /* CLK_CFG_2 */
+
+	/* CLK_CFG_2 */
 	// MUX_GATE(CLK_TOP_MUX_MSDC1, "msdc1_sel", msdc1_parents,
 	// 	0x0148, 0, 3, 7),
 	// MUX_GATE(CLK_TOP_MUX_MSDC2, "msdc2_sel", msdc2_parents,
@@ -67,22 +72,22 @@ static struct mtk_composite top_muxes[] = {
 	// 	0x0148, 16, 3, 23),
 	// MUX_GATE(CLK_TOP_MUX_MSDC4, "msdc4_sel", msdc4_parents,
 	// 	0x0148, 24, 3, 31),
-	//
-	// /* CLK_CFG_3 */
+
+	/* CLK_CFG_3 */
 	// MUX_GATE(CLK_TOP_MUX_USB20, "usb20_sel", usb20_parents,
 	// 	0x014C, 0, 2, 7),
-	//
-	// /* CLK_CFG_4 */
+
+	/* CLK_CFG_4 */
 	// MUX_GATE(CLK_TOP_MUX_HYD, "hyd_sel", hyd_parents,
 	// 	0x0150, 0, 3, 7),
 	// MUX_GATE(CLK_TOP_MUX_VENC, "venc_sel", venc_parents,
 	// 	0x0150, 8, 3, 15),
 	// MUX_GATE(CLK_TOP_MUX_SPI, "spi_sel", spi_parents,
 	// 	0x0150, 16, 3, 23),
-	// MUX_GATE(CLK_TOP_MUX_UART, "uart_sel", uart_parents,
-	// 	0x0150, 24, 2, 31),
-	//
-	// /* CLK_CFG_6 */
+	MUX_GATE(CLK_TOP_MUX_UART, "uart_sel", uart_parents,
+		0x0150, 24, 2, 31),
+
+	/* CLK_CFG_6 */
 	// MUX_GATE(CLK_TOP_MUX_CAMTG, "camtg_sel", camtg_parents,
 	// 	0x0158, 8, 3, 15),
 	// /*
@@ -91,14 +96,14 @@ static struct mtk_composite top_muxes[] = {
 	// */
 	// MUX_GATE(CLK_TOP_MUX_AUDIO, "audio_sel", audio_parents,
 	// 	0x0158, 24, 2, 31),
-	//
-	// /* CLK_CFG_7 */
+
+	/* CLK_CFG_7 */
 	// MUX_GATE(CLK_TOP_MUX_VDEC, "vdec_sel", vdec_parents,
 	// 	0x015C, 8, 4, 15),
 	// MUX_GATE(CLK_TOP_MUX_DPILVDS, "dpilvds_sel", dpilvds_parents,
 	// 	0x015C, 24, 3, 31),
-	//
-	// /* CLK_CFG_8 */
+
+	/* CLK_CFG_8 */
 	// MUX_GATE(CLK_TOP_MUX_PMICSPI, "pmicspi_sel", pmicspi_parents,
 	// 	0x0164, 0, 3, 7),
 	// MUX_GATE(CLK_TOP_MUX_MSDC0, "msdc0_sel", msdc0_parents,
@@ -217,7 +222,7 @@ static const struct mtk_gate peri_clks[] = {
 	// GATE_PERI0(CLK_PERI0_MDHIF, "peri_mdhif", "", 19),
 	// GATE_PERI0(CLK_PERI0_NLI, "peri_nli", "", 20),
 	// GATE_PERI0(CLK_PERI0_IRDA, "peri_irda", "irda_sel", 21),
-	// GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "uart_sel", 22),
+	// GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "uart_sel", 22), // FIXME: Are UART clocks divided two times?
 	// GATE_PERI0(CLK_PERI0_UART1, "peri_uart1", "uart_sel", 23),
 	// GATE_PERI0(CLK_PERI0_UART2, "peri_uart2", "uart_sel", 24),
 	// GATE_PERI0(CLK_PERI0_UART3, "peri_uart3", "uart_sel", 25),
