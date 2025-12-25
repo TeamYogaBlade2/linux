@@ -20,8 +20,8 @@ static const struct mtk_gate_regs aud_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &aud_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate aud_clks[] = {
-	// GATE_AUDIO(CLK_AUDIO_AFE, "audio_afe", "", <TODO>),
-	// GATE_AUDIO(CLK_AUDIO_I2S, "audio_i2s", "", <TODO>),
+	// GATE_AUDIO(CLK_AUDIO_AFE, "audio_afe", "", 2),
+	// GATE_AUDIO(CLK_AUDIO_I2S, "audio_i2s", "", 6),
 };
 
 static const struct mtk_clk_desc aud_desc = {
