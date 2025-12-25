@@ -18,6 +18,7 @@ properties:
       - items:
           - enum:
               - mediatek,mt2701-audsys
+              - mediatek,mt6589-audsys
               - mediatek,mt6765-audsys
               - mediatek,mt6779-audsys
               - mediatek,mt7622-audsys
