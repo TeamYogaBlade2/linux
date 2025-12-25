@@ -31,10 +31,10 @@ static const struct mtk_gate_regs disp1_cg_regs = {
 };
 
 #define GATE_DISP0(_id, _name, _parent, _shift)				\
-	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr_inv)
+	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 #define GATE_DISP1(_id, _name, _parent, _shift)				\
-	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr_inv)
+	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate disp_clks[] = {
 	// GATE_DISP0(CLK_DISP0_LARB2_SMI, "", "", 0),

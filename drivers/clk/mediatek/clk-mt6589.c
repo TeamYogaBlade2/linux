@@ -123,7 +123,7 @@ static const struct mtk_gate_regs topck_cg_regs = {
 };
 
 #define GATE_TOPCK(_id, _name, _parent, _shift)				\
-	GATE_MTK(_id, _name, _parent, &topck_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+	GATE_MTK(_id, _name, _parent, &topck_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate top_clks[] = {
 	GATE_TOPCK(CLK_TOPCK_PMICSPI, "topck_pmicspi", "pmicspi_sel", 0),
