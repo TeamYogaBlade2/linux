@@ -10,8 +10,10 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define AUDIO_TOP_CON0	0x0000
+
 static const struct mtk_gate_regs aud_cg_regs = {
-	.sta_ofs = 0x0000,
+	.sta_ofs = AUDIO_TOP_CON0,
 };
 
 #define GATE_AUDIO(_id, _name, _parent, _shift)				\

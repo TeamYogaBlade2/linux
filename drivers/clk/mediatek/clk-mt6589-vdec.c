@@ -10,14 +10,19 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define VDEC_CKEN_SET	0x0000
+#define VDEC_CKEN_CLR	0x0004
+#define LARB_CKEN_SET	0x0008
+#define LARB_CKEN_CLR	0x000c
+
 static const struct mtk_gate_regs vdec_cg_regs = {
-	.set_ofs = 0x0004,
-	.clr_ofs = 0x0000,
+	.set_ofs = VDEC_CKEN_CLR,
+	.clr_ofs = VDEC_CKEN_SET,
 };
 
 static const struct mtk_gate_regs larb_cg_regs = {
-	.set_ofs = 0x000c,
-	.clr_ofs = 0x0008,
+	.set_ofs = LARB_CKEN_CLR,
+	.clr_ofs = LARB_CKEN_SET,
 };
 
 #define GATE_VDEC(_id, _name, _parent, _shift)				\

@@ -10,16 +10,24 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define DISP_CG_CON0	0x0100
+#define DISP_CG_SET0	0x0104
+#define DISP_CG_CLR0	0x0108
+
+#define DISP_CG_CON1	0x0110
+#define DISP_CG_SET1	0x0114
+#define DISP_CG_CLR1	0x0118
+
 static const struct mtk_gate_regs disp0_cg_regs = {
-	.set_ofs = 0x0104,
-	.clr_ofs = 0x0108,
-	.sta_ofs = 0x0100,
+	.set_ofs = DISP_CG_SET0,
+	.clr_ofs = DISP_CG_CLR0,
+	.sta_ofs = DISP_CG_CON0,
 };
 
 static const struct mtk_gate_regs disp1_cg_regs = {
-	.set_ofs = 0x0114,
-	.clr_ofs = 0x0118,
-	.sta_ofs = 0x0110,
+	.set_ofs = DISP_CG_SET1,
+	.clr_ofs = DISP_CG_CLR1,
+	.sta_ofs = DISP_CG_CON1,
 };
 
 #define GATE_DISP0(_id, _name, _parent, _shift)				\

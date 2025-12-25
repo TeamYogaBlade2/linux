@@ -112,10 +112,14 @@ static struct mtk_composite top_muxes[] = {
 	// 	0x0164, 16, 2, 23),
 };
 
+#define TOPCK_PDN_SET	0x0170
+#define TOPCK_PDN_CLR	0x0174
+#define TOPCK_PDN_STA	0x0178
+
 static const struct mtk_gate_regs topck_cg_regs = {
-	.set_ofs = 0x0170,
-	.clr_ofs = 0x0174,
-	.sta_ofs = 0x0178,
+	.set_ofs = TOPCK_PDN_SET,
+	.clr_ofs = TOPCK_PDN_CLR,
+	.sta_ofs = TOPCK_PDN_STA,
 };
 
 #define GATE_TOPCK(_id, _name, _parent, _shift)				\
@@ -142,14 +146,18 @@ static const struct mtk_clk_desc topck_desc = {
 
 /* INFRACFG */
 
-#define GATE_INFRA(_id, _name, _parent, _shift)				\
-	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
+#define INFRA_PDN_SET	0x0040
+#define INFRA_PDN_CLR	0x0044
+#define INFRA_PDN_STA	0x0048
 
 static const struct mtk_gate_regs infra_cg_regs = {
-	.set_ofs = 0x0040,
-	.clr_ofs = 0x0044,
-	.sta_ofs = 0x0048,
+	.set_ofs = INFRA_PDN_SET,
+	.clr_ofs = INFRA_PDN_CLR,
+	.sta_ofs = INFRA_PDN_STA,
 };
+
+#define GATE_INFRA(_id, _name, _parent, _shift)				\
+	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate infra_clks[] = {
 	// GATE_INFRA(CLK_INFRA_DBGCLK, "", "", 0),
@@ -181,16 +189,23 @@ static const struct mtk_clk_desc infra_desc = {
 
 /* PERICFG */
 
+#define PERI_PDN0_SET	0x0008
+#define PERI_PDN0_CLR	0x0010
+#define PERI_PDN0_STA	0x0018
+#define PERI_PDN1_SET	0x000c
+#define PERI_PDN1_CLR	0x0014
+#define PERI_PDN1_STA	0x001c
+
 static const struct mtk_gate_regs peri0_cg_regs = {
-	.set_ofs = 0x0008,
-	.clr_ofs = 0x0010,
-	.sta_ofs = 0x0018,
+	.set_ofs = PERI_PDN0_SET,
+	.clr_ofs = PERI_PDN0_CLR,
+	.sta_ofs = PERI_PDN0_STA,
 };
 
 static const struct mtk_gate_regs peri1_cg_regs = {
-	.set_ofs = 0x000c,
-	.clr_ofs = 0x0014,
-	.sta_ofs = 0x001c,
+	.set_ofs = PERI_PDN1_SET,
+	.clr_ofs = PERI_PDN1_CLR,
+	.sta_ofs = PERI_PDN1_STA,
 };
 
 #define GATE_PERI0(_id, _name, _parent, _shift)				\

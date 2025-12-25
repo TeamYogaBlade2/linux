@@ -10,10 +10,14 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define MFG_CG_CON	0x0000
+#define MFG_CG_SET	0x0004
+#define MFG_CG_CLR	0x0008
+
 static const struct mtk_gate_regs mfg_cg_regs = {
-	.set_ofs = 0x0004,
-	.clr_ofs = 0x0008,
-	.sta_ofs = 0x0000,
+	.set_ofs = MFG_CG_SET,
+	.clr_ofs = MFG_CG_CLR,
+	.sta_ofs = MFG_CG_CON,
 };
 
 #define GATE_MFG(_id, _name, _parent, _shift)				\

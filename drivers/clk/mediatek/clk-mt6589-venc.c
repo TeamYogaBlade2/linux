@@ -10,10 +10,20 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define VENCSYS_CG_CON	0x0000
+#define VENCSYS_CG_SET	0x0004
+#define VENCSYS_CG_CLR	0x0008
+
+/*
+ * NOTE: downstream:
+ * .set_addr = VENCSYS_CG_CLR,
+ * .clr_addr = VENCSYS_CG_SET,
+ * .sta_addr = VENCSYS_CG_CON,
+ */
 static const struct mtk_gate_regs venc_cg_regs = {
-	.set_ofs = 0x0008,
-	.clr_ofs = 0x0004,
-	.sta_ofs = 0x0000,
+	.set_ofs = VENCSYS_CG_CLR,
+	.clr_ofs = VENCSYS_CG_SET,
+	.sta_ofs = VENCSYS_CG_CON,
 };
 
 #define GATE_VENC(_id, _name, _parent, _shift)				\
