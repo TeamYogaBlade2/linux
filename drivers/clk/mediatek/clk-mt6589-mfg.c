@@ -25,9 +25,9 @@ static const struct mtk_gate_regs mfg_cg_regs = {
 
 static const struct mtk_gate mfg_clks[] = {
 	// GATE_MFG(CLK_MFG_AXI, "mfg_axi", "", 0),
-	// GATE_MFG(CLK_MFG_MEM, "mfg_mem", "", 1),
-	// GATE_MFG(CLK_MFG_G3D, "mfg_g3d", "", 2),
-	// GATE_MFG(CLK_MFG_HYD, "mfg_hyd", "", 3),
+	GATE_MFG(CLK_MFG_MEM, "mfg_mem", "smi_mfg_as_sel", 1),
+	GATE_MFG(CLK_MFG_G3D, "mfg_g3d", "mfg_sel", 2),
+	GATE_MFG(CLK_MFG_HYD, "mfg_hyd", "hyd_sel", 3),
 };
 
 static const struct mtk_clk_desc mfg_desc = {
