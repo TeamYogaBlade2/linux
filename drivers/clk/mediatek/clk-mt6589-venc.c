@@ -30,7 +30,7 @@ static const struct mtk_gate_regs venc_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &venc_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr_inv)
 
 static const struct mtk_gate venc_clks[] = {
-	// GATE_VENC(CLK_VENC_VEN, "venc_ven", "", 0),
+	GATE_VENC(CLK_VENC_VEN, "venc_ven", "venc_sel", 0),
 };
 
 static const struct mtk_clk_desc venc_desc = {
