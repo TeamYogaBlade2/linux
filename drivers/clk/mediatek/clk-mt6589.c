@@ -23,18 +23,19 @@
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 
 static const struct mtk_fixed_factor top_divs[] = {
-	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2),
+	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2), // unconfirmed?
 	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "syspll_ck", 1, 2),
 	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "syspll_ck", 1, 3),
 	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "syspll_ck", 1, 4),
 	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "syspll_ck", 1, 6),
-	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2),
-	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3),
+	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2), // unconfirmed
+	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3), // unconfirmed
 	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5),
 	FACTOR(CLK_TOP_UNIVPLL1_D2, "univpll1_d2", "univpll_d2", 1, 2),
 	FACTOR(CLK_TOP_UNIVPLL1_D4, "univpll1_d4", "univpll_d2", 1, 4),
 	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_d3", 1, 2),
 	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_d3", 1, 4),
+	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_d3", 1, 8), // unconfirmed
 	FACTOR(CLK_TOP_MMPLL_D3, "mmpll_d3", "mmpll", 1, 3),
 	FACTOR(CLK_TOP_MMPLL_D4, "mmpll_d4", "mmpll", 1, 4),
 	FACTOR(CLK_TOP_MMPLL_D5, "mmpll_d5", "mmpll", 1, 5),
@@ -42,24 +43,24 @@ static const struct mtk_fixed_factor top_divs[] = {
 };
 
 static const char * const mfg_parents[] = {
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
+	"univpll1_d4",
+	"mmpll_d6",
+	"syspll_d2",
+	"syspll_d3",
+	"univpll1_d2",
+	"mmpll_d3",
+	"mmpll_d4",
+	"mmpll_d5",
 };
 
 static const char * const irda_parents[] = {
-	"", // unknown
-	"", // unknown
+	"clk26m", // unconfirmed
+	"univpll2_d4", // unconfirmed
 	"", // unknown
 };
 
 static const char * const cam_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -79,22 +80,23 @@ static const char * const audintbus_parents[] = {
 };
 
 static const char * const jpg_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
 	"", // unknown
 };
 
+// has clocks divided from tvdpll?
 static const char * const disp_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
 };
 
 static const char * const msdc1_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -103,7 +105,7 @@ static const char * const msdc1_parents[] = {
 };
 
 static const char * const msdc2_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -112,7 +114,7 @@ static const char * const msdc2_parents[] = {
 };
 
 static const char * const msdc3_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -121,7 +123,7 @@ static const char * const msdc3_parents[] = {
 };
 
 static const char * const msdc4_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -129,8 +131,9 @@ static const char * const msdc4_parents[] = {
 	"", // unknown
 };
 
+// has clocks divided from univpll
 static const char * const usb20_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 };
@@ -138,16 +141,16 @@ static const char * const usb20_parents[] = {
 static const char * const hyd_parents[] = {
 	"", // unknown
 	"", // unknown
+	"syspll_d2",
 	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
-	"", // unknown
+	"univpll1_d2",
+	"mmpll_d3",
+	"mmpll_d4",
+	"mmpll_d5",
 };
 
 static const char * const venc_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -158,7 +161,7 @@ static const char * const venc_parents[] = {
 };
 
 static const char * const spi_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -168,11 +171,11 @@ static const char * const spi_parents[] = {
 
 static const char * const uart_parents[] = {
 	"clk26m",
-	"univpll2_d8", // unknown
+	"univpll2_d8", // unconfirmed
 };
 
 static const char * const camtg_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -191,12 +194,12 @@ static const char * const fd_parents[] = {
 #endif
 
 static const char * const audio_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 };
 
 static const char * const vdec_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -209,7 +212,7 @@ static const char * const vdec_parents[] = {
 };
 
 static const char * const dpilvds_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -217,7 +220,7 @@ static const char * const dpilvds_parents[] = {
 };
 
 static const char * const pmicspi_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -228,7 +231,7 @@ static const char * const pmicspi_parents[] = {
 };
 
 static const char * const msdc0_parents[] = {
-	"", // unknown
+	"clk26m", // unconfirmed
 	"", // unknown
 	"", // unknown
 	"", // unknown
@@ -237,7 +240,7 @@ static const char * const msdc0_parents[] = {
 };
 
 static const char * const smi_mfg_as_parents[] = {
-	"", // unknown
+	"clk26m", // smi_mfg_as_parents
 	"", // unknown
 	"", // unknown
 	"", // unknown

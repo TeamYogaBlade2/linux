@@ -19,6 +19,7 @@
 
 
 /* TOPCKGEN */
+/* TODO: reindex clocks */
 #define CLK_TOP_SYSPLL		1
 /* GPU: 403MHz */
 #define CLK_TOP_SYSPLL_D2	2
@@ -43,6 +44,7 @@
 #define CLK_TOP_UNIVPLL2_D2	10
 /* unknown */
 #define CLK_TOP_UNIVPLL2_D4	15
+#define CLK_TOP_UNIVPLL2_D8	16
 
 /* GPU: 476MHz */
 #define CLK_TOP_MMPLL_D3	11
