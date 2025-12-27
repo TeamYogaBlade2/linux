@@ -56,7 +56,7 @@
 #define CON0_MT6589_RST_BAR	BIT(27)
 
 #define PLL(_id, _name, _reg, _pwr_reg, _en_mask, _flags, _pcwbits, \
-			_pd_reg, _pd_shift, 	_pcw_reg, _pcw_shift) {	\
+			_pd_reg, _pd_shift, _pcw_reg, _pcw_shift) {	\
 		.id = _id,						\
 		.name = _name,						\
 		.reg = _reg,						\
