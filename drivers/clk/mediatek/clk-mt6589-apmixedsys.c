@@ -49,6 +49,8 @@
 #define LVDSPLL_CON3	0x0294
 #define LVDSPLL_PWR_CON0	0x02a0
 
+#define VOID_REG	0x0
+
 /* FIXME: MT6589 config */
 #define MT8590_PLL_FMAX		(2000 * MHZ)
 #define CON0_MT6589_RST_BAR	BIT(27)
@@ -77,34 +79,34 @@
 
 static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_ARMPLL,  "armpll",  ARMPLL_CON0, ARMPLL_PWR_CON0, 0x80000001,
-//		0, 21, ARMPLL_CON1, 24, 0x0, ARMPLL_CON1, 0),
-		PLL_AO, 21, ARMPLL_CON1, 24, 0x0, ARMPLL_CON1, 0),
+//		0, 21, ARMPLL_CON1, 24, VOID_REG, ARMPLL_CON1, 0),
+		PLL_AO, 21, ARMPLL_CON1, 24, VOID_REG, ARMPLL_CON1, 0),
 /*
 	PLL(CLK_APMIXED_MAINPLL, "mainpll", MAINPLL_CON0, MAINPLL_PWR_CON0, 0xF0000001,
-//		HAVE_RST_BAR, 21, MAINPLL_CON0, 6, 0x0, MAINPLL_CON1, 0),
-		HAVE_RST_BAR, 21, <unknown>, <unknown>, 0x0, MAINPLL_CON1, 0),
+//		HAVE_RST_BAR, 21, MAINPLL_CON0, 6, VOID_REG, MAINPLL_CON1, 0),
+		HAVE_RST_BAR, 21, <unknown>, <unknown>, VOID_REG, MAINPLL_CON1, 0),
 	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", MSDCPLL_CON0, MSDCPLL_PWR_CON0, 0x80000001,
-//		0, 21, MSDCPLL_CON0, 6, 0x0, MSDCPLL_CON1, 0),
-		0, 21, <unknown>, <unknown>, 0x0, MSDCPLL_CON1, 0),
+//		0, 21, MSDCPLL_CON0, 6, VOID_REG, MSDCPLL_CON1, 0),
+		0, 21, <unknown>, <unknown>, VOID_REG, MSDCPLL_CON1, 0),
 	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  TVDPLL_CON0, TVDPLL_PWR_CON0, 0x80000001,
-//		0, 21, TVDPLL_CON0, 6, 0x0, TVDPLL_CON1, 0),
-		0, 21, <unknown>, <unknown>, 0x0, TVDPLL_CON1, 0),
+//		0, 21, TVDPLL_CON0, 6, VOID_REG, TVDPLL_CON1, 0),
+		0, 21, <unknown>, <unknown>, VOID_REG, TVDPLL_CON1, 0),
 	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", LVDSPLL_CON0, LVDSPLL_PWR_CON0, 0x80000001,
-//		0, 21, LVDSPLL_CON0, 6, 0x0, LVDSPLL_CON1, 0),
-		0, 21, <unknown>, <unknown>, 0x0, LVDSPLL_CON1, 0),
+//		0, 21, LVDSPLL_CON0, 6, VOID_REG, LVDSPLL_CON1, 0),
+		0, 21, <unknown>, <unknown>, VOID_REG, LVDSPLL_CON1, 0),
 /*
 	PLL(CLK_APMIXED_UNIVPLL, "univpll", UNIVPLL_CON0, <unknown>, 0xF3000001,
-		HAVE_RST_BAR, 7, <unknown>, <unknown>, 0x0, UNIVPLL_CON0, 8),
+		HAVE_RST_BAR, 7, <unknown>, <unknown>, VOID_REG, UNIVPLL_CON0, 8),
 //	PLL(CLK_APMIXED_UNIVPLL, "univpll", UNIVPLL_CON0, <unknown>, 0xF3000001,
-//		HAVE_RST_BAR, 7, UNIVPLL_CON0, 6, 0x0, UNIVPLL_CON0, 8),
+//		HAVE_RST_BAR, 7, UNIVPLL_CON0, 6, VOID_REG, UNIVPLL_CON0, 8),
 	PLL(CLK_APMIXED_MMPLL,   "mmpll",   MMPLL_CON0, <unknown>, 0xF0000001,
-		HAVE_RST_BAR, 7, <unknown>, <unknown>, 0x0, MMPLL_CON0, 8),
+		HAVE_RST_BAR, 7, <unknown>, <unknown>, VOID_REG, MMPLL_CON0, 8),
 //	PLL(CLK_APMIXED_MMPLL,   "mmpll",   MMPLL_CON0, <unknown>, 0xF0000001,
-//		HAVE_RST_BAR, 7, MMPLL_CON0, 6, 0x0, MMPLL_CON0, 8),
+//		HAVE_RST_BAR, 7, MMPLL_CON0, 6, VOID_REG, MMPLL_CON0, 8),
 	PLL(CLK_APMIXED_ISPPLL,  "isppll",   ISPPLL_CON0, <unknown>, 0x80000001,
-		0, 7, <unknown>, <unknown>, 0x0, ISPPLL_CON0, 8),
+		0, 7, <unknown>, <unknown>, VOID_REG, ISPPLL_CON0, 8),
 //	PLL(CLK_APMIXED_ISPPLL,  "isppll",   ISPPLL_CON0, <unknown>, 0x80000001,
-//		0, 7, MMPLL_CON0, 7, 0x0, MMPLL_CON0, 8),
+//		0, 7, MMPLL_CON0, 7, VOID_REG, MMPLL_CON0, 8),
 */
 };
 
