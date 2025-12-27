@@ -21,14 +21,26 @@
 /* TOPCKGEN */
 /* TODO: reindex clocks */
 #define CLK_TOP_SYSPLL		1
+#define CLK_TOP_MAINPLL_D3	18
+#define CLK_TOP_MAINPLL_D5	19
+#define CLK_TOP_MAINPLL_D7	20
+
 /* GPU: 403MHz */
 #define CLK_TOP_SYSPLL_D2	2
+#define CLK_TOP_SYSPLL_D2P5	39
 /* MAINPLL / 3 / 2 = GPU: 268MHz */
 #define CLK_TOP_SYSPLL_D3	3
+#define CLK_TOP_SYSPLL_D2P5	40
 /* MAINPLL / 2 / 4 */
 #define CLK_TOP_SYSPLL_D4	4
+#define CLK_TOP_SYSPLL_D5	38
 /* MAINPLL /2 / 6 */
 #define CLK_TOP_SYSPLL_D6	6
+#define CLK_TOP_SYSPLL_D8	33
+#define CLK_TOP_SYSPLL_D10	34
+#define CLK_TOP_SYSPLL_D12	35
+#define CLK_TOP_SYSPLL_D16	36
+#define CLK_TOP_SYSPLL_D24	37
 
 /* may be univpll1 parent */
 #define CLK_TOP_UNIVPLL_D2	17
@@ -36,16 +48,27 @@
 #define CLK_TOP_UNIVPLL_D3	16
 /* UNIVPLL / 5 */
 #define CLK_TOP_UNIVPLL_D5	7
+#define CLK_TOP_UNIVPLL_D7	21
+#define CLK_TOP_UNIVPLL_D7	45
+#define CLK_TOP_UNIVPLL_D10	46
+#define CLK_TOP_UNIVPLL_D26	22
+
 /* GPU: 312MHz */
 #define CLK_TOP_UNIVPLL1_D2	8
 /* GPU: 156MHz */
 #define CLK_TOP_UNIVPLL1_D4	9
+#define CLK_TOP_UNIVPLL1_D6	41
+#define CLK_TOP_UNIVPLL1_D8	42
+#define CLK_TOP_UNIVPLL1_D10	43
+
 /* UNIVPLL / 3 / 2 */
 #define CLK_TOP_UNIVPLL2_D2	10
 /* unknown */
 #define CLK_TOP_UNIVPLL2_D4	15
+#define CLK_TOP_UNIVPLL2_D6	44
 #define CLK_TOP_UNIVPLL2_D8	16
 
+#define CLK_TOP_MMPLL_D2	23
 /* GPU: 476MHz */
 #define CLK_TOP_MMPLL_D3	11
 /* GPU: 357MHz */
@@ -54,9 +77,37 @@
 #define CLK_TOP_MMPLL_D5	13
 /* GPU: 238MHz */
 #define CLK_TOP_MMPLL_D6	14
+#define CLK_TOP_MMPLL_D6	24
+
+#define CLK_TOP_LVDSPLL_D2	25
+#define CLK_TOP_LVDSPLL_D4		52
+#define CLK_TOP_LVDSPLL_D8		53
+
+#define CLK_TOP_LVDSTX_CLKDIG_CT 	26
+
+#define CLK_TOP_TVHDMI_H	27
+
+#define CLK_TOP_HDMITX_CLKDIG_D2	28
+#define CLK_TOP_HDMITX_CLKDIG_D3	29
+
+#define CLK_TOP_TVHDMI_D2	30
+#define CLK_TOP_TVHDMI_D4	31
+
+#define CLK_TOP_MEMPLL_MCK_D4	32
+
+#define CLK_TOP_APLL			46
+#define CLK_TOP_APLL_D4			47
+#define CLK_TOP_APLL_D8			48
+#define CLK_TOP_APLL_D16		49
+#define CLK_TOP_APLL_D24		50
+
+#define CLK_TOP_VPLL_DPIX		55
+
 
 /* MUXs */
 /* CLK_CFG_0 */
+#define CLK_TOP_MUX_AXI			62
+#define CLK_TOP_MUX_SMI			63
 #define CLK_TOP_MUX_MFG	0
 #define CLK_TOP_MUX_IRDA	1
 
@@ -82,11 +133,13 @@
 #define CLK_TOP_MUX_UART	14
 
 /* CLK_CFG_6 */
+#define CLK_TOP_MUX_MEM	78
 #define CLK_TOP_MUX_CAMTG	15
 // #define CLK_TOP_MUX_FD	16 */
 #define CLK_TOP_MUX_AUDIO	16
 
 /* CLK_CFG_7 */
+#define CLK_TOP_MUX_FIX	81
 #define CLK_TOP_MUX_VDEC	17
 #define CLK_TOP_MUX_DPILVDS	18
 
