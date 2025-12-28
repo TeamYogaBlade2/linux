@@ -64,6 +64,7 @@
 		rtc_clk: dummy32k {
 			compatible = "fixed-clock";
 			clock-frequency = <32000>;
+			clock-output-names = "rtc_clk";
 			#clock-cells = <0>;
 		};
 

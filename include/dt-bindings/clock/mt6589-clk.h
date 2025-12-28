@@ -20,6 +20,10 @@
 
 /* TOPCKGEN */
 /* TODO: reindex clocks */
+#define CLK_TOP_CLK_NULL	58
+
+#define CLK_TOP_CLKPH_MCK	59
+
 #define CLK_TOP_SYSPLL		1
 #define CLK_TOP_MAINPLL_D3	18
 #define CLK_TOP_MAINPLL_D5	19
@@ -30,7 +34,7 @@
 #define CLK_TOP_SYSPLL_D2P5	39
 /* MAINPLL / 3 / 2 = GPU: 268MHz */
 #define CLK_TOP_SYSPLL_D3	3
-#define CLK_TOP_SYSPLL_D2P5	40
+#define CLK_TOP_SYSPLL_D3P5	40
 /* MAINPLL / 2 / 4 */
 #define CLK_TOP_SYSPLL_D4	4
 #define CLK_TOP_SYSPLL_D5	38
@@ -80,8 +84,8 @@
 #define CLK_TOP_MMPLL_D6	24
 
 #define CLK_TOP_LVDSPLL_D2	25
-#define CLK_TOP_LVDSPLL_D4		52
-#define CLK_TOP_LVDSPLL_D8		53
+#define CLK_TOP_LVDSPLL_D4	52
+#define CLK_TOP_LVDSPLL_D8	53
 
 #define CLK_TOP_LVDSTX_CLKDIG_CT 	26
 
@@ -95,19 +99,23 @@
 
 #define CLK_TOP_MEMPLL_MCK_D4	32
 
-#define CLK_TOP_APLL			46
-#define CLK_TOP_APLL_D4			47
-#define CLK_TOP_APLL_D8			48
-#define CLK_TOP_APLL_D16		49
-#define CLK_TOP_APLL_D24		50
+#define CLK_TOP_APLL	46
+#define CLK_TOP_APLL_D4	47
+#define CLK_TOP_APLL_D8	48
+#define CLK_TOP_APLL_D16	49
+#define CLK_TOP_APLL_D24	50
 
-#define CLK_TOP_VPLL_DPIX		55
+#define CLK_TOP_VPLL_DPIX	55
+
+#define CLK_TOP_AD_ISP_208M_CK	56
+
+#define CLK_TOP_AD_MSDC_H208M_CK	57
 
 
 /* MUXs */
 /* CLK_CFG_0 */
-#define CLK_TOP_MUX_AXI			62
-#define CLK_TOP_MUX_SMI			63
+#define CLK_TOP_MUX_AXI	62
+#define CLK_TOP_MUX_SMI	63
 #define CLK_TOP_MUX_MFG	0
 #define CLK_TOP_MUX_IRDA	1
 
@@ -135,7 +143,7 @@
 /* CLK_CFG_6 */
 #define CLK_TOP_MUX_MEM	78
 #define CLK_TOP_MUX_CAMTG	15
-// #define CLK_TOP_MUX_FD	16 */
+#define CLK_TOP_MUX_FD	82
 #define CLK_TOP_MUX_AUDIO	16
 
 /* CLK_CFG_7 */
