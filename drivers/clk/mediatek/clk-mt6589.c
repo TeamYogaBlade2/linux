@@ -363,7 +363,7 @@ static struct mtk_composite top_muxes[] = {
 
 	/* CLK_CFG_3 */
 	MUX_GATE(CLK_TOP_MUX_USB20, "usb20_sel", usb20_parents,
-		0x014C, 0, 2, 7),
+		0x014c, 0, 2, 7),
 
 	/* CLK_CFG_4 */
 	MUX_GATE(CLK_TOP_MUX_HYD, "hyd_sel", hyd_parents,
@@ -387,11 +387,11 @@ static struct mtk_composite top_muxes[] = {
 
 	/* CLK_CFG_7 */
 	MUX_GATE(CLK_TOP_MUX_FIX, "fix_sel", fix_parents,
-		0x015C, 0, 3, 7),
+		0x015c, 0, 3, 7),
 	MUX_GATE(CLK_TOP_MUX_VDEC, "vdec_sel", vdec_parents,
-		0x015C, 8, 4, 15),
+		0x015c, 8, 4, 15),
 	MUX_GATE(CLK_TOP_MUX_DPILVDS, "dpilvds_sel", dpilvds_parents,
-		0x015C, 24, 3, 31),
+		0x015c, 24, 3, 31),
 
 	/* CLK_CFG_8 */
 	MUX_GATE(CLK_TOP_MUX_PMICSPI, "pmicspi_sel", pmicspi_parents,
