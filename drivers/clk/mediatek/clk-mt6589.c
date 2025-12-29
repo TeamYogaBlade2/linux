@@ -11,14 +11,7 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 
 
-/* TOPRGU - topckgen? */
-/*
- * FIXME: are the regs correct?
- *	> #define CLK_CFG_0           (TOPRGU_BASE + 0x0140)
- *	but many SoCs use 0x0040 as CLK_CFG_0
- * FIXME: ops and flags
- * FIXME: MUX_AUDINTBUS siblings
- */
+/* topckgen */
 
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 
@@ -69,6 +62,7 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_MMPLL_D6, "mmpll_d6", "mmpll", 1, 6),
 	FACTOR(CLK_TOP_MMPLL_D7, "mmpll_d7", "mmpll", 1, 7),
 
+	FACTOR(CLK_TOP_LVDSPLL, "lvdspll_ck", "lvdspll", 1, 1),
 	FACTOR(CLK_TOP_LVDSPLL_D2, "lvdspll_d2", "lvdspll", 1, 2), // lvdspll_180m
 	FACTOR(CLK_TOP_LVDSPLL_D4, "lvdspll_d4", "lvdspll", 1, 4),
 	FACTOR(CLK_TOP_LVDSPLL_D8, "lvdspll_d8", "lvdspll", 1, 8),
@@ -273,7 +267,7 @@ static const char * const audio_parents[] = {
 
 static const char * const fix_parents[] = {
 	"rtc_clk",
-	"f_f26m_ck", // TODO:
+	"clk26m", /* f_f26m_ck" */
 	"univpll_d5",
 	"univpll_d7",
 	"univpll1_d2",
@@ -297,7 +291,7 @@ static const char * const vdec_parents[] = {
 
 static const char * const dpilvds_parents[] = {
 	"clk26m",
-	"lvdspll_ck", // TODO:
+	"lvdspll_ck",
 	"lvdspll_d2",
 	"lvdspll_d4",
 	"lvdspll_d8",
@@ -325,9 +319,9 @@ static const char * const msdc0_parents[] = {
 
 static const char * const smi_mfg_as_parents[] = {
 	"clk26m",
-	"hf_fsmi_ck", // TODO:
-	"hf_fmfg_ck", // TODO:
-	"hf_fhyd_ck", // TODO:
+	"smi_sel",
+	"mfg_sel",
+	"hyd_sel",
 };
 
 static struct mtk_composite top_muxes[] = {
@@ -428,8 +422,6 @@ static const struct mtk_clk_desc topck_desc = {
 	.num_factor_clks = ARRAY_SIZE(top_divs),
 	.composite_clks = top_muxes,
 	.num_composite_clks = ARRAY_SIZE(top_muxes),
-	// .divider_clks = top_adj_divs,
-	// .num_divider_clks = ARRAY_SIZE(top_adj_divs),
 	.clk_lock = &mt6589_clk_lock,
 };
 
