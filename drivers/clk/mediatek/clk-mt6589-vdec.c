@@ -15,6 +15,25 @@
 #define LARB_CKEN_SET	0x0008
 #define LARB_CKEN_CLR	0x000c
 
+/*
+ * downstream
+    {
+        .name = __stringify(CG_VDEC0),
+        .set_addr = VDEC_CKEN_CLR,
+        .clr_addr = VDEC_CKEN_SET,
+        .mask = 0x00000001,
+        .ops = &vdec_cg_grp_ops,
+        .sys = &syss[SYS_VDE],
+    }, {
+        .name = __stringify(CG_VDEC1),
+        .set_addr = LARB_CKEN_CLR,
+        .clr_addr = LARB_CKEN_SET,
+        .mask = 0x00000001,
+        .ops = &vdec_cg_grp_ops,
+        .sys = &syss[SYS_VDE],
+    }
+ */
+
 static const struct mtk_gate_regs vdec_cg_regs = {
 	.set_ofs = VDEC_CKEN_CLR,
 	.clr_ofs = VDEC_CKEN_SET,
