@@ -165,30 +165,30 @@ static const char * const msdc1_parents[] = {
 };
 
 static const char * const msdc2_parents[] = {
-        "clk26m",
-        "syspll_d6",
-        "syspll_d5",
-        "univpll1_d4",
-        "unicpll2_d4",
-        "ad_msdc_h208m_ck",
+	"clk26m",
+	"syspll_d6",
+	"syspll_d5",
+	"univpll1_d4",
+	"unicpll2_d4",
+	"ad_msdc_h208m_ck",
 };
 
 static const char * const msdc3_parents[] = {
-        "clk26m",
-        "syspll_d6",
-        "syspll_d5",
-        "univpll1_d4",
-        "unicpll2_d4",
-        "ad_msdc_h208m_ck",
+	"clk26m",
+	"syspll_d6",
+	"syspll_d5",
+	"univpll1_d4",
+	"unicpll2_d4",
+	"ad_msdc_h208m_ck",
 };
 
 static const char * const msdc4_parents[] = {
-        "clk26m",
-        "syspll_d6",
-        "syspll_d5",
-        "univpll1_d4",
-        "unicpll2_d4",
-        "ad_msdc_h208m_ck",
+	"clk26m",
+	"syspll_d6",
+	"syspll_d5",
+	"univpll1_d4",
+	"unicpll2_d4",
+	"ad_msdc_h208m_ck",
 };
 
 static const char * const usb20_parents[] = {
@@ -306,12 +306,12 @@ static const char * const pmicspi_parents[] = {
 };
 
 static const char * const msdc0_parents[] = {
-        "clk26m",
-        "syspll_d6",
-        "syspll_d5",
-        "univpll1_d4",
-        "unicpll2_d4",
-        "ad_msdc_h208m_ck",
+	"clk26m",
+	"syspll_d6",
+	"syspll_d5",
+	"univpll1_d4",
+	"unicpll2_d4",
+	"ad_msdc_h208m_ck",
 };
 
 static const char * const smi_mfg_as_parents[] = {
@@ -367,8 +367,8 @@ static struct mtk_composite top_muxes[] = {
 		0x0150, 24, 2, 31),
 
 	/* CLK_CFG_6 */
-        MUX_GATE(CLK_TOP_MUX_MEM, "mem_sel", mem_parents,
-                0x0158, 0, 2, 7),
+	MUX_GATE(CLK_TOP_MUX_MEM, "mem_sel", mem_parents,
+		0x0158, 0, 2, 7),
 	MUX_GATE(CLK_TOP_MUX_CAMTG, "camtg_sel", camtg_parents,
 		0x0158, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_FD, "fd_sel", fd_parents,
