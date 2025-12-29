@@ -10,6 +10,19 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define TOP_CKMUXSEL	0x10001000
+
+static const char * const infra_mux1_parents[] = {
+	"clk26m",
+	"armpll",
+	"mainpll",
+	"mmpll", /* MMPLL/2 */
+};
+
+static const struct mtk_composite cpu_muxes[] = {
+	MUX(CLK_INFRA_MUX1, "infra_mux1_sel", infra_mux1_parents, TOP_CKMUXSEL, 2, 2),
+};
+
 #define INFRA_PDN_SET	0x0040
 #define INFRA_PDN_CLR	0x0044
 #define INFRA_PDN_STA	0x0048
@@ -48,6 +61,8 @@ static const struct mtk_gate infra_clks[] = {
 static const struct mtk_clk_desc infra_desc = {
 	.clks = infra_clks,
 	.num_clks = ARRAY_SIZE(infra_clks),
+	.cpumuxes = cpu_muxes,
+	.num_cpumuxes = ARRAY_SIZE(cpumuxes),
 };
 
 static const struct of_device_id of_match_clk_mt6589_infracfg[] = {

@@ -161,6 +161,8 @@
 
 
 /* INFRACFG */
+#define CLK_INFRA_MUX1	1
+
 #define CLK_INFRA_DBGCLK	64
 #define CLK_INFRA_SMI		65
 #define CLK_INFRA_SPI0	66
