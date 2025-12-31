@@ -41,7 +41,7 @@ static const struct mtk_gate infra_clks[] = {
 	// GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "", 1),
 	GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "spi_sel", 2), /* maybe, is it infra_mfg_bus? */
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
-	GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "axi_sel", 6), /* maybe */
+	GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "axi_sel", 6), /* is it infra cec (setclr_inv)? maybe correct parent */
 	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* maybe */
 	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* or axi_sel, maybe */
 	// GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "", 9),
