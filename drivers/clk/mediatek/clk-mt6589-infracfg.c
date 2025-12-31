@@ -37,13 +37,13 @@ static const struct mtk_gate_regs infra_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate infra_clks[] = {
-	// GATE_INFRA(CLK_INFRA_DBGCLK, "infra_dbgclk", "", 0),
+	GATE_INFRA(CLK_INFRA_DBGCLK, "infra_dbgclk", "axi_sel", 0), /* maybe */
 	// GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "", 1),
-	// GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "", 2),
+	GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "spi_sel", 2), /* maybe, is it infra_mfg_bus? */
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
-	// GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "", 6),
-	// GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "", 7),
-	// GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "", 8),
+	GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "axi_sel", 6), /* maybe */
+	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* maybe */
+	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* or axi_sel, maybe */
 	// GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "", 9),
 	// GATE_INFRA(CLK_INFRA_MD1HWMIXAXI, "infra_md1hwmixaxi", "", 10),
 	// GATE_INFRA(CLK_INFRA_MD1AHB, "infra_md1ahb", "", 11),
@@ -51,11 +51,11 @@ static const struct mtk_gate infra_clks[] = {
 	// GATE_INFRA(CLK_INFRA_MD2HWMIXAXI, "infra_md2hwmixaxi", "", 13),
 	// GATE_INFRA(CLK_INFRA_MD2AHB, "infra_md2ahb", "", 14),
 	// GATE_INFRA(CLK_INFRA_CPUM, "infra_cpum", "", 15),
-	// GATE_INFRA(CLK_INFRA_KP, "infra_kp", "", 16),
-	// GATE_INFRA(CLK_INFRA_CCIF0, "infra_ccif0", "", 20),
-	// GATE_INFRA(CLK_INFRA_CCIF1, "infra_ccif1", "", 21),
-	// GATE_INFRA(CLK_INFRA_PMICSPI, "infra_pmicspi", "", 22),
-	// GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "", 23),
+	GATE_INFRA(CLK_INFRA_KP, "infra_kp", "axi_sel", 16), /* maybe */
+	GATE_INFRA(CLK_INFRA_CCIF0, "infra_ccif0", "axi_sel", 20), /* maybe */
+	GATE_INFRA(CLK_INFRA_CCIF1, "infra_ccif1", "axi_sel", 21), /* maybe */
+	GATE_INFRA(CLK_INFRA_PMICSPI, "infra_pmicspi", "pmicspi_sel", 22), /* maybe */
+	GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "axi_sel", 23), /* maybe */
 };
 
 static const struct mtk_clk_desc infra_desc = {

@@ -24,7 +24,7 @@ static const struct mtk_gate_regs mfg_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &mfg_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate mfg_clks[] = {
-	// GATE_MFG(CLK_MFG_AXI, "mfg_axi", "", 0),
+	GATE_MFG(CLK_MFG_AXI, "mfg_axi", "infra_mfgaxi", 0), /* or axi_sel, maybe */
 	GATE_MFG(CLK_MFG_MEM, "mfg_mem", "smi_mfg_as_sel", 1),
 	GATE_MFG(CLK_MFG_G3D, "mfg_g3d", "mfg_sel", 2),
 	GATE_MFG(CLK_MFG_HYD, "mfg_hyd", "hyd_sel", 3),

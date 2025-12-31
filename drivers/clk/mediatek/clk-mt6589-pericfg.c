@@ -36,49 +36,67 @@ static const struct mtk_gate_regs peri1_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &peri1_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate peri_clks[] = {
-	// GATE_PERI0(CLK_PERI0_NFI, "peri_nfi", "", 0),
-	// GATE_PERI0(CLK_PERI0_THERM, "peri_therm", "", 1),
-	// GATE_PERI0(CLK_PERI0_PWM1, "peri_pwm1", "", 2),
-	// GATE_PERI0(CLK_PERI0_PWM2, "peri_pwm2", "", 3),
-	// GATE_PERI0(CLK_PERI0_PWM3, "peri_pwm3", "", 4),
-	// GATE_PERI0(CLK_PERI0_PWM4, "peri_pwm4", "", 5),
-	// GATE_PERI0(CLK_PERI0_PWM5, "pwri_pwm5", "", 6),
-	// GATE_PERI0(CLK_PERI0_PWM6, "pwri_pwm6", "", 7),
-	// GATE_PERI0(CLK_PERI0_PWM7, "peri_pwm7", "", 8),
-	// GATE_PERI0(CLK_PERI0_PWM, "peri_pwm", "", 9),
+	GATE_PERI0(CLK_PERI0_NFI, "peri_nfi", "axi_sel", 0), /* auxadc, maybe */
+	GATE_PERI0(CLK_PERI0_THERM, "peri_therm", "axi_sel", 1), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM1, "peri_pwm1", "axi_sel", 2), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM2, "peri_pwm2", "axi_sel", 3), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM3, "peri_pwm3", "axi_sel", 4), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM4, "peri_pwm4", "axi_sel", 5), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM5, "pwri_pwm5", "axi_sel", 6), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM6, "pwri_pwm6", "axi_sel", 7), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM7, "peri_pwm7", "axi_sel", 8), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM, "peri_pwm", "axi_sel", 9), /* maybe */
 	GATE_PERI0(CLK_PERI0_USB0, "peri_usb0", "usb20_sel", 10),
 	GATE_PERI0(CLK_PERI0_USB1, "peri_usb1", "usb20_sel", 11),
-	// GATE_PERI0(CLK_PERI0_APDMA, "peri_apdma", "", 12),
+	GATE_PERI0(CLK_PERI0_APDMA, "peri_apdma", "axi_sel", 12), /* maybe */
 	GATE_PERI0(CLK_PERI0_MSDC0, "peri_msdc0", "msdc0_sel", 13),
 	GATE_PERI0(CLK_PERI0_MSDC1, "peri_msdc1", "msdc1_sel", 14),
 	GATE_PERI0(CLK_PERI0_MSDC2, "peri_msdc2", "msdc2_sel", 15),
 	GATE_PERI0(CLK_PERI0_MSDC3, "peri_msdc3", "msdc3_sel", 16),
 	GATE_PERI0(CLK_PERI0_MSDC4, "peri_msdc4", "msdc4_sel", 17),
-	// GATE_PERI0(CLK_PERI0_APHIF, "peri_aphif", "", 18),
-	// GATE_PERI0(CLK_PERI0_MDHIF, "peri_mdhif", "", 19),
-	// GATE_PERI0(CLK_PERI0_NLI, "peri_nli", "", 20),
+	GATE_PERI0(CLK_PERI0_APHIF, "peri_aphif", "axi_sel", 18), /* maybe */
+	GATE_PERI0(CLK_PERI0_MDHIF, "peri_mdhif", "axi_sel", 19), /* maybe */
+	GATE_PERI0(CLK_PERI0_NLI, "peri_nli", "axi_sel", 20), /* maybe */
 	GATE_PERI0(CLK_PERI0_IRDA, "peri_irda", "irda_sel", 21),
-	GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "uart_sel", 22), // FIXME: Are UART clocks divided two times?
-	GATE_PERI0(CLK_PERI0_UART1, "peri_uart1", "uart_sel", 23),
-	GATE_PERI0(CLK_PERI0_UART2, "peri_uart2", "uart_sel", 24),
-	GATE_PERI0(CLK_PERI0_UART3, "peri_uart3", "uart_sel", 25),
-	// GATE_PERI0(CLK_PERI0_I2C0, "peri_i2c0", "", 26),
-	// GATE_PERI0(CLK_PERI0_I2C1, "peri_i2c1", "", 27),
-	// GATE_PERI0(CLK_PERI0_I2C2, "peri_i2c2", "", 28),
-	// GATE_PERI0(CLK_PERI0_I2C3, "peri_i2c3", "", 29),
-	// GATE_PERI0(CLK_PERI0_I2C4, "peri_i2c4", "", 30),
-	// GATE_PERI0(CLK_PERI0_I2C5, "peri_i2c5", "", 31),
-	//
-	// GATE_PERI1(CLK_PERI1_I2C6, "peri_i2c6", "", 0),
-	// GATE_PERI1(CLK_PERI1_WRAP, "peri_wrap", "", 1),
-	// GATE_PERI1(CLK_PERI1_AUXADC, "peri_auxadc", "", 2),
+	GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "peri_uart0_sel", 22),
+	GATE_PERI0(CLK_PERI0_UART1, "peri_uart1", "peri_uart1_sel", 23),
+	GATE_PERI0(CLK_PERI0_UART2, "peri_uart2", "peri_uart2_sel", 24),
+	GATE_PERI0(CLK_PERI0_UART3, "peri_uart3", "peri_uart3_sel", 25),
+	GATE_PERI0(CLK_PERI0_I2C0, "peri_i2c0", "axi_sel", 26), /* maybe */
+	GATE_PERI0(CLK_PERI0_I2C1, "peri_i2c1", "axi_sel", 27), /* maybe */
+	GATE_PERI0(CLK_PERI0_I2C2, "peri_i2c2", "axi_sel", 28), /* maybe */
+	GATE_PERI0(CLK_PERI0_I2C3, "peri_i2c3", "axi_sel", 29), /* maybe */
+	GATE_PERI0(CLK_PERI0_I2C4, "peri_i2c4", "axi_sel", 30), /* maybe */
+	GATE_PERI0(CLK_PERI0_I2C5, "peri_i2c5", "axi_sel", 31), /* maybe */
+
+	GATE_PERI1(CLK_PERI1_I2C6, "peri_i2c6", "axi_sel", 0), /* maybe */
+	GATE_PERI1(CLK_PERI1_PWRAP, "peri_pwrap", "axi_sel", 1), /* maybe */
+	GATE_PERI1(CLK_PERI1_AUXADC, "peri_auxadc", "axi_sel", 2), /* maybe */
 	GATE_PERI1(CLK_PERI1_SPI1, "peri_spi1", "spi_sel", 3),
-	// GATE_PERI1(CLK_PERI1_FHCTL, "peri_fhctl", "", 4),
+	GATE_PERI1(CLK_PERI1_FHCTL, "peri_fhctl", "clk26m", 4), /* maybe */
+};
+
+static const char * const uart_mux_parents[] = {
+	"clk26m", /* 26 MHz */
+	"uart_sel", /* or univpll2_d8, 52 MHz */
+};
+
+static const struct mtk_composite peri_muxs[] = {
+	MUX(CLK_PERI_MUX_UART0, "peri_uart0_sel", uart_mux_parents,
+		0x040c, 0, 1),
+	MUX(CLK_PERI_MUX_UART1, "peri_uart1_sel", uart_mux_parents,
+		0x040c, 1, 1),
+	MUX(CLK_PERI_MUX_UART2, "peri_uart2_sel", uart_mux_parents,
+		0x040c, 2, 1),
+	MUX(CLK_PERI_MUX_UART3, "peri_uart3_sel", uart_mux_parents,
+		0x040c, 3, 1),
 };
 
 static const struct mtk_clk_desc peri_desc = {
 	.clks = peri_clks,
 	.num_clks = ARRAY_SIZE(peri_clks),
+	.composite_clks = peri_muxes,
+	.num_composite_clks = ARRAY_SIZE(peri_muxes),
 };
 
 
