@@ -35,13 +35,15 @@
  */
 
 static const struct mtk_gate_regs vdec_cg_regs = {
-	.set_ofs = VDEC_CKEN_CLR,
-	.clr_ofs = VDEC_CKEN_SET,
+	.set_ofs = VDEC_CKEN_SET,
+	.clr_ofs = VDEC_CKEN_CLR,
+	.sta_ofs = VDEC_CKEN_SET, /* many SoCs use set reg as sta reg */
 };
 
 static const struct mtk_gate_regs larb_cg_regs = {
-	.set_ofs = LARB_CKEN_CLR,
-	.clr_ofs = LARB_CKEN_SET,
+	.set_ofs = LARB_CKEN_SET,
+	.clr_ofs = LARB_CKEN_CLR,
+	.sta_ofs = LARB_CKEN_SET,
 };
 
 #define GATE_VDEC(_id, _name, _parent, _shift)				\
