@@ -23,6 +23,7 @@
 #define CLK_TOP_CLK_NULL	58
 
 #define CLK_TOP_CLKPH_MCK	59
+#define CLK_TOP_CPUM_TCK_IN	61
 
 #define CLK_TOP_SYSPLL		1
 #define CLK_TOP_MAINPLL_D3	18

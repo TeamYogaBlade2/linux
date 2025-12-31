@@ -38,19 +38,19 @@ static const struct mtk_gate_regs infra_cg_regs = {
 
 static const struct mtk_gate infra_clks[] = {
 	GATE_INFRA(CLK_INFRA_DBGCLK, "infra_dbgclk", "axi_sel", 0), /* maybe */
-	// GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "", 1),
+	GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "smi_sel", 1), /* maybe */
 	GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "spi_sel", 2), /* maybe, is it infra_mfg_bus? */
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
 	GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "axi_sel", 6), /* is it infra cec (setclr_inv)? maybe correct parent */
 	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* maybe */
 	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* or axi_sel, maybe */
-	// GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "", 9),
-	// GATE_INFRA(CLK_INFRA_MD1HWMIXAXI, "infra_md1hwmixaxi", "", 10),
-	// GATE_INFRA(CLK_INFRA_MD1AHB, "infra_md1ahb", "", 11),
-	// GATE_INFRA(CLK_INFRA_MD2MCUAXI, "infra_md2mcuaxi", "", 12),
-	// GATE_INFRA(CLK_INFRA_MD2HWMIXAXI, "infra_md2hwmixaxi", "", 13),
-	// GATE_INFRA(CLK_INFRA_MD2AHB, "infra_md2ahb", "", 14),
-	// GATE_INFRA(CLK_INFRA_CPUM, "infra_cpum", "", 15),
+	GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "axi_sel", 9), /* maybe */
+	GATE_INFRA(CLK_INFRA_MD1HWMIXAXI, "infra_md1hwmixaxi", "axi_sel", 10), /* maybe */
+	GATE_INFRA(CLK_INFRA_MD1AHB, "infra_md1ahb", "axi_sel", 11), /* maybe */
+	GATE_INFRA(CLK_INFRA_MD2MCUAXI, "infra_md2mcuaxi", "axi_sel", 12), /* maybe */
+	GATE_INFRA(CLK_INFRA_MD2HWMIXAXI, "infra_md2hwmixaxi", "axi_sel", 13), /* maybe */
+	GATE_INFRA(CLK_INFRA_MD2AHB, "infra_md2ahb", "axi_sel", 14), /* maybe */
+	GATE_INFRA(CLK_INFRA_CPUM, "infra_cpum", "cpum_tck_in", 15), /* from MT8135 */
 	GATE_INFRA(CLK_INFRA_KP, "infra_kp", "axi_sel", 16), /* maybe */
 	GATE_INFRA(CLK_INFRA_CCIF0, "infra_ccif0", "axi_sel", 20), /* maybe */
 	GATE_INFRA(CLK_INFRA_CCIF1, "infra_ccif1", "axi_sel", 21), /* maybe */

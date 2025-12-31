@@ -37,34 +37,34 @@ static const struct mtk_gate_regs disp1_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &disp_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate disp_clks[] = {
-	GATE_DISP0(CLK_DISP0_LARB2_SMI, "disp0_larb2_smi", "disp_sel", 0),
+	GATE_DISP0(CLK_DISP0_LARB2_SMI, "disp0_larb2_smi", "smi_sel", 0), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_ROT_ENGINE, "disp0_rot_engine", "disp_sel", 1),
-	GATE_DISP0(CLK_DISP0_ROT_SMI, "disp0_rot_smi", "disp_sel", 2),
+	GATE_DISP0(CLK_DISP0_ROT_SMI, "disp0_rot_smi", "smi_sel", 2), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_SCL, "disp0_scl", "disp_sel", 3),
 	GATE_DISP0(CLK_DISP0_OVL_ENGINE, "disp0_ovl_engine", "disp_sel", 4),
-	GATE_DISP0(CLK_DISP0_OVL_SMI, "disp0_ovl_smi", "disp_sel", 5),
+	GATE_DISP0(CLK_DISP0_OVL_SMI, "disp0_ovl_smi", "smi_sel", 5), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_COLOR, "disp0_color", "disp_sel", 6),
 	GATE_DISP0(CLK_DISP0_2DSHP, "disp0_2dshp", "disp_sel", 7),
 	GATE_DISP0(CLK_DISP0_BLS, "disp0_bls", "disp_sel", 8),
 	GATE_DISP0(CLK_DISP0_WDMA0_ENGINE, "disp0_wdma0_engine", "disp_sel", 9),
-	GATE_DISP0(CLK_DISP0_WDMA0_SMI, "disp0_wdma0_smi", "disp_sel", 10),
+	GATE_DISP0(CLK_DISP0_WDMA0_SMI, "disp0_wdma0_smi", "smi_sel", 10), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_WDMA1_ENGINE, "disp0_wdma1_engine", "disp_sel", 11),
-	GATE_DISP0(CLK_DISP0_WDMA1_SMI, "disp0_wdma1_smi", "disp_sel", 12),
+	GATE_DISP0(CLK_DISP0_WDMA1_SMI, "disp0_wdma1_smi", "smi_sel", 12), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_RDMA0_ENGINE, "disp0_rdma0_engine", "disp_sel", 13),
-	GATE_DISP0(CLK_DISP0_RDMA0_SMI, "disp0_rdma0_smi", "disp_sel", 14),
-	GATE_DISP0(CLK_DISP0_RDMA0_OUTPUT, "disp0_rdma0_output", "disp_sel", 15),
+	GATE_DISP0(CLK_DISP0_RDMA0_SMI, "disp0_rdma0_smi", "clk_null", 14), /* mt8135 */
+	GATE_DISP0(CLK_DISP0_RDMA0_OUTPUT, "disp0_rdma0_output", "clk_null", 15), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_RDMA1_ENGINE, "disp0_rdma1_engine", "disp_sel", 16),
-	GATE_DISP0(CLK_DISP0_RDMA1_SMI, "disp0_rdma1_smi", "disp_sel", 17),
-	GATE_DISP0(CLK_DISP0_RDMA1_OUTPUT, "disp0_rdma1_output", "disp_sel", 18),
+	GATE_DISP0(CLK_DISP0_RDMA1_SMI, "disp0_rdma1_smi", "clk_null", 17), /* mt8135 */
+	GATE_DISP0(CLK_DISP0_RDMA1_OUTPUT, "disp0_rdma1_output", "clk_null", 18), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_GAMMA_ENGINE, "disp0_gamma_engine", "disp_sel", 19),
-	GATE_DISP0(CLK_DISP0_GAMMA_PIXEL, "disp0_gamma_pixel", "disp_sel", 20),
+	GATE_DISP0(CLK_DISP0_GAMMA_PIXEL, "disp0_gamma_pixel", "clk_null", 20), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_CMDQ_ENGINE, "disp0_cmdq_engine", "disp_sel", 21),
-	GATE_DISP0(CLK_DISP0_CMDQ_SMI, "disp0_cmdq_smi", "disp_sel", 22),
+	GATE_DISP0(CLK_DISP0_CMDQ_SMI, "disp0_cmdq_smi", "smi_sel", 22), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_G2D_ENGINE, "disp0_g2d_engine", "disp_sel", 23),
-	GATE_DISP0(CLK_DISP0_G2D_SMI, "disp0_g2d_smi", "disp_sel", 24),
+	GATE_DISP0(CLK_DISP0_G2D_SMI, "disp0_g2d_smi", "smi_sel", 24), /* mt8135 */
 
 	GATE_DISP1(CLK_DISP1_DBI_ENGINE, "disp1_dbi_engine", "disp_sel", 0),
-	GATE_DISP1(CLK_DISP1_DBI_SMI, "disp1_dbi_smi", "disp_sel", 1),
+	GATE_DISP1(CLK_DISP1_DBI_SMI, "disp1_dbi_smi", "smi_sel", 1), /* maybe */
 	GATE_DISP1(CLK_DISP1_DBI_OUTPUT, "disp1_dbi_output", "disp_sel", 2),
 	GATE_DISP1(CLK_DISP1_DSI_ENGINE, "disp1_dsi_engine", "disp_sel", 3),
 	GATE_DISP1(CLK_DISP1_DSI_DIGITAL, "disp1_dsi_digital", "disp_sel", 4),

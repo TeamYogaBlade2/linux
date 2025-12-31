@@ -24,18 +24,18 @@ static const struct mtk_gate_regs img_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &img_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate img_clks[] = {
-//	GATE_IMG(CLK_IMAGE_LARB3_SMI, "image_larb3_smi", "", 0),
-//	GATE_IMG(CLK_IMAGE_LARB4_SMI, "image_larb4_smi", "", 2),
-//	GATE_IMG(CLK_IMAGE_COMMN_SMI, "image_commn_smi", "", 4),
-//	GATE_IMG(CLK_IMAGE_CAM_SMI, "image_cam_smi", "", 5),
+	GATE_IMG(CLK_IMAGE_LARB3_SMI, "image_larb3_smi", "smi_sel", 0), /* maybe */
+	GATE_IMG(CLK_IMAGE_LARB4_SMI, "image_larb4_smi", "smi_sel", 2), /* maybe */
+	GATE_IMG(CLK_IMAGE_COMMN_SMI, "image_commn_smi", "smi_sel", 4), /* maybe */
+	GATE_IMG(CLK_IMAGE_CAM_SMI, "image_cam_smi", "smi_sel", 5), /* maybe */
 	GATE_IMG(CLK_IMAGE_CAM_CAM, "image_cam_cam", "cam_sel", 6),
 	GATE_IMG(CLK_IMAGE_SEN_TG, "image_sen_tg", "camtg_sel", 7),
 	GATE_IMG(CLK_IMAGE_SEN_CAM, "image_sen_cam", "cam_sel", 8),
-//	GATE_IMG(CLK_IMAGE_JPGD_SMI, "image_jpgd_smi", "", 9),
+	GATE_IMG(CLK_IMAGE_JPGD_SMI, "image_jpgd_smi", "smi_sel", 9), /* maybe, mt8135 */
 	GATE_IMG(CLK_IMAGE_JPGD_JPG, "image_jpgd_jpg", "jpg_sel", 10),
-//	GATE_IMG(CLK_IMAGE_JPGE_SMI, "image_jpge_smi", "", 11),
+	GATE_IMG(CLK_IMAGE_JPGE_SMI, "image_jpge_smi", "smi_sel", 11), /* maybe, mt8135 */
 	GATE_IMG(CLK_IMAGE_JPGE_JPG, "image_jpge_jpg", "jpg_sel", 12),
-//	GATE_IMG(CLK_IMAGE_FPC, "image_fpc", "", 13),
+	GATE_IMG(CLK_IMAGE_FPC, "image_fpc", "smi_sel", 13), /* maybe, mt8135 */
 };
 
 static const struct mtk_clk_desc img_desc = {
