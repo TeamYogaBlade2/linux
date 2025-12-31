@@ -21,8 +21,8 @@
  * .sta_addr = VENCSYS_CG_CON,
  */
 static const struct mtk_gate_regs venc_cg_regs = {
-	.set_ofs = VENCSYS_CG_CLR,
-	.clr_ofs = VENCSYS_CG_SET,
+	.set_ofs = VENCSYS_CG_SET,
+	.clr_ofs = VENCSYS_CG_CLR,
 	.sta_ofs = VENCSYS_CG_CON,
 };
 
