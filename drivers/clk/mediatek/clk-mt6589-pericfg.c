@@ -92,11 +92,20 @@ static const struct mtk_composite peri_muxs[] = {
 		0x040c, 3, 1),
 };
 
+static u16 pericfg_rst_ofs[] = { 0x0, 0x4, };
+
+static const struct mtk_clk_rst_desc peri_clk_rst_desc = {
+	.version = MTK_RST_SIMPLE,
+	.rst_bank_ofs = pericfg_rst_ofs,
+	.rst_bank_nr = ARRAY_SIZE(pericfg_rst_ofs),
+};
+
 static const struct mtk_clk_desc peri_desc = {
 	.clks = peri_clks,
 	.num_clks = ARRAY_SIZE(peri_clks),
 	.composite_clks = peri_muxes,
 	.num_composite_clks = ARRAY_SIZE(peri_muxes),
+	.rst_desc = &peri_clk_rst_desc,
 };
 
 

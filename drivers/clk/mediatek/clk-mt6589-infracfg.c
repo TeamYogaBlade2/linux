@@ -58,11 +58,20 @@ static const struct mtk_gate infra_clks[] = {
 	GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "axi_sel", 23), /* maybe */
 };
 
+static u16 infrasys_rst_ofs[] = { 0x30, 0x34, };
+
+static const struct mtk_clk_rst_desc infra_clk_rst_desc = {
+	.version = MTK_RST_SIMPLE,
+	.rst_bank_ofs = infrasys_rst_ofs,
+	.rst_bank_nr = ARRAY_SIZE(infrasys_rst_ofs),
+};
+
 static const struct mtk_clk_desc infra_desc = {
 	.clks = infra_clks,
 	.num_clks = ARRAY_SIZE(infra_clks),
 	.cpumuxes = cpu_muxes,
 	.num_cpumuxes = ARRAY_SIZE(cpumuxes),
+	.rst_desc = &infra_clk_rst_desc,
 };
 
 static const struct of_device_id of_match_clk_mt6589_infracfg[] = {
