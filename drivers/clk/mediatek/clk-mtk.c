@@ -474,6 +474,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	void __iomem *base = NULL;
 	int num_clks, r;
 
+	const char *node_name = node ? node->full_name : "unknown";
+
 	mcd = device_get_match_data(&pdev->dev);
 	if (!mcd) {
 		/* Clock driver wasn't registered from devicetree */
@@ -514,6 +516,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	num_clks += mcd->num_mux_clks + mcd->num_divider_clks;
 	num_clks += mcd->num_cpumuxes;
 
+	pr_info("MTK-CLK-DEBUG: [ %s ] Probe start (%d clocks)\n", node_name, num_clks);
+
 	clk_data = mtk_alloc_clk_data(num_clks);
 	if (!clk_data) {
 		r = -ENOMEM;
@@ -521,6 +525,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->fixed_clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d fixed_clks\n",
+			node_name, mcd->num_fixed_clks);
 		r = mtk_clk_register_fixed_clks(mcd->fixed_clks,
 						mcd->num_fixed_clks, clk_data);
 		if (r)
@@ -528,6 +534,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->factor_clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d factor_clks\n",
+			node_name, mcd->num_factor_clks);
 		r = mtk_clk_register_factors(mcd->factor_clks,
 					     mcd->num_factor_clks, clk_data);
 		if (r)
@@ -535,6 +543,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->mux_clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d mux_clks\n",
+			node_name, mcd->num_mux_clks);
 		r = mtk_clk_register_muxes(&pdev->dev, mcd->mux_clks,
 					   mcd->num_mux_clks, node,
 					   mcd->clk_lock, clk_data);
@@ -543,6 +553,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->cpumuxes) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d cpumuxes\n",
+			node_name, mcd->num_cpumuxes);
 		r = mtk_clk_register_cpumuxes(&pdev->dev, node, mcd->cpumuxes,
 					      mcd->num_cpumuxes, clk_data);
 		if (r)
@@ -550,6 +562,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->composite_clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d composite_clks\n",
+			node_name, mcd->num_composite_clks);
 		/* We don't check composite_lock because it's optional */
 		r = mtk_clk_register_composites(&pdev->dev,
 						mcd->composite_clks,
@@ -561,6 +575,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 
 
 	if (mcd->divider_clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d divider_clks\n",
+			node_name, mcd->num_divider_clks);
 		r = mtk_clk_register_dividers(&pdev->dev,
 					      mcd->divider_clks,
 					      mcd->num_divider_clks,
@@ -570,6 +586,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->clks) {
+		pr_info("MTK-CLK-DEBUG: [ %s ] Registering %d gate_clks (gates)\n",
+			node_name, mcd->num_clks);
 		r = mtk_clk_register_gates(&pdev->dev, node, mcd->clks,
 					   mcd->num_clks, clk_data);
 		if (r)
@@ -636,6 +654,7 @@ free_base:
 
 	if (mcd->need_runtime_pm)
 		pm_runtime_put(&pdev->dev);
+	pr_info("MTK-CLK-DEBUG: [ %s ] *UN*Registered clocks\n", node_name);
 	return r;
 }
 
