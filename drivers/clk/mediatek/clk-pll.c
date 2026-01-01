@@ -217,7 +217,7 @@ int mtk_pll_prepare(struct clk_hw *hw)
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 r;
 
-	if (pll->data->pwr_addr) {
+	if (pll->pwr_addr) {
 		r = readl(pll->pwr_addr) | CON0_PWR_ON;
 		writel(r, pll->pwr_addr);
 		udelay(1);
@@ -269,7 +269,7 @@ void mtk_pll_unprepare(struct clk_hw *hw)
 	r = readl(pll->en_addr) & ~BIT(pll->data->pll_en_bit);
 	writel(r, pll->en_addr);
 
-	if (pll->data->pwr_addr) {
+	if (pll->pwr_addr) {
 		r = readl(pll->pwr_addr) | CON0_ISO_EN;
 		writel(r, pll->pwr_addr);
 	
