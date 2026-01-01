@@ -96,7 +96,7 @@
 
 		mfgsys: syscon@0x10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
-			reg = <0x10206000, 0x1000>;
+			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
 		};
 
@@ -108,31 +108,31 @@
 
 		audsys: syscon@0x12070000 {
 			compatible = "mediatek,mt6589-audsys", "syscon";
-			reg = <0x12070000, 0x1000>;
+			reg = <0x12070000 0x1000>;
 			#clock-cells = <1>;
 		};
 
 		dispsys: syscon@0x14000000 {
 			compatible = "mediatek,mt6589-dispsys", "syscon";
-			reg = <0x14000000, 0x1000>;
+			reg = <0x14000000 0x1000>;
 			#clock-cells = <1>;
 		};
 
 		imgsys: syscon@0x15000000 {
 			compatible = "mediatek,mt6589-imgsys", "syscon";
-			reg = <0x15000000, 0x1000>;
+			reg = <0x15000000 0x1000>;
 			#clock-cells = <1>;
 		};
 
 		vdecsys: syscon@0x16000000 {
 			compatible = "mediatek,mt6589-vdecsys", "syscon";
-			reg = <0x16000000, 0x1000>;
+			reg = <0x16000000 0x1000>;
 			#clock-cells = <1>;
 		};
 
 		vencsys: syscon@0x17000000 {
 			compatible = "mediatek,mt6589-vencsys", "syscon";
-			reg = <0x17000000, 0x1000>;
+			reg = <0x17000000 0x1000>;
 			#clock-cells = <1>;
 		};
 	};
