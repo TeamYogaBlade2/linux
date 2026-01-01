@@ -70,7 +70,7 @@ static const struct mtk_clk_desc infra_desc = {
 	.clks = infra_clks,
 	.num_clks = ARRAY_SIZE(infra_clks),
 	.cpumuxes = cpu_muxes,
-	.num_cpumuxes = ARRAY_SIZE(cpumuxes),
+	.num_cpumuxes = ARRAY_SIZE(cpu_muxes),
 	.rst_desc = &infra_clk_rst_desc,
 };
 
@@ -85,7 +85,7 @@ static struct platform_driver clk_mt6589_infracfg_drv = {
 	.remove = mtk_clk_simple_remove,
 	.driver = {
 		.name = "clk-mt6589-infracfg",
-		.of_match_table = of_match_clk_mt6589_infra,
+		.of_match_table = of_match_clk_mt6589_infracfg,
 	},
 };
 module_platform_driver(clk_mt6589_infracfg_drv);

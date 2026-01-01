@@ -81,7 +81,7 @@ static const char * const uart_mux_parents[] = {
 	"uart_sel", /* or univpll2_d8, 52 MHz */
 };
 
-static const struct mtk_composite peri_muxs[] = {
+static const struct mtk_composite peri_muxes[] = {
 	MUX(CLK_PERI_MUX_UART0, "peri_uart0_sel", uart_mux_parents,
 		0x040c, 0, 1),
 	MUX(CLK_PERI_MUX_UART1, "peri_uart1_sel", uart_mux_parents,

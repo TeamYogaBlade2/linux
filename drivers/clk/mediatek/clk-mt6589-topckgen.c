@@ -434,7 +434,7 @@ static struct platform_driver clk_mt6589_topckgen_drv = {
 	.remove = mtk_clk_simple_remove,
 	.driver = {
 		.name = "clk-mt6589-topckgen",
-		.of_match_table = of_match_clk_mt6589,
+		.of_match_table = of_match_clk_mt6589_topckgen,
 	},
 };
 module_platform_driver(clk_mt6589_topckgen_drv);
