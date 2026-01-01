@@ -73,6 +73,13 @@
 			clock-frequency = <26000000>;
 			#clock-cells = <0>;
 		};
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
 
 		topckgen: syscon@10000000 {
 			compatible = "mediatek,mt6589-topckgen", "syscon";
@@ -135,13 +142,6 @@
 			reg = <0x17000000 0x1000>;
 			#clock-cells = <1>;
 		};
-	};
-
-	soc {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "simple-bus";
-		ranges;
 
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
@@ -203,9 +203,12 @@
 			status = "disabled";
 		};
 
+		/* FIXME: Register area that overlaps with topckgen */
+		/*
 		wdt: watchdog@10000000 {
 			compatible = "mediatek,mt6589-wdt";
 			reg = <0x10000000 0x44>;
 		};
+		*/
 	};
 };
