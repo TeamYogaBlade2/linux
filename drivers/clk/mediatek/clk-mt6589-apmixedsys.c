@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (c) 2017 MediaTek Inc.
+ *                    Weiyi Lu <weiyi.lu@mediatek.com>
+ * Copyright (c) 2023 Collabora Ltd.
+ *                    AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
  * Author: akku <akkun11.open@gmail.com>
  */
 #include <linux/clk.h>
