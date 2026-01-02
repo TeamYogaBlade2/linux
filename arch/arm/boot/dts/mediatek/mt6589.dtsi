@@ -171,12 +171,35 @@
 			      <0x10216000 0x2000>;
 		};
 
+		apdma: dma-controller@11000680 {
+			compatible = "mediatek,mt6589-uart-dma",
+				     "mediatek,mt6577-uart-dma";
+			reg = <0x11000680 0x54>,
+			      <0x11000700 0x54>,
+			      <0x11000780 0x54>,
+			      <0x11000800 0x54>,
+			      <0x11000880 0x54>,
+			      <0x11000900 0x54>;
+			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 66 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 67 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 68 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 69 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 70 IRQ_TYPE_LEVEL_LOW>;
+			dma-requests = <6>;
+			clocks = <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "apdma";
+			#dma-cells = <1>;
+		};
+
 		uart0: serial@11006000 {
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11006000 0x400>;
 			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI_MUX_UART0>, <&pericfg CLK_PERI0_UART0>;
 			clock-names = "baud", "bus";
+			dmas = <&apdma 0>, <&apdma 1>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
@@ -186,6 +209,8 @@
 			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI_MUX_UART1>, <&pericfg CLK_PERI0_UART1>;
 			clock-names = "baud", "bus";
+			dmas = <&apdma 2>, <&apdma 3>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
@@ -195,10 +220,13 @@
 			interrupts = <GIC_SPI 53 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI_MUX_UART2>, <&pericfg CLK_PERI0_UART2>;
 			clock-names = "baud", "bus";
+			dmas = <&apdma 4>, <&apdma 5>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
 		uart3: serial@11009000 {
+			/* NOTE: MT6589 does not have DMA for UART3 */
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11009000 0x400>;
 			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_LOW>;
