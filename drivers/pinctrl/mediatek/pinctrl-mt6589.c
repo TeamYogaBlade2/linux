@@ -4,52 +4,69 @@
  */
 
 #include <linux/module.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
+
+#include "pinctrl-mtk-common.h"
 #include "pinctrl-mtk-mt6589.h"
-#include "pinctrl-paris.h"
 
-/*
- * GPIO_BASE: 0xF0005000
- * GPIO1_BASE: 0xF020C000
- * GPIOEXT_BASE: (0xC000) (PMIC GPIO base.)
- */
-
-static const struct mtk_pin_soc mt6589_pinctrl_data = {
-	// .reg_cal = mt6589_reg_cals,
+static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
-	.ngrps = ARRAY_SIZE(mtk_pins_mt6589),
-	// .eint_hw = &mt6589_eint_hw,
-	// .gpio_m = 0,
-	// .ies_present = true,
-	// .base_names = mt6589_pinctrl_register_base_names,
-	// .nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
-	// .bias_set_combo = mtk_pinconf_bias_set_combo,
-	// .bias_get_combo = mtk_pinconf_bias_get_combo,
-	// .drive_set = mtk_pinconf_drive_set_raw,
-	// .drive_get = mtk_pinconf_drive_get_raw,
-	// .adv_pull_get = mtk_pinconf_adv_pull_get,
-	// .adv_pull_set = mtk_pinconf_adv_pull_set,
+	// .grp_desc = mt2701_drv_grp,
+	// .n_grp_cls = ARRAY_SIZE(mt2701_drv_grp),
+	// .pin_drv_grp = mt2701_pin_drv,
+	// .n_pin_drv_grps = ARRAY_SIZE(mt2701_pin_drv),
+	// .spec_ies = mt2701_ies_set,
+	// .n_spec_ies = ARRAY_SIZE(mt2701_ies_set),
+	// .spec_pupd = mt2701_spec_pupd,
+	// .n_spec_pupd = ARRAY_SIZE(mt2701_spec_pupd),
+	// .spec_smt = mt2701_smt_set,
+	// .n_spec_smt = ARRAY_SIZE(mt2701_smt_set),
+	// .spec_pull_set = mtk_pctrl_spec_pull_set_samereg,
+	// .spec_ies_smt_set = mtk_pconf_spec_set_ies_smt_range,
+	// .spec_pinmux_set = mt2701_spec_pinmux_set,
+	// .spec_dir_set = mt2701_spec_dir_set,
+	// .dir_offset = 0x0000,
+	// .pullen_offset = 0x0150,
+	// .pullsel_offset = 0x0280,
+	// .dout_offset = 0x0500,
+	// .din_offset = 0x0630,
+	// .pinmux_offset = 0x0760,
+	// .type1_start = 280,
+	// .type1_end = 280,
+	// .port_shf = 4,
+	// .port_mask = 0x1f,
+	// .port_align = 4,
+	// .mode_mask = 0xf,
+	// .mode_per_reg = 5,
+	// .mode_shf = 4,
+	// .eint_hw = {
+	// 	.port_mask = 6,
+	// 	.ports     = 6,
+	// 	.ap_num    = 169,
+	// 	.db_cnt    = 16,
+	// 	.db_time   = debounce_time_mt2701,
+	// },
 };
 
-static const struct of_device_id mt6589_pinctrl_match[] = {
+static const struct of_device_id mt6589_pctrl_match[] = {
 	{ .compatible = "mediatek,mt6589-pinctrl", .data = &mt6589_pinctrl_data },
 	{}
 };
 MODULE_DEVICE_TABLE(of, mt6589_pctrl_match);
 
-static struct platform_driver mt6589_pinctrl_driver = {
-	.probe = mtk_paris_pinctrl_probe,
+static struct platform_driver mtk_pinctrl_driver = {
+	.probe = mtk_pctrl_common_probe,
 	.driver = {
 		.name = "mediatek-mt6589-pinctrl",
-		.of_match_table = mt6589_pinctrl_match,
+		.of_match_table = mt6589_pctrl_match,
+		.pm = pm_sleep_ptr(&mtk_eint_pm_ops),
 	},
 };
 
 static int __init mtk_pinctrl_init(void)
 {
-	return platform_driver_register(&mt6589_pinctrl_driver);
+	return platform_driver_register(&mtk_pinctrl_driver);
 }
 arch_initcall(mtk_pinctrl_init);
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("MediaTek MT6589 Pinctrl Driver");
