@@ -143,6 +143,20 @@
 			#clock-cells = <1>;
 		};
 
+/*
+		pio: pinctrl@10005000 {
+			compatible = "mediatek,mt6589-pinctrl";
+			/* GPIO base: 0x10005000, GPIO1 base 0x1020C000*/
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>;
+		};
+*/
+
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
 			reg = <0x10008000 0x80>;
