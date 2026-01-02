@@ -2570,7 +2570,6 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	),
 
 	/* GPIOEXT */
-/*
 	MTK_PIN(
 		232, "GPIO0",
 		MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
@@ -2973,7 +2972,6 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 		MTK_FUNCTION(0, "GPIO48"),
 		MTK_FUNCTION(1, "SIMLS2_SRST")
 	),
-*/
 };
 
 #endif /* __PINCTRL_MTK_MT6589_H */
