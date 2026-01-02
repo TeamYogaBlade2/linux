@@ -217,13 +217,15 @@ int mtk_pll_prepare(struct clk_hw *hw)
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 r;
 
-	r = readl(pll->pwr_addr) | CON0_PWR_ON;
-	writel(r, pll->pwr_addr);
-	udelay(1);
-
-	r = readl(pll->pwr_addr) & ~CON0_ISO_EN;
-	writel(r, pll->pwr_addr);
-	udelay(1);
+	if (pll->pwr_addr) {
+		r = readl(pll->pwr_addr) | CON0_PWR_ON;
+		writel(r, pll->pwr_addr);
+		udelay(1);
+	
+		r = readl(pll->pwr_addr) & ~CON0_ISO_EN;
+		writel(r, pll->pwr_addr);
+		udelay(1);
+	}
 
 	r = readl(pll->en_addr) | BIT(pll->data->pll_en_bit);
 	writel(r, pll->en_addr);
@@ -267,11 +269,13 @@ void mtk_pll_unprepare(struct clk_hw *hw)
 	r = readl(pll->en_addr) & ~BIT(pll->data->pll_en_bit);
 	writel(r, pll->en_addr);
 
-	r = readl(pll->pwr_addr) | CON0_ISO_EN;
-	writel(r, pll->pwr_addr);
-
-	r = readl(pll->pwr_addr) & ~CON0_PWR_ON;
-	writel(r, pll->pwr_addr);
+	if (pll->pwr_addr) {
+		r = readl(pll->pwr_addr) | CON0_ISO_EN;
+		writel(r, pll->pwr_addr);
+	
+		r = readl(pll->pwr_addr) & ~CON0_PWR_ON;
+		writel(r, pll->pwr_addr);
+	}
 }
 
 const struct clk_ops mtk_pll_ops = {
@@ -293,7 +297,8 @@ struct clk_hw *mtk_clk_register_pll_ops(struct mtk_clk_pll *pll,
 	const char *parent_name = "clk26m";
 
 	pll->base_addr = base + data->reg;
-	pll->pwr_addr = base + data->pwr_reg;
+	if (data->pwr_reg)
+		pll->pwr_addr = base + data->pwr_reg;
 	pll->pd_addr = base + data->pd_reg;
 	pll->pcw_addr = base + data->pcw_reg;
 	if (data->pcw_chg_reg)

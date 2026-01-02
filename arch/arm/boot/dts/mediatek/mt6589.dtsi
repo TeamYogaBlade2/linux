@@ -48,6 +48,13 @@
 		compatible = "simple-bus";
 		ranges;
 
+		clk26m: oscillator@0 {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <26000000>;
+			clock-output-names = "clk26m";
+		};
+
 		system_clk: dummy13m {
 			compatible = "fixed-clock";
 			clock-frequency = <13000000>;
@@ -57,6 +64,7 @@
 		rtc_clk: dummy32k {
 			compatible = "fixed-clock";
 			clock-frequency = <32000>;
+			clock-output-names = "rtc_clk";
 			#clock-cells = <0>;
 		};
 
@@ -72,6 +80,68 @@
 		#size-cells = <1>;
 		compatible = "simple-bus";
 		ranges;
+
+		topckgen: syscon@10000100 {
+			compatible = "mediatek,mt6589-topckgen", "syscon";
+			reg = <0x10000100 0x7c>;
+			#clock-cells = <1>;
+		};
+
+		infracfg: syscon@10001000 {
+			compatible = "mediatek,mt6589-infracfg", "syscon";
+			reg = <0x10001000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+		};
+
+		pericfg: syscon@10003000 {
+			compatible = "mediatek,mt6589-pericfg", "syscon";
+			reg = <0x10003000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+		};
+
+		mfgsys: syscon@10206000 {
+			compatible = "mediatek,mt6589-mfgsys", "syscon";
+			reg = <0x10206000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		apmixedsys: syscon@10209000 {
+			compatible = "mediatek,mt6589-apmixedsys", "syscon";
+			reg = <0x10209000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		audsys: syscon@12070000 {
+			compatible = "mediatek,mt6589-audsys", "syscon";
+			reg = <0x12070000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		dispsys: syscon@14000000 {
+			compatible = "mediatek,mt6589-dispsys", "syscon";
+			reg = <0x14000000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		imgsys: syscon@15000000 {
+			compatible = "mediatek,mt6589-imgsys", "syscon";
+			reg = <0x15000000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		vdecsys: syscon@16000000 {
+			compatible = "mediatek,mt6589-vdecsys", "syscon";
+			reg = <0x16000000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		vencsys: syscon@17000000 {
+			compatible = "mediatek,mt6589-vencsys", "syscon";
+			reg = <0x17000000 0x1000>;
+			#clock-cells = <1>;
+		};
 
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
@@ -133,6 +203,7 @@
 			status = "disabled";
 		};
 
+		/* FIXME: Register area that overlaps with topckgen */
 		wdt: watchdog@10000000 {
 			compatible = "mediatek,mt6589-wdt";
 			reg = <0x10000000 0x44>;
