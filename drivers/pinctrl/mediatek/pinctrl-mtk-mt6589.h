@@ -2336,7 +2336,8 @@ static const struct mtk_desc_pin mtk_pins_mt6589[] = {
 		MTK_FUNCTION(7, "A_FUNC_DIN[2]")
 	),
 
-	/* GPIOEXT */
+	/* GPIOEXT: it must move to MT6320 pinctrl */
+/*
 	MTK_PIN(PINCTRL_PIN(232, "GPIO0"),
 		NULL, "mt6589",
 		MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
@@ -2690,6 +2691,7 @@ static const struct mtk_desc_pin mtk_pins_mt6589[] = {
 		MTK_FUNCTION(0, "GPIO48"),
 		MTK_FUNCTION(1, "SIMLS2_SRST")
 	),
+*/
 };
 
 #endif /* __PINCTRL_MTK_MT6589_H */
