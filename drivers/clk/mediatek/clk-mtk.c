@@ -16,8 +16,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
-#include <linux/delay.h>
-
 #include "clk-mtk.h"
 #include "clk-gate.h"
 #include "clk-mux.h"
@@ -519,8 +517,6 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	num_clks += mcd->num_cpumuxes;
 
 	pr_info("MTK-CLK-DEBUG: [ %s ] Probe start (%d clocks)\n", node_name, num_clks);
-	pr_info("MTK-CLK-DEBUG: Probe called for node [%pOF] (device instance: %p)\n",
-		node, &pdev->dev);
 
 	clk_data = mtk_alloc_clk_data(num_clks);
 	if (!clk_data) {
@@ -622,9 +618,6 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	if (mcd->need_runtime_pm)
 		pm_runtime_put(&pdev->dev);
 
-	pr_info("MTK-CLK-DEBUG: [ %s ] Register done", node_name);
-	mdelay(1000);
-
 	return r;
 
 unregister_clks:
@@ -671,12 +664,6 @@ static void __mtk_clk_simple_remove(struct platform_device *pdev,
 	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
 	const struct mtk_clk_desc *mcd = device_get_match_data(&pdev->dev);
 
-	const char *node_name = node ? node->full_name : "unknown";
-
-	pr_info("MTK-CLK-DEBUG: [ %s ] Remove start\n", node_name);
-	pr_info("MTK-CLK-DEBUG: Probe called for node [%pOF] (device instance: %p)\n",
-		node, &pdev->dev);
-
 	of_clk_del_provider(node);
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
@@ -699,7 +686,6 @@ static void __mtk_clk_simple_remove(struct platform_device *pdev,
 		mtk_clk_unregister_fixed_clks(mcd->fixed_clks,
 					      mcd->num_fixed_clks, clk_data);
 	mtk_free_clk_data(clk_data);
-	pr_info("MTK-CLK-DEBUG: [ %s ] Remove done\n", node_name);
 }
 
 int mtk_clk_pdev_probe(struct platform_device *pdev)
