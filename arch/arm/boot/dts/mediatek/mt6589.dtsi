@@ -7,6 +7,7 @@
 
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/mt6589-clk.h>
 
 / {
 	#address-cells = <1>;
@@ -65,12 +66,6 @@
 			compatible = "fixed-clock";
 			clock-frequency = <32000>;
 			clock-output-names = "rtc_clk";
-			#clock-cells = <0>;
-		};
-
-		uart_clk: dummy26m {
-			compatible = "fixed-clock";
-			clock-frequency = <26000000>;
 			#clock-cells = <0>;
 		};
 	};
@@ -180,7 +175,8 @@
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11006000 0x400>;
 			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&uart_clk>;
+			clocks = <&pericfg CLK_PERI_MUX_UART0>, <&pericfg CLK_PERI0_UART0>;
+			clock-names = "baud", "bus";
 			status = "disabled";
 		};
 
@@ -188,7 +184,8 @@
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11007000 0x400>;
 			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&uart_clk>;
+			clocks = <&pericfg CLK_PERI_MUX_UART1>, <&pericfg CLK_PERI0_UART1>;
+			clock-names = "baud", "bus";
 			status = "disabled";
 		};
 
@@ -196,7 +193,8 @@
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11008000 0x400>;
 			interrupts = <GIC_SPI 53 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&uart_clk>;
+			clocks = <&pericfg CLK_PERI_MUX_UART2>, <&pericfg CLK_PERI0_UART2>;
+			clock-names = "baud", "bus";
 			status = "disabled";
 		};
 
@@ -204,7 +202,8 @@
 			compatible = "mediatek,mt6577-uart";
 			reg = <0x11009000 0x400>;
 			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&uart_clk>;
+			clocks = <&pericfg CLK_PERI_MUX_UART3>, <&pericfg CLK_PERI0_UART3>;
+			clock-names = "baud", "bus";
 			status = "disabled";
 		};
 	};
