@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Author: akku <akkun11.open@gmail.com>
+ */
+#include <linux/platform_device.h>
+#include <linux/mod_devicetable.h>
+
+#include "clk-mtk.h"
+#include "clk-gate.h"
+
+#include <dt-bindings/clock/mt6589-clk.h>
+
+#define IMG_CG_CON	0x0000
+#define IMG_CG_SET	0x0004
+#define IMG_CG_CLR	0x0008
+
+static const struct mtk_gate_regs img_cg_regs = {
+	.set_ofs = IMG_CG_SET,
+	.clr_ofs = IMG_CG_CLR,
+	.sta_ofs = IMG_CG_CON,
+};
+
+#define GATE_IMG(_id, _name, _parent, _shift)				\
+	GATE_MTK(_id, _name, _parent, &img_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
+
+static const struct mtk_gate img_clks[] = {
+	GATE_IMG(CLK_IMAGE_LARB3_SMI, "image_larb3_smi", "smi_sel", 0), /* maybe */
+	GATE_IMG(CLK_IMAGE_LARB4_SMI, "image_larb4_smi", "smi_sel", 2), /* maybe */
+	GATE_IMG(CLK_IMAGE_COMMN_SMI, "image_commn_smi", "smi_sel", 4), /* maybe */
+	GATE_IMG(CLK_IMAGE_CAM_SMI, "image_cam_smi", "smi_sel", 5), /* maybe */
+	GATE_IMG(CLK_IMAGE_CAM_CAM, "image_cam_cam", "cam_sel", 6),
+	GATE_IMG(CLK_IMAGE_SEN_TG, "image_sen_tg", "camtg_sel", 7),
+	GATE_IMG(CLK_IMAGE_SEN_CAM, "image_sen_cam", "cam_sel", 8),
+	GATE_IMG(CLK_IMAGE_JPGD_SMI, "image_jpgd_smi", "smi_sel", 9), /* maybe, mt8135 */
+	GATE_IMG(CLK_IMAGE_JPGD_JPG, "image_jpgd_jpg", "jpg_sel", 10),
+	GATE_IMG(CLK_IMAGE_JPGE_SMI, "image_jpge_smi", "smi_sel", 11), /* maybe, mt8135 */
+	GATE_IMG(CLK_IMAGE_JPGE_JPG, "image_jpge_jpg", "jpg_sel", 12),
+	GATE_IMG(CLK_IMAGE_FPC, "image_fpc", "smi_sel", 13), /* maybe, mt8135 */
+};
+
+static const struct mtk_clk_desc img_desc = {
+	.clks = img_clks,
+	.num_clks = ARRAY_SIZE(img_clks),
+};
+
+static const struct of_device_id of_match_clk_mt6589_img[] = {
+	{
+		.compatible = "mediatek,mt6589-imgsys",
+		.data = &img_desc,
+	}, {
+		/* sentinel */
+	}
+};
+MODULE_DEVICE_TABLE(of, of_match_clk_mt6589_img);
+
+static struct platform_driver clk_mt6589_img_drv = {
+	.probe = mtk_clk_simple_probe,
+	.remove = mtk_clk_simple_remove,
+	.driver = {
+		.name = "clk-mt6589-img",
+		.of_match_table = of_match_clk_mt6589_img,
+	},
+};
+module_platform_driver(clk_mt6589_img_drv);
+
+MODULE_DESCRIPTION("MediaTek MT6589 imgsys clocks driver");
+MODULE_LICENSE("GPL");
