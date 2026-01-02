@@ -81,9 +81,9 @@
 		compatible = "simple-bus";
 		ranges;
 
-		topckgen: syscon@10000000 {
+		topckgen: syscon@10000100 {
 			compatible = "mediatek,mt6589-topckgen", "syscon";
-			reg = <0x10000000 0x1000>;
+			reg = <0x10000100 0x7c>;
 			#clock-cells = <1>;
 		};
 
@@ -204,11 +204,9 @@
 		};
 
 		/* FIXME: Register area that overlaps with topckgen */
-		/*
 		wdt: watchdog@10000000 {
 			compatible = "mediatek,mt6589-wdt";
 			reg = <0x10000000 0x44>;
 		};
-		*/
 	};
 };

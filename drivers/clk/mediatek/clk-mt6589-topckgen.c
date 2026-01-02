@@ -10,6 +10,9 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+/* HACK: reg starts from 0x10000100 to avoid overlap with the watchdog register area */
+#define BASE_SHIFT 0x0100
+
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 
 static const struct mtk_fixed_clk top_fixed_clks[] = {
@@ -322,81 +325,91 @@ static const char * const smi_mfg_as_parents[] = {
 	"hyd_sel",
 };
 
+#define CLK_CFG_0 (0x0140 - BASE_SHIFT)
+#define CLK_CFG_1 (0x0144 - BASE_SHIFT)
+#define CLK_CFG_2 (0x0148 - BASE_SHIFT)
+#define CLK_CFG_3 (0x014c - BASE_SHIFT)
+#define CLK_CFG_4 (0x0150 - BASE_SHIFT)
+#define CLK_CFG_5 (0x0154 - BASE_SHIFT)
+#define CLK_CFG_6 (0x0158 - BASE_SHIFT)
+#define CLK_CFG_7 (0x015c - BASE_SHIFT)
+#define CLK_CFG_8 (0x0164 - BASE_SHIFT)
+
 static struct mtk_composite top_muxes[] = {
 	/* CLK_CFG_0 */
 	MUX(CLK_TOP_MUX_AXI, "axi_sel", axi_parents,
-		0x0140, 0, 3),
+		CLK_CFG_0, 0, 3),
 	MUX_GATE(CLK_TOP_MUX_SMI, "smi_sel", smi_parents,
-		0x0140, 8, 3, 15),
+		CLK_CFG_0, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_MFG, "mfg_sel", mfg_parents,
-		0x0140, 16, 3, 23),
+		CLK_CFG_0, 16, 3, 23),
 	MUX_GATE(CLK_TOP_MUX_IRDA, "irda_sel", irda_parents,
-		0x0140, 24, 2, 31),
+		CLK_CFG_0, 24, 2, 31),
 
 	/* CLK_CFG_1 */
 	MUX_GATE(CLK_TOP_MUX_CAM, "cam_sel", cam_parents,
-		0x0144, 0, 4, 7),
+		CLK_CFG_1, 0, 4, 7),
 	MUX_GATE(CLK_TOP_MUX_AUDINTBUS, "audintbus_sel", audintbus_parents,
-		0x0144, 8, 2, 15),
+		CLK_CFG_1, 8, 2, 15),
 	MUX_GATE(CLK_TOP_MUX_JPG, "jpg_sel", jpg_parents,
-		0x0144, 16, 3, 23),
+		CLK_CFG_1, 16, 3, 23),
 	MUX_GATE(CLK_TOP_MUX_DISP, "disp_sel", disp_parents,
-		0x0144, 24, 3, 31),
+		CLK_CFG_1, 24, 3, 31),
 
 	/* CLK_CFG_2 */
 	MUX_GATE(CLK_TOP_MUX_MSDC1, "msdc1_sel", msdc1_parents,
-		0x0148, 0, 3, 7),
+		CLK_CFG_2, 0, 3, 7),
 	MUX_GATE(CLK_TOP_MUX_MSDC2, "msdc2_sel", msdc2_parents,
-		0x0148, 8, 3, 15),
+		CLK_CFG_2, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_MSDC3, "msdc3_sel", msdc3_parents,
-		0x0148, 16, 3, 23),
+		CLK_CFG_2, 16, 3, 23),
 	MUX_GATE(CLK_TOP_MUX_MSDC4, "msdc4_sel", msdc4_parents,
-		0x0148, 24, 3, 31),
+		CLK_CFG_2, 24, 3, 31),
 
 	/* CLK_CFG_3 */
 	MUX_GATE(CLK_TOP_MUX_USB20, "usb20_sel", usb20_parents,
-		0x014c, 0, 2, 7),
+		CLK_CFG_3, 0, 2, 7),
 
 	/* CLK_CFG_4 */
 	MUX_GATE(CLK_TOP_MUX_HYD, "hyd_sel", hyd_parents,
-		0x0150, 0, 3, 7),
+		CLK_CFG_4, 0, 3, 7),
 	MUX_GATE(CLK_TOP_MUX_VENC, "venc_sel", venc_parents,
-		0x0150, 8, 3, 15),
+		CLK_CFG_4, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_SPI, "spi_sel", spi_parents,
-		0x0150, 16, 3, 23),
+		CLK_CFG_4, 16, 3, 23),
 	MUX_GATE(CLK_TOP_MUX_UART, "uart_sel", uart_parents,
-		0x0150, 24, 2, 31),
+		CLK_CFG_4, 24, 2, 31),
 
 	/* CLK_CFG_6 */
 	MUX_GATE(CLK_TOP_MUX_MEM, "mem_sel", mem_parents,
-		0x0158, 0, 2, 7),
+		CLK_CFG_6, 0, 2, 7),
 	MUX_GATE(CLK_TOP_MUX_CAMTG, "camtg_sel", camtg_parents,
-		0x0158, 8, 3, 15),
+		CLK_CFG_6, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_FD, "fd_sel", fd_parents,
-		0x0158, 16, 3, 23),
+		CLK_CFG_6, 16, 3, 23),
 	MUX_GATE(CLK_TOP_MUX_AUDIO, "audio_sel", audio_parents,
-		0x0158, 24, 2, 31),
+		CLK_CFG_6, 24, 2, 31),
 
 	/* CLK_CFG_7 */
 	MUX_GATE(CLK_TOP_MUX_FIX, "fix_sel", fix_parents,
-		0x015c, 0, 3, 7),
+		CLK_CFG_7, 0, 3, 7),
 	MUX_GATE(CLK_TOP_MUX_VDEC, "vdec_sel", vdec_parents,
-		0x015c, 8, 4, 15),
+		CLK_CFG_7, 8, 4, 15),
 	MUX_GATE(CLK_TOP_MUX_DPILVDS, "dpilvds_sel", dpilvds_parents,
-		0x015c, 24, 3, 31),
+		CLK_CFG_7, 24, 3, 31),
 
 	/* CLK_CFG_8 */
 	MUX_GATE(CLK_TOP_MUX_PMICSPI, "pmicspi_sel", pmicspi_parents,
-		0x0164, 0, 3, 7),
+		CLK_CFG_8, 0, 3, 7),
 	MUX_GATE(CLK_TOP_MUX_MSDC0, "msdc0_sel", msdc0_parents,
-		0x0164, 8, 3, 15),
+		CLK_CFG_8, 8, 3, 15),
 	MUX_GATE(CLK_TOP_MUX_SMI_MFG_AS, "smi_mfg_as_sel", smi_mfg_as_parents,
-		0x0164, 16, 2, 23),
+		CLK_CFG_8, 16, 2, 23),
 };
 
-#define TOPCK_PDN_SET	0x0170
-#define TOPCK_PDN_CLR	0x0174
-#define TOPCK_PDN_STA	0x0178
+#define TOPCK_PDN_SET	(0x0170 - BASE_SHIFT)
+#define TOPCK_PDN_CLR	(0x0174 - BASE_SHIFT)
+#define TOPCK_PDN_STA	(0x0178 - BASE_SHIFT)
 
 static const struct mtk_gate_regs topck_cg_regs = {
 	.set_ofs = TOPCK_PDN_SET,
