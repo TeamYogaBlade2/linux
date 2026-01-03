@@ -30,6 +30,9 @@ static const struct mtk_drv_group_desc mt6589_drv_grp[] = {
 	MTK_DRV_GRP(4, 32, 0, 2, 4),
 };
 
+/* TODO */
+
+/* GPIO0 */
 #define DRV_CON0	0x0500
 #define DRV_CON1	0x0510
 #define DRV_CON2	0x0520
@@ -37,6 +40,13 @@ static const struct mtk_drv_group_desc mt6589_drv_grp[] = {
 #define DRV_CON4	0x0540
 #define DRV_CON5	0x0550
 
+/* GPIO1 */
+#define DRV_CON6	0x0560
+#define DRV_CON7	0x0570
+#define DRV_CON8	0x0580
+#define DRV_CON9	0x0590
+
+/* GPIO0 */
 #define DRV_CON10	0x05a0
 #define DRV_CON11	0x05b0
 #define DRV_CON12	0x05c0
@@ -123,10 +133,12 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(55, DRV_CON1, 24, 1),
 
 	/* RTC32K_CK */
-	MTK_PIN_DRV_GRP(56, , , 1), // TODO: no drive?
+	/*
+	MTK_PIN_DRV_GRP(56, , , 1), // no drive?
+	*/
 
 	/* IDDIG */
-	MTK_PIN_DRV_GRP(57, DRV_CON2, 28, 2),
+	MTK_PIN_DRV_GRP(57, DRV_CON1, 28, 2),
 
 	/* WATCHDOG */
 	MTK_PIN_DRV_GRP(58, DRV_CON2, 0, 1),
@@ -135,7 +147,7 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(59, DRV_CON2, 4, 1),
 
 	/* SRCVOLTEN */
-	MTK_PIN_DRV_GRP(59, DRV_CON2, 8, 1),
+	MTK_PIN_DRV_GRP(60, DRV_CON2, 8, 1),
 
 	/* JTAG */
 	MTK_PIN_DRV_GRP(61, DRV_CON3, 0, 1),
@@ -187,8 +199,8 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(99, DRV_CON5, 12, 1),
 
 	/* VM 1, 0 */
-	MTK_PIN_DRV_GRP(100, , , 1), // TODO
-	MTK_PIN_DRV_GRP(101, , , 1),
+	MTK_PIN_DRV_GRP(100, DRV_CON5, 12, 1)
+	MTK_PIN_DRV_GRP(101, DRV_CON5, 12, 1),
 
 	/* BSI 1 */
 	MTK_PIN_DRV_GRP(102, DRV_CON5, 16, 1),
@@ -242,7 +254,7 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 
 	/* LPCE1B, LPCE0B */
 	MTK_PIN_DRV_GRP(132, DRV_CON8, 28, 1),
-	MTK_PIN_DRV_GRP(133, DRV_CON8, 28, 1),
+	MTK_PIN_DRV_GRP(133, DRV_CON9, 0, 1),
 
 	/* SPI1 / MSDC4 */
 	MTK_PIN_DRV_GRP(134, DRV_CON8, 20, 0),
@@ -309,7 +321,12 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(185, DRV_CON10, 20, 3),
 	MTK_PIN_DRV_GRP(186, DRV_CON10, 20, 3),
 
-	/* GPIO 209 to 213 */
+	/* CMPCLK, CMMCLK, CMRST, CMPDN, CMFLASH */
+	MTK_PIN_DRV_GRP(209, DRV_CON11, 0, 1),
+	MTK_PIN_DRV_GRP(210, DRV_CON11, 4, 1),
+	MTK_PIN_DRV_GRP(211, DRV_CON11, 8, 1),
+	MTK_PIN_DRV_GRP(212, DRV_CON11, 12, 1),
+	MTK_PIN_DRV_GRP(213, DRV_CON11, 16, 1),
 
 	/* SRCLKENAI */
 	MTK_PIN_DRV_GRP(218, DRV_CON11, 20, 1),
