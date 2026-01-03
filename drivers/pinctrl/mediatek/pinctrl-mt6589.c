@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (c) 2015 MediaTek Inc.
+ * Author: Biao Huang <biao.huang@mediatek.com>
+ *
  * Author: akku <akkun11.open@gmail.com>
  */
 
