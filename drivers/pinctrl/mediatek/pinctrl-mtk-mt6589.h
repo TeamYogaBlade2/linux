@@ -10,7 +10,6 @@
 #include "pinctrl-mtk-common.h"
 
 static const struct mtk_desc_pin mtk_pins_mt6589[] = {
-	/* GPIO */
 	MTK_PIN(PINCTRL_PIN(0, "GPIO0"),
 		NULL, "mt6589",
 		MTK_EINT_FUNCTION(2, 49),
