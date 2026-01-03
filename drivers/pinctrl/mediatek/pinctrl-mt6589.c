@@ -30,7 +30,6 @@ static const struct mtk_drv_group_desc mt6589_drv_grp[] = {
 	MTK_DRV_GRP(4, 32, 0, 2, 4),
 };
 
-/* TODO */
 
 /* GPIO0 */
 #define DRV_CON0	0x0500
@@ -358,36 +357,28 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.n_grp_cls = ARRAY_SIZE(mt6589_drv_grp),
 	.pin_drv_grp = mt6589_pin_drv,
 	.n_pin_drv_grps = ARRAY_SIZE(mt6589_pin_drv),
-	// .spec_ies = mt2701_ies_set,
-	// .n_spec_ies = ARRAY_SIZE(mt2701_ies_set),
-	// .spec_pupd = mt2701_spec_pupd,
-	// .n_spec_pupd = ARRAY_SIZE(mt2701_spec_pupd),
-	// .spec_smt = mt2701_smt_set,
-	// .n_spec_smt = ARRAY_SIZE(mt2701_smt_set),
-	// .spec_pull_set = mtk_pctrl_spec_pull_set_samereg,
-	// .spec_ies_smt_set = mtk_pconf_spec_set_ies_smt_range,
-	// .spec_pinmux_set = mt2701_spec_pinmux_set,
-	// .spec_dir_set = mt2701_spec_dir_set,
 
-	/* for type0 */
-	.dir_offset = 0x0000,
+	/* it cannnot use because MT6589 GPIO regs are Read-Modify-Write */
 	.ies_offset = 0x0100,
 	.pullen_offset = 0x0200,
 	.smt_offset = 0x0300,
 	.pullsel_offset = 0x0400,
-	.drv_offset = 0x0500 /* unused */
+
+	/* FIXME: don't need mtk_get_regmap */
+	.dir_offset = 0x0000,
 	.dout_offset = 0x0800,
 	.din_offset = 0x0a00,
 	.pinmux_offset = 0x0c00,
 
 	.type1_start = 114,
 	.type1_end = 169 + 1,
-	// .port_shf = 4,
+
+	.port_shf = 4,
 	// .port_mask = 0x1f,
-	// .port_align = 4,
-	// .mode_mask = 0xf,
-	// .mode_per_reg = 5,
-	// .mode_shf = 4,
+	.port_align = 4,
+	.mode_mask = 0xf,
+	.mode_per_reg = 5,
+	.mode_shf = 4,
 	// .eint_hw = {
 	// 	.port_mask = 6,
 	// 	.ports     = 6,
@@ -399,7 +390,7 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 
 static const struct of_device_id mt6589_pctrl_match[] = {
 	{ .compatible = "mediatek,mt6589-pinctrl", .data = &mt6589_pinctrl_data },
-	{}
+	{},
 };
 MODULE_DEVICE_TABLE(of, mt6589_pctrl_match);
 
