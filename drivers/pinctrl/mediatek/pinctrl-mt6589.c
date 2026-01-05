@@ -350,6 +350,7 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(231, DRV_CON12, 4, 0),
 };
 
+/* FIXME: SIM Pins */
 static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
@@ -358,34 +359,36 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.pin_drv_grp = mt6589_pin_drv,
 	.n_pin_drv_grps = ARRAY_SIZE(mt6589_pin_drv),
 
-	/* it cannnot use because MT6589 GPIO regs are Read-Modify-Write */
+	/* FIXME: needs multibase */
 	.ies_offset = 0x0100,
 	.pullen_offset = 0x0200,
 	.smt_offset = 0x0300,
 	.pullsel_offset = 0x0400,
 
-	/* FIXME: don't need mtk_get_regmap */
 	.dir_offset = 0x0000,
 	.dout_offset = 0x0800,
 	.din_offset = 0x0a00,
 	.pinmux_offset = 0x0c00,
 
+	/* disable
 	.type1_start = 114,
 	.type1_end = 169 + 1,
+	*/
 
 	.port_shf = 4,
-	// .port_mask = 0x1f,
+	.port_mask = 0xf,
 	.port_align = 4,
 	.mode_mask = 0xf,
 	.mode_per_reg = 5,
 	.mode_shf = 4,
-	// .eint_hw = {
-	// 	.port_mask = 6,
-	// 	.ports     = 6,
-	// 	.ap_num    = 169,
-	// 	.db_cnt    = 16,
-	// 	.db_time   = debounce_time_mt2701,
-	// },
+
+	.eint_hw = {
+		.port_mask = 7,
+		.ports     = 6,
+		.ap_num    = 192,
+		.db_cnt    = 16,
+		.db_time   = debounce_time_mt6795,
+	},
 };
 
 static const struct of_device_id mt6589_pctrl_match[] = {
