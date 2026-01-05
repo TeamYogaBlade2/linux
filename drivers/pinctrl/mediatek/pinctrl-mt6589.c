@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Author: akku <akkun11.open@gmail.com>
+ *
+ * Based on pinctrl-mt2701.c
  * Copyright (c) 2015 MediaTek Inc.
  * Author: Biao Huang <biao.huang@mediatek.com>
- *
- * Author: akku <akkun11.open@gmail.com>
  */
 
 #include <linux/module.h>
@@ -350,7 +351,6 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(231, DRV_CON12, 4, 0),
 };
 
-/* FIXME: SIM Pins */
 static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
@@ -360,6 +360,10 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.n_pin_drv_grps = ARRAY_SIZE(mt6589_pin_drv),
 
 	/* FIXME: needs multibase */
+	/* disable
+	.type1_start = 114,
+	.type1_end = 169 + 1,
+	*/
 	.ies_offset = 0x0100,
 	.pullen_offset = 0x0200,
 	.smt_offset = 0x0300,
@@ -368,12 +372,8 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.dir_offset = 0x0000,
 	.dout_offset = 0x0800,
 	.din_offset = 0x0a00,
+	/* FIXME: SIM pinmux */
 	.pinmux_offset = 0x0c00,
-
-	/* disable
-	.type1_start = 114,
-	.type1_end = 169 + 1,
-	*/
 
 	.port_shf = 4,
 	.port_mask = 0xf,
