@@ -10,6 +10,8 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/regmap.h>
+#include <dt-bindings/pinctrl/mt65xx.h>
 
 #include "pinctrl-mtk-common.h"
 #include "pinctrl-mtk-mt6589.h"
@@ -176,7 +178,7 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(80, DRV_CON4, 16, 1),
 
 	/* UR4 */
-	MTK_PIN_DRV_GRP(81, DRV_CON4, 20 1),
+	MTK_PIN_DRV_GRP(81, DRV_CON4, 20, 1),
 	MTK_PIN_DRV_GRP(82, DRV_CON4, 24, 1),
 
 	/* BPI1B */
@@ -199,7 +201,7 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(99, DRV_CON5, 12, 1),
 
 	/* VM 1, 0 */
-	MTK_PIN_DRV_GRP(100, DRV_CON5, 12, 1)
+	MTK_PIN_DRV_GRP(100, DRV_CON5, 12, 1),
 	MTK_PIN_DRV_GRP(101, DRV_CON5, 12, 1),
 
 	/* BSI 1 */
@@ -351,6 +353,57 @@ static const struct mtk_pin_drv_grp mt6589_pin_drv[] = {
 	MTK_PIN_DRV_GRP(231, DRV_CON12, 4, 0),
 };
 
+#define MT6589_SIM_MODE_PER_REG	3
+#define MT6589_SIM_MODE_BITS	4
+
+/* based on mtk_pmx_set_mode (pinctrl-mtk-common.c)*/
+static void mt6589_pinmux_set(struct regmap *reg, unsigned int pin, unsigned int mode)
+{
+	unsigned int pin2, reg_addr, val;
+	unsigned char bit;
+	unsigned int mask = (1L << MT6589_SIM_MODE_BITS) - 1;
+	if (pin < 44 || pin > 49) return;
+
+	pin2 = pin - 44;
+	if (pin2 <= 2) reg_addr = 0x0980;
+	else reg_addr = 0x09a0;
+
+	mode &= mask;
+	bit = pin2 % MT6589_SIM_MODE_PER_REG;
+	mask <<= (MT6589_SIM_MODE_BITS * bit);
+	val = (mode << (MT6589_SIM_MODE_BITS * bit));
+	regmap_update_bits(reg, reg_addr, mask, val);
+}
+
+static int mt6589_pull_set(struct regmap *regmap,
+		const struct mtk_pinctrl_devdata *devdata,
+		unsigned int pin, bool isup, unsigned int arg)
+{
+	unsigned int pin2, reg_addr, bit_en, bit_sel;
+	unsigned int mask, val;
+	bool enable = (arg != MTK_PUPD_SET_R1R0_00);
+
+	if (pin < 44 || pin > 49)
+		return -EINVAL;
+
+	pin2 = pin - 44;
+	if (pin2 <= 2)
+		reg_addr = 0x0990;
+	else
+		reg_addr = 0x09b0;
+
+	bit_en = (pin2 % 3) + 4;
+	bit_sel = (pin2 % 3) + 8;
+
+	mask = BIT(bit_en) | BIT(bit_sel);
+	val = (enable ? BIT(bit_en) : 0) | (isup ? BIT(bit_sel) : 0);
+
+	regmap_update_bits(regmap, reg_addr, mask, val);
+
+	return 0;
+}
+
+/* TODO: MSDC_R0, BIAS */
 static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
@@ -358,30 +411,29 @@ static const struct mtk_pinctrl_devdata mt6589_pinctrl_data = {
 	.n_grp_cls = ARRAY_SIZE(mt6589_drv_grp),
 	.pin_drv_grp = mt6589_pin_drv,
 	.n_pin_drv_grps = ARRAY_SIZE(mt6589_pin_drv),
-
-	/* FIXME: needs multibase */
-	/* disable
-	.type1_start = 114,
-	.type1_end = 169 + 1,
-	*/
-	.ies_offset = 0x0100,
-	.pullen_offset = 0x0200,
-	.smt_offset = 0x0300,
-	.pullsel_offset = 0x0400,
-
+	.drv_multibase = true,
+	.spec_pull_set = mt6589_pull_set,
 	.dir_offset = 0x0000,
+	.ies_offset = 0x0100,
+	.ies_multibase = true,
+	.pullen_offset = 0x0200,
+	.pullen_multibase = true,
+	.smt_offset = 0x0300,
+	.smt_multibase = true,
+	.pullsel_offset = 0x0400,
+	.pullsel_multibase = true,
 	.dout_offset = 0x0800,
 	.din_offset = 0x0a00,
-	/* FIXME: SIM pinmux */
 	.pinmux_offset = 0x0c00,
-
+	.spec_pinmux_set = mt6589_pinmux_set,
+	.type1_start = 114,
+	.type1_end = 169 + 1,
 	.port_shf = 4,
 	.port_mask = 0xf,
 	.port_align = 4,
 	.mode_mask = 0xf,
 	.mode_per_reg = 5,
 	.mode_shf = 4,
-
 	.eint_hw = {
 		.port_mask = 7,
 		.ports     = 6,
