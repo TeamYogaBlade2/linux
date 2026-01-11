@@ -4,6 +4,7 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
 #include "mt6589.dtsi"
 
 / {

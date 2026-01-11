@@ -8,4 +8,24 @@
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
 	compatible = "lenovo,blade-b8000-f", "lenovo,blade", "mediatek,mt6589";
+
+	usb_vbus: regulator@0 {
+		compatible = "regulator-fixed";
+		regulator-name = "usb_vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&pio 57 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+};
+
+&usb0 {
+	status = "okay";
+	usb-role-switch;
+	connector {
+		compatible = "gpio-usb-b-connector", "usb-b-connector";
+		type = "micro";
+		id-gpios = <&pio 130 GPIO_ACTIVE_HIGH>;
+		vbus-supply = <&usb_vbus>;
+	};
 };

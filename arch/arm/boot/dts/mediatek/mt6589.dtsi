@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/phy/phy.h>
 
 / {
 	#address-cells = <1>;
@@ -260,6 +261,69 @@
 			clocks = <&pericfg CLK_PERI_MUX_UART3>, <&pericfg CLK_PERI0_UART3>;
 			clock-names = "baud", "bus";
 			status = "disabled";
+		};
+
+		/* USB 2.0 */
+		usb0: usb@11200000 {
+			compatible = "mediatek,mt6589-musb",
+				     "mediatek,mtk-musb";
+			reg = <0x11200000 0x1000>;
+			interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "mc";
+			phys = <&usb_port0 PHY_TYPE_USB2>;
+			dr_mode = "otg";
+			/* FIXME: clocks */
+			clocks = <&clk26m>, <&clk26m>, <&clk26m>;
+/*
+			clocks = <&pericfg CLK_PERI0_USB0>,
+				 <&clk26m>,
+				 <&topckgen CLK_TOP_UNIVPLL_D26>;
+*/
+			clock-names = "main", "mcu", "univpll";
+			status = "disabled";
+		};
+
+		/* USB 1.1 */
+		usb1: usb@11210000 {
+			compatible = "mediatek,mt6589-musb",
+				     "mediatek,mtk-musb";
+			reg = <0x11210000 0x1000>;
+			interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "mc";
+			phys = <&usb_port1 PHY_TYPE_USB2>;
+			dr_mode = "otg";
+			clocks = <&pericfg CLK_PERI0_USB1>,
+				 <&clk26m>,
+				 <&topckgen CLK_TOP_UNIVPLL_D26>;
+			clock-names = "main", "mcu", "univpll";
+			status = "disabled";
+		};
+
+		u2phy0: t-phy@11220000 {
+			compatible = "mediatek,mt6589-tphy",
+				     "mediatek,generic-tphy-v1";
+			reg = <0x11220000 0x0800>;
+			ranges;
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			usb_port0: usb-phy@11220800 {
+				reg = <0x11220800 0x0100>;
+				/* clocks = <&topckgen CLK_TOP_UNIVPLL_D26>; */
+				clocks = <&clk26m>;
+				clock-names = "ref";
+				#phy-cells = <1>;
+				status = "okay";
+			};
+
+			usb_port1: usb-phy@11220900 {
+				reg = <0x11220900 0x0100>;
+				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+				clock-names = "ref";
+				#phy-cells = <1>;
+				status = "okay";
+			};
 		};
 	};
 };
