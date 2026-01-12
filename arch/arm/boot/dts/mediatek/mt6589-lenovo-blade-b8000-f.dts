@@ -3,13 +3,15 @@
  * Copyright (c) 2025 akku <akkun11.open@gmail.com>
  */
 
+#include <dt-bindings/gpio/gpio.h>
+
 #include "mt6589-lenovo-blade.dtsi"
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
 	compatible = "lenovo,blade-b8000-f", "lenovo,blade", "mediatek,mt6589";
 
-	usb_vbus: regulator@0 {
+	usb_vbus: regulator-usb {
 		compatible = "regulator-fixed";
 		regulator-name = "usb_vbus";
 		regulator-min-microvolt = <5000000>;
@@ -22,6 +24,8 @@
 &usb0 {
 	status = "okay";
 	usb-role-switch;
+	dr_mode = "otg";
+
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
