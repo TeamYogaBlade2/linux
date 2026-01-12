@@ -25,6 +25,7 @@
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
+		/* unconfirmed */
 		id-gpios = <&pio 130 GPIO_ACTIVE_HIGH>;
 		vbus-supply = <&usb_vbus>;
 	};
