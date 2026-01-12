@@ -150,7 +150,7 @@
 		 */
 		pio: pinctrl@10005000 {
 			compatible = "mediatek,mt6589-pinctrl";
-			reg = <0 0x1000b000 0 0x1000>;
+			reg = <0x1000b000 0x1000>;
 			mediatek,pctl-regmap = <&syscfg_pctl_a &syscfg_pctl_b>;
 			gpio-controller;
 			#gpio-cells = <2>;
@@ -163,12 +163,12 @@
 
 		syscfg_pctl_a: syscfg_pctl_a@10005000 {
 			compatible = "mediatek,mt6589-pctl-a-syscfg", "syscon";
-			reg = <0 0x10005000 0 0x1000>;
+			reg = <0x10005000 0x1000>;
 		};
 
 		syscfg_pctl_b: syscfg_pctl_b@1020c000 {
 			compatible = "mediatek,mt6589-pctl-b-syscfg", "syscon";
-			reg = <0 0x1020c000 0 0x1000>;
+			reg = <0x1020c000 0x1000>;
 		};
 
 		timer: timer@10008000 {
