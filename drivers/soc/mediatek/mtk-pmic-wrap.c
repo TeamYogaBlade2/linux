@@ -2321,6 +2321,19 @@ static const struct pmic_wrapper_type pwrap_mt2701 = {
 	.init_soc_specific = pwrap_mt2701_init_soc_specific,
 };
 
+static const struct pmic_wrapper_type pwrap_mt6589 = {
+	.regs = mt6589_regs,
+	.type = PWRAP_MT6589,
+	.arb_en_all = 0x1ff,
+	.int_en_all = 0x7ffffffd,
+	.int1_en_all = 0,
+	.spi_w = PWRAP_MAN_CMD_SPI_WRITE,
+	.wdt_src = PWRAP_WDT_SRC_MASK_ALL,
+	.caps = PWRAP_CAP_BRIDGE | PWRAP_CAP_RESET | PWRAP_CAP_DCM,
+	.init_reg_clock = pwrap_mt6589_init_reg_clock,
+	.init_soc_specific = pwrap_mt6589_init_soc_specific,
+};
+
 static const struct pmic_wrapper_type pwrap_mt6765 = {
 	.regs = mt6765_regs,
 	.type = PWRAP_MT6765,
@@ -2344,20 +2357,6 @@ static const struct pmic_wrapper_type pwrap_mt6779 = {
 	.caps = 0,
 	.init_reg_clock = pwrap_common_init_reg_clock,
 	.init_soc_specific = NULL,
-};
-
-
-static const struct pmic_wrapper_type pwrap_mt6589 = {
-	.regs = mt6589_regs,
-	.type = PWRAP_MT6589,
-	.arb_en_all = 0x1ff,
-	.int_en_all = 0x7ffffffd,
-	.int1_en_all = 0,
-	.spi_w = PWRAP_MAN_CMD_SPI_WRITE,
-	.wdt_src = PWRAP_WDT_SRC_MASK_ALL,
-	.caps = PWRAP_CAP_BRIDGE | PWRAP_CAP_RESET | PWRAP_CAP_DCM,
-	.init_reg_clock = pwrap_mt6589_init_reg_clock,
-	.init_soc_specific = pwrap_mt6589_init_soc_specific,
 };
 
 static const struct pmic_wrapper_type pwrap_mt6795 = {
