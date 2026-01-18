@@ -10,7 +10,7 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
-#define TOP_CKMUXSEL	0x10001000
+#define TOP_CKMUXSEL	0x0
 
 static const char * const infra_mux1_parents[] = {
 	"clk26m",
