@@ -161,8 +161,9 @@
 			clocks = <&infracfg CLK_INFRA_PMICSPI>,
 				 <&infracfg CLK_INFRA_PMICWRAP>;
 			clock-names = "spi", "wrap";
-			resets = <&infracfg MT6589_INFRA_PMIC_WRAP_RST>;
-			reset-names = "pwrap";
+			resets = <&infracfg MT6589_INFRA_PMIC_WRAP_RST>,
+				 <&pericfg MT6589_PERI_PWRAP_BRIDGE_SW_RST>;
+			reset-names = "pwrap", "pwrap-bridge";
 		};
 
 		sysirq: interrupt-controller@10200100 {
