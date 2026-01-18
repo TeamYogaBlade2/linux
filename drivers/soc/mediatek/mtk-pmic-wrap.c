@@ -1301,6 +1301,7 @@ static const int mt8186_regs[] = {
 };
 
 enum pmic_type {
+	PMIC_MT6320,
 	PMIC_MT6323,
 	PMIC_MT6331,
 	PMIC_MT6332,
@@ -1852,6 +1853,7 @@ static int pwrap_init_cipher(struct pmic_wrapper *wrp)
 	pwrap_writel(wrp, 0x2, PWRAP_CIPHER_IV_SEL);
 
 	switch (wrp->master->type) {
+	case PWRAP_MT6589:
 	case PWRAP_MT8135:
 		pwrap_writel(wrp, 1, PWRAP_CIPHER_LOAD);
 		pwrap_writel(wrp, 1, PWRAP_CIPHER_START);
@@ -2039,7 +2041,7 @@ static int pwrap_mt6589_init_soc_specific(struct pmic_wrapper *wrp)
 	writel(0x7f, wrp->bridge_base + PWRAP_MT8135_BRIDGE_IORD_ARB_EN);
 	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS3_EN);
 	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS4_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_UNIT);
+	writel(0xf, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_UNIT);
 	writel(0xffff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_SRC_EN);
 	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_TIMER_EN);
 	writel(0x7ff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INT_EN);
@@ -2154,7 +2156,8 @@ static int pwrap_init(struct pmic_wrapper *wrp)
 			return ret;
 	}
 
-	if (wrp->master->type == PWRAP_MT8135)
+	if (wrp->master->type == PWRAP_MT8135 ||
+		wrp->master->type == PWRAP_MT6589)
 		pwrap_writel(wrp, 0x7, PWRAP_RRARB_EN);
 
 	pwrap_writel(wrp, 0x1, PWRAP_WACS0_EN);
@@ -2228,6 +2231,14 @@ static const struct pwrap_slv_regops pwrap_regops32 = {
 	.pwrap_read = pwrap_read32,
 	.pwrap_write = pwrap_write32,
 	.regmap = &pwrap_regmap_config32,
+};
+
+static const struct pwrap_slv_type pmic_mt6320 = {
+	.dew_regs = mt6320_regs,
+	.type = PMIC_MT6320,
+	.regops = /* TODO */,
+	.caps = PWRAP_SLV_CAP_SPI | PWRAP_DEW_DIO_EN |
+		PWRAP_SLV_CAP_SECURITY,
 };
 
 static const struct pwrap_slv_type pmic_mt6323 = {
