@@ -1314,6 +1314,7 @@ enum pmic_type {
 
 enum pwrap_type {
 	PWRAP_MT2701,
+	PWRAP_MT6589,
 	PWRAP_MT6765,
 	PWRAP_MT6779,
 	PWRAP_MT6795,
@@ -1782,6 +1783,23 @@ static int pwrap_mt2701_init_reg_clock(struct pmic_wrapper *wrp)
 	return 0;
 }
 
+static int pwrap_mt6589_init_reg_clock(struct pmic_wrapper *wrp)
+{
+	u32 rdata;
+	u32 wdata;
+	int ret;
+
+	ret = pwrap_read(wrp, PMIC_TOP_CKCON2, &rdata);
+	if (ret) return ret;
+
+	wdata = rdata & ~(0x3 << 10);
+	pwrap_write(wrp, PMIC_TOP_CKCON2, wdata);
+
+	pwrap_writel(wrp, 0x4, PWRAP_CSHEXT);
+	pwrap_init_chip_select_ext(wrp, 0, 4, 0, 0);
+	return 0;
+}
+
 static bool pwrap_is_cipher_ready(struct pmic_wrapper *wrp)
 {
 	return pwrap_readl(wrp, PWRAP_CIPHER_RDY) & 1;
@@ -2007,6 +2025,32 @@ static int pwrap_mt2701_init_soc_specific(struct pmic_wrapper *wrp)
 		break;
 	default:
 		break;
+	}
+
+	return 0;
+}
+
+/* only copied from pwrap_mt8135_init_soc_specific, needed to port more */
+static int pwrap_mt6589_init_soc_specific(struct pmic_wrapper *wrp)
+{
+	/* enable pwrap events and pwrap bridge in AP side */
+	pwrap_writel(wrp, 0x1, PWRAP_EVENT_IN_EN);
+	pwrap_writel(wrp, 0xffff, PWRAP_EVENT_DST_EN);
+	writel(0x7f, wrp->bridge_base + PWRAP_MT8135_BRIDGE_IORD_ARB_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS3_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS4_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_UNIT);
+	writel(0xffff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_SRC_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_TIMER_EN);
+	writel(0x7ff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INT_EN);
+
+	/* enable PMIC event out and sources */
+	if (pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_OUT_EN],
+			0x1) ||
+	    pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_SRC_EN],
+			0xffff)) {
+		dev_err(wrp->dev, "enable dewrap fail\n");
+		return -EFAULT;
 	}
 
 	return 0;
@@ -2302,6 +2346,20 @@ static const struct pmic_wrapper_type pwrap_mt6779 = {
 	.init_soc_specific = NULL,
 };
 
+
+static const struct pmic_wrapper_type pwrap_mt6589 = {
+	.regs = mt6589_regs,
+	.type = PWRAP_MT6589,
+	.arb_en_all = 0x1ff,
+	.int_en_all = 0x7ffffffd,
+	.int1_en_all = 0,
+	.spi_w = PWRAP_MAN_CMD_SPI_WRITE,
+	.wdt_src = PWRAP_WDT_SRC_MASK_ALL,
+	.caps = PWRAP_CAP_BRIDGE | PWRAP_CAP_RESET | PWRAP_CAP_DCM,
+	.init_reg_clock = pwrap_mt6589_init_reg_clock,
+	.init_soc_specific = pwrap_mt6589_init_soc_specific,
+};
+
 static const struct pmic_wrapper_type pwrap_mt6795 = {
 	.regs = mt6795_regs,
 	.type = PWRAP_MT6795,
@@ -2446,6 +2504,7 @@ static const struct pmic_wrapper_type pwrap_mt8186 = {
 
 static const struct of_device_id of_pwrap_match_tbl[] = {
 	{ .compatible = "mediatek,mt2701-pwrap", .data = &pwrap_mt2701 },
+	{ .compatible = "mediatek,mt6589-pwrap", .data = &pwrap_mt6589 },
 	{ .compatible = "mediatek,mt6765-pwrap", .data = &pwrap_mt6765 },
 	{ .compatible = "mediatek,mt6779-pwrap", .data = &pwrap_mt6779 },
 	{ .compatible = "mediatek,mt6795-pwrap", .data = &pwrap_mt6795 },
