@@ -151,6 +151,17 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
+		pwrap: pwrap@1000f000 {
+			compatible = "mediatek,mt6589-pwrap";
+			reg = <0x1000f000 0x1000>,
+			      <0x11017000 0x1000>;
+			reg-names = "pwrap", "pwrap-bridge";
+			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&infracfg CLK_INFRA_PMICSPI>,
+				 <&infracfg CLK_INFRA_PMICWRAP>;
+			clock-names = "spi", "wrap";
+		};
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6589-sysirq",
 				     "mediatek,mt6577-sysirq";
