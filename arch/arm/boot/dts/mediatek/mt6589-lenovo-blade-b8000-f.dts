@@ -4,6 +4,7 @@
  */
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 
 #include "mt6589-lenovo-blade.dtsi"
 
@@ -16,20 +17,42 @@
 		regulator-name = "usb_vbus";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
+//		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
+
+		// testing
+		regulator-boot-on;
+		regulator-always-on;
+	};
+};
+
+&pio {
+	usb_pins: usb-pins {
+		pins_iddig {
+			pinmux = <MT6589_PIN_57_GPIO57__FUNC_EINT34>;
+			input-enable;
+			bias-pull-up;
+		};
 	};
 };
 
 &usb0 {
 	status = "okay";
-	usb-role-switch;
-	dr_mode = "otg";
+//	usb-role-switch;
+//	dr_mode = "otg";
+	dr_mode = "peripheral";
 
+	// testing
+	//vbus-supply = <&usb_vbus>;
+/*
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
 		id-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
 		vbus-supply = <&usb_vbus>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb_pins>;
 	};
+*/
 };
