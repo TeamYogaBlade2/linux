@@ -261,5 +261,60 @@
 			clock-names = "baud", "bus";
 			status = "disabled";
 		};
+
+		mmc0: mmc@11230000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11230000 0x1000>;
+			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC0>,
+				 <&topckgen CLK_TOP_MUX_MSDC0>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc1: mmc@11240000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11240000 0x1000>;
+			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC1>,
+				 <&topckgen CLK_TOP_MUX_MSDC1>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc2: mmc@11250000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11250000 0x1000>;
+			interrupts = <GIC_SPI 41 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC2>,
+				 <&topckgen CLK_TOP_MUX_MSDC2>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc3: mmc@11260000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11260000 0x1000>;
+			interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC3>,
+				 <&topckgen CLK_TOP_MUX_MSDC3>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc4: mmc@11270000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11270000 0x1000>;
+			interrupts = <GIC_SPI 83 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC4>,
+				 <&topckgen CLK_TOP_MUX_MSDC4>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
 	};
 };
