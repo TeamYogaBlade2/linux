@@ -1,0 +1,1459 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2026 Me, myself and I
+ */
+
+#ifndef __PINCTRL_MTK_MT6572_H
+#define __PINCTRL_MTK_MT6572_H
+
+#include "pinctrl-paris.h"
+
+static const struct mtk_pin_desc mtk_pins_mt6572[] = {
+    MTK_PIN(
+        0, "GPIO0",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO0"),
+        MTK_FUNCTION(1, "SIM2_SCLK"),
+        MTK_FUNCTION(2, "SIM1_SCLK"),
+        MTK_FUNCTION(7, "CONN_MCU_TMS")
+    ),
+    MTK_PIN(
+        1, "GPIO1",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO1"),
+        MTK_FUNCTION(1, "SIM2_SIO"),
+        MTK_FUNCTION(2, "SIM1_SIO"),
+        MTK_FUNCTION(7, "CONN_MCU_TRST_B")
+    ),
+    MTK_PIN(
+        2, "GPIO2",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO2"),
+        MTK_FUNCTION(1, "SIM1_SCLK"),
+        MTK_FUNCTION(2, "SIM2_SCLK"),
+        MTK_FUNCTION(7, "CONN_MCU_TDI")
+    ),
+    MTK_PIN(
+        3, "GPIO3",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO3"),
+        MTK_FUNCTION(1, "SIM1_SIO"),
+        MTK_FUNCTION(2, "SIM2_SIO"),
+        MTK_FUNCTION(7, "CONN_MCU_TCK")
+    ),
+    MTK_PIN(
+        4, "GPIO4",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO4"),
+        MTK_FUNCTION(1, "AUD_CLK"),
+        MTK_FUNCTION(3, "AUD_ADC_CK"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGI_N")
+    ),
+    MTK_PIN(
+        5, "GPIO5",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO5"),
+        MTK_FUNCTION(1, "AUD_MISO"),
+        MTK_FUNCTION(3, "AUD_ADC_DAT_IN"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGACK_N")
+    ),
+    MTK_PIN(
+        6, "GPIO6",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO6"),
+        MTK_FUNCTION(1, "AUD_MOSI"),
+        MTK_FUNCTION(3, "AUD_ADC_WS"),
+        MTK_FUNCTION(7, "CONN_MCU_TDO")
+    ),
+    MTK_PIN(
+        7, "GPIO7",
+        MTK_EINT_FUNCTION(1, 16),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO7"),
+        MTK_FUNCTION(1, "PMIC_EINT")
+    ),
+    MTK_PIN(
+        8, "GPIO8",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO8"),
+        MTK_FUNCTION(1, "PMIC_SPI_CSN")
+    ),
+    MTK_PIN(
+        9, "GPIO9",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO9"),
+        MTK_FUNCTION(1, "PMIC_SPI_SCK")
+    ),
+    MTK_PIN(
+        10, "GPIO10",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO10"),
+        MTK_FUNCTION(1, "PMIC_SPI_MOSI")
+    ),
+    MTK_PIN(
+        11, "GPIO11",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO11"),
+        MTK_FUNCTION(1, "PMIC_SPI_MISO")
+    ),
+    MTK_PIN(
+        12, "GPIO12",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO12"),
+        MTK_FUNCTION(1, "SRCLKENA")
+    ),
+    MTK_PIN(
+        13, "GPIO13",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO13"),
+        MTK_FUNCTION(1, "WATCHDOG")
+    ),
+    MTK_PIN(
+        14, "GPIO14",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO14"),
+        MTK_FUNCTION(1, "LPD0"),
+        MTK_FUNCTION(2, "PWM3"),
+        MTK_FUNCTION(4, "DPI_B0"),
+        MTK_FUNCTION(5, "DBG_OUT8"),
+        MTK_FUNCTION(6, "DBG_OUT0"),
+        MTK_FUNCTION(7, "CONN_MCU_TMS")
+    ),
+    MTK_PIN(
+        15, "GPIO15",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO15"),
+        MTK_FUNCTION(1, "LPD1"),
+        MTK_FUNCTION(2, "PWM4"),
+        MTK_FUNCTION(4, "DPI_B1"),
+        MTK_FUNCTION(5, "DBG_OUT9"),
+        MTK_FUNCTION(6, "DBG_OUT1"),
+        MTK_FUNCTION(7, "CONN_MCU_TRST_B")
+    ),
+    MTK_PIN(
+        16, "GPIO16",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO16"),
+        MTK_FUNCTION(1, "LPD2"),
+        MTK_FUNCTION(2, "PWM5"),
+        MTK_FUNCTION(4, "DPI_B2"),
+        MTK_FUNCTION(5, "DBG_OUT10"),
+        MTK_FUNCTION(6, "DBG_OUT2"),
+        MTK_FUNCTION(7, "CONN_MCU_TDI")
+    ),
+    MTK_PIN(
+        17, "GPIO17",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO17"),
+        MTK_FUNCTION(1, "LPD3"),
+        MTK_FUNCTION(4, "DPI_B3"),
+        MTK_FUNCTION(5, "DBG_OUT11"),
+        MTK_FUNCTION(6, "DBG_OUT3"),
+        MTK_FUNCTION(7, "CONN_MCU_TCK")
+    ),
+    MTK_PIN(
+        18, "GPIO18",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO18"),
+        MTK_FUNCTION(1, "LPD4"),
+        MTK_FUNCTION(4, "DPI_B4"),
+        MTK_FUNCTION(5, "DBG_OUT12"),
+        MTK_FUNCTION(6, "DBG_OUT4"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGI_N")
+    ),
+    MTK_PIN(
+        19, "GPIO19",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO19"),
+        MTK_FUNCTION(1, "LPD5"),
+        MTK_FUNCTION(4, "DPI_B5"),
+        MTK_FUNCTION(5, "DBG_OUT13"),
+        MTK_FUNCTION(6, "DBG_OUT5"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGACK_N")
+    ),
+    MTK_PIN(
+        20, "GPIO20",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO20"),
+        MTK_FUNCTION(1, "LPD6"),
+        MTK_FUNCTION(4, "DPI_G0"),
+        MTK_FUNCTION(5, "DBG_OUT14"),
+        MTK_FUNCTION(6, "DBG_OUT6"),
+        MTK_FUNCTION(7, "CONN_MCU_TDO")
+    ),
+    MTK_PIN(
+        21, "GPIO21",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO21"),
+        MTK_FUNCTION(1, "LPD7"),
+        MTK_FUNCTION(3, "KCOL7"),
+        MTK_FUNCTION(4, "DPI_G1"),
+        MTK_FUNCTION(5, "DBG_OUT15"),
+        MTK_FUNCTION(6, "DBG_OUT7")
+    ),
+    MTK_PIN(
+        22, "GPIO22",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO22"),
+        MTK_FUNCTION(1, "LPD8"),
+        MTK_FUNCTION(2, "PWM_BL"),
+        MTK_FUNCTION(4, "DPI_G2"),
+        MTK_FUNCTION(6, "DBG_OUT8"),
+        MTK_FUNCTION(7, "CONN_GPIO0")
+    ),
+    MTK_PIN(
+        23, "GPIO23",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO23"),
+        MTK_FUNCTION(1, "LPD9"),
+        MTK_FUNCTION(2, "SRCLKENAI"),
+        MTK_FUNCTION(4, "DPI_G3"),
+        MTK_FUNCTION(6, "DBG_OUT9"),
+        MTK_FUNCTION(7, "CONN_GPIO1")
+    ),
+    MTK_PIN(
+        24, "GPIO24",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO24"),
+        MTK_FUNCTION(1, "LPD10"),
+        MTK_FUNCTION(2, "MC1_INS"),
+        MTK_FUNCTION(4, "DPI_G4"),
+        MTK_FUNCTION(6, "DBG_OUT10"),
+        MTK_FUNCTION(7, "CONN_GPIO2")
+    ),
+    MTK_PIN(
+        25, "GPIO25",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO25"),
+        MTK_FUNCTION(1, "LPD11"),
+        MTK_FUNCTION(2, "EINT5"),
+        MTK_FUNCTION(4, "DPI_G5"),
+        MTK_FUNCTION(6, "DBG_OUT11"),
+        MTK_FUNCTION(7, "CONN_GPIO3")
+    ),
+    MTK_PIN(
+        26, "GPIO26",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO26"),
+        MTK_FUNCTION(1, "LPD12"),
+        MTK_FUNCTION(2, "EINT4"),
+        MTK_FUNCTION(4, "DPI_R0"),
+        MTK_FUNCTION(5, "MD_EINT3"),
+        MTK_FUNCTION(6, "DBG_OUT12"),
+        MTK_FUNCTION(7, "CONN_GPIO4")
+    ),
+    MTK_PIN(
+        27, "GPIO27",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO27"),
+        MTK_FUNCTION(1, "LPD13"),
+        MTK_FUNCTION(2, "EINT3"),
+        MTK_FUNCTION(4, "DPI_R1"),
+        MTK_FUNCTION(5, "MD_EINT2"),
+        MTK_FUNCTION(6, "DBG_OUT13"),
+        MTK_FUNCTION(7, "CONN_GPIO5")
+    ),
+    MTK_PIN(
+        28, "GPIO28",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO28"),
+        MTK_FUNCTION(1, "LPD14"),
+        MTK_FUNCTION(2, "EINT2"),
+        MTK_FUNCTION(4, "DPI_R2"),
+        MTK_FUNCTION(5, "MD_EINT1"),
+        MTK_FUNCTION(6, "DBG_OUT14"),
+        MTK_FUNCTION(7, "CONN_GPIO6")
+    ),
+    MTK_PIN(
+        29, "GPIO29",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO29"),
+        MTK_FUNCTION(1, "LPD15"),
+        MTK_FUNCTION(2, "EINT1"),
+        MTK_FUNCTION(4, "DPI_R3"),
+        MTK_FUNCTION(5, "MD_EINT0"),
+        MTK_FUNCTION(6, "DBG_OUT15"),
+        MTK_FUNCTION(7, "CONN_GPIO7")
+    ),
+    MTK_PIN(
+        30, "GPIO30",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO30"),
+        MTK_FUNCTION(1, "LPD16"),
+        MTK_FUNCTION(2, "EINT0"),
+        MTK_FUNCTION(3, "PWM2"),
+        MTK_FUNCTION(4, "DPI_R4"),
+        MTK_FUNCTION(7, "CONN_MCU_AICE_TCKC")
+    ),
+    MTK_PIN(
+        31, "GPIO31",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO31"),
+        MTK_FUNCTION(1, "LPD17"),
+        MTK_FUNCTION(2, "EINT6"),
+        MTK_FUNCTION(3, "KROW7"),
+        MTK_FUNCTION(4, "DPI_R5"),
+        MTK_FUNCTION(7, "CONN_MCU_AICE_TMSC")
+    ),
+    MTK_PIN(
+        32, "GPIO32",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO32"),
+        MTK_FUNCTION(4, "NFI0"),
+        MTK_FUNCTION(7, "CONN_MCU_TMS")
+    ),
+    MTK_PIN(
+        33, "GPIO33",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO33"),
+        MTK_FUNCTION(4, "NFI1"),
+        MTK_FUNCTION(7, "CONN_MCU_TRST_B")
+    ),
+    MTK_PIN(
+        34, "GPIO34",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO34"),
+        MTK_FUNCTION(4, "NFI2"),
+        MTK_FUNCTION(7, "CONN_MCU_TDI")
+    ),
+    MTK_PIN(
+        35, "GPIO35",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO35"),
+        MTK_FUNCTION(4, "NFI3"),
+        MTK_FUNCTION(7, "CONN_MCU_TCK")
+    ),
+    MTK_PIN(
+        36, "GPIO36",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO36"),
+        MTK_FUNCTION(4, "NFI4"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGI_N")
+    ),
+    MTK_PIN(
+        37, "GPIO37",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO37"),
+        MTK_FUNCTION(4, "NFI5"),
+        MTK_FUNCTION(7, "CONN_MCU_DBGACK_N")
+    ),
+    MTK_PIN(
+        38, "GPIO38",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO38"),
+        MTK_FUNCTION(4, "NFI6"),
+        MTK_FUNCTION(7, "CONN_MCU_TDO")
+    ),
+    MTK_PIN(
+        39, "GPIO39",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO39"),
+        MTK_FUNCTION(4, "NFI7")
+    ),
+    MTK_PIN(
+        40, "GPIO40",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO40"),
+        MTK_FUNCTION(4, "NFI8")
+    ),
+    MTK_PIN(
+        41, "GPIO41",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO41"),
+        MTK_FUNCTION(4, "NFI9")
+    ),
+    MTK_PIN(
+        42, "GPIO42",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO42"),
+        MTK_FUNCTION(4, "NFI10")
+    ),
+    MTK_PIN(
+        43, "GPIO43",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO43"),
+        MTK_FUNCTION(4, "NFI11")
+    ),
+    MTK_PIN(
+        44, "GPIO44",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO44"),
+        MTK_FUNCTION(1, "MC0_CK"),
+        MTK_FUNCTION(3, "LPTE"),
+        MTK_FUNCTION(4, "NFI12")
+    ),
+    MTK_PIN(
+        45, "GPIO45",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO45"),
+        MTK_FUNCTION(1, "MC0_CMD"),
+        MTK_FUNCTION(3, "LPA0"),
+        MTK_FUNCTION(4, "NFI13")
+    ),
+    MTK_PIN(
+        46, "GPIO46",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO46"),
+        MTK_FUNCTION(1, "MC0_DAT0"),
+        MTK_FUNCTION(3, "LPWRB"),
+        MTK_FUNCTION(4, "NFI14")
+    ),
+    MTK_PIN(
+        47, "GPIO47",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO47"),
+        MTK_FUNCTION(1, "MC0_DAT1"),
+        MTK_FUNCTION(3, "LPRDB"),
+        MTK_FUNCTION(4, "NFI15")
+    ),
+    MTK_PIN(
+        48, "GPIO48",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO48"),
+        MTK_FUNCTION(1, "MC0_DAT2"),
+        MTK_FUNCTION(4, "NFI16")
+    ),
+    MTK_PIN(
+        49, "GPIO49",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO49"),
+        MTK_FUNCTION(1, "MC0_DAT3"),
+        MTK_FUNCTION(3, "LPCE0B"),
+        MTK_FUNCTION(4, "NFI17")
+    ),
+    MTK_PIN(
+        50, "GPIO50",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO50"),
+        MTK_FUNCTION(1, "MC0_DAT4"),
+        MTK_FUNCTION(2, "PWM_BL"),
+        MTK_FUNCTION(4, "NFI18")
+    ),
+    MTK_PIN(
+        51, "GPIO51",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO51"),
+        MTK_FUNCTION(1, "MC0_DAT5"),
+        MTK_FUNCTION(2, "EINT13"),
+        MTK_FUNCTION(4, "NFI19")
+    ),
+    MTK_PIN(
+        52, "GPIO52",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO52"),
+        MTK_FUNCTION(1, "MC0_DAT6"),
+        MTK_FUNCTION(2, "EINT14"),
+        MTK_FUNCTION(4, "NFI20")
+    ),
+    MTK_PIN(
+        53, "GPIO53",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO53"),
+        MTK_FUNCTION(1, "MC0_DAT7"),
+        MTK_FUNCTION(2, "MC1_INS"),
+        MTK_FUNCTION(4, "NFI21")
+    ),
+    MTK_PIN(
+        54, "GPIO54",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO54"),
+        MTK_FUNCTION(1, "MC0_RSTB"),
+        MTK_FUNCTION(2, "EINT12"),
+        MTK_FUNCTION(3, "LRSTB"),
+        MTK_FUNCTION(4, "NFI22")
+    ),
+    MTK_PIN(
+        55, "GPIO55",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO55"),
+        MTK_FUNCTION(1, "SD_DAT0"),
+        MTK_FUNCTION(2, "LPTE"),
+        MTK_FUNCTION(3, "SFCK"),
+        MTK_FUNCTION(5, "DPI_CK")
+    ),
+    MTK_PIN(
+        56, "GPIO56",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO56"),
+        MTK_FUNCTION(1, "SD_DAT1"),
+        MTK_FUNCTION(2, "LPA0"),
+        MTK_FUNCTION(3, "SFCS1"),
+        MTK_FUNCTION(4, "EINT10"),
+        MTK_FUNCTION(5, "DPI_DE")
+    ),
+    MTK_PIN(
+        57, "GPIO57",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO57"),
+        MTK_FUNCTION(1, "SD_DAT2"),
+        MTK_FUNCTION(2, "LPWRB"),
+        MTK_FUNCTION(3, "SFIN"),
+        MTK_FUNCTION(4, "EINT11"),
+        MTK_FUNCTION(5, "DPI_VSYNC")
+    ),
+    MTK_PIN(
+        58, "GPIO58",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO58"),
+        MTK_FUNCTION(1, "SD_DAT3"),
+        MTK_FUNCTION(2, "LPRDB"),
+        MTK_FUNCTION(3, "SFHOLD"),
+        MTK_FUNCTION(4, "EINT12"),
+        MTK_FUNCTION(5, "DPI_HSYNC")
+    ),
+    MTK_PIN(
+        59, "GPIO59",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO59"),
+        MTK_FUNCTION(1, "SD_CK"),
+        MTK_FUNCTION(2, "LRSTB"),
+        MTK_FUNCTION(3, "SFOUT")
+    ),
+    MTK_PIN(
+        60, "GPIO60",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO60"),
+        MTK_FUNCTION(1, "SD_CMD"),
+        MTK_FUNCTION(2, "LPCE0B"),
+        MTK_FUNCTION(3, "SFWP_B"),
+        MTK_FUNCTION(4, "EINT9"),
+        MTK_FUNCTION(5, "LSCE0B")
+    ),
+    MTK_PIN(
+        61, "GPIO61",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO61"),
+        MTK_FUNCTION(1, "CMPCLK"),
+        MTK_FUNCTION(2, "CMCSK"),
+        MTK_FUNCTION(6, "DBG_OUT0")
+    ),
+    MTK_PIN(
+        62, "GPIO62",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO62"),
+        MTK_FUNCTION(1, "CMMCLK"),
+        MTK_FUNCTION(6, "DBG_OUT1")
+    ),
+    MTK_PIN(
+        63, "GPIO63",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO63"),
+        MTK_FUNCTION(1, "CMDAT0"),
+        MTK_FUNCTION(3, "EINT3"),
+        MTK_FUNCTION(5, "TDD_TXD"),
+        MTK_FUNCTION(6, "DBG_OUT2"),
+        MTK_FUNCTION(7, "CONN_GPIO16")
+    ),
+    MTK_PIN(
+        64, "GPIO64",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO64"),
+        MTK_FUNCTION(1, "CMDAT1"),
+        MTK_FUNCTION(3, "EINT13"),
+        MTK_FUNCTION(5, "MD_DSPJTD"),
+        MTK_FUNCTION(6, "DBG_OUT3"),
+        MTK_FUNCTION(7, "CONN_GPIO17")
+    ),
+    MTK_PIN(
+        65, "GPIO65",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO65"),
+        MTK_FUNCTION(1, "CMDAT2"),
+        MTK_FUNCTION(3, "EINT7"),
+        MTK_FUNCTION(5, "MD_DSPJTCK"),
+        MTK_FUNCTION(6, "DBG_OUT4"),
+        MTK_FUNCTION(7, "CONN_GPIO18")
+    ),
+    MTK_PIN(
+        66, "GPIO66",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO66"),
+        MTK_FUNCTION(1, "CMDAT3"),
+        MTK_FUNCTION(3, "EINT8"),
+        MTK_FUNCTION(5, "MD_DSPJTMS"),
+        MTK_FUNCTION(6, "DBG_OUT5"),
+        MTK_FUNCTION(7, "CONN_GPIO19")
+    ),
+    MTK_PIN(
+        67, "GPIO67",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO67"),
+        MTK_FUNCTION(1, "MIPI_RDP0_A"),
+        MTK_FUNCTION(2, "CMDAT4"),
+        MTK_FUNCTION(3, "MC1_INS")
+    ),
+    MTK_PIN(
+        68, "GPIO68",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO68"),
+        MTK_FUNCTION(1, "MIPI_RDN0_A"),
+        MTK_FUNCTION(2, "CMDAT5"),
+        MTK_FUNCTION(3, "KCOL3")
+    ),
+    MTK_PIN(
+        69, "GPIO69",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO69"),
+        MTK_FUNCTION(1, "MIPI_RDP1_A"),
+        MTK_FUNCTION(2, "CMDAT6"),
+        MTK_FUNCTION(3, "KCOL4"),
+        MTK_FUNCTION(4, "EINT7")
+    ),
+    MTK_PIN(
+        70, "GPIO70",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO70"),
+        MTK_FUNCTION(1, "MIPI_RDN1_A"),
+        MTK_FUNCTION(2, "CMDAT7"),
+        MTK_FUNCTION(3, "KCOL5"),
+        MTK_FUNCTION(4, "EINT8")
+    ),
+    MTK_PIN(
+        71, "GPIO71",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO71"),
+        MTK_FUNCTION(1, "MIPI_RCP_A"),
+        MTK_FUNCTION(2, "CMHSYNC"),
+        MTK_FUNCTION(3, "KCOL6")
+    ),
+    MTK_PIN(
+        72, "GPIO72",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO72"),
+        MTK_FUNCTION(1, "MIPI_RCN_A"),
+        MTK_FUNCTION(2, "CMVSYNC"),
+        MTK_FUNCTION(3, "KCOL7")
+    ),
+    MTK_PIN(
+        73, "GPIO73",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO73"),
+        MTK_FUNCTION(1, "MIPI_RDP0"),
+        MTK_FUNCTION(3, "EINT3"),
+        MTK_FUNCTION(4, "MC1_INS")
+    ),
+    MTK_PIN(
+        74, "GPIO74",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO74"),
+        MTK_FUNCTION(1, "MIPI_RDN0"),
+        MTK_FUNCTION(3, "EINT4"),
+        MTK_FUNCTION(4, "KCOL3")
+    ),
+    MTK_PIN(
+        75, "GPIO75",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO75"),
+        MTK_FUNCTION(1, "MIPI_RDP1"),
+        MTK_FUNCTION(3, "EINT7"),
+        MTK_FUNCTION(4, "KCOL4")
+    ),
+    MTK_PIN(
+        76, "GPIO76",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO76"),
+        MTK_FUNCTION(1, "MIPI_RDN1"),
+        MTK_FUNCTION(3, "EINT8"),
+        MTK_FUNCTION(4, "KCOL5")
+    ),
+    MTK_PIN(
+        77, "GPIO77",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO77"),
+        MTK_FUNCTION(1, "MIPI_RCP"),
+        MTK_FUNCTION(2, "EINT6"),
+        MTK_FUNCTION(3, "MC1_INS"),
+        MTK_FUNCTION(4, "KCOL6")
+    ),
+    MTK_PIN(
+        78, "GPIO78",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO78"),
+        MTK_FUNCTION(1, "MIPI_RCN"),
+        MTK_FUNCTION(3, "SRCLKENAI"),
+        MTK_FUNCTION(4, "KCOL7")
+    ),
+    MTK_PIN(
+        79, "GPIO79",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO79"),
+        MTK_FUNCTION(1, "MIPI_TDP0"),
+        MTK_FUNCTION(3, "EINT9")
+    ),
+    MTK_PIN(
+        80, "GPIO80",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO80"),
+        MTK_FUNCTION(1, "MIPI_TDN0"),
+        MTK_FUNCTION(3, "EINT10")
+    ),
+    MTK_PIN(
+        81, "GPIO81",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO81"),
+        MTK_FUNCTION(1, "MIPI_TDP1"),
+        MTK_FUNCTION(3, "EINT11")
+    ),
+    MTK_PIN(
+        82, "GPIO82",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO82"),
+        MTK_FUNCTION(1, "MIPI_TDN1"),
+        MTK_FUNCTION(3, "EINT12")
+    ),
+    MTK_PIN(
+        83, "GPIO83",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO83"),
+        MTK_FUNCTION(1, "MIPI_TCP"),
+        MTK_FUNCTION(3, "EINT13")
+    ),
+    MTK_PIN(
+        84, "GPIO84",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO84"),
+        MTK_FUNCTION(1, "MIPI_TCN"),
+        MTK_FUNCTION(3, "EINT14"),
+        MTK_FUNCTION(4, "SRCLKENAI")
+    ),
+    MTK_PIN(
+        85, "GPIO85",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO85"),
+        MTK_FUNCTION(1, "MIPI_TDP2"),
+        MTK_FUNCTION(3, "MD_EINT0")
+    ),
+    MTK_PIN(
+        86, "GPIO86",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP4,
+        MTK_FUNCTION(0, "GPIO86"),
+        MTK_FUNCTION(1, "MIPI_TDN2"),
+        MTK_FUNCTION(3, "MD_EINT1"),
+        MTK_FUNCTION(4, "MC1_INS")
+    ),
+    MTK_PIN(
+        87, "GPIO87",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO87"),
+        MTK_FUNCTION(1, "EINT8"),
+        MTK_FUNCTION(2, "SFCS2"),
+        MTK_FUNCTION(3, "KCOL3"),
+        MTK_FUNCTION(4, "TDD_TXD"),
+        MTK_FUNCTION(5, "JTCK"),
+        MTK_FUNCTION(6, "DBG_OUT6"),
+        MTK_FUNCTION(7, "CONN_GPIO20")
+    ),
+    MTK_PIN(
+        88, "GPIO88",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO88"),
+        MTK_FUNCTION(1, "EINT9"),
+        MTK_FUNCTION(2, "MC1_INS"),
+        MTK_FUNCTION(3, "KCOL4"),
+        MTK_FUNCTION(5, "JTMS"),
+        MTK_FUNCTION(6, "DBG_OUT7"),
+        MTK_FUNCTION(7, "CONN_GPIO21")
+    ),
+    MTK_PIN(
+        89, "GPIO89",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO89"),
+        MTK_FUNCTION(1, "EINT14"),
+        MTK_FUNCTION(2, "SCL_1_1"),
+        MTK_FUNCTION(3, "KROW7"),
+        MTK_FUNCTION(4, "SIM1_SRST"),
+        MTK_FUNCTION(5, "JTDI"),
+        MTK_FUNCTION(6, "DBG_OUT8"),
+        MTK_FUNCTION(7, "CONN_GPIO22")
+    ),
+    MTK_PIN(
+        90, "GPIO90",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO90"),
+        MTK_FUNCTION(1, "EINT15"),
+        MTK_FUNCTION(2, "SDA_1_1"),
+        MTK_FUNCTION(3, "KCOL7"),
+        MTK_FUNCTION(4, "SIM2_SRST"),
+        MTK_FUNCTION(5, "JTDO"),
+        MTK_FUNCTION(6, "DBG_OUT9"),
+        MTK_FUNCTION(7, "CONN_GPIO23")
+    ),
+    MTK_PIN(
+        91, "GPIO91",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO91"),
+        MTK_FUNCTION(1, "MC1_CK"),
+        MTK_FUNCTION(4, "JTMS"),
+        MTK_FUNCTION(5, "TDD_TMS"),
+        MTK_FUNCTION(7, "CONN_DSP_JDI")
+    ),
+    MTK_PIN(
+        92, "GPIO92",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO92"),
+        MTK_FUNCTION(1, "MC1_CMD"),
+        MTK_FUNCTION(5, "TDD_TRSTN"),
+        MTK_FUNCTION(7, "CONN_DSP_JDO")
+    ),
+    MTK_PIN(
+        93, "GPIO93",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO93"),
+        MTK_FUNCTION(1, "MC1_DAT0"),
+        MTK_FUNCTION(4, "JTCK"),
+        MTK_FUNCTION(5, "TDD_TCK"),
+        MTK_FUNCTION(7, "CONN_DSP_JCK")
+    ),
+    MTK_PIN(
+        94, "GPIO94",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO94"),
+        MTK_FUNCTION(1, "MC1_DAT1"),
+        MTK_FUNCTION(5, "DAI_RX_GPIO"),
+        MTK_FUNCTION(6, "TDD_TXD")
+    ),
+    MTK_PIN(
+        95, "GPIO95",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO95"),
+        MTK_FUNCTION(1, "MC1_DAT2"),
+        MTK_FUNCTION(4, "JTDI"),
+        MTK_FUNCTION(5, "TDD_TDI"),
+        MTK_FUNCTION(7, "CONN_DSP_JINTP")
+    ),
+    MTK_PIN(
+        96, "GPIO96",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP1,
+        MTK_FUNCTION(0, "GPIO96"),
+        MTK_FUNCTION(1, "MC1_DAT3"),
+        MTK_FUNCTION(4, "JTDO"),
+        MTK_FUNCTION(5, "TDD_TDO"),
+        MTK_FUNCTION(7, "CONN_DSP_JMS")
+    ),
+    MTK_PIN(
+        97, "GPIO97",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO97"),
+        MTK_FUNCTION(1, "SPI_CS"),
+        MTK_FUNCTION(2, "I2S_IN_WS"),
+        MTK_FUNCTION(3, "KROW3"),
+        MTK_FUNCTION(4, "EINT3"),
+        MTK_FUNCTION(5, "DPI_B6"),
+        MTK_FUNCTION(6, "DBG_OUT0"),
+        MTK_FUNCTION(7, "MD_CDMA_GPS_SYNC")
+    ),
+    MTK_PIN(
+        98, "GPIO98",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO98"),
+        MTK_FUNCTION(1, "SPI_SCK"),
+        MTK_FUNCTION(2, "I2S_IN_CK"),
+        MTK_FUNCTION(3, "KROW4"),
+        MTK_FUNCTION(4, "EINT4"),
+        MTK_FUNCTION(5, "DPI_B7"),
+        MTK_FUNCTION(6, "DBG_OUT1"),
+        MTK_FUNCTION(7, "MD_EXT_FRAME_SYNC")
+    ),
+    MTK_PIN(
+        99, "GPIO99",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO99"),
+        MTK_FUNCTION(1, "SPI_MOSI"),
+        MTK_FUNCTION(2, "I2S_IN_DAT"),
+        MTK_FUNCTION(3, "KROW5"),
+        MTK_FUNCTION(4, "EINT7"),
+        MTK_FUNCTION(5, "DPI_G6"),
+        MTK_FUNCTION(6, "DBG_OUT2")
+    ),
+    MTK_PIN(
+        100, "GPIO100",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO100"),
+        MTK_FUNCTION(1, "SPI_MISO"),
+        MTK_FUNCTION(2, "SRCLKENAI"),
+        MTK_FUNCTION(3, "KROW6"),
+        MTK_FUNCTION(4, "EINT14"),
+        MTK_FUNCTION(5, "DPI_G7"),
+        MTK_FUNCTION(6, "DBG_OUT3")
+    ),
+    MTK_PIN(
+        101, "GPIO101",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO101"),
+        MTK_FUNCTION(1, "URXD2"),
+        MTK_FUNCTION(2, "EINT15"),
+        MTK_FUNCTION(3, "SCL_1_2"),
+        MTK_FUNCTION(4, "JTCK"),
+        MTK_FUNCTION(5, "DPI_R6")
+    ),
+    MTK_PIN(
+        102, "GPIO102",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO102"),
+        MTK_FUNCTION(1, "UTXD2"),
+        MTK_FUNCTION(2, "PWM_BL"),
+        MTK_FUNCTION(3, "SDA_1_2"),
+        MTK_FUNCTION(4, "JTMS"),
+        MTK_FUNCTION(5, "DPI_R7")
+    ),
+    MTK_PIN(
+        103, "GPIO103",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO103"),
+        MTK_FUNCTION(1, "URXD1"),
+        MTK_FUNCTION(5, "MD_URXD"),
+        MTK_FUNCTION(7, "CONN_MCU_AICE_TCKC")
+    ),
+    MTK_PIN(
+        104, "GPIO104",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO104"),
+        MTK_FUNCTION(1, "UTXD1"),
+        MTK_FUNCTION(5, "MD_UTXD"),
+        MTK_FUNCTION(7, "CONN_MCU_AICE_TMSC")
+    ),
+    MTK_PIN(
+        105, "GPIO105",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_FIXED,
+        MTK_FUNCTION(0, "GPIO105"),
+        MTK_FUNCTION(1, "SCL_0_0")
+    ),
+    MTK_PIN(
+        106, "GPIO106",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_FIXED,
+        MTK_FUNCTION(0, "GPIO106"),
+        MTK_FUNCTION(1, "SDA_0_0")
+    ),
+    MTK_PIN(
+        107, "GPIO107",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO107"),
+        MTK_FUNCTION(1, "KCOL0"),
+        MTK_FUNCTION(6, "DBG_OUT10"),
+        MTK_FUNCTION(7, "CONN_GPIO24")
+    ),
+    MTK_PIN(
+        108, "GPIO108",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO108"),
+        MTK_FUNCTION(1, "KCOL1"),
+        MTK_FUNCTION(2, "EINT6"),
+        MTK_FUNCTION(3, "PWM2"),
+        MTK_FUNCTION(5, "MD_URXD"),
+        MTK_FUNCTION(6, "DBG_OUT11"),
+        MTK_FUNCTION(7, "CONN_GPIO25")
+    ),
+    MTK_PIN(
+        109, "GPIO109",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO109"),
+        MTK_FUNCTION(1, "KCOL2"),
+        MTK_FUNCTION(4, "JTCK"),
+        MTK_FUNCTION(6, "DBG_OUT12"),
+        MTK_FUNCTION(7, "CONN_GPIO26")
+    ),
+    MTK_PIN(
+        110, "GPIO110",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO110"),
+        MTK_FUNCTION(1, "KROW0"),
+        MTK_FUNCTION(6, "DBG_OUT13"),
+        MTK_FUNCTION(7, "CONN_GPIO27")
+    ),
+    MTK_PIN(
+        111, "GPIO111",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO111"),
+        MTK_FUNCTION(1, "KROW1"),
+        MTK_FUNCTION(2, "LPTE_2ND"),
+        MTK_FUNCTION(3, "PWM1"),
+        MTK_FUNCTION(5, "MD_UTXD"),
+        MTK_FUNCTION(6, "DBG_OUT14"),
+        MTK_FUNCTION(7, "CONN_GPIO28")
+    ),
+    MTK_PIN(
+        112, "GPIO112",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO112"),
+        MTK_FUNCTION(1, "KROW2"),
+        MTK_FUNCTION(4, "JTMS"),
+        MTK_FUNCTION(6, "DBG_OUT15"),
+        MTK_FUNCTION(7, "CONN_GPIO29")
+    ),
+    MTK_PIN(
+        113, "GPIO113",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_FIXED,
+        MTK_FUNCTION(0, "GPIO113"),
+        MTK_FUNCTION(1, "SCL_1_0")
+    ),
+    MTK_PIN(
+        114, "GPIO114",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_FIXED,
+        MTK_FUNCTION(0, "GPIO114"),
+        MTK_FUNCTION(1, "SDA_1_0")
+    ),
+    MTK_PIN(
+        115, "GPIO115",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO115"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL5")
+    ),
+    MTK_PIN(
+        116, "GPIO116",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO116"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL4")
+    ),
+    MTK_PIN(
+        117, "GPIO117",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO117"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL3")
+    ),
+    MTK_PIN(
+        118, "GPIO118",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO118"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL2")
+    ),
+    MTK_PIN(
+        119, "GPIO119",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO119"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL1")
+    ),
+    MTK_PIN(
+        120, "GPIO120",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO120"),
+        MTK_FUNCTION(1, "CONN_WB_CTRL0")
+    ),
+    MTK_PIN(
+        121, "GPIO121",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO121"),
+        MTK_FUNCTION(1, "CONN_SEN")
+    ),
+    MTK_PIN(
+        122, "GPIO122",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO122"),
+        MTK_FUNCTION(1, "CONN_SDATA")
+    ),
+    MTK_PIN(
+        123, "GPIO123",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO123"),
+        MTK_FUNCTION(1, "CONN_SCLK")
+    ),
+    MTK_PIN(
+        124, "GPIO124",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO124"),
+        MTK_FUNCTION(1, "CONN_RSTB")
+    ),
+    MTK_PIN(
+        125, "GPIO125",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO125")
+    ),
+    MTK_PIN(
+        126, "GPIO126",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO126"),
+        MTK_FUNCTION(1, "CONN_F2W_CK")
+    ),
+    MTK_PIN(
+        127, "GPIO127",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO127"),
+        MTK_FUNCTION(1, "CONN_F2W_DAT")
+    ),
+    MTK_PIN(
+        128, "GPIO128",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO128"),
+        MTK_FUNCTION(1, "PWM1"),
+        MTK_FUNCTION(2, "EINT2"),
+        MTK_FUNCTION(3, "UCTS1"),
+        MTK_FUNCTION(4, "SRCLKENAI"),
+        MTK_FUNCTION(5, "MD_CLKM0"),
+        MTK_FUNCTION(6, "LSCK"),
+        MTK_FUNCTION(7, "CONN_GPIO30")
+    ),
+    MTK_PIN(
+        129, "GPIO129",
+        MTK_EINT_FUNCTION(2, 1),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO129"),
+        MTK_FUNCTION(1, "PWM2"),
+        MTK_FUNCTION(2, "EINT1"),
+        MTK_FUNCTION(3, "URTS1"),
+        MTK_FUNCTION(4, "USB_IDDIG"),
+        MTK_FUNCTION(5, "MD_CLKM1"),
+        MTK_FUNCTION(6, "LSDA"),
+        MTK_FUNCTION(7, "CONN_GPIO31")
+    ),
+    MTK_PIN(
+        130, "GPIO130",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO130"),
+        MTK_FUNCTION(1, "BPI_BUS0"),
+        MTK_FUNCTION(6, "DBG_OUT0"),
+        MTK_FUNCTION(7, "CONN_GPIO0")
+    ),
+    MTK_PIN(
+        131, "GPIO131",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO131"),
+        MTK_FUNCTION(1, "BPI_BUS1"),
+        MTK_FUNCTION(6, "DBG_OUT1"),
+        MTK_FUNCTION(7, "CONN_GPIO1")
+    ),
+    MTK_PIN(
+        132, "GPIO132",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO132"),
+        MTK_FUNCTION(1, "BPI_BUS2"),
+        MTK_FUNCTION(6, "DBG_OUT2"),
+        MTK_FUNCTION(7, "CONN_GPIO2")
+    ),
+    MTK_PIN(
+        133, "GPIO133",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO133"),
+        MTK_FUNCTION(1, "BPI_BUS3"),
+        MTK_FUNCTION(6, "DBG_OUT3"),
+        MTK_FUNCTION(7, "CONN_GPIO3")
+    ),
+    MTK_PIN(
+        134, "GPIO134",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO134"),
+        MTK_FUNCTION(1, "BPI_BUS4"),
+        MTK_FUNCTION(2, "ANT_SEL0"),
+        MTK_FUNCTION(4, "PWM2"),
+        MTK_FUNCTION(5, "I2S_OUT_WS"),
+        MTK_FUNCTION(6, "DBG_OUT4"),
+        MTK_FUNCTION(7, "CONN_GPIO4")
+    ),
+    MTK_PIN(
+        135, "GPIO135",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO135"),
+        MTK_FUNCTION(1, "BPI_BUS5"),
+        MTK_FUNCTION(2, "ANT_SEL1"),
+        MTK_FUNCTION(4, "EINT0"),
+        MTK_FUNCTION(5, "I2S_OUT_CK"),
+        MTK_FUNCTION(6, "DBG_OUT5"),
+        MTK_FUNCTION(7, "CONN_GPIO5")
+    ),
+    MTK_PIN(
+        136, "GPIO136",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP0,
+        MTK_FUNCTION(0, "GPIO136"),
+        MTK_FUNCTION(1, "BPI_BUS6"),
+        MTK_FUNCTION(2, "ANT_SEL2"),
+        MTK_FUNCTION(3, "SFCS2_MX"),
+        MTK_FUNCTION(4, "EINT2"),
+        MTK_FUNCTION(5, "I2S_OUT_DAT"),
+        MTK_FUNCTION(6, "DBG_OUT6"),
+        MTK_FUNCTION(7, "CONN_GPIO6")
+    ),
+    MTK_PIN(
+        137, "GPIO137",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO137"),
+        MTK_FUNCTION(1, "BPI_BUS7"),
+        MTK_FUNCTION(2, "BSI2_DATA"),
+        MTK_FUNCTION(3, "SCL_1_3"),
+        MTK_FUNCTION(6, "DBG_OUT7"),
+        MTK_FUNCTION(7, "CONN_GPIO7")
+    ),
+    MTK_PIN(
+        138, "GPIO138",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO138"),
+        MTK_FUNCTION(1, "BPI_BUS8"),
+        MTK_FUNCTION(2, "BSI2_CLK"),
+        MTK_FUNCTION(3, "SDA_1_3"),
+        MTK_FUNCTION(6, "DBG_OUT8"),
+        MTK_FUNCTION(7, "CONN_GPIO8")
+    ),
+    MTK_PIN(
+        139, "GPIO139",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO139"),
+        MTK_FUNCTION(1, "BPI_BUS9"),
+        MTK_FUNCTION(4, "USB_DRVVBUS"),
+        MTK_FUNCTION(6, "DBG_OUT9"),
+        MTK_FUNCTION(7, "CONN_GPIO9")
+    ),
+    MTK_PIN(
+        140, "GPIO140",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO140"),
+        MTK_FUNCTION(1, "BPI_BUS10"),
+        MTK_FUNCTION(4, "EINT6"),
+        MTK_FUNCTION(6, "DBG_OUT10"),
+        MTK_FUNCTION(7, "CONN_GPIO10")
+    ),
+    MTK_PIN(
+        141, "GPIO141",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO141"),
+        MTK_FUNCTION(1, "BPI_BUS11"),
+        MTK_FUNCTION(6, "DBG_OUT11"),
+        MTK_FUNCTION(7, "CONN_GPIO11")
+    ),
+    MTK_PIN(
+        142, "GPIO142",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO142"),
+        MTK_FUNCTION(1, "BPI_BUS12"),
+        MTK_FUNCTION(2, "LSA0"),
+        MTK_FUNCTION(3, "EINT7"),
+        MTK_FUNCTION(4, "I2S_IN_WS"),
+        MTK_FUNCTION(5, "KROW3"),
+        MTK_FUNCTION(6, "DBG_OUT12"),
+        MTK_FUNCTION(7, "CONN_GPIO12")
+    ),
+    MTK_PIN(
+        143, "GPIO143",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO143"),
+        MTK_FUNCTION(1, "BPI_BUS13"),
+        MTK_FUNCTION(2, "PWM1"),
+        MTK_FUNCTION(3, "EINT4"),
+        MTK_FUNCTION(4, "I2S_IN_CK"),
+        MTK_FUNCTION(5, "KROW4"),
+        MTK_FUNCTION(6, "DBG_OUT13"),
+        MTK_FUNCTION(7, "CONN_GPIO13")
+    ),
+    MTK_PIN(
+        144, "GPIO144",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO144"),
+        MTK_FUNCTION(1, "BPI_BUS14"),
+        MTK_FUNCTION(2, "PWM2"),
+        MTK_FUNCTION(3, "EINT5"),
+        MTK_FUNCTION(4, "I2S_IN_DAT"),
+        MTK_FUNCTION(5, "KROW5"),
+        MTK_FUNCTION(6, "DBG_OUT14"),
+        MTK_FUNCTION(7, "CONN_GPIO14")
+    ),
+    MTK_PIN(
+        145, "GPIO145",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO145"),
+        MTK_FUNCTION(1, "BPI_BUS15"),
+        MTK_FUNCTION(2, "PWM_BL"),
+        MTK_FUNCTION(3, "EINT8"),
+        MTK_FUNCTION(4, "LSDI"),
+        MTK_FUNCTION(5, "KROW6"),
+        MTK_FUNCTION(6, "DBG_OUT15"),
+        MTK_FUNCTION(7, "CONN_GPIO15")
+    ),
+    MTK_PIN(
+        146, "GPIO146",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO146"),
+        MTK_FUNCTION(1, "TXBPI")
+    ),
+    MTK_PIN(
+        147, "GPIO147",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO147"),
+        MTK_FUNCTION(1, "VM0")
+    ),
+    MTK_PIN(
+        148, "GPIO148",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO148"),
+        MTK_FUNCTION(1, "VM1")
+    ),
+    MTK_PIN(
+        149, "GPIO149",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO149"),
+        MTK_FUNCTION(1, "BSI_EN")
+    ),
+    MTK_PIN(
+        150, "GPIO150",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO150"),
+        MTK_FUNCTION(1, "BSI_CLK")
+    ),
+    MTK_PIN(
+        151, "GPIO151",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO151"),
+        MTK_FUNCTION(1, "BSI_DATA0")
+    ),
+    MTK_PIN(
+        152, "GPIO152",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO152"),
+        MTK_FUNCTION(1, "BSI_DATA1")
+    ),
+    MTK_PIN(
+        153, "GPIO153",
+        MTK_EINT_FUNCTION(NO_EINT_SUPPORT, NO_EINT_SUPPORT),
+        DRV_GRP2,
+        MTK_FUNCTION(0, "GPIO153"),
+        MTK_FUNCTION(1, "BSI_DATA2")
+    )
+};
+
+#endif /* __PINCTRL_MTK_MT6572_H */
