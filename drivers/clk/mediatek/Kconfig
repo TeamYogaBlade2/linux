@@ -124,6 +124,36 @@ config COMMON_CLK_MT2712_VENCSYS
 	help
 	  This driver supports MediaTek MT2712 vencsys clocks.
 
+config COMMON_CLK_MT6572
+	bool "Clock driver for MediaTek MT6572"
+	depends on (ARCH_MEDIATEK && ARM) || COMPILE_TEST
+	select COMMON_CLK_MEDIATEK
+	default ARCH_MEDIATEK && ARM
+	help
+	  This enables drivers for basic clocks on the MediaTek
+	  MT6572 SoC, such as apmixedsys, topckgen and infracfg.
+
+config COMMON_CLK_MT6572_AUDSYS
+	bool "Clock driver for Mediatek MT6572 audsys"
+	depends on COMMON_CLK_MT6572
+	help
+	  This enables a driver for audsys clocks on the MediaTek
+	  MT6572 SoC.
+
+config COMMON_CLK_MT6572_MFGCFG
+	tristate "Clock driver for MediaTek MT6572 mfgcfg"
+	depends on COMMON_CLK_MT6572
+	help
+	  This enables a driver for mfgcfg clocks on the MediaTek
+	  MT6572 SoC.
+
+config COMMON_CLK_MT6572_MMSYS
+	tristate "Clock driver for MediaTek MT6572 mmsys"
+	depends on COMMON_CLK_MT6572
+	help
+	  This enables a driver for mmsys clocks on the MediaTek
+	  MT6572 SoC.
+
 config COMMON_CLK_MT6735
 	tristate "Main clock drivers for MediaTek MT6735"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
