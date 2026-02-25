@@ -2386,7 +2386,7 @@ static const struct pwrap_slv_regops pwrap_regops32 = {
 static const struct pwrap_slv_type pmic_mt6320 = {
 	.dew_regs = mt6320_regs,
 	.type = PMIC_MT6320,
-	.regops = /* TODO */,
+	.regops = &pwrap_regops16,
 	.caps = PWRAP_SLV_CAP_SPI | PWRAP_DEW_DIO_EN |
 		PWRAP_SLV_CAP_SECURITY,
 };
