@@ -2183,7 +2183,6 @@ static int pwrap_mt2701_init_soc_specific(struct pmic_wrapper *wrp)
 	return 0;
 }
 
-/* only copied from pwrap_mt8135_init_soc_specific, needed to port more */
 static int pwrap_mt6589_init_soc_specific(struct pmic_wrapper *wrp)
 {
 	/* enable pwrap events and pwrap bridge in AP side */
