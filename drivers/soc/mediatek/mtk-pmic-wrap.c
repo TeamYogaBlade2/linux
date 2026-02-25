@@ -17,15 +17,16 @@
 #define PWRAP_POLL_DELAY_US	10
 #define PWRAP_POLL_TIMEOUT_US	10000
 
-#define PWRAP_MT8135_BRIDGE_IORD_ARB_EN		0x4
-#define PWRAP_MT8135_BRIDGE_WACS3_EN		0x10
-#define PWRAP_MT8135_BRIDGE_INIT_DONE3		0x14
-#define PWRAP_MT8135_BRIDGE_WACS4_EN		0x24
-#define PWRAP_MT8135_BRIDGE_INIT_DONE4		0x28
-#define PWRAP_MT8135_BRIDGE_INT_EN		0x38
-#define PWRAP_MT8135_BRIDGE_TIMER_EN		0x48
-#define PWRAP_MT8135_BRIDGE_WDT_UNIT		0x50
-#define PWRAP_MT8135_BRIDGE_WDT_SRC_EN		0x54
+/* MT6589 and MT8135 specific PWARP Bridge registers */
+#define PWRAP_BRIDGE_IORD_ARB_EN	0x4
+#define PWRAP_BRIDGE_WACS3_EN		0x10
+#define PWRAP_BRIDGE_INIT_DONE3		0x14
+#define PWRAP_BRIDGE_WACS4_EN		0x24
+#define PWRAP_BRIDGE_INIT_DONE4		0x28
+#define PWRAP_BRIDGE_INT_EN		0x38
+#define PWRAP_BRIDGE_TIMER_EN		0x48
+#define PWRAP_BRIDGE_WDT_UNIT		0x50
+#define PWRAP_BRIDGE_WDT_SRC_EN		0x54
 
 /* macro for wrapper status */
 #define PWRAP_GET_WACS_RDATA(x)		(((x) >> 0) & 0x0000ffff)
@@ -2100,13 +2101,13 @@ static int pwrap_mt8135_init_soc_specific(struct pmic_wrapper *wrp)
 	/* enable pwrap events and pwrap bridge in AP side */
 	pwrap_writel(wrp, 0x1, PWRAP_EVENT_IN_EN);
 	pwrap_writel(wrp, 0xffff, PWRAP_EVENT_DST_EN);
-	writel(0x7f, wrp->bridge_base + PWRAP_MT8135_BRIDGE_IORD_ARB_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS3_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS4_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_UNIT);
-	writel(0xffff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_SRC_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_TIMER_EN);
-	writel(0x7ff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INT_EN);
+	writel(0x7f, wrp->bridge_base + PWRAP_BRIDGE_IORD_ARB_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS3_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS4_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WDT_UNIT);
+	writel(0xffff, wrp->bridge_base + PWRAP_BRIDGE_WDT_SRC_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_TIMER_EN);
+	writel(0x7ff, wrp->bridge_base + PWRAP_BRIDGE_INT_EN);
 
 	/* enable PMIC event out and sources */
 	if (pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_OUT_EN],
@@ -2158,13 +2159,13 @@ static int pwrap_mt6589_init_soc_specific(struct pmic_wrapper *wrp)
 	/* enable pwrap events and pwrap bridge in AP side */
 	pwrap_writel(wrp, 0x1, PWRAP_EVENT_IN_EN);
 	pwrap_writel(wrp, 0xffff, PWRAP_EVENT_DST_EN);
-	writel(0x7f, wrp->bridge_base + PWRAP_MT8135_BRIDGE_IORD_ARB_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS3_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WACS4_EN);
-	writel(0xf, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_UNIT);
-	writel(0xffff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_WDT_SRC_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_TIMER_EN);
-	writel(0x7ff, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INT_EN);
+	writel(0x7f, wrp->bridge_base + PWRAP_BRIDGE_IORD_ARB_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS3_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS4_EN);
+	writel(0xf, wrp->bridge_base + PWRAP_BRIDGE_WDT_UNIT);
+	writel(0xffff, wrp->bridge_base + PWRAP_BRIDGE_WDT_SRC_EN);
+	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_TIMER_EN);
+	writel(0x7ff, wrp->bridge_base + PWRAP_BRIDGE_INT_EN);
 
 	/* enable PMIC event out and sources */
 	if (pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_OUT_EN],
@@ -2298,8 +2299,8 @@ static int pwrap_init(struct pmic_wrapper *wrp)
 	pwrap_writel(wrp, 1, PWRAP_INIT_DONE1);
 
 	if (HAS_CAP(wrp->master->caps, PWRAP_CAP_BRIDGE)) {
-		writel(1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INIT_DONE3);
-		writel(1, wrp->bridge_base + PWRAP_MT8135_BRIDGE_INIT_DONE4);
+		writel(1, wrp->bridge_base + PWRAP_BRIDGE_INIT_DONE3);
+		writel(1, wrp->bridge_base + PWRAP_BRIDGE_INIT_DONE4);
 	}
 
 	return 0;
