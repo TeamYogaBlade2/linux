@@ -44,6 +44,12 @@
 	};
 };
 
+&pwrap {
+	pmic: mt6320 {
+		compatible = "mediatek,mt6320";
+	};
+};
+
 &uart0 {
 	status = "okay";
 };
