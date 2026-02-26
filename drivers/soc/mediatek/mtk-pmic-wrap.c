@@ -115,22 +115,24 @@ enum dew_regs {
 	PWRAP_DEW_CIPHER_RDY,
 	PWRAP_DEW_CIPHER_MODE,
 	PWRAP_DEW_CIPHER_SWRST,
-	PWRAP_DEW_CIPHER_LOAD,
-	PWRAP_DEW_CIPHER_START,
-	PWRAP_DEW_EVENT_OUT_EN,
-	PWRAP_DEW_EVENT_SRC,
-	PWRAP_DEW_EVENT_SRC_EN,
-	PWRAP_DEW_EVENT_TEST,
 
 	/* MT6320 only regs */
-	PWRAP_DEW_EVENT_FLAG,
-	PWRAP_DEW_MON_FLAG_SEL,
 	PWRAP_DEW_CIPHER_IV0,
 	PWRAP_DEW_CIPHER_IV1,
 	PWRAP_DEW_CIPHER_IV2,
 	PWRAP_DEW_CIPHER_IV3,
 	PWRAP_DEW_CIPHER_IV4,
 	PWRAP_DEW_CIPHER_IV5,
+
+	/* MT6320 and MT6397 only regs */
+	PWRAP_DEW_EVENT_OUT_EN,
+	PWRAP_DEW_EVENT_SRC_EN,
+	PWRAP_DEW_EVENT_SRC,
+	PWRAP_DEW_EVENT_FLAG,
+	PWRAP_DEW_MON_FLAG_SEL,
+	PWRAP_DEW_EVENT_TEST,
+	PWRAP_DEW_CIPHER_LOAD,
+	PWRAP_DEW_CIPHER_START,
 
 	/* MT6323 only regs */
 	PWRAP_DEW_CIPHER_EN,
@@ -174,10 +176,6 @@ enum dew_regs {
 	PWRAP_DEW_RG_WDATA_MASK,
 	PWRAP_DEW_RG_SPI_RECORD_CLR,
 	PWRAP_DEW_RG_CMD_ALERT_CLR,
-
-	/* MT6397 only regs */
-	PWRAP_DEW_EVENT_SRC,
-	PWRAP_DEW_MON_FLAG_SEL,
 };
 
 static const u32 mt6320_regs[] = {
@@ -1903,6 +1901,7 @@ static int pwrap_common_init_reg_clock(struct pmic_wrapper *wrp)
 	case PWRAP_MT8173:
 		pwrap_init_chip_select_ext(wrp, 0, 4, 2, 2);
 		break;
+	case PWRAP_MT6589:
 	case PWRAP_MT8135:
 		pwrap_writel(wrp, 0x4, PWRAP_CSHEXT);
 		pwrap_init_chip_select_ext(wrp, 0, 4, 0, 0);
@@ -1932,23 +1931,6 @@ static int pwrap_mt2701_init_reg_clock(struct pmic_wrapper *wrp)
 		break;
 	}
 
-	return 0;
-}
-
-static int pwrap_mt6589_init_reg_clock(struct pmic_wrapper *wrp)
-{
-	u32 rdata;
-	u32 wdata;
-	int ret;
-
-	ret = pwrap_read(wrp, PMIC_TOP_CKCON2, &rdata);
-	if (ret) return ret;
-
-	wdata = rdata & ~(0x3 << 10);
-	pwrap_write(wrp, PMIC_TOP_CKCON2, wdata);
-
-	pwrap_writel(wrp, 0x4, PWRAP_CSHEXT);
-	pwrap_init_chip_select_ext(wrp, 0, 4, 0, 0);
 	return 0;
 }
 
@@ -2037,6 +2019,7 @@ static int pwrap_init_cipher(struct pmic_wrapper *wrp)
 		pwrap_config_cipher(wrp, wrp->slave->comp_dew_regs);
 
 	switch (wrp->slave->type) {
+	case PMIC_MT6320:
 	case PMIC_MT6397:
 		pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_CIPHER_LOAD],
 			    0x1);
@@ -2453,6 +2436,7 @@ static const struct pwrap_slv_type pmic_mt6397 = {
 };
 
 static const struct of_device_id of_slave_match_tbl[] = {
+	{ .compatible = "mediatek,mt6320", .data = &pmic_mt6320 },
 	{ .compatible = "mediatek,mt6323", .data = &pmic_mt6323 },
 	{ .compatible = "mediatek,mt6331", .data = &pmic_mt6331 },
 	{ .compatible = "mediatek,mt6351", .data = &pmic_mt6351 },
@@ -2491,7 +2475,7 @@ static const struct pmic_wrapper_type pwrap_mt6589 = {
 	.spi_w = PWRAP_MAN_CMD_SPI_WRITE,
 	.wdt_src = PWRAP_WDT_SRC_MASK_ALL,
 	.caps = PWRAP_CAP_BRIDGE | PWRAP_CAP_RESET | PWRAP_CAP_DCM,
-	.init_reg_clock = pwrap_mt6589_init_reg_clock,
+	.init_reg_clock = pwrap_common_init_reg_clock,
 	.init_soc_specific = pwrap_mt6589_init_soc_specific,
 };
 
