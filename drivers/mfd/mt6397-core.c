@@ -29,6 +29,9 @@
 #include <linux/mfd/mt6359/registers.h>
 #include <linux/mfd/mt6397/registers.h>
 
+#define MT6320_RTC_BASE		0xe000
+#define MT6320_RTC_SIZE		0x3f
+
 #define MT6323_RTC_BASE		0x8000
 #define MT6323_RTC_SIZE		0x40
 
@@ -123,6 +126,9 @@ static const struct resource mt6397_keys_resources[] = {
 
 static const struct resource mt6323_pwrc_resources[] = {
 	DEFINE_RES_MEM(MT6323_PWRC_BASE, MT6323_PWRC_SIZE),
+};
+
+static const struct mfd_cell mt6320_devs[] = {
 };
 
 static const struct mfd_cell mt6323_devs[] = {
