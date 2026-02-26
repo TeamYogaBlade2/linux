@@ -300,6 +300,13 @@ config PINCTRL_MT8516
 	select PINCTRL_MTK
 
 # For PMIC
+config PINCTRL_MT6320
+	bool "MediaTek MT6320 pin control"
+	depends on MFD_MT6397 || COMPILE_TEST
+	depends on OF
+	default MFD_MT6397
+	select PINCTRL_MTK
+
 config PINCTRL_MT6397
 	bool "MediaTek MT6397 pin control"
 	depends on MFD_MT6397 || COMPILE_TEST

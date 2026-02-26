@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
 #ifndef __PINCTRL_MTK_MT6320_H
