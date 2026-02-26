@@ -80,6 +80,11 @@ static const struct resource mt6397_rtc_resources[] = {
 	DEFINE_RES_IRQ(MT6397_IRQ_RTC),
 };
 
+static const struct resource mt6320_keys_resources[] = {
+	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_PWRKEY, "powerkey"),
+	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_HOMEKEY, "homekey"),
+};
+
 static const struct resource mt6358_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_PWRKEY, "powerkey"),
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_HOMEKEY, "homekey"),
@@ -139,6 +144,11 @@ static const struct mfd_cell mt6320_devs[] = {
 		.num_resources = ARRAY_SIZE(mt6320_rtc_resources),
 		.resources = mt6320_rtc_resources,
 		.of_compatible = "mediatek,mt6320-rtc",
+	}, {
+		.name = "mtk-pmic-keys",
+		.num_resources = ARRAY_SIZE(mt6320_keys_resources),
+		.resources = mt6320_keys_resources,
+		.of_compatible = "mediatek,mt6320-keys",
 	},
 };
 
