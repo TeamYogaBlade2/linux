@@ -176,6 +176,12 @@ int mt6397_irq_init(struct mt6397_chip *chip)
 	mutex_init(&chip->irqlock);
 
 	switch (chip->chip_id) {
+	case MT6320_CHIP_ID:
+		chip->int_con[0] = MT6320_INT_CON0;
+		chip->int_con[1] = MT6320_INT_CON1;
+		chip->int_status[0] = MT6320_INT_STATUS0;
+		chip->int_status[1] = MT6320_INT_STATUS1;
+		break;
 	case MT6323_CHIP_ID:
 		chip->int_con[0] = MT6323_INT_CON0;
 		chip->int_con[1] = MT6323_INT_CON1;

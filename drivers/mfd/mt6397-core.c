@@ -289,6 +289,14 @@ struct chip_data {
 	int (*irq_init)(struct mt6397_chip *chip);
 };
 
+static const struct chip_data mt6320_core = {
+	.cid_addr = MT6320_CID,
+	.cid_shift = 0,
+	.cells = mt6320_devs,
+	.cell_size = ARRAY_SIZE(mt6320_devs),
+	.irq_init = mt6397_irq_init,
+};
+
 static const struct chip_data mt6323_core = {
 	.cid_addr = MT6323_CID,
 	.cid_shift = 0,
@@ -401,6 +409,9 @@ static int mt6397_probe(struct platform_device *pdev)
 
 static const struct of_device_id mt6397_of_match[] = {
 	{
+		.compatible = "mediatek,mt6320",
+		.data = &mt6320_core,
+	}, {
 		.compatible = "mediatek,mt6323",
 		.data = &mt6323_core,
 	}, {
