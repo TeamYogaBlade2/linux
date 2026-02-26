@@ -52,7 +52,7 @@
 
 static const struct resource mt6320_rtc_resources[] = {
 	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
-	DEFINE_RES_IRQ(MT6320_IRQ_STATUS_RTC),
+	DEFINE_RES_IRQ(MT6320_IRQ_RTC),
 };
 
 static const struct resource mt6323_rtc_resources[] = {
