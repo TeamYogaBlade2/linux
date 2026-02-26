@@ -3,6 +3,8 @@
  * Copyright (c) 2014 MediaTek Inc.
  * Copyright (C) 2014 BQ
  * Copyright (C) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
+ *
+ * MT6320 Register Map based on bq Aquaris 5 kernel
  */
 
 #ifndef __MFD_MT6320_REGISTERS_H__

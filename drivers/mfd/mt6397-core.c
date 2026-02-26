@@ -12,6 +12,7 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/mfd/core.h>
+#include <linux/mfd/mt6320/core.h>
 #include <linux/mfd/mt6323/core.h>
 #include <linux/mfd/mt6328/core.h>
 #include <linux/mfd/mt6331/core.h>
@@ -19,6 +20,7 @@
 #include <linux/mfd/mt6358/core.h>
 #include <linux/mfd/mt6359/core.h>
 #include <linux/mfd/mt6397/core.h>
+#include <linux/mfd/mt6320/registers.h>
 #include <linux/mfd/mt6323/registers.h>
 #include <linux/mfd/mt6328/registers.h>
 #include <linux/mfd/mt6331/registers.h>
