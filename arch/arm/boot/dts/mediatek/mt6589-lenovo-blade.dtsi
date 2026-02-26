@@ -47,6 +47,12 @@
 &pwrap {
 	pmic: mt6320 {
 		compatible = "mediatek,mt6320";
+
+		pio6320: pinctrl {
+			compatible = "mediatek,mt6320-pinctrl";
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
 	};
 };
 
