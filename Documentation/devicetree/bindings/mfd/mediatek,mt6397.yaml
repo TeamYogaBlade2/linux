@@ -65,6 +65,7 @@ properties:
       compatible:
         oneOf:
           - enum:
+              - mediatek,mt6320-rtc
               - mediatek,mt6323-rtc
               - mediatek,mt6331-rtc
               - mediatek,mt6358-rtc
