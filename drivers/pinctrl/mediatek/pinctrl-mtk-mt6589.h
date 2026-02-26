@@ -649,7 +649,7 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	MTK_PIN(
 		57, "GPIO57",
 		MTK_EINT_FUNCTION(0, 34),
-		DRV_GRP1,
+		DRV_GRP3,
 		MTK_FUNCTION(0, "GPIO57"),
 		MTK_FUNCTION(1, "IDDIG"),
 		MTK_FUNCTION(2, "EINT34")
@@ -2077,7 +2077,7 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	MTK_PIN(
 		182, "GPIO182",
 		MTK_EINT_FUNCTION(0, 58),
-		DRV_GRP5,
+		DRV_GRP1,
 		MTK_FUNCTION(0, "GPIO182"),
 		MTK_FUNCTION(1, "MSDC1_SDWPI"),
 		MTK_FUNCTION(2, "EINT58"),
