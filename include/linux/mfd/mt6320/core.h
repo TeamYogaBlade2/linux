@@ -3,6 +3,9 @@
  * Copyright (c) 2014 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
+#ifndef __MFD_MT6320_CORE_H__
+#define __MFD_MT6320_CORE_H__
+
 enum mt6320_irq_numbers {
 	MT6320_IRQ_SPKL_AB = 0,
 	MT6320_IRQ_SPKR_AB,
