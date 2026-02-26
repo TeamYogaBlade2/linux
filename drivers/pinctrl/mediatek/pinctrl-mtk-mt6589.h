@@ -8,6 +8,15 @@
 
 #include "pinctrl-paris.h"
 
+/*
+ * TODO: 
+ * mt6589_drv_grp: DRV_GRP
+ * grp 0: DRV_GRP4
+ * grp 1: DRV_GRP1
+ * grp 2: DRV_GRP3
+ * gpr 3: DRV_GRP5
+ */
+
 static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	MTK_PIN(
 		0, "GPIO0",
