@@ -54,6 +54,10 @@
 			#gpio-cells = <2>;
 		};
 	};
+
+	rtc {
+		compatible = "mediatek,mt6320-rtc";
+	};
 };
 
 &uart0 {
