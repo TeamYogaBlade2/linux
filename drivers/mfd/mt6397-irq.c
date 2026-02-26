@@ -9,6 +9,8 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/suspend.h>
+#include <linux/mfd/mt6320/core.h>
+#include <linux/mfd/mt6320/registers.h>
 #include <linux/mfd/mt6323/core.h>
 #include <linux/mfd/mt6323/registers.h>
 #include <linux/mfd/mt6328/core.h>
