@@ -8,6 +8,7 @@
 #include <linux/input.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/mfd/mt6320/registers.h>
 #include <linux/mfd/mt6323/registers.h>
 #include <linux/mfd/mt6331/registers.h>
 #include <linux/mfd/mt6357/registers.h>
@@ -54,6 +55,17 @@ struct mtk_pmic_regs {
 	const struct mtk_pmic_keys_regs keys_regs[MTK_PMIC_MAX_KEY_COUNT];
 	u32 pmic_rst_reg;
 	u32 rst_lprst_mask; /* Long-press reset timeout bitmask */
+};
+
+static const struct mtk_pmic_regs mt6320_regs = {
+	.keys_regs[MTK_PMIC_PWRKEY_INDEX] =
+		MTK_PMIC_KEYS_REGS(MT6320_CHRSTATUS,
+		0x8, MT6320_INT_RSV, 0x10, MTK_PMIC_PWRKEY_RST),
+	.keys_regs[MTK_PMIC_HOMEKEY_INDEX] =
+		MTK_PMIC_KEYS_REGS(MT6320_OCSTATUS2,
+		0x10, MT6320_INT_RSV, 0x8, MTK_PMIC_HOMEKEY_RST),
+	.pmic_rst_reg = MT6320_TOP_RST_MISC,
+	.rst_lprst_mask = MTK_PMIC_RST_DU_MASK,
 };
 
 static const struct mtk_pmic_regs mt6397_regs = {
@@ -282,6 +294,9 @@ static DEFINE_SIMPLE_DEV_PM_OPS(mtk_pmic_keys_pm_ops, mtk_pmic_keys_suspend,
 
 static const struct of_device_id of_mtk_pmic_keys_match_tbl[] = {
 	{
+		.compatible = "mediatek,mt6320-keys",
+		.data = &mt6320_regs,
+	}, {
 		.compatible = "mediatek,mt6397-keys",
 		.data = &mt6397_regs,
 	}, {
