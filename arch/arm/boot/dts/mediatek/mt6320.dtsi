@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
+ */
+
 #include <dt-bindings/input/input.h>
 
 &pwrap {
@@ -9,6 +14,10 @@
 			gpio-controller;
 			#gpio-cells = <2>;
 		};
+	};
+
+	power-controller {
+		compatible = "mediatek,mt6323-pwrc";
 	};
 
 	rtc {
