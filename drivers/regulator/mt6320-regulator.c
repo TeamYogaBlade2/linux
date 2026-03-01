@@ -17,6 +17,7 @@
 #include <linux/regulator/mt6320-regulator.h>
 #include <linux/regulator/of_regulator.h>
 
+/* TODO: are they in mt6320? */
 #define MT6320_LDO_MODE_NORMAL	0
 #define MT6320_LDO_MODE_LP	1
 
@@ -264,6 +265,7 @@ static const struct regulator_ops mt6320_volt_fixed_ops = {
 
 /* The array is indexed by id(MT6320_ID_XXX) */
 static struct mt6320_regulator_info mt6320_regulators[] = {
+
 /*
 	BUCK_VPROC
 	BUCK_VSRAM
