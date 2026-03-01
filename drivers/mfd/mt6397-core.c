@@ -145,6 +145,9 @@ static const struct mfd_cell mt6320_devs[] = {
 		.resources = mt6320_rtc_resources,
 		.of_compatible = "mediatek,mt6320-rtc",
 	}, {
+		.name = "mt6320-regulator",
+		.of_compatible = "mediatek,mt6320-regulator"
+	}, {
 		.name = "mtk-pmic-keys",
 		.num_resources = ARRAY_SIZE(mt6320_keys_resources),
 		.resources = mt6320_keys_resources,
