@@ -14,24 +14,26 @@
 			gpio-controller;
 			#gpio-cells = <2>;
 		};
-	};
 
-	power-controller {
-		compatible = "mediatek,mt6323-pwrc";
-	};
-
-	rtc {
-		compatible = "mediatek,mt6320-rtc";
-	};
-
-	mt6320keys: keys {
-		compatible = "mediatek,mt6320-keys";
-		power {
-			linux,keycodes = <KEY_POWER>;
-			wakeup-source;
+		power-controller {
+			compatible = "mediatek,mt6323-pwrc";
 		};
-		home {
-			linux,keycodes = <KEY_HOME>;
+
+		rtc {
+			compatible = "mediatek,mt6320-rtc";
+		};
+
+		mt6320keys: keys {
+			compatible = "mediatek,mt6320-keys";
+
+			power {
+				linux,keycodes = <KEY_POWER>;
+				wakeup-source;
+			};
+
+			home {
+				linux,keycodes = <KEY_HOME>;
+			};
 		};
 	};
 };
