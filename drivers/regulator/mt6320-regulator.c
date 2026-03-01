@@ -39,6 +39,10 @@ struct mt6320_regulator_info {
 	u32 modeset_mask;
 };
 
+/*
+TODO: check .enable_mask, .vselctrl_mask
+*/
+
 #define MT6320_BUCK(match, vreg, min, max, step, volt_ranges, enreg,	\
 		vosel, vosel_mask, voselon, vosel_ctrl)			\
 [MT6320_ID_##vreg] = {							\
@@ -110,51 +114,43 @@ static const struct linear_range buck_volt_range1[] = {
 };
 
 static const struct linear_range buck_volt_range2[] = {
-	REGULATOR_LINEAR_RANGE(1400000, 0, 0x7f, 12500),
+	REGULATOR_LINEAR_RANGE(1500000, 0, 0x1f, 20000),
 };
 
 static const struct linear_range buck_volt_range3[] = {
 	REGULATOR_LINEAR_RANGE(500000, 0, 0x3f, 50000),
 };
 
+static const struct linear_range buck_volt_range4[] = {
+	REGULATOR_LINEAR_RANGE(1050000, 0, 0x1f, 25000),
+};
+
 static const unsigned int ldo_volt_table1[] = {
-	3300000, 3400000, 3500000, 3600000,
-};
-
-static const unsigned int ldo_volt_table2[] = {
-	1500000, 1800000, 2500000, 2800000,
-};
-
-static const unsigned int ldo_volt_table3[] = {
 	1800000, 3300000,
 };
 
-static const unsigned int ldo_volt_table4[] = {
+static const unsigned int ldo_volt_table2[] = {
 	3000000, 3300000,
 };
 
+static const unsigned int ldo_volt_table3[] = {
+	1200000, 1300000, 1500000, 1800000, 2500000, 2800000, 3000000, 3300000,
+};
+
+static const unsigned int ldo_volt_table4[] = {
+	1200000, 1100000, 1000000, 900000,
+};
+
 static const unsigned int ldo_volt_table5[] = {
-	1200000, 1300000, 1500000, 1800000, 2000000, 2800000, 3000000, 3300000,
+	1800000, 2800000,
 };
 
 static const unsigned int ldo_volt_table6[] = {
-	1200000, 1300000, 1500000, 1800000, 2500000, 2800000, 3000000, 2000000,
+	1800000, 2500000,
 };
 
 static const unsigned int ldo_volt_table7[] = {
-	1200000, 1300000, 1500000, 1800000,
-};
-
-static const unsigned int ldo_volt_table8[] = {
-	1800000, 3000000,
-};
-
-static const unsigned int ldo_volt_table9[] = {
-	1200000, 1350000, 1500000, 1800000,
-};
-
-static const unsigned int ldo_volt_table10[] = {
-	1200000, 1300000, 1500000, 1800000,
+	1500000, 1800000, 2500000, 2800000,
 };
 
 static int mt6320_get_status(struct regulator_dev *rdev)
@@ -268,79 +264,44 @@ static const struct regulator_ops mt6320_volt_fixed_ops = {
 
 /* The array is indexed by id(MT6320_ID_XXX) */
 static struct mt6320_regulator_info mt6320_regulators[] = {
-	MT6320_BUCK("buck_vproc", VPROC, 700000, 1493750, 6250,
-		buck_volt_range1, MT6320_VPROC_CON7, MT6320_VPROC_CON9, 0x7f,
-		MT6320_VPROC_CON10, MT6320_VPROC_CON5),
-	MT6320_BUCK("buck_vsys", VSYS, 1400000, 2987500, 12500,
-		buck_volt_range2, MT6320_VSYS_CON7, MT6320_VSYS_CON9, 0x7f,
-		MT6320_VSYS_CON10, MT6320_VSYS_CON5),
-	MT6320_BUCK("buck_vpa", VPA, 500000, 3650000, 50000,
-		buck_volt_range3, MT6320_VPA_CON7, MT6320_VPA_CON9,
-		0x3f, MT6320_VPA_CON10, MT6320_VPA_CON5),
-	MT6320_REG_FIXED("ldo_vtcxo", VTCXO, MT6320_ANALDO_CON1, 10, 2800000,
-		MT6320_ANALDO_CON1, 0x2),
-	MT6320_REG_FIXED("ldo_vcn28", VCN28, MT6320_ANALDO_CON19, 12, 2800000,
-		MT6320_ANALDO_CON20, 0x2),
-	MT6320_LDO("ldo_vcn33_bt", VCN33_BT, ldo_volt_table1,
-		MT6320_ANALDO_CON16, 7, MT6320_ANALDO_CON16, 0xC,
-		MT6320_ANALDO_CON21, 0x2),
-	MT6320_LDO("ldo_vcn33_wifi", VCN33_WIFI, ldo_volt_table1,
-		MT6320_ANALDO_CON17, 12, MT6320_ANALDO_CON16, 0xC,
-		MT6320_ANALDO_CON21, 0x2),
-	MT6320_REG_FIXED("ldo_va", VA, MT6320_ANALDO_CON2, 14, 2800000,
-		MT6320_ANALDO_CON2, 0x2),
-	MT6320_LDO("ldo_vcama", VCAMA, ldo_volt_table2,
-		MT6320_ANALDO_CON4, 15, MT6320_ANALDO_CON10, 0x60, -1, 0),
-	MT6320_REG_FIXED("ldo_vio28", VIO28, MT6320_DIGLDO_CON0, 14, 2800000,
-		MT6320_DIGLDO_CON0, 0x2),
-	MT6320_REG_FIXED("ldo_vusb", VUSB, MT6320_DIGLDO_CON2, 14, 3300000,
-		MT6320_DIGLDO_CON2, 0x2),
-	MT6320_LDO("ldo_vmc", VMC, ldo_volt_table3,
-		MT6320_DIGLDO_CON3, 12, MT6320_DIGLDO_CON24, 0x10,
-		MT6320_DIGLDO_CON3, 0x2),
-	MT6320_LDO("ldo_vmch", VMCH, ldo_volt_table4,
-		MT6320_DIGLDO_CON5, 14, MT6320_DIGLDO_CON26, 0x80,
-		MT6320_DIGLDO_CON5, 0x2),
-	MT6320_LDO("ldo_vemc3v3", VEMC3V3, ldo_volt_table4,
-		MT6320_DIGLDO_CON6, 14, MT6320_DIGLDO_CON27, 0x80,
-		MT6320_DIGLDO_CON6, 0x2),
-	MT6320_LDO("ldo_vgp1", VGP1, ldo_volt_table5,
-		MT6320_DIGLDO_CON7, 15, MT6320_DIGLDO_CON28, 0xE0,
-		MT6320_DIGLDO_CON7, 0x2),
-	MT6320_LDO("ldo_vgp2", VGP2, ldo_volt_table6,
-		MT6320_DIGLDO_CON8, 15, MT6320_DIGLDO_CON29, 0xE0,
-		MT6320_DIGLDO_CON8, 0x2),
-	MT6320_LDO("ldo_vgp3", VGP3, ldo_volt_table7,
-		MT6320_DIGLDO_CON9, 15, MT6320_DIGLDO_CON30, 0x60,
-		MT6320_DIGLDO_CON9, 0x2),
-	MT6320_REG_FIXED("ldo_vcn18", VCN18, MT6320_DIGLDO_CON11, 14, 1800000,
-		MT6320_DIGLDO_CON11, 0x2),
-	MT6320_LDO("ldo_vsim1", VSIM1, ldo_volt_table8,
-		MT6320_DIGLDO_CON13, 15, MT6320_DIGLDO_CON34, 0x20,
-		MT6320_DIGLDO_CON13, 0x2),
-	MT6320_LDO("ldo_vsim2", VSIM2, ldo_volt_table8,
-		MT6320_DIGLDO_CON14, 15, MT6320_DIGLDO_CON35, 0x20,
-		MT6320_DIGLDO_CON14, 0x2),
-	MT6320_REG_FIXED("ldo_vrtc", VRTC, MT6320_DIGLDO_CON15, 8, 2800000,
-		-1, 0),
-	MT6320_LDO("ldo_vcamaf", VCAMAF, ldo_volt_table5,
-		MT6320_DIGLDO_CON31, 15, MT6320_DIGLDO_CON32, 0xE0,
-		MT6320_DIGLDO_CON31, 0x2),
-	MT6320_LDO("ldo_vibr", VIBR, ldo_volt_table5,
-		MT6320_DIGLDO_CON39, 15, MT6320_DIGLDO_CON40, 0xE0,
-		MT6320_DIGLDO_CON39, 0x2),
-	MT6320_REG_FIXED("ldo_vrf18", VRF18, MT6320_DIGLDO_CON45, 15, 1825000,
-		MT6320_DIGLDO_CON45, 0x2),
-	MT6320_LDO("ldo_vm", VM, ldo_volt_table9,
-		MT6320_DIGLDO_CON47, 14, MT6320_DIGLDO_CON48, 0x30,
-		MT6320_DIGLDO_CON47, 0x2),
-	MT6320_REG_FIXED("ldo_vio18", VIO18, MT6320_DIGLDO_CON49, 14, 1800000,
-		MT6320_DIGLDO_CON49, 0x2),
-	MT6320_LDO("ldo_vcamd", VCAMD, ldo_volt_table10,
-		MT6320_DIGLDO_CON51, 14, MT6320_DIGLDO_CON52, 0x60,
-		MT6320_DIGLDO_CON51, 0x2),
-	MT6320_REG_FIXED("ldo_vcamio", VCAMIO, MT6320_DIGLDO_CON53, 14, 1800000,
-		MT6320_DIGLDO_CON53, 0x2),
+/*
+	BUCK_VPROC
+	BUCK_VSRAM
+	BUCK_VCORE
+	BUCK_VM
+	BUCK_VIO18
+	BUCK_VPA
+	BUCK_VRF18
+	BUCK_VRF18_2
+
+	//Digital LDO
+	LDO_VIO28
+	LDO_VUSB
+	LDO_VMC1
+	LDO_VMCH1
+	LDO_VEMC_3V3
+	LDO_VEMC_1V8
+	LDO_VGP1
+	LDO_VGP2
+	LDO_VGP3
+	LDO_VGP4
+	LDO_VGP5
+	LDO_VGP6
+	LDO_VSIM1
+	LDO_VSIM2
+	LDO_VIBR
+	LDO_VRTC
+	LDO_VAST
+
+	//Analog LDO
+	LDO_VRF28
+	LDO_VRF28_2
+	LDO_VTCXO
+	LDO_VTCXO_2
+	LDO_VA
+	LDO_VA28
+	LDO_VCAMA
+*/
 };
 
 static int mt6320_set_buck_vosel_reg(struct platform_device *pdev)
