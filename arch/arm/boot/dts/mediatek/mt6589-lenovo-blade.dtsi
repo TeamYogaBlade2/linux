@@ -4,8 +4,8 @@
  */
 
 /dts-v1/;
-#include <dt-bindings/input/input.h>
 #include "mt6589.dtsi"
+#include "mt6320.dtsi"
 
 / {
 	#address-cells = <1>;
@@ -42,33 +42,6 @@
 		height = <800>;
 		stride = <(1280 * 2)>;
 		format = "r5g6b5";
-	};
-};
-
-&pwrap {
-	pmic: mt6320 {
-		compatible = "mediatek,mt6320";
-
-		pio6320: pinctrl {
-			compatible = "mediatek,mt6320-pinctrl";
-			gpio-controller;
-			#gpio-cells = <2>;
-		};
-	};
-
-	rtc {
-		compatible = "mediatek,mt6320-rtc";
-	};
-
-	mt6320keys: keys {
-		compatible = "mediatek,mt6320-keys";
-		power {
-			linux,keycodes = <KEY_POWER>;
-			wakeup-source;
-		};
-		home {
-			linux,keycodes = <KEY_HOME>;
-		};
 	};
 };
 
