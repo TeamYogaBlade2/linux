@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2026 akku <akkun11.open@gmail.com>
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
 #ifndef _DT_BINDINGS_RESET_CONTROLLER_MT6589

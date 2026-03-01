@@ -144,6 +144,33 @@
 			#clock-cells = <1>;
 		};
 
+		/*
+		 * EINT registers: 0x1000b000
+		 * GPIO base: 0x10005000, GPIO1 base 0x1020c000
+		 */
+		pio: pinctrl@10005000 {
+			compatible = "mediatek,mt6589-pinctrl";
+			reg = <0x1000b000 0x1000>;
+			mediatek,pctl-regmap = <&syscfg_pctl_a &syscfg_pctl_b>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		syscfg_pctl_a: syscfg_pctl_a@10005000 {
+			compatible = "mediatek,mt6589-pctl-a-syscfg", "syscon";
+			reg = <0x10005000 0x1000>;
+		};
+
+		syscfg_pctl_b: syscfg_pctl_b@1020c000 {
+			compatible = "mediatek,mt6589-pctl-b-syscfg", "syscon";
+			reg = <0x1020c000 0x1000>;
+		};
+
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
 			reg = <0x10008000 0x80>;

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Author: akku <akkun11.open@gmail.com>
+ *
+ * Based on clk-mt2712-apmixedsys.c
  * Copyright (c) 2017 MediaTek Inc.
  *                    Weiyi Lu <weiyi.lu@mediatek.com>
  * Copyright (c) 2023 Collabora Ltd.
  *                    AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
- * Author: akku <akkun11.open@gmail.com>
  */
 #include <linux/clk.h>
 #include <linux/of.h>
@@ -94,8 +96,6 @@ static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_ISPPLL, "isppll", ISPPLL_CON0, VOID_REG, 0x80000001,
 		0, 7, ISPPLL_CON0, 7, ISPPLL_CON0, 8, 1664000000),
 };
-
-/* init logic from MT2712 */
 
 static int clk_mt6589_apmixed_probe(struct platform_device *pdev)
 {

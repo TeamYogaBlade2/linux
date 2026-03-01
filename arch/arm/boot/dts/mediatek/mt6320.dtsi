@@ -9,6 +9,11 @@
 	pmic: mt6320 {
 		compatible = "mediatek,mt6320";
 
+		interrupt-parent = <&pio>;
+		interrupts = <43 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+
 		pio6320: pinctrl {
 			compatible = "mediatek,mt6320-pinctrl";
 			gpio-controller;
