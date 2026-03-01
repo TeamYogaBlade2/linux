@@ -11,7 +11,7 @@
 #include <linux/notifier.h>
 
 enum chip_id {
-	MT6320_CHIP_ID = 0x20, /* FIXME: !!!!!! */
+	MT6320_CHIP_ID = 0x20,
 	MT6323_CHIP_ID = 0x23,
 	MT6328_CHIP_ID = 0x28,
 	MT6331_CHIP_ID = 0x31,
