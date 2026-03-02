@@ -109,24 +109,16 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_DO] = MTK_RANGE(mt6589_pin_do_range),
 //	[PINCTRL_PIN_REG_SR] = MTK_RANGE(),
 	[PINCTRL_PIN_REG_SMT] = MTK_RANGE(mt6589_pin_smt_range),
-//	[PINCTRL_PIN_REG_PD] = no
-//	[PINCTRL_PIN_REG_PU] = no
-//	[PINCTRL_PIN_REG_E4] = MTK_RANGE(),
-//	[PINCTRL_PIN_REG_E8] = MTK_RANGE(),
 //	[PINCTRL_PIN_REG_TDSEL] = MTK_RANGE(), // 0x0700 DSEL
 //	[PINCTRL_PIN_REG_RDSEL] = MTK_RANGE(), // 0x0700 DSEL
 //	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(),
-//	[PINCTRL_PIN_REG_PUPD] = MTK_RANGE(), // yes
+//	[PINCTRL_PIN_REG_PUPD] = MTK_RANGE(),
 	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 //	[PINCTRL_PIN_REG_R1] = no
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
 	[PINCTRL_PIN_REG_PULLEN] = MTK_RANGE(mt6589_pin_pullen_range),
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
 //	[PINCTRL_PIN_REG_DRV_EN] = MTK_RANGE(),
-//	[PINCTRL_PIN_REG_DRV_E0] = not adv
-//	[PINCTRL_PIN_REG_DRV_E1] = not adv
-//	[PINCTRL_PIN_REG_DRV_ADV] = not adv
-//	[PINCTRL_PIN_REG_RSEL] = no?
 };
 
 // DINV, BIAS
