@@ -25,6 +25,9 @@
 #define DRV_CON11	0x05b0
 #define DRV_CON12	0x05c0
 
+#define PIN_MSDC_R0(_shift, _pin) \
+	PIN_FIELD_CALC(_pin, _pin, 0, 0x04f0, 0x0, _shift, 1, 32, 1)
+
 static const struct mtk_pin_field_calc mt6589_pin_mode_range[] = {
 	PIN_FIELD_CALC(0, 43, 0, 0x0c00, 0x10, 0, 3, 16, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0980, 0x10, 0, 4, 16, 0),
@@ -52,6 +55,34 @@ static const struct mtk_pin_field_calc mt6589_pin_smt_range[] = {
 	PIN_FIELD_CALC(170, 231, 0, 0x03a0, 0x10, 10, 1, 16, 0),
 };
 
+static const struct mtk_pin_field_calc mt6589_pin_r0_range[] = {
+	PIN_MSDC_R0(0, 6),
+	PIN_MSDC_R0(1, 5),
+	PIN_MSDC_R0(2, 10),
+	PIN_MSDC_R0(3, 9),
+	PIN_MSDC_R0(4, 8),
+	PIN_MSDC_R0(5, 7),
+	PIN_MSDC_R0(6, 3),
+	PIN_MSDC_R0(7, 2),
+	PIN_MSDC_R0(8, 1),
+	PIN_MSDC_R0(9, 0),
+	PIN_MSDC_R0(10, 229),
+	PIN_MSDC_R0(11, 228),
+	PIN_MSDC_R0(12, 231),
+	PIN_MSDC_R0(13, 230),
+	PIN_MSDC_R0(14, 226),
+	PIN_MSDC_R0(15, 227),
+	PIN_MSDC_R0(16, 139),
+	PIN_MSDC_R0(17, 141),
+	PIN_MSDC_R0(18, 130),
+	PIN_MSDC_R0(19, 131),
+	PIN_MSDC_R0(20, 138),
+	PIN_MSDC_R0(21, 140),
+	PIN_MSDC_R0(22, 137),
+	PIN_MSDC_R0(23, 134),
+	PIN_MSDC_R0(24, 135),
+	PIN_MSDC_R0(25, 136),
+};
 
 static const struct mtk_pin_field_calc mt6589_pin_ies_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0100, 0x10, 0, 1, 16, 0),
@@ -86,7 +117,7 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 //	[PINCTRL_PIN_REG_RDSEL] = MTK_RANGE(), // 0x0700 DSEL
 //	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(),
 //	[PINCTRL_PIN_REG_PUPD] = MTK_RANGE(), // yes
-//	[PINCTRL_PIN_REG_R0] = MTK_RANGE(), // 0x04f0 MSDC_R0
+	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 //	[PINCTRL_PIN_REG_R1] = no
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
 	[PINCTRL_PIN_REG_PULLEN] = MTK_RANGE(mt6589_pin_pullen_range),
@@ -95,7 +126,7 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 //	[PINCTRL_PIN_REG_DRV_E0] = not adv
 //	[PINCTRL_PIN_REG_DRV_E1] = not adv
 //	[PINCTRL_PIN_REG_DRV_ADV] = not adv
-//	[PINCTRL_PIN_REG_RSEL] = MTK_RANGE(),
+//	[PINCTRL_PIN_REG_RSEL] = no?
 };
 
 // DINV, BIAS
@@ -128,8 +159,8 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.base_names = mt6589_pinctrl_register_base_names,
 	.nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
 //	.pull_type =
-//	.pin_rsel =
-//	.npin_rsel =
+//	.pin_rsel = no
+//	.npin_rsel = no
 //	.bias_disable_set =
 //	.bias_disable_get =
 //	.bias_set =
