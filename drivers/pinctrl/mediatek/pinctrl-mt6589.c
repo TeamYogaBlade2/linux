@@ -55,10 +55,7 @@ static const struct mtk_pin_field_calc mt6589_pin_do_range[] = {
 
 static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
 	/* MSDC0_DAT 7 to 4 */
-	PIN_FIELD_DRV(0, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(1, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(2, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(3, DRV_CON0, 3, 0),
+	PINS_FIELD_DRV(0, 3, DRV_CON0, 3, 0),
 
 	/* MSDC0_RSTB */
 	PIN_FIELD_DRV(4, DRV_CON0, 11, 0),
@@ -70,10 +67,7 @@ static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
 	PIN_FIELD_DRV(6, DRV_CON12, 15, 0),
 
 	/* MSDC0_DAT 3 to 0 */
-	PIN_FIELD_DRV(7, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(8, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(9, DRV_CON0, 3, 0),
-	PIN_FIELD_DRV(10, DRV_CON0, 3, 0),
+	PINS_FIELD_DRV(7, 10, DRV_CON0, 3, 0),
 
 	/* NFI */
 	PINS_FIELD_DRV(11, 17, DRV_CON0, 15, 0),
