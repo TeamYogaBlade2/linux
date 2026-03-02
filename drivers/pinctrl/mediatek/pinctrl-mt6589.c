@@ -251,7 +251,7 @@ static const struct mtk_pin_field_calc mt6589_pin_smt_range[] = {
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_tdsel_range[] = {
-	
+	/* CON0 */
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_rdsel_range[] = {
@@ -485,12 +485,14 @@ static const struct mtk_pin_field_calc mt6589_pin_ies_range[] = {
 
 static const struct mtk_pin_field_calc mt6589_pin_pullen_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0200, 0x10, 0, 1, 16, 0),
+	// FIXME: GPIO_PULLEN2, GPIO44~49
 	PIN_FIELD_CALC(114, 169, 1, 0x0270, 0x10, 2, 1, 16, 0),
 	PIN_FIELD_CALC(170, 231, 0, 0x02a0, 0x10, 10, 1, 16, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_pullsel_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0400, 0x10, 0, 1, 16, 0),
+	// FIXME: GPIO_PULLSEL2, GPIO44~49
 	PIN_FIELD_CALC(114, 169, 1, 0x0470, 0x10, 2, 1, 16, 0),
 	PIN_FIELD_CALC(170, 231, 0, 0x04a0, 0x10, 10, 1, 16, 0),
 };
@@ -511,7 +513,7 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
 };
 
-// DINV, BIAS
+// DINV(no GPIO44~49), BIAS, SIMx_2
 
 static const char * const mt6589_pinctrl_register_base_names[] = {
 	"gpio", "gpio1",
