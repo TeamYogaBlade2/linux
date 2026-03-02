@@ -250,13 +250,6 @@ static const struct mtk_pin_field_calc mt6589_pin_smt_range[] = {
 	PIN_FIELD_CALC(170, 231, 0, 0x03a0, 0x10, 10, 1, 16, 0),
 };
 
-static const struct mtk_pin_field_calc mt6589_pin_tdsel_range[] = {
-	/* CON0 */
-};
-
-static const struct mtk_pin_field_calc mt6589_pin_rdsel_range[] = {
-};
-
 static const struct mtk_pin_field_calc mt6589_pin_drv_range[] = {
 	/* MSDC0_DAT 7 to 4 */
 	PINS_FIELD_DRV(0, 3, DRV_CON0, 0, 0),
@@ -504,8 +497,6 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_DO] = MTK_RANGE(mt6589_pin_do_range),
 	[PINCTRL_PIN_REG_SR] = MTK_RANGE(mt6589_pin_sr_range),
 	[PINCTRL_PIN_REG_SMT] = MTK_RANGE(mt6589_pin_smt_range),
-	[PINCTRL_PIN_REG_TDSEL] = MTK_RANGE(mt6589_pin_tdsel_range),
-	[PINCTRL_PIN_REG_RDSEL] = MTK_RANGE(mt6589_pin_rdsel_range),
 	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(mt6589_pin_drv_range),
 	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
