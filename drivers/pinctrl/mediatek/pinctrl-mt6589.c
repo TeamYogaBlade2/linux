@@ -441,6 +441,7 @@ static const struct mtk_pin_field_calc mt6589_pin_drv_range[] = {
 	PINS_FIELD_DRV(230, 231, DRV_CON12, 4, 0),
 };
 
+/*
 static const struct mtk_pin_field_calc mt6589_pin_r0_range[] = {
 	PIN_FIELD_R0(0, 6),
 	PIN_FIELD_R0(1, 5),
@@ -469,6 +470,7 @@ static const struct mtk_pin_field_calc mt6589_pin_r0_range[] = {
 	PIN_FIELD_R0(24, 135),
 	PIN_FIELD_R0(25, 136),
 };
+*/
 
 static const struct mtk_pin_field_calc mt6589_pin_ies_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0100, 0x10, 0, 1, 16, 0),
@@ -498,7 +500,7 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_SR] = MTK_RANGE(mt6589_pin_sr_range),
 	[PINCTRL_PIN_REG_SMT] = MTK_RANGE(mt6589_pin_smt_range),
 	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(mt6589_pin_drv_range),
-	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
+//	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
 	[PINCTRL_PIN_REG_PULLEN] = MTK_RANGE(mt6589_pin_pullen_range),
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
@@ -528,17 +530,19 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.base_names = mt6589_pinctrl_register_base_names,
 	.nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
 //	.pull_type =
-/* maybe */
-	.bias_disable_set = mtk_pinconf_bias_set_combo,
-	.bias_disable_get = mtk_pinconf_bias_get_combo,
+/* disable? */
+//	.bias_disable_set = mtk_pinconf_bias_set_combo,
+//	.bias_disable_get = mtk_pinconf_bias_get_combo,
 //	.bias_set =
 //	.bias_get =
-//	.bias_set_combo =
-//	.bias_get_combo =
+/* maybe */
+	.bias_set_combo = mtk_pinconf_bias_set_combo,
+	.bias_get_combo = mtk_pinconf_bias_get_combo,
 	.drive_set = mtk_pinconf_drive_set_rev1,
 	.drive_get = mtk_pinconf_drive_get_rev1,
-//	.adv_pull_set =
-//	.adv_pull_get =
+/* maybe */
+	.adv_pull_set = mtk_pinconf_adv_pull_set,
+	.adv_pull_get = mtk_pinconf_adv_pull_get,
 //	.adv_drive_set =
 //	.adv_drive_get =
 };
