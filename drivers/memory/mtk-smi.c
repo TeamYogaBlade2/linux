@@ -22,6 +22,10 @@
 
 /* SMI COMMON */
 #define SMI_L1LEN			0x100
+#define MT6572_SMI_L1LEN		0x200
+
+#define MT6572_SMI_L1_ARB0		0x204
+#define MT6572_SMI_L1_ARB1		0x208
 
 #define SMI_L1_ARB			0x200
 #define SMI_BUS_SEL			0x220
@@ -738,6 +742,14 @@ static struct platform_driver mtk_smi_larb_driver = {
 	}
 };
 
+static const struct mtk_smi_reg_pair mtk_smi_common_mt6572_init[SMI_COMMON_INIT_REGS_NR] = {
+	{MT6572_SMI_L1LEN, 0x3},
+	{MT6572_SMI_L1_ARB0, 0},
+	{MT6572_SMI_L1_ARB1, 0},
+	{SMI_M4U_TH, 0x29ca7},
+	{SMI_READ_FIFO_TH, 0x320},
+};
+
 static const struct mtk_smi_reg_pair mtk_smi_common_mt6795_init[SMI_COMMON_INIT_REGS_NR] = {
 	{SMI_L1_ARB, 0x1b},
 	{SMI_M4U_TH, 0xce810c85},
@@ -752,6 +764,11 @@ static const struct mtk_smi_reg_pair mtk_smi_common_mt8195_init[SMI_COMMON_INIT_
 	{SMI_FIFO_TH2, 0x506090a},
 	{SMI_DCM, 0x4f1},
 	{SMI_DUMMY, 0x1},
+};
+
+static const struct mtk_smi_common_plat mtk_smi_common_mt6572 = {
+	.type     = MTK_SMI_GEN0,
+	.init     = mtk_smi_common_mt6572_init,
 };
 
 static const struct mtk_smi_common_plat mtk_smi_common_gen1 = {
@@ -842,6 +859,7 @@ static const struct mtk_smi_common_plat mtk_smi_common_mt8365 = {
 static const struct of_device_id mtk_smi_common_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-common", .data = &mtk_smi_common_gen1},
 	{.compatible = "mediatek,mt2712-smi-common", .data = &mtk_smi_common_gen2},
+	{.compatible = "mediatek,mt6572-smi-common", .data = &mtk_smi_common_mt6572},
 	{.compatible = "mediatek,mt6779-smi-common", .data = &mtk_smi_common_mt6779},
 	{.compatible = "mediatek,mt6795-smi-common", .data = &mtk_smi_common_mt6795},
 	{.compatible = "mediatek,mt6893-smi-common", .data = &mtk_smi_common_mt6893},
