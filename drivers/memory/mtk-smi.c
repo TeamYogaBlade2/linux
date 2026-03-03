@@ -100,6 +100,7 @@ struct mtk_smi_reg_pair {
 };
 
 enum mtk_smi_type {
+	MTK_SMI_GEN0,
 	MTK_SMI_GEN1,
 	MTK_SMI_GEN2,		/* gen2 smi common */
 	MTK_SMI_GEN2_SUB_COMM,	/* gen2 smi sub common */
@@ -141,10 +142,8 @@ struct mtk_smi {
 	unsigned int			clk_num;
 	struct clk_bulk_data		clks[MTK_SMI_CLK_NR_MAX];
 	struct clk			*clk_async; /*only needed by mt2701*/
-	union {
-		void __iomem		*smi_ao_base; /* only for gen1 */
-		void __iomem		*base;	      /* only for gen2 */
-	};
+	void __iomem		*smi_ao_base;
+	void __iomem		*base;
 	struct device			*smi_common_dev; /* for sub common */
 	const struct mtk_smi_common_plat *plat;
 };
@@ -845,31 +844,42 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	/*
-	 * for mtk smi gen 1, we need to get the ao(always on) base to config
-	 * m4u port, and we need to enable the aync clock for transform the smi
-	 * clock into emi clock domain, but for mtk smi gen2, there's no smi ao
-	 * base.
-	 */
-	if (common->plat->type == MTK_SMI_GEN1) {
-		common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(common->smi_ao_base))
-			return PTR_ERR(common->smi_ao_base);
-
-		common->clk_async = devm_clk_get_enabled(dev, "async");
-		if (IS_ERR(common->clk_async))
-			return PTR_ERR(common->clk_async);
-	} else {
-		common->base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(common->base))
-			return PTR_ERR(common->base);
-	}
-
-	/* link its smi-common if this is smi-sub-common */
-	if (common->plat->type == MTK_SMI_GEN2_SUB_COMM) {
-		ret = mtk_smi_device_link_common(dev, &common->smi_common_dev);
-		if (ret < 0)
-			return ret;
+	switch (common->plat->type) {
+		case MTK_SMI_GEN0:
+			/*
+			 * gen 0 uses 2 mmio ranges: ao base for iommu configuration,
+			 * and ext base for ostd, fifo and bw limiter setup
+			 */
+			common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->smi_ao_base))
+				return PTR_ERR(common->smi_ao_base);
+			common->base = devm_platform_ioremap_resource(pdev, 1);
+			if (IS_ERR(common->base))
+				return PTR_ERR(common->base);
+			break;
+		case MTK_SMI_GEN1:
+			/*
+			 * gen 1 needs async clock to transform the smi clock to the
+			 * emi clock domain
+			 */
+			common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->smi_ao_base))
+				return PTR_ERR(common->smi_ao_base);
+			common->clk_async = devm_clk_get_enabled(dev, "async");
+			if (IS_ERR(common->clk_async))
+				return PTR_ERR(common->clk_async);
+			break;
+		case MTK_SMI_GEN2:
+			common->base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->base))
+				return PTR_ERR(common->base);
+			break;
+		case MTK_SMI_GEN2_SUB_COMM:
+			/* link its smi-common if this is smi-sub-common */
+			ret = mtk_smi_device_link_common(dev, &common->smi_common_dev);
+			if (ret < 0)
+				return ret;
+			break;
 	}
 
 	pm_runtime_enable(dev);
@@ -897,13 +907,15 @@ static int __maybe_unused mtk_smi_common_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	if (common->plat->type != MTK_SMI_GEN2)
+	if (common->plat->type != MTK_SMI_GEN0 && common->plat->type != MTK_SMI_GEN2)
 		return 0;
 
 	for (i = 0; i < SMI_COMMON_INIT_REGS_NR && init && init[i].offset; i++)
 		writel_relaxed(init[i].value, common->base + init[i].offset);
 
-	writel(bus_sel, common->base + SMI_BUS_SEL);
+	if (common->plat->type == MTK_SMI_GEN2)
+		writel(bus_sel, common->base + SMI_BUS_SEL);
+
 	return 0;
 }
 
