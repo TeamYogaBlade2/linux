@@ -144,17 +144,17 @@
 			#clock-cells = <1>;
 		};
 
-		/*
-		 * EINT registers: 0x1000b000
-		 * GPIO base: 0x10005000, GPIO1 base 0x1020c000
-		 */
 		pio: pinctrl@10005000 {
 			compatible = "mediatek,mt6589-pinctrl";
-			reg = <0x1000b000 0x1000>;
-			mediatek,pctl-regmap = <&syscfg_pctl_a &syscfg_pctl_b>;
+			reg = <0x10005000 0x1000>,
+			      <0x1020c000 0x1000>,
+			      <0x1000b000 0x1000>;
+			reg-names = "gpio", "gpio1", "eint";
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pio 0 0 232>;
 			interrupt-controller;
+			interrupt-parent = <&gic>;
 			#interrupt-cells = <2>;
 			interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
