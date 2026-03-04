@@ -17,6 +17,7 @@
 		regulator-name = "usb_vbus";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
+		// USB_DRVVBUS 130:50001101
 //		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 
@@ -29,7 +30,7 @@
 &pio {
 	usb_pins: usb-pins {
 		pins_iddig {
-			pinmux = <MT6589_PIN_57_GPIO57__FUNC_EINT34>;
+			pinmux = <MT6589_PIN_57_GPIO57__FUNC_IDDIG>;
 			input-enable;
 			bias-pull-up;
 		};
