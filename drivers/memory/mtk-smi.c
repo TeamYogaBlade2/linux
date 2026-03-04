@@ -37,6 +37,7 @@
 #define SMI_DUMMY			0x444
 
 /* SMI LARB */
+#define SMI_LARB_STAT                   0x0
 #define SMI_LARB_SLP_CON                0xc
 #define SLP_PROT_EN                     BIT(0)
 #define SLP_PROT_RDY                    BIT(16)
@@ -48,8 +49,13 @@
 #define SMI_LARB_SW_FLAG		0x40
 #define SMI_LARB_SW_FLAG_1		0x1
 
+#define SMI_LARB_BWFILTER_EN     0x60
+#define SMI_LARB_OSTD_CTRL_EN    0x64
+
 #define SMI_LARB_OSTDL_PORT		0x200
 #define SMI_LARB_OSTDL_PORTx(id)	(SMI_LARB_OSTDL_PORT + (((id) & 0x1f) << 2))
+
+#define SMI_LARB_FIFO_STAT0      0x600
 
 /* Below are about mmu enable registers, they are different in SoCs */
 /* gen1: mt2701 */
@@ -92,6 +98,7 @@
 #define MTK_SMI_FLAG_SW_FLAG		BIT(1)
 #define MTK_SMI_FLAG_SLEEP_CTL		BIT(2)
 #define MTK_SMI_FLAG_CFG_PORT_SEC_CTL	BIT(3)
+#define MTK_SMI_FLAG_BW_CALIBRATE     BIT(4)
 #define MTK_SMI_CAPS(flags, _x)		(!!((flags) & (_x)))
 
 struct mtk_smi_reg_pair {
@@ -186,6 +193,65 @@ static const struct component_ops mtk_smi_larb_component_ops = {
 	.bind = mtk_smi_larb_bind,
 	.unbind = mtk_smi_larb_unbind,
 };
+
+static int mtk_smi_larb_config_port_gen0(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
+	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
+	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
+					      NULL;
+	int i, m4u_port_id, larb_port_num;
+	u32 sec_con_val, reg_val, tmp;
+	int ret;
+
+	m4u_port_id = larb_gen->port_in_larb[larb->larbid];
+	larb_port_num = larb_gen->port_in_larb[larb->larbid + 1] - m4u_port_id;
+
+	/* gen 1 part */
+	for (i = 0; i < larb_port_num; i++, m4u_port_id++) {
+		if (*larb->mmu & BIT(i)) {
+			sec_con_val = SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
+		} else {
+			continue;
+		}
+
+		reg_val = readl(common->smi_ao_base +
+				REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+		reg_val &= SMI_SECUR_CON_VAL_MSK(m4u_port_id);
+		reg_val |= sec_con_val;
+		reg_val |= SMI_SECUR_CON_VAL_DOMAIN(m4u_port_id);
+		writel(reg_val, common->smi_ao_base +
+					REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+	}
+
+	/* gen 2 part */
+	for (i = 0; i < SMI_LARB_PORT_NR_MAX && larbostd && !!larbostd[i]; i++)
+		writel_relaxed(larbostd[i],
+			       larb->base + SMI_LARB_OSTDL_PORTx(i));
+
+	/* some gen 0 SoCs need BW calibration */
+	if (MTK_SMI_CAPS(larb_gen->flags_general, MTK_SMI_FLAG_BW_CALIBRATE)) {
+		reg_val = readl_relaxed(larb->base + SMI_LARB_STAT);
+		if (!reg_val) {
+			writel_relaxed(0xffffffff,
+				       larb->base + SMI_LARB_BWFILTER_EN);
+
+			ret = readl_poll_timeout(
+				larb->base + SMI_LARB_FIFO_STAT0, tmp,
+				tmp == 0xaaaa, 500, 64 * 500);
+			if (ret)
+				dev_warn(dev,
+					 "BW limiter calibration timeout\n");
+
+			writel_relaxed(0, larb->base + SMI_LARB_BWFILTER_EN);
+			writel_relaxed(0xffffffff,
+				       larb->base + SMI_LARB_OSTD_CTRL_EN);
+		}
+	}
+
+	return 0;
+}
 
 static int mtk_smi_larb_config_port_gen1(struct device *dev)
 {
