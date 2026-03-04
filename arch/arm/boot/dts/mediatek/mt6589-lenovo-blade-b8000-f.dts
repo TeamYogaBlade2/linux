@@ -17,13 +17,8 @@
 		regulator-name = "usb_vbus";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		// USB_DRVVBUS 130:50001101
-//		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
+		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-
-		// testing
-		regulator-boot-on;
-		regulator-always-on;
 	};
 };
 
@@ -39,13 +34,9 @@
 
 &usb0 {
 	status = "okay";
-//	usb-role-switch;
-//	dr_mode = "otg";
-	dr_mode = "peripheral";
+	usb-role-switch;
+	dr_mode = "otg";
 
-	// testing
-	//vbus-supply = <&usb_vbus>;
-/*
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
@@ -55,5 +46,4 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb_pins>;
 	};
-*/
 };
