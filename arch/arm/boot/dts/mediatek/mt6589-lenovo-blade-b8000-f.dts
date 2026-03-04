@@ -19,7 +19,6 @@
 		regulator-max-microvolt = <5000000>;
 		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-
 	};
 };
 
@@ -31,10 +30,13 @@
 			bias-pull-up;
 		};
 
-		eint43_conflict {
+		eint34_conflict {
 			pinmux = <MT6589_PIN_48_GPIO48__FUNC_GPIO48>;
 			input-enable;
-			bias-disable;
+		};
+
+		pins_drvvbus {
+			pinmux = <MT6589_PIN_130_GPIO130__FUNC_USB_DRVVBUS>;
 		};
 	};
 };
@@ -42,7 +44,6 @@
 &usb0 {
 	status = "okay";
 	usb-role-switch;
-	dr_mode = "otg";
 
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
