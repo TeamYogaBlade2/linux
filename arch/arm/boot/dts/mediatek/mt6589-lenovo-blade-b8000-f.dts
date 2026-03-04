@@ -48,7 +48,7 @@
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
-		id-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
+		id-gpios = <&pio 57 GPIO_ACTIVE_LOW>;
 		vbus-supply = <&usb_vbus>;
 
 		pinctrl-names = "default";
