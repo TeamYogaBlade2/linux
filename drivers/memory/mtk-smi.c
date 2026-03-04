@@ -352,6 +352,11 @@ static int mtk_smi_larb_config_port_gen2_general(struct device *dev)
 	return 0;
 }
 
+static const u8 mtk_smi_larb_mt6572_ostd[][SMI_LARB_PORT_NR_MAX] = {
+  [0] = {0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f,
+  	0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f},
+};
+
 static const u8 mtk_smi_larb_mt6893_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[0] = {0x2, 0x6, 0x2, 0x2, 0x2, 0x28, 0x18, 0x18, 0x1, 0x1, 0x1, 0x8,
 	       0x8, 0x1, 0x3f},
@@ -560,6 +565,14 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 	.larb_direct_to_common_mask = BIT(8) | BIT(9),      /* bdpsys */
 };
 
+static const struct mtk_smi_larb_gen mtk_smi_larb_mt6572 = {
+	/* larb0 has 16 ports */
+  .port_in_larb = { 0, 16 },
+  .config_port = mtk_smi_larb_config_port_gen0,
+  .flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
+  .ostd = mtk_smi_larb_mt6572_ostd,
+};
+
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6779 = {
 	.config_port  = mtk_smi_larb_config_port_gen2_general,
 	.larb_direct_to_common_mask =
@@ -617,6 +630,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt8195 = {
 static const struct of_device_id mtk_smi_larb_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-larb", .data = &mtk_smi_larb_mt2701},
 	{.compatible = "mediatek,mt2712-smi-larb", .data = &mtk_smi_larb_mt2712},
+	{.compatible = "mediatek,mt6572-smi-larb", .data = &mtk_smi_larb_mt6572},
 	{.compatible = "mediatek,mt6779-smi-larb", .data = &mtk_smi_larb_mt6779},
 	{.compatible = "mediatek,mt6795-smi-larb", .data = &mtk_smi_larb_mt8173},
 	{.compatible = "mediatek,mt6893-smi-larb", .data = &mtk_smi_larb_mt6893},
