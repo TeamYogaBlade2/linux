@@ -273,12 +273,9 @@
 			phys = <&usb_port0 PHY_TYPE_USB2>;
 			dr_mode = "otg";
 			/* FIXME: clocks */
-			clocks = <&clk26m>, <&clk26m>, <&clk26m>;
-/*
 			clocks = <&pericfg CLK_PERI0_USB0>,
 				 <&clk26m>,
 				 <&topckgen CLK_TOP_UNIVPLL_D26>;
-*/
 			clock-names = "main", "mcu", "univpll";
 			status = "disabled";
 		};
@@ -292,12 +289,9 @@
 			interrupt-names = "mc";
 			phys = <&usb_port1 PHY_TYPE_USB2>;
 			dr_mode = "otg";
-			clocks = <&clk26m>, <&clk26m>, <&clk26m>;
-/*
 			clocks = <&pericfg CLK_PERI0_USB1>,
 				 <&clk26m>,
 				 <&topckgen CLK_TOP_UNIVPLL_D26>;
-*/
 			clock-names = "main", "mcu", "univpll";
 			status = "disabled";
 		};
@@ -313,8 +307,7 @@
 
 			usb_port0: usb-phy@11220800 {
 				reg = <0x11220800 0x0100>;
-//				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
-				clocks = <&clk26m>;
+				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "okay";
@@ -322,8 +315,7 @@
 
 			usb_port1: usb-phy@11220900 {
 				reg = <0x11220900 0x0100>;
-//				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
-				clocks = <&clk26m>;
+				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "okay";
