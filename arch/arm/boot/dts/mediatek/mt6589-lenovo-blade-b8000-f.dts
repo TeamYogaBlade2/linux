@@ -19,6 +19,7 @@
 		regulator-max-microvolt = <5000000>;
 		gpio = <&pio 130 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
+
 	};
 };
 
@@ -28,6 +29,12 @@
 			pinmux = <MT6589_PIN_57_GPIO57__FUNC_IDDIG>;
 			input-enable;
 			bias-pull-up;
+		};
+
+		eint43_conflict {
+			pinmux = <MT6589_PIN_48_GPIO48__FUNC_GPIO48>;
+			input-enable;
+			bias-disable;
 		};
 	};
 };
