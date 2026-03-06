@@ -376,20 +376,24 @@
 				 <MT6589_GPIO186__FUNC_MSDC1_DAT3>,
 				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
 			input-enable;
-			drive-strength = <4>;
+			//drive-strength = <4>;
+			bias-pull-up;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
-			bias-pull-down;
-			drive-strength = <4>;
+			bias-disable;
+			//drive-strength = <4>;
+			drive-strength = <8>;
 		};
 
+/* 182:00001001
 		pins-wp {
 			pinmux = <MT6589_GPIO182__FUNC_MSDC1_SDWPI>;
 			input-enable;
-			bias-pull-up;
+			bias-disable;
 		};
+*/
 
 		pins-insert {
 			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
