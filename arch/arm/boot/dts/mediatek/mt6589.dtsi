@@ -271,7 +271,7 @@
 			reg = <0x11240000 0x1000>;
 			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_MSDC1>,
-				 <&clk26m>;
+				 <&topckgen CLK_TOP_MUX_MSDC1>;
 			clock-names = "source", "hclk";
 			status = "disabled";
 		};
@@ -392,12 +392,13 @@
 		};
 
 		pins-insert {
-			pinmux = <MT6589_GPIO171__FUNC_GPIO171>;
+			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
 			bias-pull-up;
 		};
 	};
 
 	mmc1_pins_uhs: mmc1 {
+/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO180__FUNC_MSDC1_DAT0>,
 				 <MT6589_GPIO181__FUNC_MSDC1_DAT1>,
@@ -411,6 +412,12 @@
 		pins-clk {
 			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
 			drive-strength = <4>;
+		};
+*/
+		/* dummy */
+		pins-insert {
+			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
+			bias-pull-up;
 		};
 	};
 
