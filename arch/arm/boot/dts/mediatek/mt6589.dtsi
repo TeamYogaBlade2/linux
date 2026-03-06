@@ -161,16 +161,6 @@
 				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
-		syscfg_pctl_a: syscfg_pctl_a@10005000 {
-			compatible = "mediatek,mt6589-pctl-a-syscfg", "syscon";
-			reg = <0x10005000 0x1000>;
-		};
-
-		syscfg_pctl_b: syscfg_pctl_b@1020c000 {
-			compatible = "mediatek,mt6589-pctl-b-syscfg", "syscon";
-			reg = <0x1020c000 0x1000>;
-		};
-
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
 			reg = <0x10008000 0x80>;
@@ -280,7 +270,7 @@
 			reg = <0x11240000 0x1000>;
 			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_MSDC1>,
-				 <&topckgen CLK_TOP_MUX_MSDC1>;
+				 <&clk26m>;
 			clock-names = "source", "hclk";
 			status = "disabled";
 		};
@@ -322,6 +312,7 @@
 
 &pio {
 	mmc0_pins_default: mmc0default {
+/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
 				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
@@ -340,7 +331,7 @@
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			bias-pull-down;
 		};
-
+*/
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
 			bias-pull-up;
@@ -348,6 +339,7 @@
 	};
 
 	mmc0_pins_uhs: mmc0 {
+/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
 				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
@@ -368,7 +360,7 @@
 			drive-strength = <2>;
 			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
 		};
-
+*/
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
 			bias-pull-up;
