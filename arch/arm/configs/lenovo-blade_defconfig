@@ -115,6 +115,10 @@ CONFIG_MMC_MTK=y
 
 ## Battery
 
+## Regulator
+CONFIG_REGULATOR=y
+CONFIG_REGULATOR_FIXED_VOLTAGE=y
+
 ## Audio
 
 ## Video Accelerator
