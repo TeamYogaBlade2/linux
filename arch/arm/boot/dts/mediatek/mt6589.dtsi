@@ -126,8 +126,9 @@
 			      <0x11000300 0x80>;
 			interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C0>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -141,8 +142,9 @@
 			      <0x11000380 0x80>;
 			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C1>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -156,8 +158,9 @@
 			      <0x11000400 0x80>;
 			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C2>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -171,8 +174,9 @@
 			      <0x11000480 0x80>;
 			interrupts = <GIC_SPI 47 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C3>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -186,8 +190,9 @@
 			      <0x11000500 0x80>;
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C4>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -201,8 +206,9 @@
 			      <0x11000580 0x80>;
 			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C5>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -216,8 +222,9 @@
 			      <0x11000600 0x80>;
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI1_I2C6>,
-				 <&clk26m>;
-			clock-names = "main", "pmic";
+				 <&clk26m>,
+				 <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main", "pmic", "dma";
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
@@ -231,7 +238,7 @@
 			#size-cells = <0>; 
 			reg = <0x11016000 0x1000>;
 			interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&clk26m>,
+			clocks = <&clk26m>, /* FIXME */
 				 <&topckgen CLK_TOP_MUX_SPI>,
 				 <&pericfg CLK_PERI1_SPI1>;
 			clock-names = "parent-clk", "sel-clk", "spi-clk";
