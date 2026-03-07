@@ -221,6 +221,7 @@
 				 <&topckgen CLK_TOP_MUX_SPI>,
 				 <&pericfg CLK_PERI1_SPI1>;
 			clock-names = "parent-clk", "sel-clk", "spi-clk";
+			status = "disabled";
 		};
 
 		dispsys: syscon@14000000 {
