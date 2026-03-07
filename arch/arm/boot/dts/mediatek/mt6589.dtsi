@@ -131,6 +131,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c1: i2c@1100e000 {
@@ -144,6 +146,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c2: i2c@1100f000 {
@@ -157,6 +161,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c3: i2c@11010000 {
@@ -170,6 +176,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c4: i2c@11011000 {
@@ -183,6 +191,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c5: i2c@11012000 {
@@ -196,6 +206,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		i2c6: i2c@11013000 {
@@ -209,6 +221,8 @@
 			clock-div = <16>; /* maybe */
 			mediatek,have-pmic;
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		spi1: spi@11016000 {
