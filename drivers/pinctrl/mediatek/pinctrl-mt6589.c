@@ -516,7 +516,7 @@ static const struct mtk_pin_field_calc mt6589_pin_pullsel_range[] = {
 	PIN_FIELD_CALC(0, 43, 0, 0x0400, 0x10, 0, 1, 16, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0990, 0x0, 8, 1, 16, 0),
 	PIN_FIELD_CALC(47, 49, 0, 0x09b0, 0x0, 8, 1, 16, 0),
-	PIN_FIELD_CALC(50, 113, 0, 0x0430, 0x10, 2, 1, 16, 0)
+	PIN_FIELD_CALC(50, 113, 0, 0x0430, 0x10, 2, 1, 16, 0),
 	PIN_FIELD_CALC(114, 169, 1, 0x0470, 0x10, 2, 1, 16, 0),
 	PIN_FIELD_CALC(170, 231, 0, 0x04a0, 0x10, 10, 1, 16, 0),
 };
