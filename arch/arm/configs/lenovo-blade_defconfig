@@ -126,6 +126,9 @@ CONFIG_REGULATOR_FIXED_VOLTAGE=y
 ## GPU
 #CONFIG_SGX=y # not ported
 
+## Networking
+CONFIG_NET=y
+
 ## Wi-Fi / Bluetooth
 
 ## Thermal
