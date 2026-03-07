@@ -502,6 +502,7 @@ static const struct mtk_pin_field_calc mt6589_pin_ies_range[] = {
 	PIN_FIELD_CALC(170, 231, 0, 0x01a0, 0x10, 10, 1, 16, 0),
 };
 
+/* If pin has R0, PULLEN=R1 */
 static const struct mtk_pin_field_calc mt6589_pin_pullen_range[] = {
 	PIN_FIELD_CALC(0, 43, 0, 0x0200, 0x10, 0, 1, 16, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0990, 0x0, 4, 1, 16, 0),
@@ -534,8 +535,6 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
 };
 
-// DINV(no GPIO44~49), BIAS
-
 static const char * const mt6589_pinctrl_register_base_names[] = {
 	"gpio", "gpio1",
 };
@@ -557,22 +556,12 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.gpio_m = 0,
 	.base_names = mt6589_pinctrl_register_base_names,
 	.nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
-//	.pull_type =
-/* disable? */
-//	.bias_disable_set =
-//	.bias_disable_get =
-//	.bias_set =
-//	.bias_get =
-/* maybe */
 	.bias_set_combo = mtk_pinconf_bias_set_combo,
 	.bias_get_combo = mtk_pinconf_bias_get_combo,
 	.drive_set = mtk_pinconf_drive_set_rev1,
 	.drive_get = mtk_pinconf_drive_get_rev1,
-/* maybe */
 	.adv_pull_set = mtk_pinconf_adv_pull_set,
 	.adv_pull_get = mtk_pinconf_adv_pull_get,
-//	.adv_drive_set =
-//	.adv_drive_get =
 };
 
 static const struct of_device_id mt6589_pinctrl_match[] = {
