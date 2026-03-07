@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 
 / {
 	#address-cells = <1>;
@@ -260,6 +261,314 @@
 			clocks = <&pericfg CLK_PERI_MUX_UART3>, <&pericfg CLK_PERI0_UART3>;
 			clock-names = "baud", "bus";
 			status = "disabled";
+		};
+
+		mmc0: mmc@11230000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11230000 0x1000>;
+			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC0>,
+				 <&topckgen CLK_TOP_MUX_MSDC0>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc1: mmc@11240000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11240000 0x1000>;
+			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC1>,
+				 <&topckgen CLK_TOP_MUX_MSDC1>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc2: mmc@11250000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11250000 0x1000>;
+			interrupts = <GIC_SPI 41 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC2>,
+				 <&topckgen CLK_TOP_MUX_MSDC2>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc3: mmc@11260000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11260000 0x1000>;
+			interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC3>,
+				 <&topckgen CLK_TOP_MUX_MSDC3>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+
+		mmc4: mmc@11270000 {
+			compatible = "mediatek,mt6589-mmc",
+				     "mediatek,mt2701-mmc";
+			reg = <0x11270000 0x1000>;
+			interrupts = <GIC_SPI 83 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_MSDC4>,
+				 <&topckgen CLK_TOP_MUX_MSDC4>;
+			clock-names = "source", "hclk";
+			status = "disabled";
+		};
+	};
+};
+
+&pio {
+	mmc0_pins_default: mmc0default {
+/*
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
+				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
+				 <MT6589_GPIO8__FUNC_MSDC0_DAT2>,
+				 <MT6589_GPIO7__FUNC_MSDC0_DAT3>,
+				 <MT6589_GPIO3__FUNC_MSDC0_DAT4>,
+				 <MT6589_GPIO2__FUNC_MSDC0_DAT5>,
+				 <MT6589_GPIO1__FUNC_MSDC0_DAT6>,
+				 <MT6589_GPIO0__FUNC_MSDC0_DAT7>,
+				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
+			bias-pull-down;
+		};
+*/
+		pins-rst {
+			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
+			bias-pull-up;
+		};
+	};
+
+	mmc0_pins_uhs: mmc0 {
+/*
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
+				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
+				 <MT6589_GPIO8__FUNC_MSDC0_DAT2>,
+				 <MT6589_GPIO7__FUNC_MSDC0_DAT3>,
+				 <MT6589_GPIO3__FUNC_MSDC0_DAT4>,
+				 <MT6589_GPIO2__FUNC_MSDC0_DAT5>,
+				 <MT6589_GPIO1__FUNC_MSDC0_DAT6>,
+				 <MT6589_GPIO0__FUNC_MSDC0_DAT7>,
+				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
+			input-enable;
+			drive-strength = <2>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
+			drive-strength = <2>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+		};
+*/
+		pins-rst {
+			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
+			bias-pull-up;
+		};
+	};
+
+	mmc1_pins_default: mmc1default {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO180__FUNC_MSDC1_DAT0>,
+				 <MT6589_GPIO181__FUNC_MSDC1_DAT1>,
+				 <MT6589_GPIO185__FUNC_MSDC1_DAT2>,
+				 <MT6589_GPIO186__FUNC_MSDC1_DAT3>,
+				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
+			input-enable;
+			//drive-strength = <4>;
+			bias-pull-up;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
+			bias-disable;
+			//drive-strength = <4>;
+			drive-strength = <8>;
+		};
+
+/* 182:00001001
+		pins-wp {
+			pinmux = <MT6589_GPIO182__FUNC_MSDC1_SDWPI>;
+			input-enable;
+			bias-disable;
+		};
+*/
+
+		pins-insert {
+			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
+			bias-pull-up;
+		};
+	};
+
+	mmc1_pins_uhs: mmc1 {
+/*
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO180__FUNC_MSDC1_DAT0>,
+				 <MT6589_GPIO181__FUNC_MSDC1_DAT1>,
+				 <MT6589_GPIO185__FUNC_MSDC1_DAT2>,
+				 <MT6589_GPIO186__FUNC_MSDC1_DAT3>,
+				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
+			input-enable;
+			drive-strength = <4>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
+			drive-strength = <4>;
+		};
+*/
+		/* dummy */
+		pins-insert {
+			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
+			bias-pull-up;
+		};
+	};
+
+	mmc2_pins_default: mmc2default {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO179__FUNC_MSDC2_DAT0>,
+				 <MT6589_GPIO178__FUNC_MSDC2_DAT1>,
+				 <MT6589_GPIO174__FUNC_MSDC2_DAT2>,
+				 <MT6589_GPIO175__FUNC_MSDC2_DAT3>,
+				 <MT6589_GPIO176__FUNC_MSDC2_CMD>;
+			input-enable;
+			drive-strength = <4>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO177__FUNC_MSDC2_CLK>;
+			bias-pull-down;
+			drive-strength = <4>;
+		};
+
+		pins-wp {
+			pinmux = <MT6589_GPIO173__FUNC_MSDC2_SDWPI>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-insert {
+			pinmux = <MT6589_GPIO172__FUNC_GPIO172>;
+			bias-pull-up;
+		};
+	};
+
+	mmc2_pins_uhs: mmc2 {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO179__FUNC_MSDC2_DAT0>,
+				 <MT6589_GPIO178__FUNC_MSDC2_DAT1>,
+				 <MT6589_GPIO174__FUNC_MSDC2_DAT2>,
+				 <MT6589_GPIO175__FUNC_MSDC2_DAT3>,
+				 <MT6589_GPIO176__FUNC_MSDC2_CMD>;
+			input-enable;
+			drive-strength = <4>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO177__FUNC_MSDC2_CLK>;
+			drive-strength = <4>;
+		};
+	};
+
+	mmc3_pins_default: mmc3default {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO231__FUNC_MSDC3_DAT0>,
+				 <MT6589_GPIO230__FUNC_MSDC3_DAT1>,
+				 <MT6589_GPIO226__FUNC_MSDC3_DAT2>,
+				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
+				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
+			input-enable;
+			drive-strength = <4>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			bias-pull-down;
+			drive-strength = <4>;
+		};
+	};
+
+	mmc3_pins_uhs: mmc3 {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO231__FUNC_MSDC3_DAT0>,
+				 <MT6589_GPIO230__FUNC_MSDC3_DAT1>,
+				 <MT6589_GPIO226__FUNC_MSDC3_DAT2>,
+				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
+				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
+			input-enable;
+			drive-strength = <4>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			drive-strength = <4>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+	};
+
+	mmc4_pins_default: mmc4default {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO130__FUNC_MSDC4_DAT0>,
+				 <MT6589_GPIO131__FUNC_MSDC4_DAT1>,
+				 <MT6589_GPIO138__FUNC_MSDC4_DAT2>,
+				 <MT6589_GPIO140__FUNC_MSDC4_DAT3>,
+				 <MT6589_GPIO137__FUNC_MSDC4_DAT4>,
+				 <MT6589_GPIO134__FUNC_MSDC4_DAT5>,
+				 <MT6589_GPIO135__FUNC_MSDC4_DAT6>,
+				 <MT6589_GPIO136__FUNC_MSDC4_DAT7>,
+				 <MT6589_GPIO141__FUNC_MSDC4_CMD>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
+			bias-pull-down;
+		};
+
+		pins-rst {
+			pinmux = <MT6589_GPIO142__FUNC_MSDC4_RSTB>;
+			bias-pull-up;
+		};
+	};
+
+	mmc4_pins_uhs: mmc4 {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO130__FUNC_MSDC4_DAT0>,
+				 <MT6589_GPIO131__FUNC_MSDC4_DAT1>,
+				 <MT6589_GPIO138__FUNC_MSDC4_DAT2>,
+				 <MT6589_GPIO140__FUNC_MSDC4_DAT3>,
+				 <MT6589_GPIO137__FUNC_MSDC4_DAT4>,
+				 <MT6589_GPIO134__FUNC_MSDC4_DAT5>,
+				 <MT6589_GPIO135__FUNC_MSDC4_DAT6>,
+				 <MT6589_GPIO136__FUNC_MSDC4_DAT7>,
+				 <MT6589_GPIO141__FUNC_MSDC4_CMD>;
+			input-enable;
+			drive-strength = <2>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
+			drive-strength = <2>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-rst {
+			pinmux = <MT6589_GPIO142__FUNC_MSDC4_RSTB>;
+			bias-pull-up;
 		};
 	};
 };
