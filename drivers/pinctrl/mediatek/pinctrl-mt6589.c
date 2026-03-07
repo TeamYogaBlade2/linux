@@ -25,19 +25,26 @@
 #define DRV_CON11	0x05b0
 #define DRV_CON12	0x05c0
 
+/* for 2nd base */
+#define PINS_FIELD1(_s_pin, _e_pin, _s_addr, _x_addrs, _s_bit, _x_bits)	\
+	PIN_FIELD_CALC(_s_pin, _e_pin, 1, _s_addr, _x_addrs, _s_bit,	\
+		       _x_bits, 32, 1)
+
 /* all R0 are in one register */
 #define PIN_FIELD_R0(_bit, _pin) \
 	PIN_FIELD_CALC(_pin, _pin, 0, 0x04f0, 0x0, _bit, 1, 32, 1)
 
 /*
+ * MT6589's Drive/Slew Rate register
+ *
  * E2, E4, E8, E16: Drive
  * SR: Slew Rate
  * DM: Dummy
  * MSB <-> LSB
  *
- * DRV_GRP4: SR  E8  E4  E2  : 2/4/6/8/10/12/14/16mA
  * DRV_GRP1: SR  E8  E4  DM  : 4/8/12/16mA
  * DRV_GRP3: SR  E4  E2  DM  : 2/4/6/8mA
+ * DRV_GRP4: SR  E8  E4  E2  : 2/4/6/8/10/12/14/16mA
  * DRV_GRP5: SR  E16 E8  E4  : 4/8/12/16/20/24/28/32mA
  */
 
@@ -267,6 +274,116 @@ static const struct mtk_pin_field_calc mt6589_pin_smt_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0300, 0x10, 0, 1, 16, 0),
 	PIN_FIELD_CALC(114, 169, 1, 0x0370, 0x10, 2, 1, 16, 0),
 	PIN_FIELD_CALC(170, 231, 0, 0x03a0, 0x10, 10, 1, 16, 0),
+};
+
+static const struct mtk_pin_field_calc mt6589_pin_tdsel_range[] = {
+	/* MSDC0_RSTB */
+	PINS_FIELD(4, 4, 0x0700, 0x0, 0, 4),
+	/* MSDC0 */
+	PINS_FIELD(, , 0x0700, 0x0, 8, 4),
+	/* NFI */
+	PINS_FIELD(, , 0x0700, 0x0, 24, 4),
+	/* EINT */
+	PINS_FIELD(, , 0x0710, 0x0, 0, 4),
+	/* SPI */
+	PINS_FIELD(, , 0x0710, 0x0, 8, 4),
+	/* SIM */
+	PINS_FIELD(, , 0x0710, 0x0, 16, 4),
+	/* I2S */
+	PINS_FIELD(, , 0x0710, 0x0, 24, 4),
+	/* GPIO */
+	PINS_FIELD(, , 0x0720, 0x0, 0, 4),
+	/* JTAG */
+	PINS_FIELD(, , 0x0730, 0x0, 0, 4),
+	/* UART */
+	PINS_FIELD(, , 0x0730, 0x0, 8, 4),
+	/* PWM */
+	PINS_FIELD(, , 0x0730, 0x0, 24, 4),
+	/* BPI */
+	PINS_FIELD(, , 0x0740, 0x0, 8, 4),
+	/* BSI1A */
+	PINS_FIELD(, , 0x0740, 0x0, 24, 4),
+	/* BSI1B */
+	PINS_FIELD(, , 0x0750, 0x0, 0, 4),
+	/* BSI1C */
+	PINS_FIELD(, , 0x0750, 0x0, 16, 4),
+	/* PCM */
+	PINS_FIELD1(, , 0x0760, 0x0, 0, 4),
+	/* LCD */
+	PINS_FIELD1(, , 0x0760, 0x0, 8, 4),
+	/* MSDC4_RSTB */
+	PINS_FIELD1(, , 0x0760, 0x0, 16, 4),
+	/* MSDC4 */
+	PINS_FIELD1(, , 0x0760, 0x0, 24, 4),
+	/* DPI */
+	PINS_FIELD1(, , 0x0770, 0x0, 8, 4),
+	/* MSDC1INSI */
+	PINS_FIELD1(, , 0x0770, 0x0, 16, 4),
+	/* MSDC2 */
+	PINS_FIELD(, , 0x0780, 0x0, 0, 4),
+	/* MSDC1 */
+	PINS_FIELD(, , 0x0780, 0x0, 16, 4),
+	/* CAM */
+	PINS_FIELD(, , 0x0790, 0x0, 0, 4),
+	/* I2C */
+	PINS_FIELD(, , 0x0790, 0x0, 8, 4),
+	/* MSDC3 */
+	PINS_FIELD(, , 0x0790, 0x0, 16, 4),
+};
+
+static const struct mtk_pin_field_calc mt6589_pin_rdsel_range[] = {
+	/* MSDC0_RSTB */
+	PINS_FIELD(4, 4, 0x0700, 0x0, 4, 2),
+	/* MSDC0 */
+	PINS_FIELD(, , 0x0700, 0x0, 16, 6),
+	/* NFI */
+	PINS_FIELD(, , 0x0700, 0x0, 28, 2),
+	/* EINT */
+	PINS_FIELD(, , 0x0710, 0x0, 4, 2),
+	/* SPI */
+	PINS_FIELD(, , 0x0710, 0x0, 12, 2),
+	/* SIM */
+	PINS_FIELD(, , 0x0710, 0x0, 20, 2),
+	/* I2S */
+	PINS_FIELD(, , 0x0710, 0x0, 28, 2),
+	/* GPIO */
+	PINS_FIELD(, , 0x0720, 0x0, 4, 2),
+	/* JTAG */
+	PINS_FIELD(, , 0x0730, 0x0, 4, 2),
+	/* UART */
+	PINS_FIELD(, , 0x0730, 0x0, 16, 6),
+	/* PWM */
+	PINS_FIELD(, , 0x0740, 0x0, 0, 6),
+	/* BPI */
+	PINS_FIELD(, , 0x0740, 0x0, 16, 6),
+	/* BSI1A */
+	PINS_FIELD(, , 0x0740, 0x0, 28, 2),
+	/* BSI1B */
+	PINS_FIELD(, , 0x0750, 0x0, 8, 6),
+	/* BSI1C */
+	PINS_FIELD(, , 0x0750, 0x0, 20, 2),
+	/* PCM */
+	PINS_FIELD1(, , 0x0760, 0x0, 4, 2),
+	/* LCD */
+	PINS_FIELD1(, , 0x0760, 0x0, 12, 2),
+	/* MSDC4_RSTB */
+	PINS_FIELD1(, , 0x0760, 0x0, 20, 2),
+	/* MSDC4 */
+	PINS_FIELD1(, , 0x0770, 0x0, 0, 6),
+	/* DPI */
+	PINS_FIELD1(, , 0x0770, 0x0, 12, 2),
+	/* MSDC1INSI */
+	PINS_FIELD1(, , 0x0770, 0x0, 20, 2),
+	/* MSDC2 */
+	PINS_FIELD(, , 0x0780, 0x0, 8, 6),
+	/* MSDC1 */
+	PINS_FIELD(, , 0x0780, 0x0, 24, 6),
+	/* CAM */
+	PINS_FIELD(, , 0x0790, 0x0, 4, 2),
+	/* I2C */
+	PINS_FIELD(, , 0x0790, 0x0, 12, 2),
+	/* MSDC3 */
+	PINS_FIELD(, , 0x0790, 0x0, 24, 6),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_drv_range[] = {
@@ -520,6 +637,8 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_DO] = MTK_RANGE(mt6589_pin_do_range),
 	[PINCTRL_PIN_REG_SR] = MTK_RANGE(mt6589_pin_sr_range),
 	[PINCTRL_PIN_REG_SMT] = MTK_RANGE(mt6589_pin_smt_range),
+	[PINCTRL_PIN_REG_TDSEL] = MTK_RANGE(mt6589_pin_tdsel_range),
+	[PINCTRL_PIN_REG_RDSEL] = MTK_RANGE(mt6589_pin_rdsel_range),
 	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(mt6589_pin_drv_range),
 	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
