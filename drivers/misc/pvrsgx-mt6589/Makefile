@@ -34,6 +34,7 @@ ccflags-y += \
 	-D__linux__ $(OPTIM) -g
 
 ccflags-y += -DLINUX
+ccflags-y += -Wno-declaration-after-statement
 
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),)
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),eng)
