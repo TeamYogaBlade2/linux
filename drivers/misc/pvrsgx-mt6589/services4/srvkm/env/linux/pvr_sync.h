@@ -60,6 +60,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvr_sync_user.h"
 #include "servicesint.h" // PVRSRV_DEVICE_SYNC_OBJECT
 
+struct sync_fence;
+
 /* services4 internal interface */
 
 int PVRSyncDeviceInit(void);
