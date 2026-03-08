@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
-
-/* clock IDs from mt_clkmgr.h */
-
 
 /* APMIXEDSYS */
 #define CLK_APMIXED_ARMPLL	0

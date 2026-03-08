@@ -111,30 +111,23 @@ patternProperties:
           slew-rate:
             enum: [0, 1]
 
-          # TODO
           mediatek,pull-up-adv:
             description: |
-              Pull up settings for 2 pull resistors, R0 and R1. User can
-              configure those special pins. Valid arguments are described as
-              below:
-              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
-              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
-              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
-              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
+              Pull up settings for R0. User can configure those special pins.
+              Valid arguments are described as below:
+              0: R0 disabled.
+              1: R0 enabled.
             $ref: /schemas/types.yaml#/definitions/uint32
-            enum: [0, 1, 2, 3]
+            enum: [0, 1]
 
           mediatek,pull-down-adv:
             description: |
-              Pull down settings for 2 pull resistors, R0 and R1. User can
-              configure those special pins. Valid arguments are described as
-              below:
-              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
-              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
-              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
-              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
+              Pull down settings for R0. User can configure those special pins.
+              Valid arguments are described as below:
+              0: R0 disabled.
+              1: R0 enabled.
             $ref: /schemas/types.yaml#/definitions/uint32
-            enum: [0, 1, 2, 3]
+            enum: [0, 1]
 
         required:
           - pinmux
@@ -145,4 +138,34 @@ additionalProperties: false
 
 examples:
   - |
-      TODO
+      #include <dt-bindings/interrupt-controller/irq.h>
+      #include <dt-bindings/interrupt-controller/arm-gic.h>
+      soc {
+          #address-cells = <1>;
+          #size-cells = <1>;
+
+          pio: pinctrl@10005000 {
+              compatible = "mediatek,mt6589-pinctrl";
+              reg = <0x10005000 0x1000>,
+                    <0x1020c000 0x1000>,
+                    <0x1000b000 0x1000>;
+              reg-names = "gpio", "gpio1", "eint";
+              gpio-controller;
+              #gpio-cells = <2>;
+              gpio-ranges = <&pio 0 0 232>;
+              interrupt-controller;
+              interrupt-parent = <&gic>;
+              #interrupt-cells = <2>;
+              interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
+                           <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
+                           <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>;
+
+              usb_pins_default: usb-pins {
+                  pins_iddig {
+                      pinmux = <MT6589_GPIO57__FUNC_IDDIG>;
+                      input-enable;
+                      bias-pull-up;
+                  }
+              };
+          };
+      };
