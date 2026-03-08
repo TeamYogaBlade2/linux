@@ -31,7 +31,7 @@
 #define SYS_USING_INTERRUPTS 
 #define PVRSRV_NEW_PVR_DPF 
 #define PVRSRV_NEED_PVR_DPF 
-#define SUPPORT_ION 
+//#define SUPPORT_ION
 #define SUPPORT_PVRSRV_DEVICE_CLASS 
 #define IMG_ADDRSPACE_PHYSADDR_BITS 32
 #define SUPPORT_LINUX_X86_WRITECOMBINE 
@@ -49,8 +49,8 @@
 #define ANDROID 
 #define SUPPORT_PVRSRV_ANDROID_SYSTRACE 
 #define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC 
-#define SUPPORT_ION_HEADER "linux/ion.h"
-#define SUPPORT_ION_PRIV_HEADER "../drivers/gpu/ion/ion_priv.h"
+//#define SUPPORT_ION_HEADER "linux/ion.h"
+//#define SUPPORT_ION_PRIV_HEADER "../drivers/gpu/ion/ion_priv.h"
 #define USE_RGBA_8888_FB 
 #define MTK_DEBUG_LFB 
 #define MTK_DEBUG_TIMER_MONITOR 
