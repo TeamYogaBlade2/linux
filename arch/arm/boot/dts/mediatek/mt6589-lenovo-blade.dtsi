@@ -44,6 +44,22 @@
 	};
 };
 
+&i2c3 {
+	status = "okay";
+	/* TODO */
+	clock-frequency = <400000>;
+
+	accelerometer@11 {
+		compatible = "bosch,bma255";
+		reg = <0x11>;
+	};
+
+	magnetometer@13 {
+		compatible = "bosch,bmm150";
+		reg = <0x13>;
+	};
+};
+
 &uart0 {
 	status = "okay";
 };

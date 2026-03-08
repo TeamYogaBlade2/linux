@@ -1076,7 +1076,7 @@ int mtk_pctrl_init(struct platform_device *pdev,
 		return dev_err_probe(dev, -EINVAL, "Cannot find pinctrl regmap.\n");
 	}
 
-	/* Only 8135 has two base addr, other SoCs have only one. */
+	/* 6589 and 8135 has two base addr, other SoCs have only one. */
 	node = of_parse_phandle(np, "mediatek,pctl-regmap", 1);
 	if (node) {
 		pctl->regmap2 = syscon_node_to_regmap(node);
