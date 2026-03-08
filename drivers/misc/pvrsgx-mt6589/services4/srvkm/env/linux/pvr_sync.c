@@ -721,7 +721,7 @@ PVRSyncIOCTLCreate(struct PVR_SYNC_TIMELINE *psObj, void __user *pvData)
 		goto err_out;
 	}
 
-	if (!access_ok(VERIFY_READ, pvData, sizeof(sData)))
+	if (!access_ok(pvData, sizeof(sData)))
 		goto err_put_fd;
 
 	if (copy_from_user(&sData, pvData, sizeof(sData)))
@@ -778,7 +778,7 @@ PVRSyncIOCTLCreate(struct PVR_SYNC_TIMELINE *psObj, void __user *pvData)
 
 	sData.fence = iFd;
 
-	if (!access_ok(VERIFY_WRITE, pvData, sizeof(sData)))
+	if (!access_ok(pvData, sizeof(sData)))
 	{
 		sync_fence_put(psFence);
 		goto err_put_fd;
@@ -823,7 +823,7 @@ PVRSyncIOCTLDebug(struct PVR_SYNC_TIMELINE *psObj, void __user *pvData)
 	struct list_head *psEntry;
 	int i = 0, err = -EFAULT;
 
-	if(!access_ok(VERIFY_READ, pvData, sizeof(sData)))
+	if(!access_ok(pvData, sizeof(sData)))
 		goto err_out;
 
 	if(copy_from_user(&sData, pvData, sizeof(sData)))
@@ -884,7 +884,7 @@ PVRSyncIOCTLDebug(struct PVR_SYNC_TIMELINE *psObj, void __user *pvData)
 
 	sData.ui32NumPoints = i;
 
-	if(!access_ok(VERIFY_WRITE, pvData, sizeof(sData)))
+	if(!access_ok(pvData, sizeof(sData)))
 		goto err_out;
 
 	if(copy_to_user(pvData, &sData, sizeof(sData)))
@@ -954,7 +954,7 @@ PVRSyncIOCTLAlloc(struct PVR_SYNC_TIMELINE *psTimeline, void __user *pvData)
 		goto err_out;
 	}
 
-	if (!access_ok(VERIFY_READ, pvData, sizeof(sData)))
+	if (!access_ok(pvData, sizeof(sData)))
 		goto err_put_fd;
 
 	if (copy_from_user(&sData, pvData, sizeof(sData)))
@@ -1029,7 +1029,7 @@ PVRSyncIOCTLAlloc(struct PVR_SYNC_TIMELINE *psTimeline, void __user *pvData)
 
 	LinuxUnLockMutex(&gPVRSRVLock);
 
-	if (!access_ok(VERIFY_WRITE, pvData, sizeof(sData)))
+	if (!access_ok(pvData, sizeof(sData)))
 		goto err_release_file;
 
 	if (copy_to_user(pvData, &sData, sizeof(sData)))
