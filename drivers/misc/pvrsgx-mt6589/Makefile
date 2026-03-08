@@ -33,7 +33,6 @@ ccflags-y += \
 ccflags-y += \
 	-D__linux__ $(OPTIM) -g
 
-ccflags-y += -DLINUX
 ccflags-y += -Wno-declaration-after-statement
 
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),)
@@ -44,9 +43,7 @@ endif
 endif
 endif
 
-ccflags-$(CONFIG_PVR_BUILD_RELEASE_MT6589) += \
-	-include $(src)/include4/config_kernel_$(VER).h
-ccflags-$(CONFIG_PVR_BUILD_DEBUG_MT6589) += \
+ccflags-y += \
 	-include $(src)/include4/config_kernel_$(VER).h
 
 pvrsrvkm-y := \
