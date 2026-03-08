@@ -95,13 +95,13 @@ static const IMG_CHAR PVRProcDirRoot[] = "pvr";
 static IMG_INT pvr_proc_open(struct inode *inode,struct file *file);
 static ssize_t pvr_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos);
 
-static struct file_operations pvr_proc_operations =
+static struct proc_ops pvr_proc_operations =
 {
-	.open		= pvr_proc_open,
-	.read		= seq_read,
-	.write		= pvr_proc_write,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
+	.proc_open	= pvr_proc_open,
+	.proc_read	= seq_read,
+	.proc_write	= pvr_proc_write,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= seq_release,
 };
 
 static void *pvr_proc_seq_start (struct seq_file *m, loff_t *pos);
@@ -137,10 +137,6 @@ static void ProcSeqShowVersion(struct seq_file *sfile,void* el);
 static void ProcSeqShowSysNodes(struct seq_file *sfile,void* el);
 static void* ProcSeqOff2ElementSysNodes(struct seq_file * sfile, loff_t off);
 
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
-#define PDE_DATA(x)    PDE(x)->data;
-#endif
 
 #ifdef DEBUG
 
@@ -227,7 +223,7 @@ static IMG_INT pvr_proc_open(struct inode *inode,struct file *file)
 	IMG_INT ret = seq_open(file, &pvr_proc_seq_operations);
 
 	struct seq_file *seq = (struct seq_file*)file->private_data;
-	struct pvr_proc_dir_entry* ppde = PDE_DATA(inode);
+	struct pvr_proc_dir_entry* ppde = pde_data(inode);
 
 	/* Add pointer to handlers to seq_file structure */
 	seq->private = ppde;
@@ -252,7 +248,7 @@ static ssize_t pvr_proc_write(struct file *file, const char __user *buffer,
 	struct pvr_proc_dir_entry * ppde;
 
 	PVR_UNREFERENCED_PARAMETER(ppos);
-	ppde = PDE_DATA(inode);
+	ppde = pde_data(inode);
 
 	if (!ppde->write)
 		return -EIO;
