@@ -4,8 +4,67 @@
  */
 
 #include "mt6589-lenovo-blade.dtsi"
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
 	compatible = "lenovo,blade-b8000-f", "lenovo,blade", "mediatek,mt6589";
+
+	reg_1p8v: regulator-1p8v {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-1.8V";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	reg_3p3v: regulator-3p3v {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-3.3V";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	reg_5v: regulator-5v {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-5V";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+};
+
+/* Internal storage */
+&mmc0 {
+//	status = "okay";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc0_pins_default>;
+	pinctrl-1 = <&mmc0_pins_uhs>;
+	non-removable;
+	bus-width = <8>;
+	max-frequency = <50000000>;
+//	cap-mmc-highspeed;
+	vmmc-supply = <&reg_3p3v>;
+	vqmmc-supply = <&reg_1p8v>;
+};
+
+/* SD Card */
+&mmc1 {
+	status = "okay";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc1_pins_default>;
+	pinctrl-1 = <&mmc1_pins_uhs>;
+	bus-width = <4>;
+//	max-frequency = <50000000>;
+	max-frequency = <400000>;
+//	cap-sd-highspeed;
+//	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
+// gpio182 is fake
+	cd-gpios = <&pio 182 GPIO_ACTIVE_LOW>;
+	vmmc-supply = <&reg_3p3v>;
+	vqmmc-supply = <&reg_3p3v>;
 };
