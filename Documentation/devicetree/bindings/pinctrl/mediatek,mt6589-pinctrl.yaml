@@ -111,7 +111,6 @@ patternProperties:
           slew-rate:
             enum: [0, 1]
 
-          # TODO
           mediatek,pull-up-adv:
             description: |
               Pull up settings for R0. User can configure those special pins.
@@ -163,9 +162,10 @@ examples:
 
               usb_pins_default: usb-pins {
                   pins_iddig {
-                  pinmux = <MT6589_GPIO57__FUNC_IDDIG>;
-                  input-enable;
-                  bias-pull-up;
+                      pinmux = <MT6589_GPIO57__FUNC_IDDIG>;
+                      input-enable;
+                      bias-pull-up;
+                  }
               };
           };
       };
