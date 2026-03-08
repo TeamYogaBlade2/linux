@@ -163,11 +163,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PRIVATE_DATA(pFile) ((pFile)->private_data)
 #endif
 
-/*
- * This is all module configuration stuff required by the linux kernel.
- */
-MODULE_SUPPORTED_DEVICE(DEVNAME);
-
 #if defined(PVRSRV_NEED_PVR_DPF)
 #include <linux/moduleparam.h>
 extern IMG_UINT32 gPVRDebugLevel;
@@ -250,7 +245,7 @@ static IMG_UINT32 gPVRPowerLevel;
  * This is the driver interface we support.  
  */
 #if defined(PVR_LDM_PLATFORM_MODULE)
-static int PVRSRVDriverRemove(LDM_DEV *device);
+static void PVRSRVDriverRemove(LDM_DEV *device);
 static int PVRSRVDriverProbe(LDM_DEV *device);
 #endif
 #if defined(PVR_LDM_PCI_MODULE)
@@ -398,7 +393,7 @@ static int __devinit PVRSRVDriverProbe(LDM_DEV *pDevice, const struct pci_device
 
 *****************************************************************************/
 #if defined (PVR_LDM_PLATFORM_MODULE)
-static int PVRSRVDriverRemove(LDM_DEV *pDevice)
+static void PVRSRVDriverRemove(LDM_DEV *pDevice)
 #endif
 #if defined(PVR_LDM_PCI_MODULE)
 static void __devexit PVRSRVDriverRemove(LDM_DEV *pDevice)
@@ -431,12 +426,7 @@ static void __devexit PVRSRVDriverRemove(LDM_DEV *pDevice)
 	}
 #endif
 
-#if defined (PVR_LDM_PLATFORM_MODULE)
-	return 0;
-#endif
-#if defined (PVR_LDM_PCI_MODULE)
 	return;
-#endif
 }
 #endif /* defined(PVR_LDM_MODULE) */
 
@@ -1034,7 +1024,7 @@ static int __init PVRCore_Init(void)
 	 * This code (using GPL symbols) facilitates automatic device
 	 * node creation on platforms with udev (or similar).
 	 */
-	psPvrClass = class_create(THIS_MODULE, "pvr");
+	psPvrClass = class_create("pvr");
 
 	if (IS_ERR(psPvrClass))
 	{
