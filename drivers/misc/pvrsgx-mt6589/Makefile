@@ -33,6 +33,8 @@ ccflags-y += \
 ccflags-y += \
 	-D__linux__ $(OPTIM) -g
 
+ccflags-y += -DLINUX
+
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),)
 ifneq ($(strip $(TARGET_BUILD_VARIANT)),eng)
 ifneq ($(strip $(MTK_3D_DEBUG_FOR_USER_VERSION)),yes)
