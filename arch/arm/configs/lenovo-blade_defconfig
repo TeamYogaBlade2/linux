@@ -129,7 +129,7 @@ CONFIG_REGULATOR_FIXED_VOLTAGE=y
 ## Video Accelerator
 
 ## GPU
-#CONFIG_SGX=y # not ported
+CONFIG_PVR_SGX_MT6589=y
 
 ## Networking
 CONFIG_NET=y
