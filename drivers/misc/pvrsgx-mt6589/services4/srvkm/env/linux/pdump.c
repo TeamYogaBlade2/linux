@@ -43,7 +43,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined (PDUMP)
 
 #include <asm/atomic.h>
-#include <stdarg.h>
+#include <linux/stdarg.h>
 #if defined (SUPPORT_SGX)
 #include "sgxdefs.h" /* Is this still needed? */
 #endif
