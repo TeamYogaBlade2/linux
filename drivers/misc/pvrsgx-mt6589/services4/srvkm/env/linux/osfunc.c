@@ -80,8 +80,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/workqueue.h>
 #endif
 
-#include <mach/sync_write.h>
-
 #include "img_types.h"
 #include "services_headers.h"
 #include "mm.h"
@@ -2124,6 +2122,7 @@ PVRSRV_ERROR OSBaseFreeContigMemory(IMG_SIZE_T uiSize, IMG_CPU_VIRTADDR pvLinAdd
 
 ******************************************************************************/
 
+/* TODO use ioremap */
 IMG_UINT32 OSReadHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset)
 {
 #if !defined(NO_HARDWARE)
@@ -2136,8 +2135,7 @@ IMG_UINT32 OSReadHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset)
 IMG_VOID OSWriteHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset, IMG_UINT32 ui32Value)
 {
 #if !defined(NO_HARDWARE)
-    //writel(ui32Value, (IMG_PBYTE)pvLinRegBaseAddr+ui32Offset);
-    mt65xx_reg_sync_writel(ui32Value, (IMG_PBYTE)pvLinRegBaseAddr+ui32Offset);
+    writel(ui32Value, (IMG_PBYTE)pvLinRegBaseAddr+ui32Offset);
 #else
     *(IMG_UINT32 *)((IMG_PBYTE)pvLinRegBaseAddr+ui32Offset) = ui32Value;
 #endif
