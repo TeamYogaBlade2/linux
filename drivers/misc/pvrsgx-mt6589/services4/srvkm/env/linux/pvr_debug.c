@@ -56,7 +56,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>			// strncpy, strlen
-#include <stdarg.h>
+#include <linux/stdarg.h>
 #include <linux/seq_file.h>
 #include "img_types.h"
 #include "servicesext.h"
