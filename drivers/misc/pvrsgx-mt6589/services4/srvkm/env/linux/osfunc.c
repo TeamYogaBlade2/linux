@@ -41,6 +41,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/version.h>
 #include <linux/uaccess.h>
+#include <linux/timer.h>
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
 #ifndef AUTOCONF_INCLUDED
@@ -2703,14 +2704,14 @@ static void OSTimerCallbackBody(TIMER_CALLBACK_DATA *psTimerCBData)
  
  OS specific timer callback wrapper function
  
- @Input    ui32Data : timer callback data
+ @Input    t : timer callback data
 
  @Return   NONE
 
 ******************************************************************************/
-static IMG_VOID OSTimerCallbackWrapper(IMG_UINTPTR_T uiData)
+static IMG_VOID OSTimerCallbackWrapper(struct timer_list *t)
 {
-    TIMER_CALLBACK_DATA	*psTimerCBData = (TIMER_CALLBACK_DATA*)uiData;
+    TIMER_CALLBACK_DATA *psTimerCBData = timer_container_of(psTimerCBData, t, sTimer);
     
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES) || defined(PVR_LINUX_TIMERS_USING_SHARED_WORKQUEUE)
     int res;
@@ -2810,14 +2811,8 @@ IMG_HANDLE OSAddTimer(PFN_TIMER_FUNC pfnTimerFunc, IMG_VOID *pvData, IMG_UINT32 
     psTimerCBData->ui32Delay = ((HZ * ui32MsTimeout) < 1000)
                                 ?	1
                                 :	((HZ * ui32MsTimeout) / 1000);
-    /* initialise object */
-    init_timer(&psTimerCBData->sTimer);
-    
-    /* setup timer object */
-    /* PRQA S 0307,0563 1 */ /* ignore warning about inconpartible ptr casting */
-    psTimerCBData->sTimer.function = (IMG_VOID *)OSTimerCallbackWrapper;
-    psTimerCBData->sTimer.data = (IMG_UINTPTR_T)psTimerCBData;
-    
+    timer_setup(&psTimerCBData->sTimer, OSTimerCallbackWrapper, 0);
+
     return (IMG_HANDLE)(ui + 1);
 }
 
@@ -2926,7 +2921,7 @@ PVRSRV_ERROR OSDisableTimer (IMG_HANDLE hTimer)
 #endif
 
     /* remove timer */
-    del_timer_sync(&psTimerCBData->sTimer);	
+    timer_delete_sync(&psTimerCBData->sTimer);
     
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES)
     /*
@@ -3344,7 +3339,8 @@ static IMG_BOOL CPUVAddrToPFN(struct vm_area_struct *psVMArea, IMG_UINTPTR_T uCP
     if (pgd_none(*psPGD) || pgd_bad(*psPGD))
         return bRet;
 
-    psPUD = pud_offset(psPGD, uCPUVAddr);
+    p4d_t *psP4D = p4d_offset(psPGD, uCPUVAddr);
+    psPUD = pud_offset(psP4D, uCPUVAddr);
     if (pud_none(*psPUD) || pud_bad(*psPUD))
         return bRet;
 
@@ -3430,7 +3426,7 @@ PVRSRV_ERROR OSReleasePhysPageAddr(IMG_HANDLE hOSWrapMem)
                         SetPageDirty(psPage);
                     }
 	        }
-                page_cache_release(psPage);
+                put_page(psPage);
 	    }
             break;
         }
@@ -3608,11 +3604,11 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
     psInfo->eType = WRAP_TYPE_GET_USER_PAGES;
 
     /* Lock down user memory */
-    down_read(&current->mm->mmap_sem);
+    mmap_read_lock(current->mm);
     bMMapSemHeld = IMG_TRUE;
 
     /* Get page list */
-    psInfo->iNumPagesMapped = get_user_pages(current, current->mm, uStartAddr, psInfo->iNumPages, 1, 0, psInfo->ppsPages, NULL);
+    psInfo->iNumPagesMapped = get_user_pages(uStartAddr, psInfo->iNumPages, FOLL_WRITE, psInfo->ppsPages);
 
     if (psInfo->iNumPagesMapped >= 0)
     {
@@ -3797,7 +3793,7 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
 
 exit:
     PVR_ASSERT(bMMapSemHeld);
-    up_read(&current->mm->mmap_sem);
+    mmap_read_unlock(current->mm);
 
     /* Return the cookie */
     *phOSWrapMem = (IMG_HANDLE)psInfo;
@@ -3815,7 +3811,7 @@ exit:
 error:
     if (bMMapSemHeld)
     {
-        up_read(&current->mm->mmap_sem);
+        mmap_read_unlock(current->mm);
     }
     OSReleasePhysPageAddr((IMG_HANDLE)psInfo);
 
@@ -4342,18 +4338,18 @@ static void pvr_dmac_clean_range(const void *pvStart, const void *pvEnd)
 
 static void pvr_flush_range(phys_addr_t pStart, phys_addr_t pEnd)
 {
-	arm_dma_ops.sync_single_for_device(NULL, pStart, pEnd - pStart, DMA_TO_DEVICE);
-	arm_dma_ops.sync_single_for_cpu(NULL, pStart, pEnd - pStart, DMA_FROM_DEVICE);
+	dma_sync_single_for_device(NULL, pStart, pEnd - pStart, DMA_TO_DEVICE);
+	dma_sync_single_for_cpu(NULL, pStart, pEnd - pStart, DMA_FROM_DEVICE);
 }
 
 static void pvr_clean_range(phys_addr_t pStart, phys_addr_t pEnd)
 {
-	arm_dma_ops.sync_single_for_device(NULL, pStart, pEnd - pStart, DMA_TO_DEVICE);
+	dma_sync_single_for_device(NULL, pStart, pEnd - pStart, DMA_TO_DEVICE);
 }
 
 static void pvr_invalidate_range(phys_addr_t pStart, phys_addr_t pEnd)
 {
-	arm_dma_ops.sync_single_for_cpu(NULL, pStart, pEnd - pStart, DMA_FROM_DEVICE);
+	dma_sync_single_for_cpu(NULL, pStart, pEnd - pStart, DMA_FROM_DEVICE);
 }
 
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0) */
