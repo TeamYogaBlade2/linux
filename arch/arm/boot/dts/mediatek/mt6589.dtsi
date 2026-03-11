@@ -277,7 +277,7 @@
 			reg-names = "gpio", "gpio1", "eint";
 			gpio-controller;
 			#gpio-cells = <2>;
-			gpio-ranges = <&pio 0 0 231>;
+			gpio-ranges = <&pio 0 0 232>;
 			interrupt-controller;
 			interrupt-parent = <&gic>;
 			#interrupt-cells = <2>;
