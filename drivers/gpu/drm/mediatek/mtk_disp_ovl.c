@@ -20,9 +20,21 @@
 #include "mtk_disp_drv.h"
 #include "mtk_drm_drv.h"
 
-#define DISP_REG_OVL_INTEN			0x0004
-#define OVL_FME_CPL_INT					BIT(1)
+#define DISP_REG_OVL_INTEN					0x0004
+#define OVL_FME_CPL_INT							BIT(1)
+#define OVL_FME_UND_INT							BIT(2)
+#define OVL_RDMA0_EOF_ABNORMAL_INT	BIT(5)
+#define OVL_RDMA1_EOF_ABNORMAL_INT	BIT(6)
+#define OVL_RDMA0_FIFO_UND_INT			BIT(9)
+#define OVL_RDMA1_FIFO_UND_INT			BIT(10)
+
 #define DISP_REG_OVL_INTSTA			0x0008
+#define OVL_FME_UND							BIT(2)
+#define OVL_RDMA0_EOF_ABNORMAL	BIT(5)
+#define OVL_RDMA1_EOF_ABNORMAL	BIT(6)
+#define OVL_RDMA0_FIFO_UND			BIT(9)
+#define OVL_RDMA1_FIFO_UND			BIT(10)
+
 #define DISP_REG_OVL_EN				0x000c
 #define DISP_REG_OVL_RST			0x0014
 #define DISP_REG_OVL_ROI_SIZE			0x0020
@@ -170,6 +182,18 @@ struct mtk_disp_ovl {
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_ovl *priv = dev_id;
+	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
+
+	if (reg & OVL_FME_UND)
+		pr_err("OVL: OVL frame underflow\n");
+	if (reg & OVL_RDMA0_EOF_ABNORMAL)
+		pr_err("OVL: RDMA0 didn't complete frame\n");
+	if (reg & OVL_RDMA1_EOF_ABNORMAL)
+		pr_err("OVL: RDMA1 didn't complete frame\n");
+	if (reg & OVL_RDMA0_FIFO_UND)
+		pr_err("OVL: RDMA0 FIFO underflow\n");
+	if (reg & OVL_RDMA1_FIFO_UND)
+		pr_err("OVL: RDMA1 FIFO underflow\n");
 
 	/* Clear frame completion interrupt */
 	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
@@ -205,7 +229,10 @@ void mtk_ovl_enable_vblank(struct device *dev)
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
 	writel(0x0, ovl->regs + DISP_REG_OVL_INTSTA);
-	writel_relaxed(OVL_FME_CPL_INT, ovl->regs + DISP_REG_OVL_INTEN);
+	writel_relaxed(OVL_FME_CPL_INT | OVL_FME_UND_INT |
+	               OVL_RDMA0_EOF_ABNORMAL_INT | OVL_RDMA1_EOF_ABNORMAL_INT |
+	               OVL_RDMA0_FIFO_UND_INT | OVL_RDMA1_FIFO_UND_INT,
+	               ovl->regs + DISP_REG_OVL_INTEN);
 }
 
 void mtk_ovl_disable_vblank(struct device *dev)
