@@ -277,7 +277,7 @@
 			reg-names = "gpio", "gpio1", "eint";
 			gpio-controller;
 			#gpio-cells = <2>;
-			gpio-ranges = <&pio 0 0 232>;
+			gpio-ranges = <&pio 0 0 231>;
 			interrupt-controller;
 			interrupt-parent = <&gic>;
 			#interrupt-cells = <2>;
@@ -483,7 +483,8 @@
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			drive-strength = <2>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-down;
+			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 */
 		pins-rst {
@@ -604,7 +605,8 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-up;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
@@ -623,13 +625,15 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-up;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
 			drive-strength = <4>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+			bias-pull-down;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_10>;
 		};
 	};
 
@@ -678,7 +682,8 @@
 		pins-clk {
 			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
 			drive-strength = <2>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-down;
+			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-rst {
