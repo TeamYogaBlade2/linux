@@ -330,6 +330,13 @@
 #define MT8195_MUTEX_EOF_DPI0			(MT8195_MUTEX_SOF_DPI0 << 7)
 #define MT8195_MUTEX_EOF_DPI1			(MT8195_MUTEX_SOF_DPI1 << 7)
 
+#define MT6572_MUTEX_MOD_DISP_OVL		3
+#define MT6572_MUTEX_MOD_DISP_WDMA		6
+#define MT6572_MUTEX_MOD_DISP_COLOR		7
+#define MT6572_MUTEX_MOD_DISP_BLS		9
+// XXX: this is RDMA1, RDMA0 is MDP
+#define MT6572_MUTEX_MOD_DISP_RDMA0		10
+
 struct mtk_mutex {
 	u8 id;
 	bool claimed;
@@ -395,6 +402,14 @@ static const u8 mt2712_mutex_mod[DDP_COMPONENT_ID_MAX] = {
 	[DDP_COMPONENT_UFOE] = MT2712_MUTEX_MOD_DISP_UFOE,
 	[DDP_COMPONENT_WDMA0] = MT2712_MUTEX_MOD_DISP_WDMA0,
 	[DDP_COMPONENT_WDMA1] = MT2712_MUTEX_MOD_DISP_WDMA1,
+};
+
+static const u8 mt6572_mutex_mod[DDP_COMPONENT_ID_MAX] = {
+	[DDP_COMPONENT_BLS] = MT6572_MUTEX_MOD_DISP_BLS,
+	[DDP_COMPONENT_COLOR0] = MT6572_MUTEX_MOD_DISP_COLOR,
+	[DDP_COMPONENT_OVL0] = MT6572_MUTEX_MOD_DISP_OVL,
+	[DDP_COMPONENT_RDMA0] = MT6572_MUTEX_MOD_DISP_RDMA0,
+	[DDP_COMPONENT_WDMA0] = MT6572_MUTEX_MOD_DISP_WDMA,
 };
 
 static const u8 mt8167_mutex_mod[DDP_COMPONENT_ID_MAX] = {
@@ -743,6 +758,13 @@ static const struct mtk_mutex_data mt2712_mutex_driver_data = {
 	.mutex_sof = mt2712_mutex_sof,
 	.mutex_mod_reg = MT2701_MUTEX0_MOD0,
 	.mutex_mod1_reg = MT2701_MUTEX0_MOD1,
+	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
+};
+
+static const struct mtk_mutex_data mt6572_mutex_driver_data = {
+	.mutex_mod = mt6572_mutex_mod,
+	.mutex_sof = mt2712_mutex_sof,
+	.mutex_mod_reg = MT2701_MUTEX0_MOD0,
 	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
 };
 
@@ -1132,6 +1154,7 @@ static int mtk_mutex_probe(struct platform_device *pdev)
 static const struct of_device_id mutex_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-mutex", .data = &mt2701_mutex_driver_data },
 	{ .compatible = "mediatek,mt2712-disp-mutex", .data = &mt2712_mutex_driver_data },
+	{ .compatible = "mediatek,mt6572-disp-mutex", .data = &mt6572_mutex_driver_data },
 	{ .compatible = "mediatek,mt6795-disp-mutex", .data = &mt6795_mutex_driver_data },
 	{ .compatible = "mediatek,mt8167-disp-mutex", .data = &mt8167_mutex_driver_data },
 	{ .compatible = "mediatek,mt8173-disp-mutex", .data = &mt8173_mutex_driver_data },
