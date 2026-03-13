@@ -72,6 +72,8 @@ struct mtk_disp_rdma_data {
 	unsigned int fifo_size;
 	const u32 *formats;
 	size_t num_formats;
+	u32 size_con0;
+	u32 size_con1;
 };
 
 /*
@@ -191,9 +193,9 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	u32 rdma_fifo_size;
 
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_0, 0xfff);
+			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_1, 0xfffff);
+			   DISP_REG_RDMA_SIZE_CON_1, rdma->data->size_con1);
 
 	if (rdma->fifo_size)
 		rdma_fifo_size = rdma->fifo_size;
@@ -380,24 +382,32 @@ static const struct mtk_disp_rdma_data mt2701_rdma_driver_data = {
 	.fifo_size = SZ_4K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
 };
 
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
 	.fifo_size = SZ_8K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
 };
 
 static const struct mtk_disp_rdma_data mt8183_rdma_driver_data = {
 	.fifo_size = 5 * SZ_1K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
 };
 
 static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 	.fifo_size = 1920,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
 };
 
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
