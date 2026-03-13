@@ -439,6 +439,11 @@
 						 BIT(26) | BIT(27) | \
 						 BIT(28))
 
+/* XXX: no idea about these names, using MT2701 naming convention... */
+#define MT6572_TOP_AXI_PROT_EN_CONN_M		BIT(0)
+#define MT6572_TOP_AXI_PROT_EN_CONN_S		BIT(4)
+#define MT6572_TOP_AXI_PROT_EN_DIS		BIT(11)
+
 #define INFRA_TOPAXI_PROTECTEN			0x0220
 #define INFRA_TOPAXI_PROTECTSTA1		0x0228
 #define INFRA_TOPAXI_PROTECTEN_SET		0x0260
