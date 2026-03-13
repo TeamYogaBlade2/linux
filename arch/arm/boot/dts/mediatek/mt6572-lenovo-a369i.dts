@@ -4,7 +4,10 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 #include "mt6572.dtsi"
+#include "mt6323.dtsi"
 
 / {
 	model = "Lenovo A369i";
@@ -20,12 +23,13 @@
 		stdout-path = "serial0:921600n8";
 
 		framebuffer: framebuffer@9fa00000 {
-			compatible = "simple-framebuffer";
+			//compatible = "simple-framebuffer";
 			memory-region = <&framebuffer_reserved>;
 			width = <480>;
 			height = <800>;
 			stride = <(480 * 2)>;
 			format = "r5g6b5";
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
 		};
 	};
 
@@ -49,8 +53,170 @@
 			no-map;
 		};
 	};
+
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6323_vibr_reg>;
+		min-microvolt = <1200000>;
+		max-microvolt = <3300000>;
+	};
+};
+
+&bls {
+	status = "okay";
+};
+
+&cpu0 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "djn,otm8018b";
+		reg = <0>;
+		vcc-supply = <&mt6323_vgp1_reg>;
+
+		//pinctrl-names = "default";
+		//pinctrl-0 = <&panel_pins>;
+
+		reset-gpios = <&pio 56 GPIO_ACTIVE_HIGH>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+
+	port {
+		dsi_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
+
+};
+
+&gpu {
+	/* Switch to WHPLL */
+	assigned-clocks = <&topckgen CLK_TOP_MFG_MUX_SEL>,
+			  <&topckgen CLK_TOP_MFG_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MFG_PRE_500M>,
+				 <&topckgen CLK_TOP_MFG_MUX_SEL>;
+
+	operating-points-v2 = <&gpu_opp_table>;
+	nvmem-cells = <&gpu_speedbin>;
+	nvmem-cell-names = "speedbin";
+};
+
+&i2c0 {
+	status = "okay";
+};
+
+&i2c1 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	accelerometer@15 {
+		compatible = "memsic,mxc6255";
+		reg = <0x15>;
+	};
+};
+
+&mmc1 {
+	pinctrl-0 = <&mmc1_pins>;
+	pinctrl-1 = <&mmc1_pins>;
+	pinctrl-names = "default", "state_uhs";
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	//sd-uhs-ddr50;
+	//sd-uhs-sdr104;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	//sd-uhs-sdr50;
+	vmmc-supply = <&mt6323_vmch_reg>;
+	vqmmc-supply = <&mt6323_vmc_reg>;
+	//cd-gpios = <&gpio 18 GPIO_ACTIVE_LOW>;
+	broken-cd;
+	status = "okay";
 };
 
 &uart0 {
 	status = "okay";
+};
+
+&usb {
+	status = "okay";
+};
+
+&u2phy0 {
+	status = "okay";
+};
+
+&pmic {
+	pinctrl-0 = <&pmic_int_pins>;
+	pinctrl-names = "default";
+	interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+&pwrap {
+	pinctrl-names = "default";
+};
+
+&pio {
+	mmc1_pins: mmc1-pins {
+		pins-clk {
+			pinmux = <MT6572_PIN_91_MC1_CK__FUNC_MC1_CK>;
+			bias-pull-down;
+			drive-strength = <8>;
+		};
+
+		pins-cmd-dat {
+			pinmux = <MT6572_PIN_92_MC1_CMD__FUNC_MC1_CMD>,
+				 <MT6572_PIN_93_MC1_DAT0__FUNC_MC1_DAT0>,
+				 <MT6572_PIN_94_MC1_DAT1__FUNC_MC1_DAT1>,
+				 <MT6572_PIN_95_MC1_DAT2__FUNC_MC1_DAT2>,
+				 <MT6572_PIN_96_MC1_DAT3__FUNC_MC1_DAT3>;
+			input-enable;
+			bias-pull-up;
+			drive-strength = <8>;
+		};
+	};
+
+	panel_pins: panel-pins {
+		pins_reset {
+			pinmux = <MT6572_PIN_59_SD_CK__FUNC_GPIO59>;
+		};
+	};
+
+	pmic_int_pins: pmic-int-pins {
+		pins {
+			pinmux = <MT6572_PIN_7_PMIC_EINT__FUNC_PMIC_EINT>;
+			input-enable;
+		};
+	};
+};
+
+&mt6323keys {
+	power-off-time-sec = <5>;
+	home {
+		status = "disabled";
+	};
+};
+
+&keyboard {
+	status = "okay";
+	linux,keymap = <MATRIX_KEY(0, 1, KEY_VOLUMEDOWN)
+			MATRIX_KEY(0, 2, KEY_VOLUMEUP)>;
+	keypad,num-rows = <1>;
+	keypad,num-columns = <2>;
+	debounce-delay-ms = <32>;
 };
