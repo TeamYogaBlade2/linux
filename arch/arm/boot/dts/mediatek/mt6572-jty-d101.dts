@@ -4,7 +4,11 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+//#include <dt-bindings/iio/adc/mediatek,mt6323-auxadc.h>
 #include "mt6572.dtsi"
+#include "mt6323.dtsi"
 
 / {
 	model = "JTY D101";
@@ -18,15 +22,6 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		stdout-path = "serial0:921600n8";
-
-		framebuffer: framebuffer@bf400000 {
-			compatible = "simple-framebuffer";
-			memory-region = <&framebuffer_reserved>;
-			width = <1024>;
-			height = <600>;
-			stride = <(1024 * 2)>;
-			format = "r5g6b5";
-		};
 	};
 
 	memory@80000000 {
@@ -53,9 +48,230 @@
 			reg = <0xbf400000 0xc00000>;
 			no-map;
 		};
+
+		default-pool {
+			compatible = "shared-dma-pool";
+			size = <0x6000000>;
+			alloc-ranges = <0x90000000 0x10000000>;
+			reusable;
+			linux,cma-default;
+		};
+	};
+
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6323_vibr_reg>;
+		min-microvolt = <1200000>;
+		max-microvolt = <3300000>;
+	};
+};
+
+&auxadc {
+	status = "okay";
+};
+
+&cpu0 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&bls {
+	status = "okay";
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "wsvgalnl,ek79007";
+		reg = <0>;
+		vcc-supply = <&mt6323_vgp1_reg>;
+
+		//pinctrl-names = "default";
+		//pinctrl-0 = <&panel_pins>;
+
+		reset-gpios = <&pio 56 GPIO_ACTIVE_HIGH>;
+		//enable-gpios = <&pio 135 GPIO_ACTIVE_HIGH>;
+		//standby-gpios = <&pio 56 GPIO_ACTIVE_HIGH>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+
+	port {
+		dsi_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
+};
+
+&i2c0 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+
+&i2c1 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	accelerometer@4c {
+		compatible = "mcube,mc3236";
+		reg = <0x4c>;
 	};
 };
 
 &uart0 {
 	status = "okay";
+};
+
+&usb {
+	status = "okay";
+};
+
+&u2phy0 {
+	status = "okay";
+};
+
+&pmic {
+	pinctrl-0 = <&pmic_int_pins>;
+	pinctrl-names = "default";
+	interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+&pwrap {
+	assigned-clocks = <&topckgen CLK_TOP_PMIC_SPI_SEL>;
+	assigned-clock-parents = <&uart_clk>;
+};
+
+&mmc0 {
+	pinctrl-0 = <&mmc0_pins>;
+	pinctrl-1 = <&mmc0_pins>;
+	pinctrl-names = "default", "state_uhs";
+	bus-width = <1>;
+	max-frequency = <50000000>;
+	cap-mmc-highspeed;
+	//mmc-ddr-1_8v;
+	//mmc-hs200-1_8v;
+	vmmc-supply = <&mt6323_vemc3v3_reg>;
+	vqmmc-supply = <&mt6323_vio18_reg>;
+	non-removable;
+	status = "okay";
+};
+
+&mmc1 {
+	pinctrl-0 = <&mmc1_pins>;
+	pinctrl-1 = <&mmc1_pins>;
+	pinctrl-names = "default", "state_uhs";
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	//sd-uhs-ddr50;
+	//sd-uhs-sdr104;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	//sd-uhs-sdr50;
+	vmmc-supply = <&mt6323_vmch_reg>;
+	vqmmc-supply = <&mt6323_vmc_reg>;
+	//cd-gpios = <&gpio 18 GPIO_ACTIVE_LOW>;
+	broken-cd;
+	status = "okay";
+};
+
+&mt6323keys {
+	power-off-time-sec = <5>;
+	home {
+		status = "disabled";
+	};
+};
+
+&keyboard {
+	status = "okay";
+	linux,keymap = <MATRIX_KEY(0, 0, KEY_VOLUMEUP)
+			MATRIX_KEY(1, 0, KEY_VOLUMEDOWN)>;
+	keypad,num-rows = <2>;
+	keypad,num-columns = <1>;
+	debounce-delay-ms = <32>;
+};
+
+&pio {
+	pmic_int_pins: pmic-int-pins {
+		pins {
+			pinmux = <MT6572_PIN_7_PMIC_EINT__FUNC_PMIC_EINT>;
+			input-enable;
+			bias-pull-down;
+		};
+	};
+
+	pwrap_pins: pwrap-pins {
+		pins {
+			pinmux = <MT6572_PIN_8_PMIC_SPI_CSN__FUNC_PMIC_SPI_CSN>,
+				 <MT6572_PIN_9_PMIC_SPI_SCK__FUNC_PMIC_SPI_SCK>,
+				 <MT6572_PIN_10_PMIC_SPI_MOSI__FUNC_PMIC_SPI_MOSI>,
+				 <MT6572_PIN_11_PMIC_SPI_MISO__FUNC_PMIC_SPI_MISO>;
+		};
+	};
+
+	mmc0_pins: mmc0-pins {
+		pins-clk {
+			pinmux = <MT6572_PIN_44_MC0_CK__FUNC_MC0_CK>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-cmd-dat {
+			pinmux = <MT6572_PIN_45_MC0_CMD__FUNC_MC0_CMD>,
+				 <MT6572_PIN_46_MC0_DAT0__FUNC_MC0_DAT0>,
+				 <MT6572_PIN_47_MC0_DAT1__FUNC_MC0_DAT1>,
+				 <MT6572_PIN_48_MC0_DAT2__FUNC_MC0_DAT2>,
+				 <MT6572_PIN_49_MC0_DAT3__FUNC_MC0_DAT3>,
+				 <MT6572_PIN_50_MC0_DAT4__FUNC_MC0_DAT4>,
+				 <MT6572_PIN_51_MC0_DAT5__FUNC_MC0_DAT5>,
+				 <MT6572_PIN_52_MC0_DAT6__FUNC_MC0_DAT6>,
+				 <MT6572_PIN_53_MC0_DAT7__FUNC_MC0_DAT7>;
+			input-enable;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-rst {
+			pinmux = <MT6572_PIN_54_MC0_RSTB__FUNC_MC0_RSTB>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+		};
+	};
+
+	mmc1_pins: mmc1-pins {
+		pins-clk {
+			pinmux = <MT6572_PIN_91_MC1_CK__FUNC_MC1_CK>;
+			bias-pull-down;
+			drive-strength = <8>;
+		};
+
+		pins-cmd-dat {
+			pinmux = <MT6572_PIN_92_MC1_CMD__FUNC_MC1_CMD>,
+				 <MT6572_PIN_93_MC1_DAT0__FUNC_MC1_DAT0>,
+				 <MT6572_PIN_94_MC1_DAT1__FUNC_MC1_DAT1>,
+				 <MT6572_PIN_95_MC1_DAT2__FUNC_MC1_DAT2>,
+				 <MT6572_PIN_96_MC1_DAT3__FUNC_MC1_DAT3>;
+			input-enable;
+			bias-pull-up;
+			drive-strength = <8>;
+		};
+	};
+
+	panel_pins: panel-pins {
+		pins_reset {
+			pinmux = <MT6572_PIN_59_SD_CK__FUNC_GPIO59>;
+			output-low;
+		};
+		pins_enable {
+			pinmux = <MT6572_PIN_56_SD_DAT1__FUNC_GPIO56>;
+			output-low;
+		};
+	};
 };
