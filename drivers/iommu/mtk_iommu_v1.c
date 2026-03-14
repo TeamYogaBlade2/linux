@@ -627,6 +627,7 @@ static const struct iommu_ops mtk_iommu_v1_ops = {
 
 static const struct of_device_id mtk_iommu_v1_of_ids[] = {
 	{ .compatible = "mediatek,mt2701-m4u", .data = (void *)MTK_IOMMU_V1 },
+	{ .compatible = "mediatek,mt6589-m4u", .data = (void *)MTK_IOMMU_MT65XX },
 	{}
 };
 MODULE_DEVICE_TABLE(of, mtk_iommu_v1_of_ids);
