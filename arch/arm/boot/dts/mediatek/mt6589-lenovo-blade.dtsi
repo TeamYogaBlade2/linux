@@ -32,15 +32,6 @@
 			no-map;
 		};
 	};
-
-	framebuffer0: framebuffer@bf600000 {
-		compatible = "simple-framebuffer";
-		reg = <&framebuffer_reserved>;
-		width = <1280>;
-		height = <800>;
-		stride = <(1280 * 2)>;
-		format = "r5g6b5";
-	};
 };
 
 &i2c3 {
