@@ -9,7 +9,6 @@
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
-	compatible = "lenovo,blade", "mediatek,mt6589";
 
 	chosen {
 		linux,initrd-start = <0x82600000>;
