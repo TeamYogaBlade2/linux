@@ -3,7 +3,7 @@
  * Copyright (c) 2025 akku <akkun11.open@gmail.com>
  */
 
-#include "mt6589-lenovo-blade.dtsi"
+#include "mt6589-lenovo-b8000.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 
 / {
