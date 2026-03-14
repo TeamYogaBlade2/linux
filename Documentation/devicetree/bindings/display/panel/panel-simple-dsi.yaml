@@ -28,8 +28,12 @@ properties:
 
         # AU Optronics Corporation 8.0" WUXGA TFT LCD panel
       - auo,b080uan01
+        # BOE Technology 10.1" WXGA panel with Himax HX8896-A01 TCON
+      - boe,hx8896-a01
         # Boe Corporation 8.0" WUXGA TFT LCD panel
       - boe,tv080wum-nl0
+        # CMI 10.1" WXGA panel with Himax HX8896-A01 TCON
+      - innolux,hx8896-a01
         # Innolux P079ZCA 7.85" 768x1024 TFT LCD panel
       - innolux,p079zca
         # JDI FHD_R63452 1080x1920 5.2" IPS LCD Panel
