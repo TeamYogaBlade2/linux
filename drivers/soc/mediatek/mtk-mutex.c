@@ -378,19 +378,17 @@ static const u8 mt2712_mutex_mod[DDP_COMPONENT_ID_MAX] = {
 };
 
 static const u8 mt6589_mutex_mod[DDP_COMPONENT_ID_MAX] = {
-/*
-Bit 0: ROT
-Bit 1: SCL
-Bit 2: OVL
-Bit 3: Color engine
-Bit 4: 2D sharpness
-Bit 5: WDMA0
-Bit 6: WDMA1
-Bit 7: RDMA0
-Bit 8: RDMA1
-Bit 9: BLS
-Bit 10: GAMMA
-*/
+	[DDP_COMPONENT_ROT]	= 0,
+	[DDP_COMPONENT_SCL]	= 1,
+	[DDP_COMPONENT_OVL0]	= 2,
+	[DDP_COMPONENT_COLOR0]	= 3,
+	[DDP_COMPONENT_2DSHARP]	= 4,
+	[DDP_COMPONENT_WDMA0]	= 5,
+	[DDP_COMPONENT_WDMA1]	= 6,
+	[DDP_COMPONENT_RDMA0]	= 7,
+	[DDP_COMPONENT_RDMA1]	= 8,
+	[DDP_COMPONENT_BLS]	= 9,
+	[DDP_COMPONENT_GAMMA]	= 10,
 };
 
 static const u8 mt8167_mutex_mod[DDP_COMPONENT_ID_MAX] = {
