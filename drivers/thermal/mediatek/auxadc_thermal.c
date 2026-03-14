@@ -1100,7 +1100,7 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	if (len < 3 * sizeof(u32)) {
+	if (len < 2 * sizeof(u32)) {
 		dev_warn(dev, "invalid calibration data\n");
 		ret = -EINVAL;
 		goto out;
