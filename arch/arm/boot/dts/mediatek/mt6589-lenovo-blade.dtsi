@@ -27,15 +27,15 @@
 
 		ranges;
 
-		mtkfb_region: memory@bf600000{
-			reg = <0xbf600000 (1280 * 800 * 2 * 2)>;
+		framebuffer_reserved: memory@bf600000{
+			reg = <0xbf600000 0xa00000>;
 			no-map;
 		};
 	};
 
 	framebuffer0: framebuffer@bf600000 {
 		compatible = "simple-framebuffer";
-		reg = <0xbf600000 (1280 * 800 * 2)>;
+		reg = <&framebuffer_reserved>;
 		width = <1280>;
 		height = <800>;
 		stride = <(1280 * 2)>;
