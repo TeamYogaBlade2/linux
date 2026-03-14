@@ -142,6 +142,24 @@
 
 /*
  * Layout of the fuses providing the calibration data
+ * These macros could be used for MT6572.
+ */
+#define CALIB_BUF0_O_SLOPE_MT6572(x)		(((x) >> 26) & 0x3f)
+#define CALIB_BUF0_O_SLOPE_SIGN_MT6572(x)	(((x) >> 25) & 0x1)
+#define CALIB_BUF0_VTS_TS1_MT6572(x)		(((x) >> 16) & 0x1ff)
+#define CALIB_BUF0_DEGC_CALI_MT6572(x)		(((x) >> 10) & 0x3f)
+#define CALIB_BUF0_ID_MT6572(x)			(((x) >> 9) & 0x1)
+#define CALIB_BUF0_VTS_TSABB_MT6572(x)		(((x) >> 0) & 0x1ff)
+
+#define CALIB_BUF1_ADC_CALI_EN_MT6572_VER0(x)	(((x) >> 31) & 0x1)
+#define CALIB_BUF1_ADC_CALI_EN_MT6572_VER1(x)	(((x) >> 24) & 0x1)
+#define CALIB_BUF1_THERMAL_VER_MT6572(x)	(((x) >> 10) & 0xf)
+#define CALIB_BUF1_ADC_OE_MT6572_VER0(x)	(((x) >> 16) & 0x3ff)
+#define CALIB_BUF1_ADC_OE_MT6572_VER1(x)	(((x) >> 14) & 0x3ff)
+#define CALIB_BUF1_ADC_GE_MT6572(x)		(((x) >> 0) & 0x3ff)
+
+/*
+ * Layout of the fuses providing the calibration data
  * These macros could be used for MT67XX and MT68XX.
  */
 #define CALIB_BUF1_ADC_OE_V1_5(x)	(((x) >> 12) & 0x3ff)
@@ -186,6 +204,7 @@ enum {
 
 enum mtk_thermal_version {
 	MTK_THERMAL_V1 = 1,
+	MTK_THERMAL_MT6572,
 	MTK_THERMAL_V1_5,
 	MTK_THERMAL_V2,
 	MTK_THERMAL_V3,
@@ -231,6 +250,25 @@ enum mtk_thermal_version {
 
 /* The calibration coefficient of sensor  */
 #define MT2712_CALIBRATION	165
+
+/* MT6572 thermal sensors */
+#define MT6572_TS1	0
+#define MT6572_TSABB	1
+
+/* AUXADC channel 11 is used for the temperature sensors */
+#define MT6572_TEMP_AUXADC_CHANNEL	11
+
+/* The total number of temperature sensors in the MT6572 */
+#define MT6572_NUM_SENSORS	2
+
+/* The number of sensing points per bank */
+#define MT6572_NUM_SENSORS_PER_ZONE	2
+
+/* The number of controller in the MT6572 */
+#define MT6572_NUM_CONTROLLER		1
+
+/* The calibration coefficient of sensor  */
+#define MT6572_CALIBRATION	165
 
 #define MT7622_TEMP_AUXADC_CHANNEL	11
 #define MT7622_NUM_SENSORS		1
@@ -441,6 +479,26 @@ static const int mt2712_vts_index[MT2712_NUM_SENSORS] = {
 	VTS1, VTS2, VTS3, VTS4
 };
 
+/* MT6572 thermal sensor data */
+static const int mt6572_bank_data[MT6572_NUM_SENSORS] = {
+	MT6572_TS1, MT6572_TSABB
+};
+
+static const int mt6572_msr[MT6572_NUM_SENSORS_PER_ZONE] = {
+	TEMP_MSR0, TEMP_MSR1
+};
+
+static const int mt6572_adcpnp[MT6572_NUM_SENSORS_PER_ZONE] = {
+	TEMP_ADCPNP0, TEMP_ADCPNP1
+};
+
+static const int mt6572_mux_values[MT6572_NUM_SENSORS] = { 0, 1 };
+static const int mt6572_tc_offset[MT6572_NUM_CONTROLLER] = { 0x0 };
+
+static const int mt6572_vts_index[MT6572_NUM_SENSORS] = {
+	VTS1, VTSABB
+};
+
 /* MT7622 thermal sensor data */
 static const int mt7622_bank_data[MT7622_NUM_SENSORS] = { MT7622_TS1, };
 static const int mt7622_msr[MT7622_NUM_SENSORS_PER_ZONE] = { TEMP_MSR0, };
@@ -547,6 +605,37 @@ static const struct mtk_thermal_data mt2701_thermal_data = {
 	.adcpnp = mt2701_adcpnp,
 	.sensor_mux_values = mt2701_mux_values,
 	.version = MTK_THERMAL_V1,
+};
+
+/*
+ * The MT6572 thermal controller has one bank, which can read up to
+ * three temperature sensors simultaneously. The MT6572 has a total of 2
+ * temperature sensors.
+ *
+ * The thermal core only gets the maximum temperature of this one bank,
+ * so the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data.
+ */
+static const struct mtk_thermal_data mt6572_thermal_data = {
+	.auxadc_channel = MT6572_TEMP_AUXADC_CHANNEL,
+	.num_banks = 1,
+	.num_sensors = MT6572_NUM_SENSORS,
+	.vts_index = mt6572_vts_index,
+	.cali_val = MT6572_CALIBRATION,
+	.num_controller = MT6572_NUM_CONTROLLER,
+	.controller_offset = mt6572_tc_offset,
+	.need_switch_bank = false,
+	.bank_data = {
+		{
+			.num_sensors = 2,
+			.sensors = mt6572_bank_data,
+		},
+	},
+	.msr = mt6572_msr,
+	.adcpnp = mt6572_adcpnp,
+	.sensor_mux_values = mt6572_mux_values,
+	.version = MTK_THERMAL_MT6572,
 };
 
 /*
@@ -1065,6 +1154,46 @@ static int mtk_thermal_extract_efuse_v1(struct mtk_thermal *mt, u32 *buf)
 	return 0;
 }
 
+static int mtk_thermal_extract_efuse_mt6572(struct mtk_thermal *mt, u32 *buf)
+{
+	int i, ver;
+	bool calibrate = true;
+
+	mt->adc_ge = CALIB_BUF1_ADC_GE_MT6572(buf[1]);
+	ver = CALIB_BUF1_THERMAL_VER_MT6572(buf[1]);
+	if (ver == 0) {
+		mt->adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER0(buf[1]);
+		calibrate = CALIB_BUF1_ADC_CALI_EN_MT6572_VER0(buf[1]);
+	} else if (ver == 1) {
+		mt->adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER1(buf[1]);
+		calibrate = CALIB_BUF1_ADC_CALI_EN_MT6572_VER0(buf[1]);
+	} else if (ver > 1 || !calibrate)
+		/* otherwise efuse may be not blown, use default values */
+		return -EINVAL;
+
+	for (i = 0; i < mt->conf->num_sensors; i++) {
+		switch (mt->conf->vts_index[i]) {
+		case VTS1:
+			mt->vts[VTS1] = CALIB_BUF0_VTS_TS1_MT6572(buf[0]);
+			break;
+		case VTSABB:
+			mt->vts[VTSABB] = CALIB_BUF0_VTS_TSABB_MT6572(buf[0]);
+			break;
+		default:
+			break;
+		}
+	}
+
+	mt->degc_cali = CALIB_BUF0_DEGC_CALI_MT6572(buf[0]);
+	if (CALIB_BUF0_ID_MT6572(buf[0]) &
+	    CALIB_BUF0_O_SLOPE_SIGN_MT6572(buf[0]))
+		mt->o_slope = -CALIB_BUF0_O_SLOPE_MT6572(buf[0]);
+	else
+		mt->o_slope = CALIB_BUF0_O_SLOPE_MT6572(buf[0]);
+
+	return 0;
+}
+
 static int mtk_thermal_extract_efuse_v1_5(struct mtk_thermal *mt, u32 *buf)
 {
 	int i;
@@ -1185,6 +1314,9 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 	case MTK_THERMAL_V1:
 		ret = mtk_thermal_extract_efuse_v1(mt, buf);
 		break;
+	case MTK_THERMAL_MT6572:
+		ret = mtk_thermal_extract_efuse_mt6572(mt, buf);
+		break;
 	case MTK_THERMAL_V1_5:
 		ret = mtk_thermal_extract_efuse_v1_5(mt, buf);
 		break;
@@ -1222,6 +1354,10 @@ static const struct of_device_id mtk_thermal_of_match[] = {
 	{
 		.compatible = "mediatek,mt2712-thermal",
 		.data = (void *)&mt2712_thermal_data,
+	},
+	{
+		.compatible = "mediatek,mt6572-thermal",
+		.data = (void *)&mt6572_thermal_data,
 	},
 	{
 		.compatible = "mediatek,mt7622-thermal",
@@ -1354,7 +1490,8 @@ static int mtk_thermal_probe(struct platform_device *pdev)
 
 	if (mt->conf->version == MTK_THERMAL_V1)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v1;
-	else if (mt->conf->version == MTK_THERMAL_V1_5)
+	else if (mt->conf->version == MTK_THERMAL_MT6572 ||
+	         mt->conf->version == MTK_THERMAL_V1_5)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v1_5;
 	else if (mt->conf->version == MTK_THERMAL_V2)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v2;
