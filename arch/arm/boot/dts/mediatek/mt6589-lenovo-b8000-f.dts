@@ -8,7 +8,7 @@
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
-	compatible = "lenovo,blade-b8000-f", "lenovo,blade", "mediatek,mt6589";
+	compatible = "lenovo,blade-b8000-f", "mediatek,mt6589";
 
 	reg_1p8v: regulator-1p8v {
 		compatible = "regulator-fixed";

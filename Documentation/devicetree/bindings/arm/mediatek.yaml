@@ -39,7 +39,6 @@ properties:
           - enum:
               - fairphone,fp1
               - mundoreader,bq-aquaris5
-              - lenovo,blade
               - lenovo,blade-b8000-f
               - lenovo,blade-b8000-h
               - lenovo,blade-b6000-f
