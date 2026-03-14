@@ -5482,6 +5482,31 @@ static const struct panel_desc_dsi auo_b080uan01 = {
 	.lanes = 4,
 };
 
+static const struct drm_display_mode boe_hx8896a_01_mode = {
+	.clock		= 69837, /* 1416 * 822 * 60 / 1000 kHz */
+	.hdisplay	= 1280,
+	.hsync_start	= 1280 + 100,
+	.hsync_end	= 1280 + 100 + 4,
+	.htotal		= 1280 + 100 + 4 + 32,
+	.vdisplay	= 800,
+	.vsync_start	= 800 + 10,
+	.vsync_end	= 800 + 10 + 2,
+	.vtotal		= 800 + 10 + 2 + 10,
+};
+
+static const struct panel_desc_dsi boe_hx8896_a01 = {
+	.desc = {
+		.modes = &boe_hx8896_a01_mode,
+		.num_modes = 1,
+		.bpc = 8,
+		.size = { .width = 217, .height = 136 }, /* TODO */
+		.connector_type = DRM_MODE_CONNECTOR_DSI,
+	},
+	.flags = MIPI_DSI_MODE_VIDEO,
+	.format = MIPI_DSI_FMT_RGB888,
+	.lanes = 4,
+};
+
 static const struct drm_display_mode boe_tv080wum_nl0_mode = {
 	.clock = 160000,
 	.hdisplay = 1200,
@@ -5508,6 +5533,31 @@ static const struct panel_desc_dsi boe_tv080wum_nl0 = {
 	.flags = MIPI_DSI_MODE_VIDEO |
 		 MIPI_DSI_MODE_VIDEO_BURST |
 		 MIPI_DSI_MODE_VIDEO_SYNC_PULSE,
+	.format = MIPI_DSI_FMT_RGB888,
+	.lanes = 4,
+};
+
+static const struct drm_display_mode innolux_hx8896_a01_mode = {
+	.clock		= 76019, /* 1521 * 833 * 60 / 1000 kHz */
+	.hdisplay	= 1280,
+	.hsync_start	= 1280 + 186, /* + HFP */
+	.hsync_end	= 1280 + 186 + 5, /* + HSW */
+	.htotal		= 1280 + 186 + 5 + 50, /* + HBP */
+	.vdisplay	= 800,
+	.vsync_start	= 800 + 21, /* + VFP */
+	.vsync_end	= 800 + 21 + 2, /* + VSW */
+	.vtotal		= 800 + 21 + 2 + 10, /* + VBP */
+};
+
+static const struct panel_desc_dsi innolux_hx8896_a01 = {
+	.desc = {
+		.modes = &innolux_hx8896_a01_mode,
+		.num_modes = 1,
+		.bpc = 8,
+		.size = { .width = 217, .height = 136 }, /* TODO */
+		.connector_type = DRM_MODE_CONNECTOR_DSI,
+	},
+	.flags = MIPI_DSI_MODE_VIDEO,
 	.format = MIPI_DSI_FMT_RGB888,
 	.lanes = 4,
 };
@@ -5661,8 +5711,14 @@ static const struct of_device_id dsi_of_match[] = {
 		.compatible = "auo,b080uan01",
 		.data = &auo_b080uan01
 	}, {
+		.compatible = "boe,hx8896-a01",
+		.data = &boe_hx8896_a01
+	}, {
 		.compatible = "boe,tv080wum-nl0",
 		.data = &boe_tv080wum_nl0
+	}, {
+		.compatible = "innolux,hx8896-a01",
+		.data = &innolux_hx8896_a01
 	}, {
 		.compatible = "lg,ld070wx3-sl01",
 		.data = &lg_ld070wx3_sl01
