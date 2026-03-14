@@ -1273,6 +1273,11 @@ static const struct mtk_dsi_driver_data mt2701_dsi_driver_data = {
 	.reg_shadow_dbg_off = 0x190
 };
 
+static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
+	.reg_cmdq_off = 0x180,
+	.reg_vm_cmd_off = 0x130,
+};
+
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
@@ -1301,6 +1306,7 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 
 static const struct of_device_id mtk_dsi_of_match[] = {
 	{ .compatible = "mediatek,mt2701-dsi", .data = &mt2701_dsi_driver_data },
+	{ .compatible = "mediatek,mt6589-dsi", .data = &mt6589_dsi_driver_data },
 	{ .compatible = "mediatek,mt8173-dsi", .data = &mt8173_dsi_driver_data },
 	{ .compatible = "mediatek,mt8183-dsi", .data = &mt8183_dsi_driver_data },
 	{ .compatible = "mediatek,mt8186-dsi", .data = &mt8186_dsi_driver_data },
