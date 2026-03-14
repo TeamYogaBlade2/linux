@@ -49,8 +49,13 @@
 #define SMI_LARB_SW_FLAG		0x40
 #define SMI_LARB_SW_FLAG_1		0x1
 
-#define SMI_LARB_BWFILTER_EN     0x60
-#define SMI_LARB_OSTD_CTRL_EN    0x64
+/* mt6589, mt8135 */
+#define SMI_LARB_BWFILTER_EN_V1	0x2c
+
+/* mt2601, mt6572, mt6571, mt6582, mt6592, mt8127 */
+#define SMI_LARB_BWFILTER_EN_V2	0x60
+
+#define SMI_LARB_OSTD_CTRL_EN	0x64
 
 #define SMI_LARB_OSTDL_PORT		0x200
 #define SMI_LARB_OSTDL_PORTx(id)	(SMI_LARB_OSTDL_PORT + (((id) & 0x1f) << 2))
@@ -98,7 +103,8 @@
 #define MTK_SMI_FLAG_SW_FLAG		BIT(1)
 #define MTK_SMI_FLAG_SLEEP_CTL		BIT(2)
 #define MTK_SMI_FLAG_CFG_PORT_SEC_CTL	BIT(3)
-#define MTK_SMI_FLAG_BW_CALIBRATE     BIT(4)
+#define MTK_SMI_FLAG_BW_CALIBRATE	BIT(4)
+#define MTK_SMI_FLAG_BWFILTER_REG_V2	BIT(5)
 #define MTK_SMI_CAPS(flags, _x)		(!!((flags) & (_x)))
 
 struct mtk_smi_reg_pair {
@@ -201,7 +207,7 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
 	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
 					      NULL;
-	int i, m4u_port_id, larb_port_num;
+	int i, m4u_port_id, larb_port_num, offset;
 	u32 sec_con_val, reg_val, tmp;
 	int ret;
 
@@ -232,10 +238,16 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 
 	/* some gen 0 SoCs need BW calibration */
 	if (MTK_SMI_CAPS(larb_gen->flags_general, MTK_SMI_FLAG_BW_CALIBRATE)) {
+		if (MTK_SMI_CAPS(larb_gen->flags_general,
+				 MTK_SMI_FLAG_BWFILTER_REG_V2))
+			offset = SMI_LARB_BWFILTER_EN_V2;
+		else
+			offset = SMI_LARB_BWFILTER_EN_V1;
+
 		reg_val = readl_relaxed(larb->base + SMI_LARB_STAT);
 		if (!reg_val) {
 			writel_relaxed(0xffffffff,
-				       larb->base + SMI_LARB_BWFILTER_EN);
+				       larb->base + offset);
 
 			ret = readl_poll_timeout(
 				larb->base + SMI_LARB_FIFO_STAT0, tmp,
@@ -244,9 +256,9 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 				dev_warn(dev,
 					 "BW limiter calibration timeout\n");
 
-			writel_relaxed(0, larb->base + SMI_LARB_BWFILTER_EN);
+			writel_relaxed(0, larb->base + offset);
 			writel_relaxed(0xffffffff,
-				       larb->base + SMI_LARB_OSTD_CTRL_EN);
+				       larb->base + offset);
 		}
 	}
 
@@ -347,6 +359,8 @@ static int mtk_smi_larb_config_port_gen2_general(struct device *dev)
 	}
 	return 0;
 }
+
+
 
 static const u8 mtk_smi_larb_mt6893_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[0] = {0x2, 0x6, 0x2, 0x2, 0x2, 0x28, 0x18, 0x18, 0x1, 0x1, 0x1, 0x8,
@@ -524,6 +538,12 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 	.larb_direct_to_common_mask = BIT(8) | BIT(9),      /* bdpsys */
 };
 
+static const struct mtk_smi_larb_gen mtk_smi_larb_mt6589 = {
+	.port_in_larb = { 0, 10, 17, 29, 43, 53, 54, 54 },
+	.config_port = mtk_smi_larb_config_port_gen0,
+	.flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
+};
+
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6779 = {
 	.config_port  = mtk_smi_larb_config_port_gen2_general,
 	.larb_direct_to_common_mask =
@@ -580,6 +600,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt8195 = {
 static const struct of_device_id mtk_smi_larb_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-larb", .data = &mtk_smi_larb_mt2701},
 	{.compatible = "mediatek,mt2712-smi-larb", .data = &mtk_smi_larb_mt2712},
+	{.compatible = "mediatek,mt6589-smi-larb", .data = &mtk_smi_larb_mt6589},
 	{.compatible = "mediatek,mt6779-smi-larb", .data = &mtk_smi_larb_mt6779},
 	{.compatible = "mediatek,mt6795-smi-larb", .data = &mtk_smi_larb_mt8173},
 	{.compatible = "mediatek,mt6893-smi-larb", .data = &mtk_smi_larb_mt6893},
