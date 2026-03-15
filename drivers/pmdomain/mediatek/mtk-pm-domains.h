@@ -13,6 +13,7 @@
 #define MTK_SCPD_EXT_BUCK_ISO		BIT(6)
 #define MTK_SCPD_HAS_INFRA_NAO		BIT(7)
 #define MTK_SCPD_STRICT_BUS_PROTECTION	BIT(8)
+#define MTK_SCPD_NO_SRAM		BIT(10)
 #define MTK_SCPD_CAPS(_scpd, _x)	((_scpd)->data->caps & (_x))
 
 #define SPM_VDE_PWR_CON			0x0210
@@ -33,9 +34,11 @@
 
 #define PWR_STATUS_MD1			BIT(0)
 #define PWR_STATUS_CONN			BIT(1)
+#define PWR_STATUS_DDRPHY		BIT(2)
 #define PWR_STATUS_DISP			BIT(3)
 #define PWR_STATUS_MFG			BIT(4)
 #define PWR_STATUS_ISP			BIT(5)
+#define PWR_STATUS_INFRASYS		BIT(6)
 #define PWR_STATUS_VDEC			BIT(7)
 #define PWR_STATUS_VENC_LT		BIT(20)
 #define PWR_STATUS_VENC			BIT(21)
