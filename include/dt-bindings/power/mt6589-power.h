@@ -1,17 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 
 #ifndef _DT_BINDINGS_POWER_MT6589_POWER_H
 #define _DT_BINDINGS_POWER_MT6589_POWER_H
-
-/*
- * FC0
- * DBG
- * CPU
- * FC1
- * FC2
- * FC3
- * IFR_FH
- */
 
 #define MT6589_POWER_DOMAIN_MD1	0
 #define MT6589_POWER_DOMAIN_MD2	1
