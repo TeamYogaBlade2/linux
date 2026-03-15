@@ -7,9 +7,6 @@
 #include "mt6589.dtsi"
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
-
 	chosen {
 		linux,initrd-start = <0x82600000>;
 		/* DEBUG: testing clock drivers */
