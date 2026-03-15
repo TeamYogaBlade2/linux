@@ -294,6 +294,18 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
+/*
+		timer-arm {
+			compatible = "arm,armv7-timer";
+			interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>,
+				     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>,
+				     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>,
+				     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
+			clock-frequency = <13000000>;
+			arm,cpu-registers-not-fw-configured;
+		};
+*/
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6589-sysirq",
 				     "mediatek,mt6577-sysirq";
