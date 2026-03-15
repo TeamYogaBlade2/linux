@@ -15,7 +15,6 @@
 
 #include <dt-bindings/power/mt2701-power.h>
 #include <dt-bindings/power/mt2712-power.h>
-#include <dt-bindings/power/mt6589-power.h>
 #include <dt-bindings/power/mt6797-power.h>
 #include <dt-bindings/power/mt7622-power.h>
 #include <dt-bindings/power/mt7623a-power.h>
@@ -32,11 +31,8 @@
 #define SPM_MFG_PWR_CON			0x0214
 #define SPM_VEN_PWR_CON			0x0230
 #define SPM_ISP_PWR_CON			0x0238
-#define SPM_IFR_PWR_CON			0x0234	/* MT6589 */
 #define SPM_DIS_PWR_CON			0x023c
-#define SPM_DPY_PWR_CON			0x0240	/* MT6589 */
 #define SPM_CONN_PWR_CON		0x0280
-#define SPM_CONN2_PWR_CON		0x0284	/* MT6589 */
 #define SPM_VEN2_PWR_CON		0x0298
 #define SPM_AUDIO_PWR_CON		0x029c	/* MT8173, MT2712 */
 #define SPM_BDP_PWR_CON			0x029c	/* MT2701 */
@@ -62,11 +58,9 @@
 #define PWR_CLK_DIS_BIT			BIT(4)
 
 #define PWR_STATUS_CONN			BIT(1)
-#define PWR_STATUS_DPY			BIT(2)	/* MT6589 */
 #define PWR_STATUS_DISP			BIT(3)
 #define PWR_STATUS_MFG			BIT(4)
 #define PWR_STATUS_ISP			BIT(5)
-#define PWR_STATUS_IFR			BIT(6)	/* MT6589 */
 #define PWR_STATUS_VDEC			BIT(7)
 #define PWR_STATUS_BDP			BIT(14)
 #define PWR_STATUS_ETH			BIT(15)
@@ -95,7 +89,6 @@ enum clk_id {
 	CLK_HIFSEL,
 	CLK_JPGDEC,
 	CLK_AUDIO,
-	CLK_DISP,
 	CLK_MAX,
 };
 
@@ -110,7 +103,6 @@ static const char * const clk_names[] = {
 	"hif_sel",
 	"jpgdec",
 	"audio",
-	"disp",
 	NULL,
 };
 
@@ -757,73 +749,6 @@ static const struct scp_subdomain scp_subdomain_mt2712[] = {
 };
 
 /*
- * MT6589 power domain support
- */
-static const struct scp_domain_data scp_domain_data_mt6589[] = {
-	[MT6589_POWER_DOMAIN_MD1] = {
-		.name = "md1",
-		.sta_mask = PWR_STATUS_CONN,
-		.ctl_offs = SPM_CONN2_PWR_CON, /* not miss */
-		.clk_id = {CLK_NONE},
-		.caps = MTK_SCPD_ACTIVE_WAKEUP, /* maybe */
-	},
-	[MT6589_POWER_DOMAIN_MD2] = {
-		.name = "md2",
-		.sta_mask = PWR_STATUS_CONN,
-		.ctl_offs = SPM_CONN_PWR_CON,
-		.clk_id = {CLK_NONE},
-		.caps = MTK_SCPD_ACTIVE_WAKEUP, /* maybe */
-	},
-	[MT6589_POWER_DOMAIN_DPY] = {
-		.name = "dpy",
-		.sta_mask = PWR_STATUS_DPY,
-		.ctl_offs = SPM_DPY_PWR_CON,
-		.clk_id = {CLK_NONE},
-		.caps = MTK_SCPD_ACTIVE_WAKEUP, /* maybe */
-	},
-	[MT6589_POWER_DOMAIN_DIS] = {
-		.name = "disp",
-		.sta_mask = PWR_STATUS_DISP,
-		.ctl_offs = SPM_DIS_PWR_CON,
-		.clk_id = {CLK_DISP},
-	},
-	[MT6589_POWER_DOMAIN_MFG] = {
-		.name = "mfg",
-		.sta_mask = PWR_STATUS_MFG,
-		.ctl_offs = SPM_MFG_PWR_CON,
-		.clk_id = {CLK_NONE},
-	},
-	[MT6589_POWER_DOMAIN_ISP] = {
-		.name = "isp",
-		.sta_mask = PWR_STATUS_ISP,
-		.ctl_offs = SPM_ISP_PWR_CON,
-		.clk_id = {CLK_NONE},
-	},
-	[MT6589_POWER_DOMAIN_IFR] = {
-		.name = "ifr",
-		.sta_mask = PWR_STATUS_IFR,
-		.ctl_offs = SPM_IFR_PWR_CON,
-		.clk_id = {CLK_NONE},
-		.caps = MTK_SCPD_ACTIVE_WAKEUP, /* maybe */
-	},
-	[MT6589_POWER_DOMAIN_VEN] = {
-		.name = "venc",
-		.sta_mask = BIT(7),
-		.ctl_offs = SPM_VEN_PWR_CON,
-		.clk_id = {CLK_VENC},
-	},
-	[MT6589_POWER_DOMAIN_VDE] = {
-		.name = "vdec",
-		.sta_mask = BIT(8),
-		.ctl_offs = SPM_VDE_PWR_CON,
-		.clk_id = {CLK_VDEC},
-	},
-};
-
-static const struct scp_subdomain scp_subdomain_mt6589[] = {
-};
-
-/*
  * MT6797 power domain support
  */
 
@@ -1106,18 +1031,6 @@ static const struct scp_soc_data mt2712_data = {
 	.bus_prot_reg_update = false,
 };
 
-static const struct scp_soc_data mt6589_data = {
-	.domains = scp_domain_data_mt6589,
-	.num_domains = ARRAY_SIZE(scp_domain_data_mt6589),
-	.subdomains = scp_subdomain_mt6589,
-	.num_subdomains = ARRAY_SIZE(scp_subdomain_mt6589),
-	.regs = {
-//		.pwr_sta_offs = SPM_PWR_STATUS,
-//		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND
-	},
-//	.bus_prot_reg_update = false,
-};
-
 static const struct scp_soc_data mt6797_data = {
 	.domains = scp_domain_data_mt6797,
 	.num_domains = ARRAY_SIZE(scp_domain_data_mt6797),
@@ -1173,9 +1086,6 @@ static const struct of_device_id of_scpsys_match_tbl[] = {
 	}, {
 		.compatible = "mediatek,mt2712-scpsys",
 		.data = &mt2712_data,
-	}, {
-		.compatible = "mediatek,mt6589-scpsys",
-		.data = &mt6589_data,
 	}, {
 		.compatible = "mediatek,mt6797-scpsys",
 		.data = &mt6797_data,
