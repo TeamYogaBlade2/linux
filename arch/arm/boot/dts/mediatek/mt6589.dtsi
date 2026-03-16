@@ -406,7 +406,7 @@
 			compatible = "mediatek,mt6589-m4u";
 			reg = <0x10205000 0x1000>;
 			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&infrasys CLK_INFRA_M4U>;
+			clocks = <&infracfg CLK_INFRA_M4U>;
 			clock-names = "bclk";
 			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>, <&larb3>, <&larb4>;
 			#iommu-cells = <1>;
@@ -546,7 +546,7 @@
 			compatible = "mediatek,mt6589-disp-ovl";
 			reg = <0x14003000 0x1000>;
 			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>
+			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>,
 				 <&dispsys CLK_DISP0_OVL_SMI>;
 			iommus = <&iommu MT6589_M4U_PORT_OVL_CH0>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
