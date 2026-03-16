@@ -8,7 +8,6 @@
 
 / {
 	chosen {
-		linux,initrd-start = <0x82600000>;
 		/* DEBUG: testing clock drivers */
 		bootargs = "clk_ignore_unused";
 	};
