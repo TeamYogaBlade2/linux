@@ -404,7 +404,29 @@
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
+/* M4Ug
 		iommu: iommu@10205000 {
+			compatible = "mediatek,mt6589-m4u";
+			reg = <0x10205000 0x1000>;
+			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&infracfg CLK_INFRA_M4U>;
+			clock-names = "bclk";
+			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>, <&larb3>, <&larb4>;
+			#iommu-cells = <1>;
+		};
+*/
+
+		iommu0: iommu@10205800 {
+			compatible = "mediatek,mt6589-m4u";
+			reg = <0x10205800 0x1000>;
+			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&infracfg CLK_INFRA_M4U>;
+			clock-names = "bclk";
+			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>, <&larb3>, <&larb4>;
+			#iommu-cells = <1>;
+		};
+
+		iommu1: iommu@10205000 {
 			compatible = "mediatek,mt6589-m4u";
 			reg = <0x10205000 0x1000>;
 			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
