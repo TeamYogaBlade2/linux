@@ -6,8 +6,6 @@
 #include "mt6589-lenovo-blade.dtsi"
 
 / {
-	/* TODO: panel */
-
 	framebuffer0: framebuffer@bf600000 {
 		compatible = "simple-framebuffer";
 		memory-region = <&framebuffer_reserved>;
@@ -15,5 +13,44 @@
 		height = <800>;
 		stride = <(1280 * 2)>;
 		format = "r5g6b5";
+		status = "disabled";
+	};
+
+	reg_panel: regulator-panel {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-1.2V";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <1200000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "boe,hx8896-a01";
+		/*
+		 * or innolux,hx8896-a01
+		 * TODO: panel mux
+		 */
+		reg = <0>;
+		power-supply = <&reg_panel>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+
+	port {
+		dsi_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
 	};
 };
