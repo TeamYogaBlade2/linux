@@ -41,19 +41,16 @@
 		reg = <0>;
 		power-supply = <&reg_panel>;
 
-/*
 		port {
 			panel_in: endpoint {
 				remote-endpoint = <&dsi_out>;
 			};
 		};
-*/
 	};
-/*
+
 	port {
 		dsi_out: endpoint {
 			remote-endpoint = <&panel_in>;
 		};
 	};
-*/
 };

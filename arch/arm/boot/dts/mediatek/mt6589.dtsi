@@ -143,8 +143,8 @@
 
 				power-domain@MT6589_POWER_DOMAIN_DIS {
 					reg = <MT6589_POWER_DOMAIN_DIS>;
-					clocks = <&topckgen CLK_TOP_MUX_DISP>;
-					clock-names = "disp";
+				//	clocks = <&topckgen CLK_TOP_MUX_DISP>;
+				//	clock-names = "disp";
 					#power-domain-cells = <0>;
 				};
 
