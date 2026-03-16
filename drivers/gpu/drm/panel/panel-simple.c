@@ -5482,7 +5482,7 @@ static const struct panel_desc_dsi auo_b080uan01 = {
 	.lanes = 4,
 };
 
-static const struct drm_display_mode boe_hx8896a_01_mode = {
+static const struct drm_display_mode boe_hx8896_a01_mode = {
 	.clock		= 69837, /* 1416 * 822 * 60 / 1000 kHz */
 	.hdisplay	= 1280,
 	.hsync_start	= 1280 + 100,
