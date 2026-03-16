@@ -41,7 +41,7 @@ static const struct mtk_mmsys_driver_data mt2712_mmsys_driver_data = {
 static const struct mtk_mmsys_driver_data mt6572_dispsys_driver_data = {
 	.clk_driver = "clk-mt6589-disp",
 	.routes = mt6589_dispsys_routing_table,
-	//.num_routes = ARRAY_SIZE(mt6589_dispsys_routing_table),
+	.num_routes = ARRAY_SIZE(mt6589_dispsys_routing_table),
 };
 
 static const struct mtk_mmsys_driver_data mt6779_mmsys_driver_data = {
