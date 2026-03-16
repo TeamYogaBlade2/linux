@@ -9,6 +9,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt6589-clk.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+#include <dt-bindings/memory/mt6589-larb-port.h>
 
 / {
 	#address-cells = <1>;
@@ -305,6 +306,16 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
+		mipi_tx0: dsi-phy@10012000 {
+			compatible = "mediatek,mt7623-mipi-tx",
+				     "mediatek,mt2701-mipi-tx";
+			reg = <0x10012000 0x90>;
+			clocks = <&dispsys CLK_DISP1_DSI_DIGITAL_LANE>; // uart_clk
+			clock-output-names = "mipi_tx0_pll";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6589-sysirq",
 				     "mediatek,mt6577-sysirq";
@@ -312,6 +323,26 @@
 			#interrupt-cells = <3>;
 			interrupt-parent = <&gic>;
 			reg = <0x10200100 0x1c>;
+		};
+
+		smi_common: smi@10202000 {
+			compatible = "mediatek,mt6589-smi-common";
+			reg = <0x10202000 0x1000>;
+			clocks = <&>,
+				 <&infracfg CLK_INFRA_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
+		};
+
+		iommu: iommu@10205000 {
+			compatible = "mediatek,mt6589-m4u";
+			reg = <0x10205000 0x1000>;
+			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&infrasys CLK_INFRA_M4U>;
+			clock-names = "bclk";
+			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>, <&larb3>, <&larb4>;
+			#iommu-cells = <1>;
+			power-domains = TODO;
 		};
 
 		gic: interrupt-controller@10211000 {
@@ -442,6 +473,117 @@
 				 <&topckgen CLK_TOP_MUX_MSDC4>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+		};
+
+		ovl: ovl@14003000 {
+			compatible = "mediatek,mt6589-disp-ovl";
+			reg = <0x14003000 0x1000>;
+			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>
+				 <&dispsys CLK_DISP0_OVL_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_OVL_CH0>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
+			power-domains = TODO;
+		};
+
+		rdma0: rdma@14006000 {
+			compatible = "mediatek,mt6589-disp-rdma";
+			reg = <0x14006000 0x1000>;
+			interrupts = <GIC_SPI 166 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA0_ENGINE>,
+				 <&dispsys CLK_DISP0_RDMA0_SMI>,
+				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
+			power-domains = TODO;
+		};
+
+		rdma1: rdma@14007000 {
+			compatible = "mediatek,mt6589-disp-rdma";
+			reg = <0x14007000 0x1000>;
+			interrupts = <GIC_SPI 167 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA1_ENGINE>,
+				 <&dispsys CLK_DISP0_RDMA1_SMI>,
+				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
+			power-domains = TODO;
+		};
+
+		mutex: mutex@14011000 {
+			compatible = "mediatek,mt6589-disp-mutex";
+			reg = <0x14011000 0x1000>;
+			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
+			power-domains = TODO;
+		};
+
+		dsi: dsi@1400d000 {
+			compatible = "mediatek,mt6589-dsi";
+			reg = <0x1400d000 0x1000>;
+			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP1_DSI_ENGINE>,
+				 <&dispsys CLK_DISP1_DSI_DIGITAL>,
+				 <&mipi_tx0>;
+			clock-names = "engine", "digital", "hs";
+			phys = <&mipi_tx0>;
+			phy-names = "dphy";
+			power-domains = TODO;
+			status = "disabled";
+		};
+
+		larb0: larb@17001000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x17001000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <0>;
+			clocks = <&>,
+				 <&>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
+		};
+
+		larb1: larb@16010000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x16010000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <1>;
+			clocks = <&>,
+				 <&>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
+		};
+
+		larb2: larb@14010000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x14010000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <2>;
+			clocks = <&>,
+				 <&dispsys CLK_DISP0_LARB2_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
+		};
+
+		larb3: larb@15001000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x15001000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <3>;
+			clocks = <&>,
+				 <&imgsys CLK_IMAGE_LARB3_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
+		};
+
+		larb4: larb@15002000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x15002000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <4>;
+			clocks = <&>,
+				 <&imgsys CLK_IMAGE_LARB4_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = TODO;
 		};
 	};
 };
