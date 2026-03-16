@@ -423,7 +423,7 @@
 		iommu1: iommu@10205800 {
 			compatible = "mediatek,mt6589-m4u";
 			reg = <0x10205800 0x1000>;
-			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
+			interrupts = <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&infracfg CLK_INFRA_M4U>;
 			clock-names = "bclk";
 			mediatek,larbs = <&larb2>, <&larb4>;
