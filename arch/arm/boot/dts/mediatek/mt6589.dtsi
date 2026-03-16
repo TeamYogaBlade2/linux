@@ -607,8 +607,8 @@
 			reg = <0x17001000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <0>;
-			clocks = <&infracfg CLK_INFRA_SMI>, /* idk */
-				 <&infracfg CLK_INFRA_SMI>;
+			clocks = <&vencsys CLK_VENC_VEN>,
+				 <&vencsys CLK_VENC_VEN>;
 			clock-names = "apb", "smi";
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
@@ -618,8 +618,8 @@
 			reg = <0x16010000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <1>;
-			clocks = <&infracfg CLK_INFRA_SMI>, /* idk */
-				 <&infracfg CLK_INFRA_SMI>;
+			clocks = <&vdecsys CLK_VDEC0_VDE>,
+				 <&vdecsys CLK_VDEC1_SMI>;
 			clock-names = "apb", "smi";
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
