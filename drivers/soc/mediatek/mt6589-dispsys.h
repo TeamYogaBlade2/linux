@@ -38,22 +38,18 @@
  *   DBI_SEL       0x1           0x0=RDMA0
  *   SCL_MOUT_EN   BIT(0)        bit[0]=WDMA0
  *   WDMA0_SEL     0x1           0x0=SCL
- *
- * NOTE: Register offsets below are placeholders (0x000).
- * Fill them in from the MT6589 MMSYS (DISP_REG_CONFIG_*) register map.
  */
 
-/* TODO: replace each 0x000 with the real MMSYS register offset */
-#define MT6589_DISP_OVL_MOUT_EN		0x000 /* TODO */
-#define MT6589_DISP_COLOR_MOUT_EN	0x000 /* TODO */
-#define MT6589_DISP_COLOR_SEL_IN	0x000 /* TODO */
-#define MT6589_DISP_BLS_SEL_IN		0x000 /* TODO */
-#define MT6589_DISP_RDMA0_SOUT_SEL	0x000 /* TODO */
-#define MT6589_DISP_RDMA1_SOUT_SEL	0x000 /* TODO */
-#define MT6589_DISP_DPI0_SEL_IN		0x000 /* TODO */
-#define MT6589_DISP_DBI_SEL_IN		0x000 /* TODO */
-#define MT6589_DISP_SCL_MOUT_EN		0x000 /* TODO */
-#define MT6589_DISP_WDMA0_SEL_IN	0x000 /* TODO */
+#define MT6589_DISP_SCL_MOUT_EN		0x020
+#define MT6589_DISP_OVL_MOUT_EN		0x024
+#define MT6589_DISP_COLOR_MOUT_EN	0x028
+#define MT6589_DISP_RDMA0_OUT_SEL	0x034
+#define MT6589_DISP_RDMA1_OUT_SEL 	0x038
+#define MT6589_DISP_WDMA0_SEL_IN	0x040
+#define MT6589_DISP_COLOR_SEL_IN	0x04c
+#define MT6589_DISP_BLS_SEL_IN		0x054
+#define MT6589_DISP_DPI0_SEL_IN		0x05c
+#define MT6589_DISP_DBI_SEL_IN		0x058
  
 /* OVL_MOUT_EN */
 #define MT6589_OVL_MOUT_EN_WDMA1	BIT(0)
@@ -101,7 +97,7 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
 		    MT6589_OVL_MOUT_EN_MASK,   MT6589_OVL_MOUT_EN_COLOR),
 	MMSYS_ROUTE(OVL0,   COLOR0,
 		    MT6589_DISP_COLOR_SEL_IN,
-		    MT6589_COLOR_SEL_IN_MASK,  MT6589_COLOR_SEL_IN_OVL),
+			    MT6589_COLOR_SEL_IN_MASK,  MT6589_COLOR_SEL_IN_OVL),
  
 	/*
 	 * Main path step 2: COLOR output → BLS
@@ -127,12 +123,12 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
  
 	/* RDMA0 → DBI */
 	MMSYS_ROUTE(RDMA0,  DBI,
-		    MT6589_DISP_RDMA0_SOUT_SEL,
+		    MT6589_DISP_RDMA0_OUT_SEL,
 		    MT6589_RDMA0_SOUT_MASK,    MT6589_RDMA0_SOUT_DBI),
  
 	/* RDMA0 → DPI0 (OVL-sourced) */
 	MMSYS_ROUTE(RDMA0,  DPI0,
-		    MT6589_DISP_RDMA0_SOUT_SEL,
+		    MT6589_DISP_RDMA0_OUT_SEL,
 		    MT6589_RDMA0_SOUT_MASK,    MT6589_RDMA0_SOUT_DPI0),
  
 	/*
@@ -151,7 +147,7 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
  
 	/* RDMA1 → DPI0 */
 	MMSYS_ROUTE(RDMA1,  DPI0,
-		    MT6589_DISP_RDMA1_SOUT_SEL,
+		    MT6589_DISP_RDMA1_OUT_SEL ,
 		    MT6589_RDMA1_SOUT_MASK,    MT6589_RDMA1_SOUT_DPI0),
 	MMSYS_ROUTE(RDMA1,  DPI0,
 		    MT6589_DISP_DPI0_SEL_IN,
@@ -159,7 +155,7 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
  
 	/* RDMA1 → DPI1 */
 	MMSYS_ROUTE(RDMA1,  DPI1,
-		    MT6589_DISP_RDMA1_SOUT_SEL,
+		    MT6589_DISP_RDMA1_OUT_SEL ,
 		    MT6589_RDMA1_SOUT_MASK,    MT6589_RDMA1_SOUT_DPI1),
  
 	/*
