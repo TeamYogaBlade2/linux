@@ -13,7 +13,7 @@
 		height = <800>;
 		stride = <(1280 * 2)>;
 		format = "r5g6b5";
-		status = "disabled";
+		//status = "disabled";
 	};
 
 	reg_panel: regulator-panel {
@@ -41,16 +41,19 @@
 		reg = <0>;
 		power-supply = <&reg_panel>;
 
+/*
 		port {
 			panel_in: endpoint {
 				remote-endpoint = <&dsi_out>;
 			};
 		};
+*/
 	};
-
+/*
 	port {
 		dsi_out: endpoint {
 			remote-endpoint = <&panel_in>;
 		};
 	};
+*/
 };

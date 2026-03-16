@@ -150,9 +150,10 @@
 
 				power-domain@MT6589_POWER_DOMAIN_MFG {
 					reg = <MT6589_POWER_DOMAIN_MFG>;
-					clocks = <&topckgen CLK_TOP_MUX_MFG>,
-						 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
-					clock-names = "mfg", "mfg_as";
+				// clock get failed
+				//	clocks = <&topckgen CLK_TOP_MUX_MFG>,
+				//		 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
+				//	clock-names = "mfg", "mfg_as";
 					#power-domain-cells = <0>;
 				};
 
@@ -175,8 +176,9 @@
 
 				power-domain@MT6589_POWER_DOMAIN_VDE {
 					reg = <MT6589_POWER_DOMAIN_VDE>;
-					clocks = <&topckgen CLK_TOP_MUX_VDEC>;
-					clock-names = "vdec";
+				// clock get failed
+				//	clocks = <&topckgen CLK_TOP_MUX_VDEC>;
+				//	clock-names = "vdec";
 					#power-domain-cells = <0>;
 				};
 			};
@@ -581,6 +583,8 @@
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;
 			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
+			/* not found in clock list */
+			clocks = <&clk26m>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
