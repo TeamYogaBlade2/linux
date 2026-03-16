@@ -396,10 +396,10 @@
 		smi_common: smi@10202000 {
 			compatible = "mediatek,mt6589-smi-common";
 			reg = <0x10202000 0x1000>;
-			clocks = <&>,
+			clocks = <&infracfg CLK_INFRA_SMI>,
 				 <&infracfg CLK_INFRA_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		iommu: iommu@10205000 {
@@ -410,7 +410,6 @@
 			clock-names = "bclk";
 			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>, <&larb3>, <&larb4>;
 			#iommu-cells = <1>;
-			power-domains = TODO;
 		};
 
 		gic: interrupt-controller@10211000 {
@@ -553,7 +552,7 @@
 				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		rdma0: rdma@14006000 {
@@ -564,7 +563,7 @@
 				 <&dispsys CLK_DISP0_RDMA0_SMI>,
 				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		rdma1: rdma@14007000 {
@@ -575,14 +574,14 @@
 				 <&dispsys CLK_DISP0_RDMA1_SMI>,
 				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		mutex: mutex@14011000 {
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;
 			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		dsi: dsi@1400d000 {
@@ -595,7 +594,7 @@
 			clock-names = "engine", "digital", "hs";
 			phys = <&mipi_tx0>;
 			phy-names = "dphy";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 			status = "disabled";
 		};
 
@@ -604,10 +603,10 @@
 			reg = <0x17001000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <0>;
-			clocks = <&>,
-				 <&>;
+			clocks = <&infracfg CLK_INFRA_SMI>, /* idk */
+				 <&infracfg CLK_INFRA_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		larb1: larb@16010000 {
@@ -615,10 +614,10 @@
 			reg = <0x16010000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <1>;
-			clocks = <&>,
-				 <&>;
+			clocks = <&infracfg CLK_INFRA_SMI>, /* idk */
+				 <&infracfg CLK_INFRA_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		larb2: larb@14010000 {
@@ -626,10 +625,10 @@
 			reg = <0x14010000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <2>;
-			clocks = <&>,
+			clocks = <&dispsys CLK_DISP0_LARB2_SMI>,
 				 <&dispsys CLK_DISP0_LARB2_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		larb3: larb@15001000 {
@@ -637,10 +636,10 @@
 			reg = <0x15001000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <3>;
-			clocks = <&>,
+			clocks = <&imgsys CLK_IMAGE_LARB3_SMI>,
 				 <&imgsys CLK_IMAGE_LARB3_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		larb4: larb@15002000 {
@@ -648,10 +647,10 @@
 			reg = <0x15002000 0x1000>;
 			mediatek,smi = <&smi_common>;
 			mediatek,larb-id = <4>;
-			clocks = <&>,
+			clocks = <&imgsys CLK_IMAGE_LARB4_SMI>,
 				 <&imgsys CLK_IMAGE_LARB4_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = TODO;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 	};
 };
