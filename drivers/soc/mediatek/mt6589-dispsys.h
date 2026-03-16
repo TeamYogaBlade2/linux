@@ -50,55 +50,55 @@
 #define MT6589_DISP_BLS_SEL_IN		0x054
 #define MT6589_DISP_DPI0_SEL_IN		0x05c
 #define MT6589_DISP_DBI_SEL_IN		0x058
- 
+
 /* OVL_MOUT_EN */
 #define MT6589_OVL_MOUT_EN_WDMA1	BIT(0)
 #define MT6589_OVL_MOUT_EN_COLOR	BIT(2)
 #define MT6589_OVL_MOUT_EN_MASK		GENMASK(2, 0)
- 
+
 /* COLOR_MOUT_EN */
 #define MT6589_COLOR_MOUT_EN_BLS	BIT(3)
 #define MT6589_COLOR_MOUT_EN_MASK	GENMASK(3, 0)
- 
+
 /* COLOR_SEL_IN */
 #define MT6589_COLOR_SEL_IN_OVL		0x1
 #define MT6589_COLOR_SEL_IN_MASK	0x1
- 
+
 /* BLS_SEL_IN */
 #define MT6589_BLS_SEL_IN_COLOR		0x1
 #define MT6589_BLS_SEL_IN_MASK		0x1
- 
+
 /* RDMA0_SOUT_SEL */
 #define MT6589_RDMA0_SOUT_DBI		0x1
 #define MT6589_RDMA0_SOUT_DPI0		0x2
 #define MT6589_RDMA0_SOUT_MASK		0x3
- 
+
 /* RDMA1_SOUT_SEL */
 #define MT6589_RDMA1_SOUT_DPI0		0x1
 #define MT6589_RDMA1_SOUT_DPI1		0x2
 #define MT6589_RDMA1_SOUT_MASK		0x3
- 
+
 /* DPI0_SEL_IN */
 #define MT6589_DPI0_SEL_IN_RDMA1	0x1
 #define MT6589_DPI0_SEL_IN_MASK		0x1
- 
+
 /* SCL_MOUT_EN */
 #define MT6589_SCL_MOUT_EN_WDMA0	BIT(0)
 #define MT6589_SCL_MOUT_EN_MASK		BIT(0)
 
-static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
+static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
 	/*
 	 * Main path step 1: OVL output → COLOR
 	 *   OVL_MOUT_EN selects COLOR as the downstream engine.
 	 *   COLOR_SEL_IN confirms OVL as the upstream source.
 	 */
-	MMSYS_ROUTE(OVL0,   COLOR0,
+	MMSYS_ROUTE(OVL0, COLOR0,
 		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_MASK,   MT6589_OVL_MOUT_EN_COLOR),
-	MMSYS_ROUTE(OVL0,   COLOR0,
+		    MT6589_OVL_MOUT_EN_MASK, MT6589_OVL_MOUT_EN_COLOR),
+	MMSYS_ROUTE(OVL0, COLOR0,
 		    MT6589_DISP_COLOR_SEL_IN,
-			    MT6589_COLOR_SEL_IN_MASK,  MT6589_COLOR_SEL_IN_OVL),
- 
+		    MT6589_COLOR_SEL_IN_MASK, MT6589_COLOR_SEL_IN_OVL),
+
 	/*
 	 * Main path step 2: COLOR output → BLS
 	 *   COLOR_MOUT_EN selects BLS as the downstream engine.
@@ -109,8 +109,8 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
 		    MT6589_COLOR_MOUT_EN_MASK, MT6589_COLOR_MOUT_EN_BLS),
 	MMSYS_ROUTE(COLOR0, BLS,
 		    MT6589_DISP_BLS_SEL_IN,
-		    MT6589_BLS_SEL_IN_MASK,    MT6589_BLS_SEL_IN_COLOR),
- 
+		    MT6589_BLS_SEL_IN_MASK, MT6589_BLS_SEL_IN_COLOR),
+
 	/*
 	 * Main path step 3: RDMA0 output → DSI0 / DBI / DPI0
 	 *   BLS feeds RDMA0 via direct-link (no SEL register needed).
@@ -120,53 +120,53 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table = {
 	 * as the hardware resets to DSI0.  Only the MOUT/SEL entries for
 	 * the OVL→COLOR and COLOR→BLS hops are required for this path.
 	 */
- 
+
 	/* RDMA0 → DBI */
-	MMSYS_ROUTE(RDMA0,  DBI,
+	MMSYS_ROUTE(RDMA0, DBI0,
 		    MT6589_DISP_RDMA0_OUT_SEL,
-		    MT6589_RDMA0_SOUT_MASK,    MT6589_RDMA0_SOUT_DBI),
- 
+		    MT6589_RDMA0_SOUT_MASK, MT6589_RDMA0_SOUT_DBI),
+
 	/* RDMA0 → DPI0 (OVL-sourced) */
-	MMSYS_ROUTE(RDMA0,  DPI0,
+	MMSYS_ROUTE(RDMA0, DPI0,
 		    MT6589_DISP_RDMA0_OUT_SEL,
-		    MT6589_RDMA0_SOUT_MASK,    MT6589_RDMA0_SOUT_DPI0),
- 
+		    MT6589_RDMA0_SOUT_MASK, MT6589_RDMA0_SOUT_DPI0),
+
 	/*
 	 * Memory-out path: OVL → WDMA1
 	 *   Allows screen-capture concurrently with the main LCD path.
 	 *   Enabled by setting bit[0] of OVL_MOUT_EN alongside bit[2].
 	 */
-	MMSYS_ROUTE(OVL0,   WDMA1,
+	MMSYS_ROUTE(OVL0, WDMA1,
 		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_MASK,   MT6589_OVL_MOUT_EN_WDMA1),
- 
+		    MT6589_OVL_MOUT_EN_MASK, MT6589_OVL_MOUT_EN_WDMA1),
+
 	/*
 	 * Direct RDMA1 paths: bypass OVL/COLOR/BLS entirely.
 	 *   Used for external display (e.g. HDMI via bridge chip).
 	 */
- 
+
 	/* RDMA1 → DPI0 */
-	MMSYS_ROUTE(RDMA1,  DPI0,
-		    MT6589_DISP_RDMA1_OUT_SEL ,
-		    MT6589_RDMA1_SOUT_MASK,    MT6589_RDMA1_SOUT_DPI0),
-	MMSYS_ROUTE(RDMA1,  DPI0,
+	MMSYS_ROUTE(RDMA1, DPI0,
+		    MT6589_DISP_RDMA1_OUT_SEL,
+		    MT6589_RDMA1_SOUT_MASK, MT6589_RDMA1_SOUT_DPI0),
+	MMSYS_ROUTE(RDMA1, DPI0,
 		    MT6589_DISP_DPI0_SEL_IN,
-		    MT6589_DPI0_SEL_IN_MASK,   MT6589_DPI0_SEL_IN_RDMA1),
- 
+		    MT6589_DPI0_SEL_IN_MASK, MT6589_DPI0_SEL_IN_RDMA1),
+
 	/* RDMA1 → DPI1 */
 	MMSYS_ROUTE(RDMA1,  DPI1,
-		    MT6589_DISP_RDMA1_OUT_SEL ,
-		    MT6589_RDMA1_SOUT_MASK,    MT6589_RDMA1_SOUT_DPI1),
- 
+		    MT6589_DISP_RDMA1_OUT_SEL,
+		    MT6589_RDMA1_SOUT_MASK, MT6589_RDMA1_SOUT_DPI1),
+
 	/*
 	 * MDP path: SCL → WDMA0
 	 *   Used for MDP (Media Data Path) scaling + write-back.
 	 *   ROT feeds SCL; SCL_MOUT_EN routes the output to WDMA0.
 	 *   WDMA0_SEL_IN defaults to SCL (val=0x0); no SEL entry needed.
 	 */
-	MMSYS_ROUTE(SCL,    WDMA0,
+	MMSYS_ROUTE(SCL, WDMA0,
 		    MT6589_DISP_SCL_MOUT_EN,
-		    MT6589_SCL_MOUT_EN_MASK,   MT6589_SCL_MOUT_EN_WDMA0),
+		    MT6589_SCL_MOUT_EN_MASK, MT6589_SCL_MOUT_EN_WDMA0),
 };
 
 #endif /* __SOC_MEDIATEK_MT6589_DISPSYS_H */
