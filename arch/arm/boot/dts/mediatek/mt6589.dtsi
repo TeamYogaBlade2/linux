@@ -10,6 +10,7 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 #include <dt-bindings/memory/mt6589-larb-port.h>
+#include <dt-bindings/power/mt6589-power.h>
 
 / {
 	#address-cells = <1>;
@@ -112,6 +113,73 @@
 			reg = <0x10003000 0x1000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+		};
+
+		scpsys: syscon@10006000 {
+			compatible = "syscon", "simple-mfd";
+			reg = <0x10006000 0x1000>;
+			#power-domain-cells = <1>;
+
+			spm: power-controller {
+				compatible = "mediatek,mt6589-power-controller";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#power-domain-cells = <1>;
+
+				power-domain@MT6589_POWER_DOMAIN_MD1 {
+					reg = <MT6589_POWER_DOMAIN_MD1>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_MD2 {
+					reg = <MT6589_POWER_DOMAIN_MD2>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_DPY {
+					reg = <MT6589_POWER_DOMAIN_DPY>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_DIS {
+					reg = <MT6589_POWER_DOMAIN_DIS>;
+					clocks = <&topckgen CLK_TOP_MUX_DISP>;
+					clock-names = "disp";
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_MFG {
+					reg = <MT6589_POWER_DOMAIN_MFG>;
+					clocks = <&topckgen CLK_TOP_MUX_MFG>,
+						 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
+					clock-names = "mfg", "mfg_as";
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_ISP {
+					reg = <MT6589_POWER_DOMAIN_ISP>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_IFR {
+					reg = <MT6589_POWER_DOMAIN_IFR>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_VEN {
+					reg = <MT6589_POWER_DOMAIN_VEN>;
+					clocks = <&topckgen CLK_TOP_MUX_VENC>;
+					clock-names = "venc";
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_VDE {
+					reg = <MT6589_POWER_DOMAIN_VDE>;
+					clocks = <&topckgen CLK_TOP_MUX_VDEC>;
+					clock-names = "vdec";
+					#power-domain-cells = <0>;
+				};
+			};
 		};
 
 		mfgsys: syscon@10206000 {

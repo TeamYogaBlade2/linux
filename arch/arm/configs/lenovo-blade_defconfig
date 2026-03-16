@@ -119,6 +119,9 @@ CONFIG_BMC150_MAGN_I2C=y
 ## Reset
 #CONFIG_RESET_CONTROLLER
 
+## Power Management
+CONFIG_MTK_SCPSYS_PM_DOMAINS=y
+
 ## Battery
 
 ## Regulator
