@@ -1,13 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /*
- * Copyright (c) 2025 akku <akkun11.open@gmail.com>
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
-
-#include "mt6589-lenovo-blade.dtsi"
-#include <dt-bindings/gpio/gpio.h>
+#include "mt6589-lenovo-b8000.dtsi"
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
