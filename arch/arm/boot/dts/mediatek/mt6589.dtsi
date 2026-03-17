@@ -707,7 +707,7 @@
 		pins-i2c0 {
 			pinmux = <MT6589_GPIO118__FUNC_SDA0>,
 				 <MT6589_GPIO119__FUNC_SCL0>;
-			bias-disable;
+			bias-pull-up;
 		};
 	};
 
@@ -715,7 +715,7 @@
 		pin-i2c1 {
 			pinmux = <MT6589_GPIO214__FUNC_SDA1>,
 				 <MT6589_GPIO215__FUNC_SCL1>;
-			bias-disable;
+			bias-pull-up;
 		};
 	};
 
@@ -723,7 +723,7 @@
 		pin-i2c2 {
 			pinmux = <MT6589_GPIO216__FUNC_SDA2>,
 				 <MT6589_GPIO217__FUNC_SCL2>;
-			bias-disable;
+			bias-pull-up;
 		};
 	};
 
@@ -731,7 +731,7 @@
 		pin-i2c3 {
 			pinmux = <MT6589_GPIO67__FUNC_SDA3>,
 				 <MT6589_GPIO68__FUNC_SCL3>;
-			bias-disable;
+			bias-pull-up;
 		};
 	};
 };

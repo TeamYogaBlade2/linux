@@ -32,8 +32,10 @@
 
 &i2c3 {
 	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3_pins>;
 	/* TODO */
-	clock-frequency = <400000>;
+//	clock-frequency = <100000>;
 
 	accelerometer@11 {
 		compatible = "bosch,bma255";
