@@ -140,7 +140,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -156,7 +156,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -172,7 +172,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -188,7 +188,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -204,7 +204,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -220,7 +220,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -236,7 +236,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
