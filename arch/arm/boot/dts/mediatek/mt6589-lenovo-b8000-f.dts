@@ -55,7 +55,7 @@
 
 /* SD Card */
 &mmc1 {
-	status = "okay";
+//	status = "okay";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc1_pins_default>;
 	pinctrl-1 = <&mmc1_pins_uhs>;
@@ -92,6 +92,8 @@
 
 &usb0 {
 	status = "okay";
+	dr_mode = "peripheral";
+/*
 	usb-role-switch;
 
 	connector {
@@ -101,4 +103,5 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb_pins>;
 	};
+*/
 };

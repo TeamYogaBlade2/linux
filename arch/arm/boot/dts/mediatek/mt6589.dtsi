@@ -445,7 +445,7 @@
 				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
 				clock-names = "ref";
 				#phy-cells = <1>;
-				status = "okay";
+				status = "disabled";
 			};
 		};
 
