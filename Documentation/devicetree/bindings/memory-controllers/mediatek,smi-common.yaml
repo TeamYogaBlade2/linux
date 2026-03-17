@@ -52,9 +52,6 @@ properties:
           - const: mediatek,mt7623-smi-common
           - const: mediatek,mt2701-smi-common
 
-  reg:
-    maxItems: 1
-
   power-domains:
     maxItems: 1
 
@@ -87,6 +84,24 @@ required:
   - clock-names
 
 allOf:
+  - if:  # Generation 0 HW (mt6589)
+      properties:
+        compatible:
+          contains:
+            const: mediatek,mt6589-smi-common
+    then:
+      properties:
+        reg:
+          items:
+            - description: SMI AO base
+            - description: SMI base
+          minItems: 2
+          maxItems: 2
+    else:
+      properties:
+        reg:
+          maxItems: 1
+
   - if:  # only for gen1 HW
       properties:
         compatible:
