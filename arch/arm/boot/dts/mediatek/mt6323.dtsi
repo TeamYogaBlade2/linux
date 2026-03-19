@@ -28,6 +28,10 @@
 			compatible = "mediatek,mt6323-sound";
 		};
 
+		efuse {
+			compatible = "mediatek,mt6323-efuse";
+		};
+
 		mt6323_leds: leds {
 			compatible = "mediatek,mt6323-led";
 			#address-cells = <1>;
