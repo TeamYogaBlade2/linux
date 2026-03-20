@@ -2166,31 +2166,6 @@ static int pwrap_mt2701_init_soc_specific(struct pmic_wrapper *wrp)
 	return 0;
 }
 
-static int pwrap_mt6589_init_soc_specific(struct pmic_wrapper *wrp)
-{
-	/* enable pwrap events and pwrap bridge in AP side */
-	pwrap_writel(wrp, 0x1, PWRAP_EVENT_IN_EN);
-	pwrap_writel(wrp, 0xffff, PWRAP_EVENT_DST_EN);
-	writel(0x7f, wrp->bridge_base + PWRAP_BRIDGE_IORD_ARB_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS3_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_WACS4_EN);
-	writel(0xf, wrp->bridge_base + PWRAP_BRIDGE_WDT_UNIT);
-	writel(0xffff, wrp->bridge_base + PWRAP_BRIDGE_WDT_SRC_EN);
-	writel(0x1, wrp->bridge_base + PWRAP_BRIDGE_TIMER_EN);
-	writel(0x7ff, wrp->bridge_base + PWRAP_BRIDGE_INT_EN);
-
-	/* enable PMIC event out and sources */
-	if (pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_OUT_EN],
-			0x1) ||
-	    pwrap_write(wrp, wrp->slave->dew_regs[PWRAP_DEW_EVENT_SRC_EN],
-			0xffff)) {
-		dev_err(wrp->dev, "enable dewrap fail\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
 static int pwrap_mt6795_init_soc_specific(struct pmic_wrapper *wrp)
 {
 	pwrap_writel(wrp, 0xf, PWRAP_STAUPD_GRPEN);
@@ -2476,7 +2451,7 @@ static const struct pmic_wrapper_type pwrap_mt6589 = {
 	.wdt_src = PWRAP_WDT_SRC_MASK_ALL,
 	.caps = PWRAP_CAP_BRIDGE | PWRAP_CAP_RESET | PWRAP_CAP_DCM,
 	.init_reg_clock = pwrap_common_init_reg_clock,
-	.init_soc_specific = pwrap_mt6589_init_soc_specific,
+	.init_soc_specific = pwrap_mt8135_init_soc_specific,
 };
 
 static const struct pmic_wrapper_type pwrap_mt6765 = {
