@@ -36,6 +36,10 @@
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
 #define DISP_RDMA_MEM_CON			0x0024
+
+#define MEM_MODE_INPUT_FORMAT_RGB565_MT65XX		(0x004 << 4)
+#define MEM_MODE_INPUT_FORMAT_RGB888_MT65XX		(0x008 << 4)
+
 #define MEM_MODE_INPUT_FORMAT_RGB565			(0x000 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGB888			(0x001 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGBA8888			(0x002 << 4)
@@ -72,6 +76,7 @@ struct mtk_disp_rdma_data {
 	unsigned int fifo_size;
 	const u32 *formats;
 	size_t num_formats;
+	unsigned int (*fmt_convert)(unsigned int fmt);
 };
 
 /*
@@ -213,8 +218,43 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	mtk_ddp_write(cmdq_pkt, reg, &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_FIFO_CON);
 }
 
-static unsigned int rdma_fmt_convert(struct mtk_disp_rdma *rdma,
-				     unsigned int fmt)
+static unsigned int rdma_fmt_convert_mt65xx(unsigned int fmt)
+{
+	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
+	 * is defined in mediatek HW data sheet.
+	 * The alphabet order in XXX is no relation to data
+	 * arrangement in memory.
+	 */
+	switch (fmt) {
+	default:
+	case DRM_FORMAT_RGB565:
+		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX;
+	case DRM_FORMAT_BGR565:
+		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_RGB888:
+		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX;
+	case DRM_FORMAT_BGR888:
+		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_RGBA8888:
+		return MEM_MODE_INPUT_FORMAT_ARGB8888;
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_BGRA8888:
+		return MEM_MODE_INPUT_FORMAT_ARGB8888 | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		return MEM_MODE_INPUT_FORMAT_RGBA8888;
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888:
+		return MEM_MODE_INPUT_FORMAT_RGBA8888 | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_UYVY:
+		return MEM_MODE_INPUT_FORMAT_UYVY;
+	case DRM_FORMAT_YUYV:
+		return MEM_MODE_INPUT_FORMAT_YUYV;
+	}
+}
+
+static unsigned int rdma_fmt_convert(unsigned int fmt)
 {
 	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
 	 * is defined in mediatek HW data sheet.
@@ -266,7 +306,7 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	unsigned int fmt = pending->format;
 	unsigned int con;
 
-	con = rdma_fmt_convert(rdma, fmt);
+	con = rdma->data->fmt_convert(fmt);
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
 
 	if (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV) {
@@ -380,24 +420,28 @@ static const struct mtk_disp_rdma_data mt2701_rdma_driver_data = {
 	.fifo_size = SZ_4K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.fmt_convert = rdma_fmt_convert,
 };
 
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
 	.fifo_size = SZ_8K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.fmt_convert = rdma_fmt_convert,
 };
 
 static const struct mtk_disp_rdma_data mt8183_rdma_driver_data = {
 	.fifo_size = 5 * SZ_1K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.fmt_convert = rdma_fmt_convert,
 };
 
 static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 	.fifo_size = 1920,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.fmt_convert = rdma_fmt_convert,
 };
 
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
