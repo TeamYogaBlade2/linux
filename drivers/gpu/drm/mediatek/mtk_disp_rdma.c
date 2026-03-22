@@ -77,6 +77,7 @@ struct mtk_disp_rdma_data {
 	const u32 *formats;
 	size_t num_formats;
 	unsigned int (*fmt_convert)(unsigned int fmt);
+	bool broken_height;
 };
 
 /*
@@ -194,6 +195,10 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	unsigned int reg;
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	u32 rdma_fifo_size;
+
+	/* Some SoCs require their default value after reset or 0 to make RDMA happy. */
+	if (rdma->data->broken_height)
+		height = 0;
 
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_SIZE_CON_0, 0xfff);
@@ -423,6 +428,14 @@ static const struct mtk_disp_rdma_data mt2701_rdma_driver_data = {
 	.fmt_convert = rdma_fmt_convert,
 };
 
+static const struct mtk_disp_rdma_data mt6572_rdma_driver_data = {
+	.fifo_size = 3840,
+	.formats = mt8173_formats,
+	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.fmt_convert = rdma_fmt_convert_mt65xx,
+	.broken_height = true,
+};
+
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
 	.fifo_size = SZ_8K,
 	.formats = mt8173_formats,
@@ -447,6 +460,8 @@ static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-rdma",
 	  .data = &mt2701_rdma_driver_data},
+	{ .compatible = "mediatek,mt6572-disp-rdma",
+	  .data = &mt6572_rdma_driver_data},
 	{ .compatible = "mediatek,mt8173-disp-rdma",
 	  .data = &mt8173_rdma_driver_data},
 	{ .compatible = "mediatek,mt8183-disp-rdma",
