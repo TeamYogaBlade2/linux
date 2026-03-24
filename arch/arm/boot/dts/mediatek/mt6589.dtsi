@@ -10,6 +10,7 @@
 #include <dt-bindings/clock/mt6589-clk.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+#include <dt-bindings/reset/mt6589-resets.h>
 
 / {
 	#address-cells = <1>;
@@ -404,6 +405,8 @@
 				 <&clk26m>,
 				 <&topckgen CLK_TOP_UNIVPLL_D26>;
 			clock-names = "main", "mcu", "univpll";
+			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
+			reset-names = "hrst";
 			status = "disabled";
 		};
 
@@ -420,6 +423,8 @@
 				 <&clk26m>,
 				 <&topckgen CLK_TOP_UNIVPLL_D26>;
 			clock-names = "main", "mcu", "univpll";
+			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
+			reset-names = "hrst";
 			status = "disabled";
 		};
 
