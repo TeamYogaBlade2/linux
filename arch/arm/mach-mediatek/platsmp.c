@@ -46,6 +46,15 @@ struct mtk_hotplug_info {
 	unsigned int spm_l1_pdn_bits[MTK_MAX_CPU - 1];
 	unsigned int spm_l1_pdn_ack_bits[MTK_MAX_CPU - 1];
 };
+
+static const struct mtk_hotplug_info mtk_mt6572_hotplug = {
+	.spm_compat = "mediatek,mt6572-scpsys",
+	.mcusys_compat = "mediatek,mt6572-mcusys",
+	.spm_pwr_con = { 0x218 },
+	.spm_pwr_status_bits = { BIT(11) },
+	.spm_l1_pdn_bits = { BIT(0) },
+	.spm_l1_pdn_ack_bits = { BIT(8) },
+};
 #endif
 
 struct mtk_smp_boot_info {
@@ -68,6 +77,9 @@ static const struct mtk_smp_boot_info mtk_mt6572_boot = {
 	0x10001400, 0x08,
 	{ 0x534c4131 },
 	{ 0x0c },
+#ifdef CONFIG_HOTPLUG_CPU
+	&mtk_mt6572_hotplug,
+#endif
 };
 
 static const struct mtk_smp_boot_info mtk_mt6589_boot = {
@@ -107,7 +119,7 @@ static void __iomem *mcusys_base;
 
 static void spm_cpu_wait_busy(enum mtk_cpu_target_state state, unsigned int cpu)
 {
-	u32 val, mask = mtk_smp_info->hotplug->spm_pwr_status_bits[cpu];
+	u32 val, mask = mtk_smp_info->hotplug->spm_pwr_status_bits[cpu - 1];
 	do {
 		val = readl(spm_base + SPM_PWR_STATUS) & mask;
 		val |= readl(spm_base + SPM_PWR_STATUS_2ND) & mask;
@@ -119,14 +131,14 @@ static void spm_l1_wait_busy(enum mtk_cpu_target_state state, unsigned int cpu)
 	u32 val;
 	do {
 		val = readl(spm_base + SPM_L1_PDN(cpu)) &
-		      mtk_smp_info->hotplug->spm_l1_pdn_ack_bits[cpu];
+		      mtk_smp_info->hotplug->spm_l1_pdn_ack_bits[cpu - 1];
 	} while (state == POWER_DOWN ? !val : !!val);
 }
 
 static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 {
-	u32 val, pwr_con = mtk_smp_info->hotplug->spm_pwr_con[cpu],
-		 l1_pdn_bits = mtk_smp_info->hotplug->spm_l1_pdn_bits[cpu];
+	u32 val, pwr_con = mtk_smp_info->hotplug->spm_pwr_con[cpu - 1],
+		 l1_pdn_bits = mtk_smp_info->hotplug->spm_l1_pdn_bits[cpu - 1];
 
 	switch (state) {
 	case POWER_DOWN:
@@ -219,7 +231,7 @@ static bool mtk_hotplug_is_available(void)
 static bool mtk_hotplug_is_off(unsigned int cpu)
 {
 	u32 val = readl_relaxed(spm_base + SPM_PWR_STATUS);
-	return !(val & mtk_smp_info->hotplug->spm_pwr_status_bits[cpu]);
+	return !(val & mtk_smp_info->hotplug->spm_pwr_status_bits[cpu - 1]);
 }
 #endif
 
