@@ -48,7 +48,6 @@
 #define PWR_CLK_DIS_BIT			BIT(4)
 #define PWR_SRAM_CLKISO_BIT		BIT(5)
 #define PWR_SRAM_ISOINT_B_BIT		BIT(6)
-
 #define PWR_RTFF_SAVE			BIT(24)
 #define PWR_RTFF_NRESTORE		BIT(25)
 #define PWR_RTFF_CLK_DIS		BIT(26)
