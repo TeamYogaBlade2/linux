@@ -44,7 +44,7 @@
 
 	};
 
-	arch_timer {
+	timer {
 		compatible = "arm,armv7-timer";
 		interrupt-parent = <&gic>;
 		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
