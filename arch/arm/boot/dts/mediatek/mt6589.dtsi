@@ -256,6 +256,16 @@
 			status = "disabled";
 		};
 
+		gpu: gpu@13000000 {
+			compatible = "mediatek,mt6589-gpu", "img,powervr-sgx544";
+			reg = <0x13000000 0x10000>;
+			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mfgsys CLK_MFG_G3D>,
+				 <&mfgsys CLK_MFG_MEM>,
+				 <&mfgsys CLK_MFG_AXI>;
+			clock-names = "core", "mem", "sys";
+		};
+
 		dispsys: syscon@14000000 {
 			compatible = "mediatek,mt6589-dispsys", "syscon";
 			reg = <0x14000000 0x1000>;
