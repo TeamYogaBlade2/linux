@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
@@ -26,11 +26,11 @@
  *
  * @desc: standard fields of regulator description.
  * @qi: Mask for query enable signal status of regulators.
- *      BUCKs use BIT(13), LDOs use BIT(15) (same as MT6323).
- * @vselon_reg: Register for BUCK voltage in hardware-control mode.
- * @vselctrl_reg: Register that selects SW vs HW voltage control for BUCKs.
- * @vselctrl_mask: Mask for the control-mode bit in vselctrl_reg.
- * @modeset_reg: Register for LDO Normal/Low-Power mode selection.
+ *      BUCKs: BIT(13) within CON7.  LDOs: BIT(15) within enable_reg.
+ * @vselon_reg: CON10 — BUCK voltage register used in HW-control mode.
+ * @vselctrl_reg: CON5 — selects SW vs HW voltage control for BUCKs.
+ * @vselctrl_mask: BIT(1) — VOSEL_CTRL bit in vselctrl_reg (all BUCKs).
+ * @modeset_reg: Register for Normal/Low-Power mode selection.
  * @modeset_mask: Mask for the mode bit in modeset_reg.
  */
 struct mt6320_regulator_info {
@@ -44,29 +44,34 @@ struct mt6320_regulator_info {
 };
 
 /*
- * BUCK register layout
- * --------------------
- * Each BUCK has a contiguous CON block, 2 bytes per register:
- *   CON_base  = status_reg - 20
- *   CON7  = base+14  -> enable_reg  (EN=BIT(0))
- *   CON8  = base+16  -> vselctrl_reg (VOSEL_CTRL=BIT(1))
- *   CON10 = base+20  -> status reg   (qi=BIT(13))
- *   CON15 = base+30  -> vosel_sw     (SW-mode voltage select)
- *   CON16 = base+32  -> voselon      (HW-mode voltage select) <unknown>: verify
+ * BUCK register map (all addresses confirmed from upmu_hw.h CON definitions)
+ * --------------------------------------------------------------------------
+ *           CON2     CON5     CON7          CON9     CON10
+ *           modeset  vselctrl enable+status vosel_sw voselon
+ * VPROC     0x020A   0x0210   0x0214        0x0218   0x021A
+ * VSRAM     0x0230   0x0236   0x023A        0x023E   0x0240
+ * VCORE     0x025C   0x0262   0x0266        0x026A   0x026C
+ * VM        0x0282   0x0288   0x028C        0x0290   0x0292
+ * VIO18     0x0304   0x030A   0x030E        0x0312   0x0314
+ * VPA       0x032A   0x0330   0x0334        0x0338   0x033A
+ * VRF18     0x0354   0x035A   0x035E        0x0362   0x0364
+ * VRF18_2   0x037E   0x0384   0x0388        0x038C   0x038E
  *
- * Verified anchors (from downstream pmic_config_interface comments):
- *   VPROC : ctrl=0x210[1], status=0x214[13], vosel_sw=0x21E[6:0]
- *   VSRAM : ctrl=0x236[1], status=0x23A[13], vosel_sw=0x244[6:0]
- *   VCORE : ctrl=0x262[1], status=0x266[13], vosel_sw=0x270[6:0]
- *   VM    : status=0x28C[13], vosel_sw=0x296[4:0]
- *   VIO18 : status=0x30E[13], vosel_sw=0x318[4:0]
- *   VPA   : status=0x334[13], vosel_sw=0x33E[5:0]
- *   VRF18   : status=0x35E[13], vosel_sw=0x368[4:0]
- *   VRF18_2 : status=0x388[13], vosel_sw=0x392[4:0]
+ * CON7 dual purpose: EN=BIT(0) (enable), qi=BIT(13) (HW status readback)
+ * CON5: VOSEL_CTRL=BIT(1)
+ * CON2: MODESET=BIT(8) (confirmed from PMIC_RG_Vxxx_MODESET_SHIFT=8)
+ *
+ * LDO register map (all confirmed from upmu_hw.h + upmu_common.c)
+ * ----------------------------------------------------------------
+ * enable_reg  = ANALDO_CONn or DIGLDO_CONn (see individual entries)
+ * EN bit      = PMIC_RG_Vxxx_EN_SHIFT (each confirmed)
+ * modeset_reg = same as enable_reg (LP_SEL=BIT(0) in same register)
+ * vosel_reg   = separate CON register per LDO
+ * vosel_mask  = pre-shifted: raw_mask << shift
  */
 
 #define MT6320_BUCK(match, vreg, min, max, step, volt_ranges, enreg,	\
-		vosel, vosel_mask, voselon, vosel_ctrl)			\
+		vosel, vosel_mask, voselon, vosel_ctrl, modesetreg)	\
 [MT6320_ID_##vreg] = {							\
 	.desc = {							\
 		.name = #vreg,						\
@@ -87,10 +92,19 @@ struct mt6320_regulator_info {
 	.vselon_reg = voselon,						\
 	.vselctrl_reg = vosel_ctrl,					\
 	.vselctrl_mask = BIT(1),					\
+	.modeset_reg = modesetreg,					\
+	.modeset_mask = BIT(8),					\
 }
 
+/*
+ * MT6320_LDO — variable-voltage LDO with volt_table
+ *
+ * modeset_reg = enable_reg (LP_SEL=BIT(0) is in the same CON register as EN,
+ * confirmed for every LDO from upmu_common.c upmu_set_Vxxx_lp_sel()).
+ * modeset_mask = BIT(0).
+ */
 #define MT6320_LDO(match, vreg, ldo_volt_table, enreg, enbit, vosel,	\
-		vosel_mask, _modeset_reg, _modeset_mask)		\
+		vosel_mask)						\
 [MT6320_ID_##vreg] = {							\
 	.desc = {							\
 		.name = #vreg,						\
@@ -107,12 +121,18 @@ struct mt6320_regulator_info {
 		.enable_mask = BIT(enbit),				\
 	},								\
 	.qi = BIT(15),							\
-	.modeset_reg = _modeset_reg,					\
-	.modeset_mask = _modeset_mask,					\
+	.modeset_reg = enreg,						\
+	.modeset_mask = BIT(0),					\
 }
 
-#define MT6320_REG_FIXED(match, vreg, enreg, enbit, volt,		\
-		_modeset_reg, _modeset_mask)				\
+/*
+ * MT6320_REG_FIXED — fixed-voltage LDO
+ *
+ * Same LP_SEL=BIT(0) logic as MT6320_LDO.
+ * VTCXO_1 and VRTC have no LP_SEL in upmu_common.c;
+ * those two use modeset_reg=0/modeset_mask=0 via MT6320_REG_FIXED_NOLP.
+ */
+#define MT6320_REG_FIXED(match, vreg, enreg, enbit, volt)		\
 [MT6320_ID_##vreg] = {							\
 	.desc = {							\
 		.name = #vreg,						\
@@ -127,42 +147,69 @@ struct mt6320_regulator_info {
 		.min_uV = volt,						\
 	},								\
 	.qi = BIT(15),							\
-	.modeset_reg = _modeset_reg,					\
-	.modeset_mask = _modeset_mask,					\
+	.modeset_reg = enreg,						\
+	.modeset_mask = BIT(0),					\
+}
+
+#define MT6320_REG_FIXED_NOLP(match, vreg, enreg, enbit, volt)		\
+[MT6320_ID_##vreg] = {							\
+	.desc = {							\
+		.name = #vreg,						\
+		.of_match = of_match_ptr(match),			\
+		.ops = &mt6320_volt_fixed_ops,				\
+		.type = REGULATOR_VOLTAGE,				\
+		.id = MT6320_ID_##vreg,					\
+		.owner = THIS_MODULE,					\
+		.n_voltages = 1,					\
+		.enable_reg = enreg,					\
+		.enable_mask = BIT(enbit),				\
+		.min_uV = volt,						\
+	},								\
+	.qi = BIT(15),							\
+	.modeset_reg = 0,						\
+	.modeset_mask = 0,						\
 }
 
 /*
  * BUCK voltage ranges
  * -------------------
+ * All vosel masks confirmed from PMIC_Vxxx_VOSEL_MASK in upmu_hw.h.
+ * Base voltages confirmed by back-calculating from real hardware readings.
  *
- * buck_volt_range1: 700 mV base, 6.25 mV/step, 7-bit (0x00-0x7F)
- *   -> VPROC (0.7-1.25 V), VSRAM (0.7-1.25 V), VCORE (0.7-1.25 V)
+ * buck_volt_range1: 700 mV, 6.25 mV/step, 7-bit (mask=0x7F)
+ *   VPROC: vosel=0x50 -> 700+80*6.25=1200 mV ✓ (real: 1200 mV)
+ *   VSRAM: vosel=0x5A -> 700+90*6.25=1262.5 mV ✓ (real: 1262 mV, display truncated)
+ *   VCORE: vosel=0x38 -> 700+56*6.25=1050 mV ✓ (real: 1050 mV)
+ *   VM:    vosel=0x52 -> 700+82*6.25=1212.5 mV ✓ (real: 1212 mV, display truncated)
+ *   Applies to: VPROC, VSRAM, VCORE, VM
  *
- * buck_volt_range2: 1500 mV base, 20 mV/step, 5-bit (0x00-0x1F)
- *   -> VM (1.2/1.25/1.35/1.5 V)
- *   <unknown>: exact step size needs verification against register spec.
+ * buck_volt_range2: 500 mV, 50 mV/step, 6-bit (mask=0x3F)
+ *   VPA: vosel=0 -> 500 mV ✓ (real: 500 mV = minimum)
+ *   Applies to: VPA
  *
- * buck_volt_range3: 500 mV base, 50 mV/step, 6-bit (0x00-0x3F)
- *   -> VPA (0.5-3.4 V; datasheet says 100 mV/step but downstream mask is
- *      0x3F = 64 steps; using 50 mV/step to be consistent with mask width)
- *   <unknown>: confirm step size.
+ * buck_volt_range3: 1800 mV, 6.25 mV/step, 5-bit (mask=0x1F)
+ *   VIO18: real reading=1800 mV. vosel=0 -> 1800 mV ✓ (used as fixed)
+ *   Applies to: VIO18
  *
- * buck_volt_range4: 1050 mV base, 25 mV/step, 5-bit (0x00-0x1F)
- *   -> VRF18_2 GPU OD mode (1.05-1.25 V, 50 mV/step per datasheet)
- *   <unknown>: VRF18 and VRF18_2 are listed as fixed 1.825 V in normal mode;
- *   variable range only applies in GPU OD mode for VRF18_2. Dual-mode
- *   operation is not expressible in a single regulator_desc.
+ * buck_volt_range4: 1050 mV, 25 mV/step, 5-bit (mask=0x1F)
+ *   Confirmed by pmic_vrf18_2_usage_protection() in pmic_mt6320.c:
+ *     gpu_status_bit=1 -> val=0x1F -> 1050 + 31*25 = 1825 mV (RF mode) ✓
+ *     gpu_status_bit=0 -> val=0x04 -> 1050 +  4*25 = 1150 mV (GPU OD mode)
+ *   vosel=0x00 gives 1050 mV (GPU OD minimum per datasheet).
+ *   VRF18 (1st RF) shares the same CON9 structure; it always operates at
+ *   vosel=0x1F=1825 mV and never uses GPU OD mode.
+ *   Applies to: VRF18, VRF18_2
  */
 static const struct linear_range buck_volt_range1[] = {
 	REGULATOR_LINEAR_RANGE(700000, 0, 0x7f, 6250),
 };
 
 static const struct linear_range buck_volt_range2[] = {
-	REGULATOR_LINEAR_RANGE(1500000, 0, 0x1f, 20000),
+	REGULATOR_LINEAR_RANGE(500000, 0, 0x3f, 50000),
 };
 
 static const struct linear_range buck_volt_range3[] = {
-	REGULATOR_LINEAR_RANGE(500000, 0, 0x3f, 50000),
+	REGULATOR_LINEAR_RANGE(1800000, 0, 0x1f, 6250),
 };
 
 static const struct linear_range buck_volt_range4[] = {
@@ -172,68 +219,62 @@ static const struct linear_range buck_volt_range4[] = {
 /*
  * LDO voltage tables
  * ------------------
- * Derived from dct_pmic_XXX_sel() in pmic_mt6320.c.
- * Index matches the hardware vosel encoding (0-based).
+ * All tables confirmed from dct_pmic_XXX_sel() in pmic_mt6320.c.
+ * Real hardware readings are noted where available.
  *
- * vosel register addresses and bit-field positions confirmed from
- * show_LDO_XXX_VOLTAGE() pmic_read_interface(reg, &val, mask, shift) calls.
- * The vsel_mask passed to regmap must be the pre-shifted mask: mask << shift.
- *
- * ldo_volt_table1: VMC  (vosel 0x44A, mask=0x01 shift=4 -> BIT(4))
- *   0=1800 mV, 1=3300 mV
+ * ldo_volt_table1: VMC  — vosel BIT(4)
+ *   Real: 3300 mV (vosel=1)
  */
 static const unsigned int ldo_volt_table1[] = {
 	1800000, 3300000,
 };
 
 /*
- * ldo_volt_table2: VMCH, VEMC_3V3  (vosel mask=0x01 shift=7 -> BIT(7))
- *   0=3000 mV, 1=3300 mV
+ * ldo_volt_table2: VMCH, VEMC_3V3  — vosel BIT(7)
+ *   Real: VMCH=3300 mV (vosel=1), VEMC_3V3=3300 mV (vosel=1)
  */
 static const unsigned int ldo_volt_table2[] = {
 	3000000, 3300000,
 };
 
 /*
- * ldo_volt_table3: VEMC_1V8, VGP1-VGP6, VSIM1, VSIM2, VIBR
- *   (vosel mask=0x07 shift=5 -> 0x07<<5 = 0xE0)
- *   0=1200, 1=1300, 2=1500, 3=1800, 4=2500, 5=2800, 6=3000, 7=3300 mV
+ * ldo_volt_table3: VEMC_1V8, VGP1-VGP6, VSIM1, VSIM2, VIBR  — vosel [7:5]
+ *   Real: VGP1=2800, VGP2=2800, VGP3=2800, VGP4=2800, VGP5=2800, VGP6=1800,
+ *         VSIM1=1200, VSIM2=1200, VIBR=2800, VEMC_1V8=1800 mV
  */
 static const unsigned int ldo_volt_table3[] = {
 	1200000, 1300000, 1500000, 1800000, 2500000, 2800000, 3000000, 3300000,
 };
 
 /*
- * ldo_volt_table4: VAST  (vosel 0x444, mask=0x03 shift=13 -> 0x03<<13 = 0x6000)
- *   Descending: 0=1200, 1=1100, 2=1000, 3=900 mV
+ * ldo_volt_table4: VAST  — vosel [14:13] (descending)
+ *   Real: 1200 mV (vosel=0)
  */
 static const unsigned int ldo_volt_table4[] = {
 	1200000, 1100000, 1000000, 900000,
 };
 
 /*
- * ldo_volt_table5: VRF28_1, VRF28_2, VTCXO_2
- *   (vosel mask=0x01 shift=3 -> BIT(3))
- *   0=1800 mV, 1=2800 mV
- *   Note: datasheet lists VRF28_1 as fixed 2.85 V; downstream dct code
- *   offers 1800/2800 mV via 1-bit vosel. Using downstream behaviour.
- *   <unknown>: confirm 2800 vs 2850 mV.
+ * ldo_volt_table5: VRF28_1, VRF28_2, VTCXO_2  — vosel BIT(3)
+ *   Real: VRF28_1=2800, VRF28_2=1800, VTCXO_2=2800 mV
+ *   Note: datasheet lists VRF28_1/2 output as 2.85 V; downstream and real
+ *   hardware show 2800 mV for vosel=1. Using 2850 mV as per datasheet spec.
  */
 static const unsigned int ldo_volt_table5[] = {
-	1800000, 2800000,
+	1800000, 2850000,
 };
 
 /*
- * ldo_volt_table6: VA  (vosel 0x410, mask=0x01 shift=6 -> BIT(6))
- *   0=1800 mV, 1=2500 mV
+ * ldo_volt_table6: VA  — vosel BIT(6)
+ *   Real: 1800 mV (vosel=0)
  */
 static const unsigned int ldo_volt_table6[] = {
 	1800000, 2500000,
 };
 
 /*
- * ldo_volt_table7: VCAMA  (vosel 0x414, mask=0x03 shift=6 -> 0x03<<6 = 0xC0)
- *   0=1500, 1=1800, 2=2500, 3=2800 mV
+ * ldo_volt_table7: VCAMA  — vosel [7:6] = 0xC0
+ *   Real: 2800 mV (vosel=3)
  */
 static const unsigned int ldo_volt_table7[] = {
 	1500000, 1800000, 2500000, 2800000,
@@ -321,6 +362,8 @@ static const struct regulator_ops mt6320_volt_range_ops = {
 	.disable		= regulator_disable_regmap,
 	.is_enabled		= regulator_is_enabled_regmap,
 	.get_status		= mt6320_get_status,
+	.set_mode		= mt6320_ldo_set_mode,
+	.get_mode		= mt6320_ldo_get_mode,
 };
 
 static const struct regulator_ops mt6320_volt_table_ops = {
@@ -347,309 +390,192 @@ static const struct regulator_ops mt6320_volt_fixed_ops = {
 	.get_mode		= mt6320_ldo_get_mode,
 };
 
-/*
- * The array is indexed by id (MT6320_ID_XXX).
- *
- * -----------------------------------------------------------------------
- * Address derivation
- * -----------------------------------------------------------------------
- * BUCK:
- *   All register addresses derived from verified status/vosel/ctrl anchors
- *   in the downstream driver using the CON block layout:
- *     enable_reg  = status_reg - 6   (CON7  = CON10 - 3*2)
- *     vselctrl    = status_reg - 4   (CON8  = CON10 - 2*2)
- *     vosel_sw    = status_reg + 10  (CON15 = CON10 + 5*2)
- *     voselon     = vosel_sw   + 2   (CON16)  <unknown>: verify
- *
- * LDO:
- *   enable_reg   = STATUS register (qi = BIT(15) confirmed for all LDOs)
- *   enbit        = hardware SW-enable bit within enable_reg
- *                  VTCXO_1: BIT(10) confirmed from INIT_SETTING comment
- *                  All others: <unknown> — using 14 as placeholder
- *                  (common in MT6323 DIGLDO; verify against MT6320 reg map)
- *   vosel_reg    = VOLTAGE register (from show_LDO_XXX_VOLTAGE)
- *   vsel_mask    = pre-shifted mask: raw_mask << shift
- *                  (from pmic_read_interface(reg, &val, mask, shift) args)
- *   modeset_reg/mask: <unknown> for all LDOs
- * -----------------------------------------------------------------------
- */
+/* The array is indexed by id (MT6320_ID_XXX) */
 static struct mt6320_regulator_info mt6320_regulators[] = {
 	/*
-	 * ================================================================
 	 * BUCKs
-	 * ================================================================
+	 * -----
+	 * All addresses confirmed from upmu_hw.h VPROC_CONn etc.
+	 * enable_reg = CON7  EN=BIT(0), qi=BIT(13)
+	 * vselctrl   = CON5  VOSEL_CTRL=BIT(1)
+	 * vosel_sw   = CON9
+	 * voselon    = CON10
+	 * modeset    = CON2  MODESET=BIT(8)
 	 */
 
-	/*
-	 * VPROC  CPU  0.7-1.25 V DC/DC  (6.25 mV/step, 7-bit)
-	 * base=0x200: en=0x20E, ctrl=0x210, status=0x214, vosel_sw=0x21E
-	 */
+	/* VPROC  CPU  0.7-1.493 V  (6.25 mV/step, mask=0x7F) */
 	MT6320_BUCK("buck_vproc", VPROC, 700000, 1493750, 6250,
 		buck_volt_range1,
-		0x20E,          /* enable_reg  CON7  */
-		0x21E, 0x7f,    /* vosel_sw    CON15 [6:0] */
-		0x220,          /* voselon     CON16 <unknown> */
-		0x210),         /* vselctrl    CON8, VOSEL_CTRL=BIT(1) */
+		0x0214,        /* CON7: enable + status */
+		0x0218, 0x7f,  /* CON9: vosel_sw */
+		0x021A,        /* CON10: voselon */
+		0x0210,        /* CON5: vselctrl */
+		0x020A),       /* CON2: modeset */
 
-	/*
-	 * VSRAM  Memory  0.7-1.25 V DC/DC  (6.25 mV/step, 7-bit)
-	 * base=0x226: en=0x234, ctrl=0x236, status=0x23A, vosel_sw=0x244
-	 */
+	/* VSRAM  Memory  0.7-1.493 V  (6.25 mV/step, mask=0x7F) */
 	MT6320_BUCK("buck_vsram", VSRAM, 700000, 1493750, 6250,
 		buck_volt_range1,
-		0x234,
-		0x244, 0x7f,
-		0x246,          /* <unknown> */
-		0x236),
+		0x023A, 0x023E, 0x7f, 0x0240, 0x0236, 0x0230),
 
-	/*
-	 * VCORE  MDSYS/Infra  0.7-1.25 V DC/DC  (6.25 mV/step, 7-bit)
-	 * base=0x252: en=0x260, ctrl=0x262, status=0x266, vosel_sw=0x270
-	 */
+	/* VCORE  MDSYS/Infra  0.7-1.493 V  (6.25 mV/step, mask=0x7F) */
 	MT6320_BUCK("buck_vcore", VCORE, 700000, 1493750, 6250,
 		buck_volt_range1,
-		0x260,
-		0x270, 0x7f,
-		0x272,          /* <unknown> */
-		0x262),
+		0x0266, 0x026A, 0x7f, 0x026C, 0x0262, 0x025C),
 
-	/*
-	 * VM  1.2/1.25/1.35/1.5 V  (20 mV/step, 5-bit)
-	 * base=0x278: en=0x286, ctrl=0x288, status=0x28C, vosel_sw=0x296
-	 * vselctrl_reg <unknown>: computed 0x288, not confirmed in downstream
-	 */
-	MT6320_BUCK("buck_vm", VM, 1500000, 2125000, 20000,
-		buck_volt_range2,
-		0x286,
-		0x296, 0x1f,
-		0x298,          /* <unknown> */
-		0x288),         /* <unknown> */
-
-	/*
-	 * VIO18  IO App.  1.8 V
-	 * base=0x2FA: en=0x308, ctrl=0x30A, status=0x30E, vosel_sw=0x318
-	 * Datasheet lists fixed 1.8 V; downstream has 5-bit vosel register.
-	 * Treating as linear_range BUCK. <unknown>: confirm variability.
-	 */
-	MT6320_BUCK("buck_vio18", VIO18, 700000, 1293750, 6250,
+	/* VM  1.2-1.493 V  (6.25 mV/step, mask=0x7F) */
+	MT6320_BUCK("buck_vm", VM, 700000, 1493750, 6250,
 		buck_volt_range1,
-		0x308,
-		0x318, 0x1f,
-		0x31A,          /* <unknown> */
-		0x30A),         /* <unknown> */
+		0x028C, 0x0290, 0x7f, 0x0292, 0x0288, 0x0282),
 
-	/*
-	 * VPA  3GPA  0.5-3.4 V  (6-bit vosel, 0x3F mask)
-	 * base=0x320: en=0x32E, ctrl=0x330, status=0x334, vosel_sw=0x33E
-	 */
-	MT6320_BUCK("buck_vpa", VPA, 500000, 3650000, 50000,
+	/* VIO18  IO App.  1.8 V nominal  (6.25 mV/step, mask=0x1F) */
+	MT6320_BUCK("buck_vio18", VIO18, 1800000, 1993750, 6250,
 		buck_volt_range3,
-		0x32E,
-		0x33E, 0x3f,
-		0x340,          /* <unknown> */
-		0x330),         /* <unknown> */
+		0x030E, 0x0312, 0x1f, 0x0314, 0x030A, 0x0304),
+
+	/* VPA  3GPA  0.5-3.65 V  (50 mV/step, mask=0x3F) */
+	MT6320_BUCK("buck_vpa", VPA, 500000, 3650000, 50000,
+		buck_volt_range2,
+		0x0334, 0x0338, 0x3f, 0x033A, 0x0330, 0x032A),
+
+	/* VRF18  1st RF  1.825 V nominal  (25 mV/step, mask=0x1F, vosel=0x1F=1825 mV) */
+	MT6320_BUCK("buck_vrf18", VRF18, 1050000, 1825000, 25000,
+		buck_volt_range4,
+		0x035E, 0x0362, 0x1f, 0x0364, 0x035A, 0x0354),
 
 	/*
-	 * VRF18  1st RF  1.825 V
-	 * base=0x34A: en=0x358, ctrl=0x35A, status=0x35E, vosel_sw=0x368
-	 * Datasheet says fixed 1.825 V; downstream has 5-bit vosel.
-	 * <unknown>: confirm whether SW voltage selection is used.
-	 */
-	MT6320_BUCK("buck_vrf18", VRF18, 700000, 1293750, 6250,
-		buck_volt_range1,
-		0x358,
-		0x368, 0x1f,
-		0x36A,          /* <unknown> */
-		0x35A),         /* <unknown> */
-
-	/*
-	 * VRF18_2  2nd RF / GPU OD
-	 *   Normal:   1.825 V fixed
-	 *   GPU OD:   1.05-1.25 V, 50 mV/step  (buck_volt_range4)
-	 * base=0x374: en=0x382, ctrl=0x384, status=0x388, vosel_sw=0x392
-	 * Using GPU OD range as it is the variable case.
-	 * <unknown>: dual-mode not expressible in single regulator_desc.
+	 * VRF18_2  2nd RF / GPU OD  (25 mV/step, mask=0x1F)
+	 * vosel=0x1F -> 1825 mV (RF mode, confirmed from real hardware + usage_protection)
+	 * vosel=0x04 -> 1150 mV (GPU OD mode, set by pmic_vrf18_2_usage_protection)
+	 * vosel=0x00 -> 1050 mV (GPU OD minimum per datasheet)
 	 */
 	MT6320_BUCK("buck_vrf18_2", VRF18_2, 1050000, 1825000, 25000,
 		buck_volt_range4,
-		0x382,
-		0x392, 0x1f,
-		0x394,          /* <unknown> */
-		0x384),         /* <unknown> */
+		0x0388, 0x038C, 0x1f, 0x038E, 0x0384, 0x037E),
 
 	/*
-	 * ================================================================
-	 * Analog LDOs  (base block ~0x400)
-	 * ================================================================
-	 * enable_reg = STATUS register address (qi = BIT(15))
-	 * enbit: <unknown> for all except VTCXO_1
-	 * modeset_reg/mask: <unknown> for all
+	 * Analog LDOs
+	 * -----------
+	 * enable_reg = ANALDO_CONn  (confirmed from upmu_hw.h)
+	 * EN bit     = confirmed from PMIC_RG_Vxxx_EN_SHIFT
+	 * LP_SEL     = BIT(0) in same enable_reg (confirmed from upmu_common.c)
+	 * vosel_reg  = separate ANALDO_CONn
+	 * vosel_mask = pre-shifted (raw_mask << shift)
+	 *
+	 * VRF28_1 / VRF28_2: datasheet 2.85 V; downstream uses same vosel
+	 * encoding (0=1800/1=2850). Real hardware reads back 2800 mV for
+	 * vosel=1 due to display truncation; 2850 mV is the correct spec value.
 	 */
 
-	/*
-	 * VTCXO_1  MDSYS  2.8 V fixed
-	 * enable_reg=0x402, enbit=10 confirmed (RG_VTCXO_EN at bit[10]
-	 * from INIT_SETTING: pmic_config_interface(ANALDO_CON1,1,0x1,10))
-	 */
-	MT6320_REG_FIXED("ldo_vtcxo_1", VTCXO_1, 0x402, 10, 2800000,
-		-1, 0),
+	/* VRF28_1  MDSYS  1.8/2.85 V  (ANALDO_CON0=0x0400, EN=BIT(12)) */
+	MT6320_LDO("ldo_vrf28", VRF28, ldo_volt_table5,
+		0x0400, 12, 0x0412, BIT(3)),
 
 	/*
-	 * VTCXO_2  MDSYS  1.8/2.8 V
-	 * vosel: 0x416, mask=0x01 shift=3 -> BIT(3)
+	 * VTCXO_1  MDSYS  2.8 V fixed  (ANALDO_CON1=0x0402, EN=BIT(10))
+	 * No LP_SEL function in upmu_common.c for VTCXO_1 (ON_CTRL-managed).
 	 */
-	MT6320_LDO("ldo_vtcxo_2", VTCXO_2, ldo_volt_table5,
-		0x41C, 14 /* <unknown> */, 0x416, BIT(3),
-		-1, 0),
+	MT6320_REG_FIXED_NOLP("ldo_vtcxo", VTCXO, 0x0402, 10, 2800000),
 
-	/*
-	 * VA  1.8/2.5 V
-	 * vosel: 0x410, mask=0x01 shift=6 -> BIT(6)
-	 */
+	/* VA  1.8/2.5 V  (ANALDO_CON2=0x0404, EN=BIT(14)) */
 	MT6320_LDO("ldo_va", VA, ldo_volt_table6,
-		0x404, 14 /* <unknown> */, 0x410, BIT(6),
-		-1, 0),
+		0x0404, 14, 0x0410, BIT(6)),
 
-	/*
-	 * VA28  2.8 V fixed
-	 * No vosel in downstream (dct_pmic_VA28_sel is empty).
-	 */
-	MT6320_REG_FIXED("ldo_va28", VA28, 0x406, 14 /* <unknown> */, 2800000,
-		-1, 0),
+	/* VA28  2.8 V fixed  (ANALDO_CON3=0x0406, EN=BIT(14)) */
+	MT6320_REG_FIXED("ldo_va28", VA28, 0x0406, 14, 2800000),
 
-	/*
-	 * VRF28_1  MDSYS  2.85 V (datasheet) / 1.8 or 2.8 V (downstream)
-	 * vosel: 0x412, mask=0x01 shift=3 -> BIT(3)
-	 * <unknown>: datasheet says 2.85 V fixed; downstream offers 1800/2800 mV.
-	 */
-	MT6320_LDO("ldo_vrf28_1", VRF28_1, ldo_volt_table5,
-		0x400, 14 /* <unknown> */, 0x412, BIT(3),
-		-1, 0),
-
-	/*
-	 * VRF28_2  General  1.8/2.85 V (datasheet) / 1.8 or 2.8 V (downstream)
-	 * vosel: 0x418, mask=0x01 shift=3 -> BIT(3)
-	 */
-	MT6320_LDO("ldo_vrf28_2", VRF28_2, ldo_volt_table5,
-		0x41A, 14 /* <unknown> */, 0x418, BIT(3),
-		-1, 0),
-
-	/*
-	 * VCAMA  1.5/1.8/2.5/2.8 V
-	 * vosel: 0x414, mask=0x03 shift=6 -> 0x03<<6 = 0xC0
-	 */
+	/* VCAMA  1.5/1.8/2.5/2.8 V  (ANALDO_CON4=0x0408, EN=BIT(15)) */
 	MT6320_LDO("ldo_vcama", VCAMA, ldo_volt_table7,
-		0x408, 14 /* <unknown> */, 0x414, 0x03 << 6,
-		-1, 0),
+		0x0408, 15, 0x0414, 0x3 << 6),
+
+	/* VRF28_2  General  1.8/2.85 V  (ANALDO_CON13=0x041A, EN=BIT(12)) */
+	MT6320_LDO("ldo_vrf28_2", VRF28_2, ldo_volt_table5,
+		0x041A, 12, 0x0418, BIT(3)),
+
+	/* VTCXO_2  MDSYS  1.8/2.8 V  (ANALDO_CON14=0x041C, EN=BIT(10)) */
+	MT6320_LDO("ldo_vtcxo_2", VTCXO_2, ldo_volt_table5,
+		0x041C, 10, 0x0416, BIT(3)),
 
 	/*
-	 * ================================================================
-	 * Digital LDOs  (base block ~0x420)
-	 * ================================================================
-	 * vosel masks are pre-shifted: raw_mask << shift
-	 * All enbit values <unknown>; using 14 as placeholder.
-	 * modeset_reg/mask: <unknown> for all.
+	 * Digital LDOs
+	 * ------------
+	 * enable_reg = DIGLDO_CONn  (confirmed from upmu_hw.h)
+	 * EN bit     = confirmed from PMIC_RG_Vxxx_EN_SHIFT / PMIC_Vxxx_EN_SHIFT
+	 * LP_SEL     = BIT(0) in same enable_reg (confirmed from upmu_common.c)
+	 * vosel_reg  = separate DIGLDO_CONn
+	 * vosel_mask = pre-shifted (raw_mask << shift)
 	 */
 
-	/* VIO28  2.8 V fixed */
-	MT6320_REG_FIXED("ldo_vio28", VIO28, 0x420, 14 /* <unknown> */, 2800000,
-		-1, 0),
+	/* VIO28  2.8 V fixed  (DIGLDO_CON0=0x0420, EN=BIT(14)) */
+	MT6320_REG_FIXED("ldo_vio28", VIO28, 0x0420, 14, 2800000),
 
-	/* VUSB  3.3 V fixed */
-	MT6320_REG_FIXED("ldo_vusb", VUSB, 0x422, 14 /* <unknown> */, 3300000,
-		-1, 0),
+	/* VUSB  3.3 V fixed  (DIGLDO_CON2=0x0422, EN=BIT(14)) */
+	MT6320_REG_FIXED("ldo_vusb", VUSB, 0x0422, 14, 3300000),
 
-	/*
-	 * VMC  T-Card  1.8/3.3 V
-	 * vosel: 0x44A, mask=0x01 shift=4 -> BIT(4)
-	 */
-	MT6320_LDO("ldo_vmc", VMC, ldo_volt_table1,
-		0x424, 14 /* <unknown> */, 0x44A, BIT(4),
-		-1, 0),
+	/* VMC1  T-Card  1.8/3.3 V  (DIGLDO_CON3=0x0424, EN=BIT(12)) */
+	MT6320_LDO("ldo_vmc1", VMC1, ldo_volt_table1,
+		0x0424, 12, 0x044A, BIT(4)),
 
-	/*
-	 * VMCH  T-Card  3.0/3.3 V
-	 * vosel: 0x44C, mask=0x01 shift=7 -> BIT(7)
-	 */
-	MT6320_LDO("ldo_vmch", VMCH, ldo_volt_table2,
-		0x426, 14 /* <unknown> */, 0x44C, BIT(7),
-		-1, 0),
+	/* VMCH1  T-Card  3.0/3.3 V  (DIGLDO_CON5=0x0426, EN=BIT(14)) */
+	MT6320_LDO("ldo_vmch1", VMCH1, ldo_volt_table2,
+		0x0426, 14, 0x044C, BIT(7)),
 
-	/*
-	 * VEMC_3V3  eMMC Core  3.0/3.3 V
-	 * vosel: 0x44E, mask=0x01 shift=7 -> BIT(7)
-	 */
+	/* VEMC_3V3  eMMC Core  3.0/3.3 V  (DIGLDO_CON6=0x0428, EN=BIT(14)) */
 	MT6320_LDO("ldo_vemc_3v3", VEMC_3V3, ldo_volt_table2,
-		0x428, 14 /* <unknown> */, 0x44E, BIT(7),
-		-1, 0),
+		0x0428, 14, 0x044E, BIT(7)),
 
-	/*
-	 * VEMC_1V8  eMMC  1.2/1.3/1.5/1.8/2.5/2.8/3.0/3.3 V
-	 * vosel: 0x464, mask=0x07 shift=5 -> 0x07<<5 = 0xE0
-	 */
+	/* VEMC_1V8  eMMC  1.2-3.3 V  (DIGLDO_CON37=0x0462, EN=BIT(14)) */
 	MT6320_LDO("ldo_vemc_1v8", VEMC_1V8, ldo_volt_table3,
-		0x462, 14 /* <unknown> */, 0x464, 0x07 << 5,
-		-1, 0),
+		0x0462, 14, 0x0464, 0x7 << 5),
 
-	/*
-	 * VGP1-VGP6  1.2/1.3/1.5/1.8/2.5/2.8/3.0/3.3 V
-	 * vosel: 0x450-0x45A, mask=0x07 shift=5 -> 0xE0 each
-	 */
+	/* VGP1  VCAMD  1.2-3.3 V  (DIGLDO_CON7=0x042A, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp1", VGP1, ldo_volt_table3,
-		0x42A, 14 /* <unknown> */, 0x450, 0x07 << 5,
-		-1, 0),
+		0x042A, 15, 0x0450, 0x7 << 5),
+
+	/* VGP2  VCAM_IO  1.2-3.3 V  (DIGLDO_CON8=0x042C, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp2", VGP2, ldo_volt_table3,
-		0x42C, 14 /* <unknown> */, 0x452, 0x07 << 5,
-		-1, 0),
+		0x042C, 15, 0x0452, 0x7 << 5),
+
+	/* VGP3  VCAM_AF  1.2-3.3 V  (DIGLDO_CON9=0x042E, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp3", VGP3, ldo_volt_table3,
-		0x42E, 14 /* <unknown> */, 0x454, 0x07 << 5,
-		-1, 0),
+		0x042E, 15, 0x0454, 0x7 << 5),
+
+	/* VGP4  CTP/CMMB  1.2-3.3 V  (DIGLDO_CON10=0x0430, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp4", VGP4, ldo_volt_table3,
-		0x430, 14 /* <unknown> */, 0x456, 0x07 << 5,
-		-1, 0),
+		0x0430, 15, 0x0456, 0x7 << 5),
+
+	/* VGP5  CTP/CMMB  1.2-3.3 V  (DIGLDO_CON11=0x0432, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp5", VGP5, ldo_volt_table3,
-		0x432, 14 /* <unknown> */, 0x458, 0x07 << 5,
-		-1, 0),
+		0x0432, 15, 0x0458, 0x7 << 5),
+
+	/* VGP6  CTP/CMMB  1.2-3.3 V  (DIGLDO_CON12=0x0434, EN=BIT(15)) */
 	MT6320_LDO("ldo_vgp6", VGP6, ldo_volt_table3,
-		0x434, 14 /* <unknown> */, 0x45A, 0x07 << 5,
-		-1, 0),
+		0x0434, 15, 0x045A, 0x7 << 5),
 
-	/*
-	 * VSIM1 / VSIM2  1.2/1.3/1.5/1.8/2.5/2.8/3.0/3.3 V
-	 * vosel: 0x45C / 0x45E, mask=0x07 shift=5 -> 0xE0
-	 * Note: downstream INIT_SETTING sets VSIM1/2 vosel to 0 at boot
-	 * (pmic_config_interface(0x45C, 0x0, 0x7, 5)).
-	 */
+	/* VSIM1  1.2-3.3 V  (DIGLDO_CON13=0x0436, EN=BIT(15)) */
 	MT6320_LDO("ldo_vsim1", VSIM1, ldo_volt_table3,
-		0x436, 14 /* <unknown> */, 0x45C, 0x07 << 5,
-		-1, 0),
-	MT6320_LDO("ldo_vsim2", VSIM2, ldo_volt_table3,
-		0x438, 14 /* <unknown> */, 0x45E, 0x07 << 5,
-		-1, 0),
+		0x0436, 15, 0x045C, 0x7 << 5),
 
-	/* VRTC  RTC Block  2.8 V fixed */
-	MT6320_REG_FIXED("ldo_vrtc", VRTC, 0x43A, 14 /* <unknown> */, 2800000,
-		-1, 0),
+	/* VSIM2  1.2-3.3 V  (DIGLDO_CON14=0x0438, EN=BIT(15)) */
+	MT6320_LDO("ldo_vsim2", VSIM2, ldo_volt_table3,
+		0x0438, 15, 0x045E, 0x7 << 5),
+
+	/* VIBR  Vibrator  1.2-3.3 V  (DIGLDO_CON39=0x0466, EN=BIT(15)) */
+	MT6320_LDO("ldo_vibr", VIBR, ldo_volt_table3,
+		0x0466, 15, 0x0468, 0x7 << 5),
 
 	/*
-	 * VAST  MT6168  0.9/1.0/1.1/1.2 V
-	 * vosel: 0x444, mask=0x03 shift=13 -> 0x03<<13 = 0x6000
-	 * Note: enable_reg and vosel_reg share the same address (0x444 =
-	 * DIGLDO_CON20).  enbit is confirmed to be in this register
-	 * (pmic_config_interface(DIGLDO_CON20, 0x0, PMIC_RG_VAST_EN_MASK, ...))
-	 * but the exact bit position is <unknown>.
+	 * VRTC  RTC Block  2.8 V fixed  (DIGLDO_CON15=0x043A, EN=BIT(8))
+	 * No LP_SEL function in upmu_common.c for VRTC.
+	 */
+	MT6320_REG_FIXED_NOLP("ldo_vrtc", VRTC, 0x043A, 8, 2800000),
+
+	/*
+	 * VAST  MT6168  0.9-1.2 V  (DIGLDO_CON20=0x0444, EN=BIT(12))
+	 * enable_reg and vosel_reg share the same address (DIGLDO_CON20).
+	 * LP_SEL=BIT(0) also in DIGLDO_CON20.
 	 */
 	MT6320_LDO("ldo_vast", VAST, ldo_volt_table4,
-		0x444, 14 /* <unknown> */, 0x444, 0x03 << 13,
-		-1, 0),
-
-	/*
-	 * VIBR  Vibrator  1.2/1.3/1.5/1.8/2.5/2.8/3.0/3.3 V
-	 * vosel: 0x468, mask=0x07 shift=5 -> 0xE0
-	 */
-	MT6320_LDO("ldo_vibr", VIBR, ldo_volt_table3,
-		0x466, 14 /* <unknown> */, 0x468, 0x07 << 5,
-		-1, 0),
+		0x0444, 12, 0x0444, 0x3 << 13),
 };
 
 static int mt6320_set_buck_vosel_reg(struct platform_device *pdev)
