@@ -410,7 +410,8 @@
 			status = "disabled";
 		};
 
-		/* USB 1.1 */
+		/* USB 1.1 - MUSBFSH*/
+		/*
 		usb1: usb@11210000 {
 			compatible = "mediatek,mt6589-musb",
 				     "mediatek,mtk-musb";
@@ -427,6 +428,7 @@
 			reset-names = "hrst";
 			status = "disabled";
 		};
+		*/
 
 		u2phy0: t-phy@11220000 {
 			compatible = "mediatek,mt6589-tphy",
@@ -445,6 +447,7 @@
 				status = "okay";
 			};
 
+			/*
 			usb_port1: usb-phy@11220900 {
 				reg = <0x11220900 0x0100>;
 				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
@@ -452,6 +455,7 @@
 				#phy-cells = <1>;
 				status = "disabled";
 			};
+			*/
 		};
 
 		mmc0: mmc@11230000 {
