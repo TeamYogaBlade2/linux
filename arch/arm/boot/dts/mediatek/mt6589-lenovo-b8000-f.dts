@@ -73,8 +73,7 @@
 &pio {
 	usb_pins: usb-pins {
 		pins_iddig {
-			pinmux = <MT6589_GPIO57__FUNC_GPIO57>;
-			input-enable;
+			pinmux = <MT6589_GPIO57__FUNC_IDDIG>;
 			bias-pull-up;
 		};
 
@@ -92,16 +91,13 @@
 
 &usb0 {
 	status = "okay";
-	dr_mode = "peripheral";
-/*
 	usb-role-switch;
 
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
-		id-gpios = <&pio 57 GPIO_ACTIVE_LOW>;
+		id-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb_pins>;
 	};
-*/
 };
