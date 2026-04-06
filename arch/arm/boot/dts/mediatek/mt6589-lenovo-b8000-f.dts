@@ -91,12 +91,13 @@
 
 &usb0 {
 	status = "okay";
+	dr_mode = "otg";
 	usb-role-switch;
 
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
-		id-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
+		id-gpios = <&pio 57 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb_pins>;
 	};
