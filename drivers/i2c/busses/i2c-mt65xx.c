@@ -379,6 +379,21 @@ static const struct mtk_i2c_compatible mt2712_compat = {
 	.max_dma_support = 33,
 };
 
+static const struct mtk_i2c_compatible mt6572_compat = {
+	.quirks = &mt6577_i2c_quirks,
+	.regs = mt_i2c_regs_v1,
+	.pmic_i2c = 0,
+	.dcm = 0,
+	.auto_restart = 0,
+	.aux_len_reg = 1,
+	.timing_adjust = 0,
+	.dma_sync = 0,
+	.ltiming_adjust = 0,
+	.apdma_sync = 0,
+	.dma_separate_rx = 1,
+	.max_dma_support = 32,
+};
+
 static const struct mtk_i2c_compatible mt6577_compat = {
 	.quirks = &mt6577_i2c_quirks,
 	.regs = mt_i2c_regs_v1,
@@ -528,6 +543,7 @@ static const struct mtk_i2c_compatible mt8192_compat = {
 
 static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt2712-i2c", .data = &mt2712_compat },
+	{ .compatible = "mediatek,mt6572-i2c", .data = &mt6572_compat },
 	{ .compatible = "mediatek,mt6577-i2c", .data = &mt6577_compat },
 	{ .compatible = "mediatek,mt6589-i2c", .data = &mt6589_compat },
 	{ .compatible = "mediatek,mt7622-i2c", .data = &mt7622_compat },
