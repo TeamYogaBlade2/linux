@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
@@ -187,8 +187,11 @@ struct mt6320_regulator_info {
  *   VPA: vosel=0 -> 500 mV ✓ (real: 500 mV = minimum)
  *   Applies to: VPA
  *
- * buck_volt_range3: 1800 mV, 6.25 mV/step, 5-bit (mask=0x1F)
- *   VIO18: real reading=1800 mV. vosel=0 -> 1800 mV ✓ (used as fixed)
+ * buck_volt_range3: 1500 mV, 20 mV/step, 5-bit (mask=0x1F)
+ *   Confirmed from show_BUCK_VIO18_VOLTAGE() in pmic_mt6320.c:
+ *     ret_value = 1500 + (reg_val * 20)
+ *   Cross-check: real reading=1800 mV -> reg_val=(1800-1500)/20=15=0x0F ✓
+ *   Range: 1500 mV (vosel=0x00) to 2120 mV (vosel=0x1F)
  *   Applies to: VIO18
  *
  * buck_volt_range4: 1050 mV, 25 mV/step, 5-bit (mask=0x1F)
@@ -209,7 +212,7 @@ static const struct linear_range buck_volt_range2[] = {
 };
 
 static const struct linear_range buck_volt_range3[] = {
-	REGULATOR_LINEAR_RANGE(1800000, 0, 0x1f, 6250),
+	REGULATOR_LINEAR_RANGE(1500000, 0, 0x1f, 20000),
 };
 
 static const struct linear_range buck_volt_range4[] = {
@@ -427,8 +430,8 @@ static struct mt6320_regulator_info mt6320_regulators[] = {
 		buck_volt_range1,
 		0x028C, 0x0290, 0x7f, 0x0292, 0x0288, 0x0282),
 
-	/* VIO18  IO App.  1.8 V nominal  (6.25 mV/step, mask=0x1F) */
-	MT6320_BUCK("buck_vio18", VIO18, 1800000, 1993750, 6250,
+	/* VIO18  IO App.  1.5-2.12 V  (20 mV/step, mask=0x1F, real: vosel=0x0F=1800 mV) */
+	MT6320_BUCK("buck_vio18", VIO18, 1500000, 2120000, 20000,
 		buck_volt_range3,
 		0x030E, 0x0312, 0x1f, 0x0314, 0x030A, 0x0304),
 
