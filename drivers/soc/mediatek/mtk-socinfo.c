@@ -21,8 +21,19 @@
 	.soc_name = _soc_name,									\
 	.segment_name = _segment_name,								\
 	.marketing_name = _marketing_name,							\
-	.cell_data = {_cell_data1, _cell_data2}							\
+	.cell_data = {_cell_data1, _cell_data2},						\
+	.cell_mask = {0xFFFFFFFF, 0xFFFFFFFF}							\
 }
+
+#define MTK_SOCINFO_ENTRY_COMPAT(_soc_name, _segment_name, _marketing_name, \
+				 _cell_data, _cell_mask, _compat)           \
+{                                                                           \
+	.soc_name = _soc_name, .segment_name = _segment_name,               \
+	.marketing_name = _marketing_name, .dt_compat = _compat,            \
+	.cell_data = {_cell_data, CELL_NOT_USED},                           \
+	.cell_mask = {_cell_mask, 0xFFFFFFFF}                               \
+}
+
 #define CELL_NOT_USED (0xFFFFFFFF)
 #define MAX_CELLS (2)
 
@@ -37,12 +48,25 @@ struct socinfo_data {
 	char *soc_name;
 	char *segment_name;
 	char *marketing_name;
+	char *dt_compat;
 	u32 cell_data[MAX_CELLS];
+	u32 cell_mask[MAX_CELLS];
 };
 
 static const char *cell_names[MAX_CELLS] = {"socinfo-data1", "socinfo-data2"};
 
 static struct socinfo_data socinfo_data_table[] = {
+	/* MT6572M has PTP level set to 3. */
+	MTK_SOCINFO_ENTRY_COMPAT("MT6572", "MT6572M", "MT6572M",
+	                         0x00000300, 0x00000300, "mediatek,mt6572"),
+	/* MT6572A has PTP level set to 2. */
+	MTK_SOCINFO_ENTRY_COMPAT("MT6572", "MT6572A", "MT6572A",
+	                         0x00000200, 0x00000300, "mediatek,mt6572"),
+	/* MT6572W has PTP level set to 1 or 0. */
+	MTK_SOCINFO_ENTRY_COMPAT("MT6572", "MT6572W", "MT6572W",
+	                         0x00000100, 0x00000300, "mediatek,mt6572"),
+	MTK_SOCINFO_ENTRY_COMPAT("MT6572", "MT6572W", "MT6572W",
+	                         0x00000000, 0x00000300, "mediatek,mt6572"),
 	MTK_SOCINFO_ENTRY("MT8173", "MT8173V/AC", "MT8173", 0x6CA20004, 0x10000000),
 	MTK_SOCINFO_ENTRY("MT8183", "MT8183V/AZA", "Kompanio 500", 0x00010043, 0x00000840),
 	MTK_SOCINFO_ENTRY("MT8183", "MT8183V/AZA", "Kompanio 500", 0x00010043, 0x00000940),
@@ -145,9 +169,14 @@ static int mtk_socinfo_get_socinfo_data(struct mtk_socinfo *mtk_socinfop)
 		return -ENOENT;
 
 	for (i = 0; i < ARRAY_SIZE(socinfo_data_table); i++) {
+		if (socinfo_data_table[i].dt_compat &&
+		    !of_machine_is_compatible(socinfo_data_table[i].dt_compat))
+			continue;
+
 		match_socinfo = true;
 		for (j = 0; j < num_cell_data; j++) {
-			if (cell_data[j] != socinfo_data_table[i].cell_data[j]) {
+			if ((cell_data[j] & socinfo_data_table[i].cell_mask[j]) !=
+			    socinfo_data_table[i].cell_data[j]) {
 				match_socinfo = false;
 				break;
 			}
