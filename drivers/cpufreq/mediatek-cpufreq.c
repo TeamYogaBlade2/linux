@@ -10,6 +10,7 @@
 #include <linux/cpumask.h>
 #include <linux/minmax.h>
 #include <linux/module.h>
+#include <linux/nvmem-consumer.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
@@ -57,6 +58,7 @@ struct mtk_cpu_dvfs_info {
 	const struct mtk_cpufreq_platform_data *soc_data;
 	int vtrack_max;
 	bool ccifreq_bound;
+	int opp_token;
 };
 
 static struct platform_device *cpufreq_pdev;
@@ -383,9 +385,15 @@ static struct device *of_get_cci(struct device *cpu_dev)
 
 static int mtk_cpu_dvfs_info_init(struct mtk_cpu_dvfs_info *info, int cpu)
 {
+	struct nvmem_cell *speedbin_cell;
+	struct dev_pm_opp_config config;
 	struct device *cpu_dev;
+	struct device_node *np;
 	struct dev_pm_opp *opp;
 	unsigned long rate;
+	u32 opp_hw_ver;
+	u8 *speedbin;
+	size_t len;
 	int ret;
 
 	cpu_dev = get_cpu_device(cpu);
@@ -450,6 +458,40 @@ static int mtk_cpu_dvfs_info_init(struct mtk_cpu_dvfs_info *info, int cpu)
 		}
 	}
 
+	np = dev_pm_opp_of_get_opp_desc_node(cpu_dev);
+	if (!np)
+		goto no_speedbin;
+
+	speedbin_cell = of_nvmem_cell_get(np, "speedbin");
+	of_node_put(np);
+
+	if (IS_ERR(speedbin_cell))
+		goto no_speedbin;
+
+	speedbin = nvmem_cell_read(speedbin_cell, &len);
+	nvmem_cell_put(speedbin_cell);
+
+	if (IS_ERR(speedbin)) {
+		ret = PTR_ERR(speedbin);
+		dev_err_probe(cpu_dev, ret, "cpu%d: failed to read speedbin\n", cpu);
+		goto out_disable_sram_reg;
+	}
+
+	/* Convert the raw value to a bitmask */
+	opp_hw_ver = BIT(*speedbin);
+	kfree(speedbin);
+
+	config.supported_hw = &opp_hw_ver;
+	config.supported_hw_count = 1;
+
+	info->opp_token = dev_pm_opp_set_config(cpu_dev, &config);
+	if (info->opp_token < 0) {
+		ret = info->opp_token;
+		dev_err_probe(cpu_dev, ret, "cpu%d: failed to set OPP config\n", cpu);
+		goto out_disable_sram_reg;
+	}
+
+no_speedbin:
 	/* Get OPP-sharing information from "operating-points-v2" bindings */
 	ret = dev_pm_opp_of_get_sharing_cpus(cpu_dev, &info->cpus);
 	if (ret) {
@@ -573,6 +615,10 @@ static void mtk_cpu_dvfs_info_release(struct mtk_cpu_dvfs_info *info)
 	clk_disable_unprepare(info->inter_clk);
 	clk_put(info->inter_clk);
 	dev_pm_opp_of_cpumask_remove_table(&info->cpus);
+
+	if (info->opp_token > 0)
+		dev_pm_opp_clear_config(info->opp_token);
+
 	dev_pm_opp_unregister_notifier(info->cpu_dev, &info->opp_nb);
 	if (info->soc_data->ccifreq_supported)
 		put_device(info->cci_dev);
