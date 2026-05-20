@@ -605,6 +605,16 @@ config DRM_PANEL_ORISETECH_OTM8009A
 	  Say Y here if you want to enable support for Orise Technology
 	  otm8009a 480x800 dsi 2dl panel.
 
+config DRM_PANEL_ORISETECH_OTM8018B
+	tristate "Orise Technology otm8018b 480x854 dsi panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	help
+	  Say Y here if you want to enable support for Orise Technology
+	  otm8018b 480x854 dsi panel as found on the Prestigio PAP5500 DUO
+	  (boyi variant). Bootloader runs the full Orise CMD2 init; this
+	  driver only does sleep-exit + display-on.
+
 config DRM_PANEL_OSD_OSD101T2587_53TS
 	tristate "OSD OSD101T2587-53TS DSI 1920x1200 video mode panel"
 	depends on OF
