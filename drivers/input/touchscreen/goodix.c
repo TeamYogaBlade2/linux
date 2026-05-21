@@ -109,6 +109,7 @@ static const struct goodix_chip_id goodix_chip_ids[] = {
 	{ .id = "9111", .data = &gt911_chip_data },
 	{ .id = "927", .data = &gt911_chip_data },
 	{ .id = "928", .data = &gt911_chip_data },
+	{ .id = "915", .data = &gt911_chip_data },
 
 	{ .id = "912", .data = &gt967_chip_data },
 	{ .id = "9147", .data = &gt967_chip_data },
@@ -184,13 +185,17 @@ int goodix_i2c_read(struct i2c_client *client, u16 reg, u8 *buf, int len)
 	msgs[1].len   = len;
 	msgs[1].buf   = buf;
 
-	ret = i2c_transfer(client->adapter, msgs, 2);
-	if (ret >= 0)
-		ret = (ret == ARRAY_SIZE(msgs) ? 0 : -EIO);
+	ret = i2c_transfer(client->adapter, &msgs[0], 1);
+	if (ret == 1) {
+		udelay(50);
+		ret = i2c_transfer(client->adapter, &msgs[1], 1);
+		if (ret == 1)
+			return 0;
+	}
+	ret = (ret < 0) ? ret : -EIO;
 
-	if (ret)
-		dev_err(&client->dev, "Error reading %d bytes from 0x%04x: %d\n",
-			len, reg, ret);
+	dev_err(&client->dev, "Error reading %d bytes from 0x%04x: %d\n",
+		len, reg, ret);
 	return ret;
 }
 
@@ -788,7 +793,7 @@ int goodix_reset_no_int_sync(struct goodix_ts_data *ts)
 	if (error)
 		goto error;
 
-	usleep_range(100, 2000);		/* T3: > 100us */
+	msleep(2);				/* T3: > 100us */
 
 	error = gpiod_direction_output(ts->gpiod_rst, 1);
 	if (error)
@@ -1172,6 +1177,11 @@ static int goodix_configure_dev(struct goodix_ts_data *ts)
 retry_read_config:
 	/* Read configuration and apply touchscreen parameters */
 	goodix_read_config(ts);
+
+	if (!ts->firmware_name && !strcmp(ts->id, "915")) {
+		ts->chip->calc_config_checksum(ts);
+		goodix_send_cfg(ts, ts->config, ts->chip->config_len);
+	}
 
 	/* Try overriding touchscreen parameters via device properties */
 	touchscreen_parse_properties(ts->input_dev, true, &ts->prop);
