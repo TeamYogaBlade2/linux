@@ -5338,7 +5338,7 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 		guard(srcu)(&desc->gdev->desc_srcu);
 		flags = READ_ONCE(desc->flags);
 		is_irq = test_bit(GPIOD_FLAG_USED_AS_IRQ, &flags);
-		if (is_irq || test_bit(GPIOD_FLAG_REQUESTED, &flags)) {
+		if (is_irq || test_bit(GPIOD_FLAG_REQUESTED, &flags) || true) {
 			gpiod_get_direction(desc);
 			is_out = test_bit(GPIOD_FLAG_IS_OUT, &flags);
 			value = gpio_chip_get_value(gc, desc);
