@@ -268,6 +268,7 @@ struct mtk_i2c_compatible {
 	unsigned char dma_sync: 1;
 	unsigned char ltiming_adjust: 1;
 	unsigned char apdma_sync: 1;
+	unsigned char dma_separate_rx: 1;
 	unsigned char max_dma_support;
 };
 
@@ -292,7 +293,10 @@ struct mtk_i2c {
 
 	/* set in i2c probe */
 	void __iomem *base;		/* i2c base addr */
-	void __iomem *pdmabase;		/* dma base address*/
+	void __iomem *pdmabase;		/* dma base address (TX channel) */
+	void __iomem *pdmabase_rx;	/* RX dma base; aliases pdmabase
+					 * when dma_separate_rx is 0
+					 */
 	struct clk_bulk_data clocks[I2C_MT65XX_CLK_MAX]; /* clocks for i2c */
 	bool have_pmic;			/* can use i2c pins from PMIC */
 	bool use_push_pull;		/* IO config push-pull mode */
@@ -1006,6 +1010,13 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 	u8 *dma_wr_buf = NULL;
 	dma_addr_t rpaddr = 0;
 	dma_addr_t wpaddr = 0;
+	void __iomem *rxbase = i2c->pdmabase_rx;
+	unsigned int rx_mem_off = i2c->dev_comp->dma_separate_rx ?
+				  OFFSET_TX_MEM_ADDR : OFFSET_RX_MEM_ADDR;
+	unsigned int rx_len_off = i2c->dev_comp->dma_separate_rx ?
+				  OFFSET_TX_LEN : OFFSET_RX_LEN;
+	unsigned int rx_4g_off = i2c->dev_comp->dma_separate_rx ?
+				 OFFSET_TX_4G_MODE : OFFSET_RX_4G_MODE;
 	int ret;
 
 	i2c->irq_stat = 0;
@@ -1084,8 +1095,8 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 
 	/* Prepare buffer data to start transfer */
 	if (i2c->op == I2C_MASTER_RD) {
-		writel(I2C_DMA_INT_FLAG_NONE, i2c->pdmabase + OFFSET_INT_FLAG);
-		writel(I2C_DMA_CON_RX | dma_sync, i2c->pdmabase + OFFSET_CON);
+		writel(I2C_DMA_INT_FLAG_NONE, rxbase + OFFSET_INT_FLAG);
+		writel(I2C_DMA_CON_RX | dma_sync, rxbase + OFFSET_CON);
 
 		dma_rd_buf = i2c_get_dma_safe_msg_buf(msgs, 1);
 		if (!dma_rd_buf)
@@ -1101,11 +1112,11 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 
 		if (i2c->dev_comp->max_dma_support > 32) {
 			reg_4g_mode = upper_32_bits(rpaddr);
-			writel(reg_4g_mode, i2c->pdmabase + OFFSET_RX_4G_MODE);
+			writel(reg_4g_mode, rxbase + rx_4g_off);
 		}
 
-		writel((u32)rpaddr, i2c->pdmabase + OFFSET_RX_MEM_ADDR);
-		writel(msgs->len, i2c->pdmabase + OFFSET_RX_LEN);
+		writel((u32)rpaddr, rxbase + rx_mem_off);
+		writel(msgs->len, rxbase + rx_len_off);
 	} else if (i2c->op == I2C_MASTER_WR) {
 		writel(I2C_DMA_INT_FLAG_NONE, i2c->pdmabase + OFFSET_INT_FLAG);
 		writel(I2C_DMA_CON_TX | dma_sync, i2c->pdmabase + OFFSET_CON);
@@ -1173,16 +1184,28 @@ static int mtk_i2c_do_transfer(struct mtk_i2c *i2c, struct i2c_msg *msgs,
 			writel(reg_4g_mode, i2c->pdmabase + OFFSET_TX_4G_MODE);
 
 			reg_4g_mode = upper_32_bits(rpaddr);
-			writel(reg_4g_mode, i2c->pdmabase + OFFSET_RX_4G_MODE);
+			writel(reg_4g_mode, rxbase + rx_4g_off);
 		}
 
 		writel((u32)wpaddr, i2c->pdmabase + OFFSET_TX_MEM_ADDR);
-		writel((u32)rpaddr, i2c->pdmabase + OFFSET_RX_MEM_ADDR);
+		writel((u32)rpaddr, rxbase + rx_mem_off);
 		writel(msgs->len, i2c->pdmabase + OFFSET_TX_LEN);
-		writel((msgs + 1)->len, i2c->pdmabase + OFFSET_RX_LEN);
+		writel((msgs + 1)->len, rxbase + rx_len_off);
+
+		if (i2c->dev_comp->dma_separate_rx)
+			writel(I2C_DMA_CON_RX, rxbase + OFFSET_CON);
 	}
 
-	writel(I2C_DMA_START_EN, i2c->pdmabase + OFFSET_EN);
+	if (i2c->op == I2C_MASTER_RD) {
+		writel(I2C_DMA_START_EN, rxbase + OFFSET_EN);
+	} else if (i2c->op == I2C_MASTER_WR) {
+		writel(I2C_DMA_START_EN, i2c->pdmabase + OFFSET_EN);
+	} else {
+		/* I2C_MASTER_WRRD */
+		writel(I2C_DMA_START_EN, i2c->pdmabase + OFFSET_EN);
+		if (i2c->dev_comp->dma_separate_rx)
+			writel(I2C_DMA_START_EN, rxbase + OFFSET_EN);
+	}
 
 	if (!i2c->auto_restart) {
 		start_reg = I2C_TRANSAC_START;
@@ -1396,6 +1419,15 @@ static int mtk_i2c_probe(struct platform_device *pdev)
 	init_completion(&i2c->msg_complete);
 
 	i2c->dev_comp = of_device_get_match_data(&pdev->dev);
+
+	if (i2c->dev_comp->dma_separate_rx) {
+		i2c->pdmabase_rx = devm_platform_ioremap_resource(pdev, 2);
+		if (IS_ERR(i2c->pdmabase_rx))
+			return PTR_ERR(i2c->pdmabase_rx);
+	} else {
+		i2c->pdmabase_rx = i2c->pdmabase;
+	}
+
 	i2c->adap.dev.of_node = pdev->dev.of_node;
 	i2c->dev = &pdev->dev;
 	i2c->adap.dev.parent = &pdev->dev;
