@@ -1,0 +1,373 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (c) 2026 Custom Firmware <gabin278@gmail.com>
+ */
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+#include "mt6572.dtsi"
+#include "mt6323.dtsi"
+
+/ {
+	model = "Prestigio MultiPhone PAP5500 DUO";
+	compatible = "prestigio,pap5500-duo", "mediatek,mt6572";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:921600n8";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x20000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		framebuffer_reserved: framebuffer@9f800000 {
+			reg = <0x9f800000 0x800000>;
+			no-map;
+		};
+	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <2000000>;
+		voltage-max-design-microvolt = <4200000>;
+		voltage-min-design-microvolt = <3300000>;
+		ocv-capacity-celsius = <25>;
+		ocv-capacity-table-0 = <4189000 100>, <4107000  95>,
+				       <4063000  90>, <4018000  85>,
+				       <3975000  80>, <3937000  75>,
+				       <3907000  70>, <3871000  65>,
+				       <3843000  60>, <3810000  55>,
+				       <3787000  50>, <3781000  45>,
+				       <3777000  40>, <3772000  35>,
+				       <3753000  30>, <3719000  25>,
+				       <3671000  20>, <3596000  15>,
+				       <3536000  10>, <3493000   5>,
+				       <3419000   0>;
+	};
+
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6323_vibr_reg>;
+		min-microvolt = <1200000>;
+		max-microvolt = <3300000>;
+	};
+
+	pwm-leds {
+		compatible = "pwm-leds";
+		pinctrl-0 = <&flash_pins>;
+		pinctrl-names = "default";
+
+		led-torch {
+			function = LED_FUNCTION_TORCH;
+			color = <LED_COLOR_ID_WHITE>;
+			pwms = <&pwm 0 31250>;
+			max-brightness = <255>;
+		};
+	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 1 31250>;
+		brightness-levels = <0 1023>;
+		num-interpolated-steps = <1023>;
+		default-brightness-level = <512>;
+		power-supply = <&mt6323_vsys_reg>;
+	};
+};
+
+&auxadc {
+	status = "okay";
+};
+
+&bls {
+	status = "okay";
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "boyi,otm8018b";
+		reg = <0>;
+		vcc-supply = <&mt6323_vgp1_reg>;
+		backlight = <&backlight>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+
+	port {
+		dsi_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
+};
+
+&cpu0 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&gpu {
+	/* Switch to WHPLL */
+	assigned-clocks = <&topckgen CLK_TOP_MFG_MUX_SEL>,
+			  <&topckgen CLK_TOP_MFG_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MFG_PRE_500M>,
+				 <&topckgen CLK_TOP_MFG_MUX_SEL>;
+
+	operating-points-v2 = <&gpu_opp_table>;
+	nvmem-cells = <&gpu_speedbin>;
+	nvmem-cell-names = "speedbin";
+};
+
+&i2c1 {
+	pinctrl-0 = <&i2c1_pins>;
+	pinctrl-names = "default";
+	clock-frequency = <400000>;
+	status = "okay";
+
+	touchscreen@5d {
+		status = "okay";
+		compatible = "goodix,gt911";
+		reg = <0x5d>;
+
+		interrupt-parent = <&pio>;
+		interrupts = <1 IRQ_TYPE_EDGE_RISING>;
+		irq-gpios = <&pio 129 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
+
+		AVDD28-supply = <&mt6323_vgp1_reg>;
+		VDDIO-supply = <&mt6323_vio18_reg>;
+
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <854>;
+		touchscreen-inverted-x;
+
+		pinctrl-0 = <&tpd_pins>;
+		pinctrl-names = "default";
+	};
+
+	light-sensor@39 {
+		compatible = "rohm,rpr0400";
+		reg = <0x39>;
+		vdd-supply = <&mt6323_vgp1_reg>;
+		vddio-supply = <&mt6323_vio18_reg>;
+	};
+
+	accelerometer@18 {
+		compatible = "bosch,bma222e";
+		reg = <0x18>;
+		vdd-supply = <&mt6323_vgp1_reg>;
+		vddio-supply = <&mt6323_vio18_reg>;
+	};
+};
+
+&mt6323_vgp1_reg {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6323_vgp2_reg {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&mt6323_vgp3_reg {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&mt6323keys {
+	power-off-time-sec = <5>;
+	home {
+		status = "disabled";
+	};
+};
+
+&mt6323_leds {
+	status = "okay";
+
+	led@3 {
+		reg = <3>;
+		function = LED_FUNCTION_KBD_BACKLIGHT;
+		color = <LED_COLOR_ID_WHITE>;
+		default-state = "off";
+	};
+};
+
+
+&pwm {
+	pinctrl-0 = <&bl_pwm_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&usb {
+	status = "okay";
+};
+
+&u2phy0 {
+	status = "okay";
+};
+
+&pmic {
+	pinctrl-0 = <&pmic_int_pins>;
+	pinctrl-names = "default";
+	interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+&pwrap {
+	assigned-clocks = <&topckgen CLK_TOP_PMIC_SPI_SEL>;
+	assigned-clock-parents = <&uart_clk>;
+};
+
+&mmc0 {
+	pinctrl-0 = <&mmc0_pins>;
+	pinctrl-1 = <&mmc0_pins>;
+	pinctrl-names = "default", "state_uhs";
+	bus-width = <8>;
+	max-frequency = <50000000>;
+	cap-mmc-highspeed;
+	vmmc-supply = <&mt6323_vemc3v3_reg>;
+	vqmmc-supply = <&mt6323_vio18_reg>;
+	non-removable;
+	status = "okay";
+};
+
+&mmc1 {
+	pinctrl-0 = <&mmc1_pins>;
+	pinctrl-1 = <&mmc1_pins>;
+	pinctrl-names = "default", "state_uhs";
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	vmmc-supply = <&mt6323_vmch_reg>;
+	vqmmc-supply = <&mt6323_vmc_reg>;
+	broken-cd;
+	status = "okay";
+};
+
+&keyboard {
+	status = "okay";
+	linux,keymap = <MATRIX_KEY(0, 1, KEY_VOLUMEUP)
+			MATRIX_KEY(0, 2, KEY_VOLUMEDOWN)>;
+	keypad,num-rows = <1>;
+	keypad,num-columns = <3>;
+	debounce-delay-ms = <32>;
+};
+
+&pio {
+	bl_pwm_pins: bl-pwm-pins {
+		pins {
+			pinmux = <MT6572_PIN_30_LPD16__FUNC_PWM2>;
+		};
+	};
+
+	pmic_int_pins: pmic-int-pins {
+		pins {
+			pinmux = <MT6572_PIN_7_PMIC_EINT__FUNC_PMIC_EINT>;
+			input-enable;
+			bias-pull-down;
+		};
+	};
+
+	mmc0_pins: mmc0-pins {
+		pins-clk {
+			pinmux = <MT6572_PIN_44_MC0_CK__FUNC_MC0_CK>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-cmd-dat {
+			pinmux = <MT6572_PIN_45_MC0_CMD__FUNC_MC0_CMD>,
+				 <MT6572_PIN_46_MC0_DAT0__FUNC_MC0_DAT0>,
+				 <MT6572_PIN_47_MC0_DAT1__FUNC_MC0_DAT1>,
+				 <MT6572_PIN_48_MC0_DAT2__FUNC_MC0_DAT2>,
+				 <MT6572_PIN_49_MC0_DAT3__FUNC_MC0_DAT3>,
+				 <MT6572_PIN_50_MC0_DAT4__FUNC_MC0_DAT4>,
+				 <MT6572_PIN_51_MC0_DAT5__FUNC_MC0_DAT5>,
+				 <MT6572_PIN_52_MC0_DAT6__FUNC_MC0_DAT6>,
+				 <MT6572_PIN_53_MC0_DAT7__FUNC_MC0_DAT7>;
+			input-enable;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-rst {
+			pinmux = <MT6572_PIN_54_MC0_RSTB__FUNC_MC0_RSTB>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+		};
+	};
+
+	tpd_pins: tpd-pins {
+		pins-rst {
+			pinmux = <MT6572_PIN_57_SD_DAT2__FUNC_GPIO57>;
+			output-high;
+		};
+		pins-int {
+			pinmux = <MT6572_PIN_129_PWM2__FUNC_EINT1>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_pins: i2c1-pins {
+		pins {
+			pinmux = <MT6572_PIN_113_SCL_1_0__FUNC_SCL_1_0>,
+				 <MT6572_PIN_114_SDA_1_0__FUNC_SDA_1_0>;
+		};
+	};
+
+	flash_pins: flash-pins {
+		pins {
+			pinmux = <MT6572_PIN_128_PWM1__FUNC_PWM1>;
+		};
+	};
+
+	mmc1_pins: mmc1-pins {
+		pins-clk {
+			pinmux = <MT6572_PIN_91_MC1_CK__FUNC_MC1_CK>;
+			bias-pull-down;
+			drive-strength = <8>;
+		};
+
+		pins-cmd-dat {
+			pinmux = <MT6572_PIN_92_MC1_CMD__FUNC_MC1_CMD>,
+				 <MT6572_PIN_93_MC1_DAT0__FUNC_MC1_DAT0>,
+				 <MT6572_PIN_94_MC1_DAT1__FUNC_MC1_DAT1>,
+				 <MT6572_PIN_95_MC1_DAT2__FUNC_MC1_DAT2>,
+				 <MT6572_PIN_96_MC1_DAT3__FUNC_MC1_DAT3>;
+			input-enable;
+			bias-pull-up;
+			drive-strength = <8>;
+		};
+	};
+};
