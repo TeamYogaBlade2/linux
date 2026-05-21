@@ -12,6 +12,20 @@ description:
 
 allOf:
   - $ref: /schemas/i2c/i2c-controller.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: mediatek,mt6572-i2c
+    then:
+      properties:
+        reg:
+          minItems: 3
+          maxItems: 3
+    else:
+      properties:
+        reg:
+          maxItems: 2
 
 maintainers:
   - Qii Wang <qii.wang@mediatek.com>
@@ -20,6 +34,7 @@ properties:
   compatible:
     oneOf:
       - const: mediatek,mt2712-i2c
+      - const: mediatek,mt6572-i2c
       - const: mediatek,mt6577-i2c
       - const: mediatek,mt6589-i2c
       - const: mediatek,mt7622-i2c
@@ -64,9 +79,11 @@ properties:
           - const: mediatek,mt8192-i2c
 
   reg:
+    minItems: 2
     items:
       - description: Physical base address
-      - description: DMA base address
+      - description: DMA base address (TX channel on mt6572)
+      - description: DMA RX channel base address (mt6572 only)
 
   interrupts:
     maxItems: 1
