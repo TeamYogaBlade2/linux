@@ -46,6 +46,14 @@ static const struct mc3230_chip_info mc3230_chip_info = {
 	.scale = 115411765,
 };
 
+static const struct mc3230_chip_info mc3236_chip_info = {
+	.name = "mc3236",
+	.chip_id = 0x20,
+	.product_code = 0x60,
+	/* 4 * 9.81 / (2^14 - 1) = 0.2394348 */
+	.scale = 2394348,
+};
+
 static const struct mc3230_chip_info mc3510c_chip_info = {
 	.name = "mc3510c",
 	.chip_id = 0x23,
@@ -231,6 +239,7 @@ static DEFINE_SIMPLE_DEV_PM_OPS(mc3230_pm_ops, mc3230_suspend, mc3230_resume);
 
 static const struct i2c_device_id mc3230_i2c_id[] = {
 	{ "mc3230", (kernel_ulong_t)&mc3230_chip_info },
+	{ "mc3236", (kernel_ulong_t)&mc3236_chip_info },
 	{ "mc3510c", (kernel_ulong_t)&mc3510c_chip_info },
 	{ }
 };
@@ -238,6 +247,7 @@ MODULE_DEVICE_TABLE(i2c, mc3230_i2c_id);
 
 static const struct of_device_id mc3230_of_match[] = {
 	{ .compatible = "mcube,mc3230", &mc3230_chip_info },
+	{ .compatible = "mcube,mc3236", &mc3236_chip_info },
 	{ .compatible = "mcube,mc3510c", &mc3510c_chip_info },
 	{ }
 };
