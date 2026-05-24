@@ -364,6 +364,17 @@ config ROHM_BU27034
 	  Typical application is adjusting LCD and backlight power of TVs and
 	  mobile phones.
 
+config RPR0400
+	tristate "ROHM RPR-0400 ALS and proximity sensor driver"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y here if you want to build support for ROHM's RPR-0400
+	  ambient light and proximity sensor device.
+
+	  To compile this driver as a module, choose M here:
+	  the module will be called rpr0400.
+
 config RPR0521
 	tristate "ROHM RPR0521 ALS and proximity sensor driver"
 	depends on I2C
