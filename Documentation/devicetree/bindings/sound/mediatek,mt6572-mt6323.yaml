@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/mediatek,mt6572-mt6323.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6572 sound card with the MT6323 PMIC codec
+
+maintainers:
+  - Custom Firmware <gabin278@gmail.com>
+
+description:
+  The machine-level sound card binding the MT6572 AFE platform to the MT6323
+  PMIC analog codec.
+
+allOf:
+  - $ref: sound-card-common.yaml#
+
+properties:
+  compatible:
+    const: mediatek,mt6572-mt6323-sound
+
+  aux-devs:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    description:
+      List of phandles pointing to auxiliary devices, such as an external
+      speaker amplifier.
+
+  mediatek,platform:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: phandle to the MT6572 AFE platform.
+
+  mediatek,accdet:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      The phandle to the MT6323 accessory detection block, which detects audio
+      jack insertion and removal. This property should only be present if the
+      accdet block is actually wired to the audio jack pins and to be used for
+      jack detection.
+
+required:
+  - compatible
+  - mediatek,platform
+
+unevaluatedProperties: false
