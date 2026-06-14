@@ -56,6 +56,17 @@
 		num-interpolated-steps = <1023>;
 		default-brightness-level = <512>;
 	};
+
+	sound {
+		compatible = "mediatek,mt6572-mt6323-sound";
+		mediatek,platform = <&afe>;
+		audio-routing = "Speaker", "Speaker Driver",
+				"Earpiece", "Earpiece Driver";
+		mediatek,accdet = <&mt6323_accdet>;
+
+		pinctrl-0 = <&jack_pins>;
+		pinctrl-names = "default";
+	};
 };
 
 &cpu0 {
@@ -164,10 +175,25 @@
 	status = "okay";
 };
 
+&mt6323_accdet {
+	interrupts = <&pio 2 IRQ_TYPE_EDGE_BOTH>, <&pmic 18 IRQ_TYPE_LEVEL_HIGH>;
+	interrupt-names = "eint", "pmic";
+
+	debounce-delay-ms = <256>;
+
+	status = "okay";
+};
+
 &pio {
 	backlight_pins: backlight-pins {
 		pins-pwm {
 			pinmux = <PINMUX_GPIO30__FUNC_PWM2>;
+		};
+	};
+
+	jack_pins: jack-pins {
+		pins-int {
+			pinmux = <PINMUX_GPIO136__FUNC_EINT2>;
 		};
 	};
 
