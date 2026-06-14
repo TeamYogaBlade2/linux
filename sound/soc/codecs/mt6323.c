@@ -8,6 +8,7 @@
  */
 
 #include <linux/bits.h>
+#include <linux/delay.h>
 #include <linux/mfd/mt6397/core.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -25,10 +26,14 @@
 
 /*
  * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x4000,
- * AUDTOP analog DAC/headphone block @ 0x0700.
+ * AUDTOP analog DAC/headphone/voice block @ 0x0700, internal class-D speaker
+ * amplifier control @ 0x0052 (SPK_CON).
  */
 #define ABB_AFE_CON(n)		(0x4000 + (n) * 2)
 #define AUDTOP_CON(n)		(0x0700 + (n) * 2)
+#define SPK_CON(n)		(0x0052 + (n) * 2)
+/* Speaker clock gate lives in TOP_CKPDN1 (cleared to enable). */
+#define PMIC_RG_AUD_SPK_PDN	0x000e
 #define ABB_AFE_UP8X_FIFO_CFG0	0x401e
 #define ABB_AFE_PMIC_NEWIF_CFG0	0x4024
 #define ABB_AFE_PMIC_NEWIF_CFG1	0x4026
@@ -95,6 +100,7 @@ static const struct reg_sequence mt6323_codec_init[] = {
 	/* Conservative default analog output gain: headphone 0dB, lineout -10dB. */
 	{ ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
 	{ ZCD_CON1, ZCD_GAIN_REG(ZCD_GAIN_N10DB) },
+	{ SPK_CON(9), 0x0400 },		/* class-D speaker PGA gain +6dB; "Speaker Volume" owns it */
 };
 
 /* Audio clocks: CLKSQ + 26 MHz, gated with the stream. */
@@ -182,6 +188,51 @@ static int mt6323_hp_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+/*
+ * Internal class-D speaker (SPK_CON) fed by the AUDTOP voice/LCH DAC; the 1.35V
+ * CM buffer comes up with the shared "DAC" widget. Sequence and values mirror
+ * the stock HAL DEVICE_OUT_SPEAKER (class-D) path.
+ */
+static int mt6323_speaker_event(struct snd_soc_dapm_widget *w,
+				struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6323_codec_priv *priv =
+		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	int i;
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);	/* voice buffer, min gain */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0xb7f6);	/* HP input short, 2.4V, audio clk */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0014);	/* audio bias + LCH DAC */
+		fsleep(10000);						/* bias/DAC settle */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x3550);	/* connect voice buffer -> SPK amp */
+		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_CLR, PMIC_RG_AUD_SPK_PDN);	/* speaker clock on */
+		regmap_write(priv->regmap, SPK_CON(2), 0x0214);		/* class-AB OC protection */
+		/* SPK_CON9 PGA gain is owned by the "Speaker Volume" control. */
+		regmap_write(priv->regmap, SPK_CON(0), 0x3008);		/* enable amp, offset trim, class-D */
+		regmap_write(priv->regmap, SPK_CON(0), 0x3009);
+		fsleep(5000);						/* amp power-up settle */
+		regmap_write(priv->regmap, SPK_CON(0), 0x3001);		/* class-D, amp enable */
+		regmap_write(priv->regmap, SPK_CON(12), 0x0a00);	/* output stage enable */
+		/* Ramp the voice-buffer gain to 0dB (final 0x35b0), 1ms/step. */
+		for (i = 6; i <= 11; i++) {
+			fsleep(1000);
+			regmap_write(priv->regmap, AUDTOP_CON(7), 0x3500 | (i << 4));
+		}
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		regmap_write(priv->regmap, SPK_CON(0), 0x0004);		/* mute + disable class-D amp */
+		regmap_write(priv->regmap, SPK_CON(12), 0x0000);	/* output stage off */
+		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_SET, PMIC_RG_AUD_SPK_PDN);	/* speaker clock off */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);	/* voice buffer off */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0000);	/* LCH DAC off */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0x37e2);	/* baseline */
+		break;
+	}
+	return 0;
+}
+
 static const struct snd_soc_dapm_widget mt6323_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("AUDCLK", SND_SOC_NOPM, 0, 0, mt6323_clk_event,
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
@@ -193,6 +244,9 @@ static const struct snd_soc_dapm_widget mt6323_dapm_widgets[] = {
 			       mt6323_hp_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUTPUT("Headphone"),
+	SND_SOC_DAPM_OUT_DRV_E("Speaker Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
+			       mt6323_speaker_event,
+			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
 static const struct snd_soc_dapm_route mt6323_dapm_routes[] = {
@@ -201,6 +255,7 @@ static const struct snd_soc_dapm_route mt6323_dapm_routes[] = {
 	{ "DAC", NULL, "NEWIF" },
 	{ "HP Driver", NULL, "DAC" },
 	{ "Headphone", NULL, "HP Driver" },
+	{ "Speaker Driver", NULL, "DAC" },
 };
 
 /*
@@ -217,12 +272,23 @@ static const struct snd_soc_dapm_route mt6323_dapm_routes[] = {
 /* Output volume: -10dB .. +8dB in 1dB steps (the inverted ZCD gain field). */
 static const DECLARE_TLV_DB_SCALE(mt6323_dl_tlv, -1000, 100, 0);
 
+/*
+ * Class-D speaker PGA gain SPK_CON9[11:8]. Stock dB table {-60,0,4,5,...,17} for
+ * index 0..15 (0 = mute, 1 = 0dB, 2 = +4dB, then +1dB/step). Analog volume --
+ * scales after the DAC, unlike the digital "Playback Volume".
+ */
+static const DECLARE_TLV_DB_RANGE(mt6323_spk_tlv,
+	0, 0, TLV_DB_SCALE_ITEM(TLV_DB_GAIN_MUTE, 0, 1),
+	1, 1, TLV_DB_SCALE_ITEM(0, 0, 0),
+	2, 15, TLV_DB_SCALE_ITEM(400, 100, 0));
+
 static const struct snd_kcontrol_new mt6323_snd_controls[] = {
 	MT6323_PIN_SWITCH("Headphone"),
 	SOC_DOUBLE_TLV("Headphone Volume", ZCD_CON2, 0, 7, ZCD_GAIN_CTL_MAX, 1,
 		       mt6323_dl_tlv),
 	SOC_DOUBLE_TLV("Lineout Volume", ZCD_CON1, 0, 7, ZCD_GAIN_CTL_MAX, 1,
 		       mt6323_dl_tlv),
+	SOC_SINGLE_TLV("Speaker Volume", SPK_CON(9), 8, 0x0f, 0, mt6323_spk_tlv),
 };
 
 static int mt6323_component_probe(struct snd_soc_component *component)
