@@ -27,6 +27,7 @@ properties:
       - items:
           - enum:
               - allwinner,sun6i-a31-gpu # MP2 Rev 115
+              - mediatek,mt6589-gpu # MP1 Rev 115
               - ti,omap4470-gpu # MP1 Rev 112
               - ti,omap5432-gpu # MP2 Rev 105
               - ti,am5728-gpu # MP2 Rev 116
