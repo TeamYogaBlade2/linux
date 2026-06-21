@@ -45,7 +45,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.name = "dpy",
 		.sta_mask = PWR_STATUS_DDRPHY,
 		.ctl_offs = 0x0240,
-		.caps = MTK_SCPD_ALWAYS_ON | MTK_SCPD_NO_SRAM,
+		.caps = MTK_SCPD_ALWAYS_ON,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},

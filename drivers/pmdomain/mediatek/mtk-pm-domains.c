@@ -278,11 +278,9 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 			goto err_pwr_ack;
 	}
 
-	if (!MTK_SCPD_CAPS(pd, MTK_SCPD_NO_SRAM)) {
-		ret = scpsys_sram_enable(pd);
-		if (ret < 0)
-			goto err_disable_subsys_clks;
-	}
+	ret = scpsys_sram_enable(pd);
+	if (ret < 0)
+		goto err_disable_subsys_clks;
 
 	ret = scpsys_bus_protect_disable(pd);
 	if (ret < 0)
@@ -300,8 +298,7 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 err_enable_bus_protect:
 	scpsys_bus_protect_enable(pd);
 err_disable_sram:
-	if (!MTK_SCPD_CAPS(pd, MTK_SCPD_NO_SRAM))
-		scpsys_sram_disable(pd);
+	scpsys_sram_disable(pd);
 err_disable_subsys_clks:
 	if (!MTK_SCPD_CAPS(pd, MTK_SCPD_STRICT_BUS_PROTECTION))
 		clk_bulk_disable_unprepare(pd->num_subsys_clks,
@@ -324,11 +321,9 @@ static int scpsys_power_off(struct generic_pm_domain *genpd)
 	if (ret < 0)
 		return ret;
 
-	if (!MTK_SCPD_CAPS(pd, MTK_SCPD_NO_SRAM)) {
-		ret = scpsys_sram_disable(pd);
-		if (ret < 0)
-			return ret;
-	}
+	ret = scpsys_sram_disable(pd);
+	if (ret < 0)
+		return ret;
 
 	if (pd->data->ext_buck_iso_offs && MTK_SCPD_CAPS(pd, MTK_SCPD_EXT_BUCK_ISO))
 		regmap_set_bits(scpsys->base, pd->data->ext_buck_iso_offs,
