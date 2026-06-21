@@ -8,7 +8,7 @@
  */
 
 #ifndef __MFD_MT6320_REGISTERS_H__
-#define ___MFD_MT6320_REGISTERS_H__
+#define __MFD_MT6320_REGISTERS_H__
 
 /* PMIC Registers */
 #define MT6320_CHR_CON0			0x0000
