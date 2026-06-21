@@ -16,7 +16,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_MD1,
 		.ctl_offs = SPM_MD1_PWR_CON,
 		.sram_pdn_bits = BIT(8),
-		.sram_pdn_ack_bits = 0, /* don't have */
+		.sram_pdn_ack_bits = 0,
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0x5300),
@@ -29,7 +29,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_CONN,
 		.ctl_offs = SPM_CONN_PWR_CON,
 		.sram_pdn_bits = BIT(8),
-		.sram_pdn_ack_bits = 0, /* don't have */
+		.sram_pdn_ack_bits = 0,
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0xac00),
