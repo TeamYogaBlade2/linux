@@ -5,10 +5,10 @@
 
 /dts-v1/;
 #include "mt6589.dtsi"
+#include "mt6320.dtsi"
 
 / {
 	chosen {
-		linux,initrd-start = <0x82600000>;
 		/* DEBUG: testing clock drivers */
 		bootargs = "clk_ignore_unused";
 	};
@@ -33,8 +33,10 @@
 
 &i2c3 {
 	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3_pins>;
 	/* TODO */
-	clock-frequency = <400000>;
+//	clock-frequency = <100000>;
 
 	accelerometer@11 {
 		compatible = "bosch,bma255";
