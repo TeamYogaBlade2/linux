@@ -16,13 +16,11 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_MD1,
 		.ctl_offs = SPM_MD1_PWR_CON,
 		.sram_pdn_bits = BIT(8),
-		.sram_pdn_ack_bits = 0, /* don't have */
+		.sram_pdn_ack_bits = 0,
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
-		/*
 		.bp_cfg = {
-			BUS_PROT_INFRA_UPDATE_TOPAXI(MT6589_TOP_AXI_PROT_EN_MD1),
+			BUS_PROT_INFRA_UPDATE_TOPAXI(0x5300),
 		},
-		*/
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -31,13 +29,11 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_CONN,
 		.ctl_offs = SPM_CONN_PWR_CON,
 		.sram_pdn_bits = BIT(8),
-		.sram_pdn_ack_bits = 0, /* don't have */
+		.sram_pdn_ack_bits = 0,
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
-		/*
 		.bp_cfg = {
-			BUS_PROT_INFRA_UPDATE_TOPAXI(MT6589_TOP_AXI_PROT_EN_MD2),
+			BUS_PROT_INFRA_UPDATE_TOPAXI(0xac00),
 		},
-		*/
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -45,7 +41,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.name = "dpy",
 		.sta_mask = PWR_STATUS_DDRPHY,
 		.ctl_offs = 0x0240,
-		.caps = MTK_SCPD_ALWAYS_ON | MTK_SCPD_NO_SRAM,
+		.caps = MTK_SCPD_ALWAYS_ON,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -55,11 +51,6 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.ctl_offs = SPM_DIS_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
 		.sram_pdn_ack_bits = GENMASK(15, 12),
-		/*
-		.bp_cfg = {
-			BUS_PROT_INFRA_UPDATE_TOPAXI(MT6589_TOP_AXI_PROT_EN_DIS),
-		},
-		*/
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -70,11 +61,9 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sram_pdn_bits = BIT(8),
 		.sram_pdn_ack_bits = BIT(12),
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
-		/*
 		.bp_cfg = {
-			BUS_PROT_INFRA_UPDATE_TOPAXI(TODO),
+			BUS_PROT_INFRA_UPDATE_TOPAXI(0x0020),
 		},
-		*/
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -85,9 +74,6 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sram_pdn_bits = GENMASK(11, 8),
 		.sram_pdn_ack_bits = GENMASK(15, 12),
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
-		/*
-		.bp_cfg = BUS_PROT_INFRA_UPDATE_TOPAXI(TODO), img_s_prot_en?,
-		*/
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
