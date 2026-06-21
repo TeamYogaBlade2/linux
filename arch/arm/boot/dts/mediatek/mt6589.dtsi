@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/reset/mt6589-resets.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 
 / {
@@ -313,6 +314,20 @@
 			interrupts = <GIC_SPI 113 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&system_clk>, <&rtc_clk>;
 			clock-names = "system-clk", "rtc-clk";
+		};
+
+		pwrap: pwrap@1000f000 {
+			compatible = "mediatek,mt6589-pwrap";
+			reg = <0x1000f000 0x1000>,
+			      <0x11017000 0x1000>;
+			reg-names = "pwrap", "pwrap-bridge";
+			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&infracfg CLK_INFRA_PMICSPI>,
+				 <&infracfg CLK_INFRA_PMICWRAP>;
+			clock-names = "spi", "wrap";
+			resets = <&infracfg MT6589_INFRA_PMIC_WRAP_RST>,
+				 <&pericfg MT6589_PERI_PWRAP_BRIDGE_SW_RST>;
+			reset-names = "pwrap", "pwrap-bridge";
 		};
 
 		sysirq: interrupt-controller@10200100 {

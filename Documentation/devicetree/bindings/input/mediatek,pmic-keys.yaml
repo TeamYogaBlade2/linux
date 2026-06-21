@@ -24,6 +24,7 @@ description: |
 properties:
   compatible:
     enum:
+      - mediatek,mt6320-keys
       - mediatek,mt6323-keys
       - mediatek,mt6328-keys
       - mediatek,mt6331-keys

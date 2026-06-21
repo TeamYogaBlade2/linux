@@ -5,6 +5,7 @@
 
 /dts-v1/;
 #include "mt6589.dtsi"
+#include "mt6320.dtsi"
 
 / {
 	chosen {
