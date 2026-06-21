@@ -111,12 +111,7 @@
 
 #define U3P_U2PHYDTM1		0x06C
 #define P2C_RG_UART_EN			BIT(16)
-#define P2C_FORCE_VBUSVALID		BIT(13)
-#define P2C_FORCE_SESSEND		BIT(12)
-#define P2C_FORCE_BVALID		BIT(11)
-#define P2C_FORCE_AVALID		BIT(10)
 #define P2C_FORCE_IDDIG		BIT(9)
-#define P2C_FORCE_IDPULLUP		BIT(8)
 #define P2C_RG_VBUSVALID		BIT(5)
 #define P2C_RG_SESSEND			BIT(4)
 #define P2C_RG_AVALID			BIT(2)
@@ -861,12 +856,6 @@ static void u2_phy_instance_init(struct mtk_tphy *tphy,
 
 	/* Workaround only for mt8195, HW fix it for others (V3) */
 	u2_phy_pll_26m_set(tphy, instance);
-
-	/* Used by phone products */
-	mtk_phy_set_bits(com + U3P_U2PHYDTM1,
-			 P2C_FORCE_IDPULLUP | P2C_FORCE_AVALID |
-				 P2C_FORCE_BVALID | P2C_FORCE_SESSEND |
-				 P2C_FORCE_VBUSVALID);
 
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
