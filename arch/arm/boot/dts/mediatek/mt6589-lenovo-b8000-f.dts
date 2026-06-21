@@ -94,7 +94,7 @@
 //	dr_mode = "otg";
 //	usb-role-switch;
 	dr_mode = "peripheral";
-
+/*
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
@@ -102,4 +102,5 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&usb_pins>;
 	};
+*/
 };
