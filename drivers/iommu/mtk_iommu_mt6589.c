@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * IOMMU API for MTK architected m4u v1 implementations
+ * IOMMU API for MTK architected MT6589 M4U implementations
+ *
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
  * Copyright (c) 2015-2016 MediaTek Inc.
  * Author: Honghui Zhang <honghui.zhang@mediatek.com>
  *
- * Based on driver/iommu/mtk_iommu.c
+ * Based on driver/iommu/mtk_iommu.c, driver/iommu/mtk_iommu_v1.c
  */
 #include <linux/bug.h>
 #include <linux/clk.h>
@@ -28,7 +30,7 @@
 #include <linux/string_choices.h>
 #include <asm/barrier.h>
 #include <dt-bindings/memory/mtk-memory-port.h>
-#include <dt-bindings/memory/mt2701-larb-port.h>
+#include <dt-bindings/memory/mt6589-larb-port.h>
 #include <soc/mediatek/smi.h>
 
 #if defined(CONFIG_ARM)
@@ -83,8 +85,6 @@ struct dma_iommu_mapping {
 #define REG_MMU_CPE_DONE			0x60c
 #define F_DESC_VALID				0x2
 #define F_DESC_NONSEC				BIT(3)
-#define MT2701_M4U_TF_LARB(TF)			(6 - (((TF) >> 13) & 0x7))
-#define MT2701_M4U_TF_PORT(TF)			(((TF) >> 8) & 0xF)
 
 #define MT65XX_MMU_INT_ID_PORT_ID	GENMASK(12, 8)
 #define MT65XX_MMU_INT_ID_LARB_ID	GENMASK(14, 13)
@@ -95,18 +95,13 @@ struct dma_iommu_mapping {
 /* MTK generation one iommu HW only support 4K size mapping */
 #define MT2701_IOMMU_PAGE_SHIFT			12
 #define MT2701_IOMMU_PAGE_SIZE			(1UL << MT2701_IOMMU_PAGE_SHIFT)
-#define MT2701_LARB_NR_MAX			3
+#define MT6589_LARB_NR_MAX			4
 
 /*
  * MTK m4u support 4GB iova address space, and only support 4K page
  * mapping. So the pagetable size should be exactly as 4M.
  */
 #define M2701_IOMMU_PGT_SIZE			SZ_4M
-
-enum mtk_iommu_type {
-	MTK_IOMMU_MT65XX,
-	MTK_IOMMU_V1,
-};
 
 struct mtk_iommu_v1_suspend_reg {
 	u32			standard_axi_mode;
@@ -128,8 +123,6 @@ struct mtk_iommu_v1_data {
 	struct mtk_smi_larb_iommu	larb_imu[MTK_LARB_NR_MAX];
 
 	struct mtk_iommu_v1_suspend_reg	reg;
-
-	enum mtk_iommu_type type;
 };
 
 struct mtk_iommu_v1_domain {
@@ -159,35 +152,32 @@ static struct mtk_iommu_v1_domain *to_mtk_domain(struct iommu_domain *dom)
 	return container_of(dom, struct mtk_iommu_v1_domain, domain);
 }
 
-static const int mt2701_m4u_in_larb[] = {
-	MT2701_LARB0_PORT_OFFSET, MT2701_LARB1_PORT_OFFSET,
-	MT2701_LARB2_PORT_OFFSET, MT2701_LARB3_PORT_OFFSET
+static const int mt6589_m4u_in_larb[] = {
+	MT6589_LARB0_PORT_OFFSET, MT6589_LARB1_PORT_OFFSET,
+	MT6589_LARB2_PORT_OFFSET, MT6589_LARB3_PORT_OFFSET
 };
 
-static inline int mt2701_m4u_to_larb(int id)
+static inline int mt6589_m4u_to_larb(int id)
 {
 	int i;
 
-	for (i = ARRAY_SIZE(mt2701_m4u_in_larb) - 1; i >= 0; i--)
-		if ((id) >= mt2701_m4u_in_larb[i])
+	for (i = ARRAY_SIZE(mt6589_m4u_in_larb) - 1; i >= 0; i--)
+		if ((id) >= mt6589_m4u_in_larb[i])
 			return i;
 
 	return 0;
 }
 
-static inline int mt2701_m4u_to_port(int id)
+static inline int mt6589_m4u_to_port(int id)
 {
-	int larb = mt2701_m4u_to_larb(id);
+	int larb = mt6589_m4u_to_larb(id);
 
-	return id - mt2701_m4u_in_larb[larb];
+	return id - mt6589_m4u_in_larb[larb];
 }
 
 static void mtk_iommu_v1_tlb_flush_all(struct mtk_iommu_v1_data *data)
 {
 	u32 val = F_INVLD_EN0;
-	if (data->type == MTK_IOMMU_V1)
-	    val |= F_INVLD_EN1;
-
 	writel_relaxed(val, data->base + REG_MMU_INV_SEL);
 	writel_relaxed(F_ALL_INVLD, data->base + REG_MMU_INVALIDATE);
 	wmb(); /* Make sure the tlb flush all done */
@@ -196,32 +186,14 @@ static void mtk_iommu_v1_tlb_flush_all(struct mtk_iommu_v1_data *data)
 static void mtk_iommu_v1_tlb_flush_range(struct mtk_iommu_v1_data *data,
 					 unsigned long iova, size_t size)
 {
-	int ret;
-	u32 tmp, val = F_INVLD_EN0;
-	if (data->type == MTK_IOMMU_V1)
-		val |= F_INVLD_EN1;
-
+	u32 val = F_INVLD_EN0;
 	writel_relaxed(val, data->base + REG_MMU_INV_SEL);
 	writel_relaxed(iova & F_MMU_FAULT_VA_MSK,
 		data->base + REG_MMU_INVLD_START_A);
 	writel_relaxed((iova + size - 1) & F_MMU_FAULT_VA_MSK,
 		data->base + REG_MMU_INVLD_END_A);
 	writel_relaxed(F_MMU_INV_RANGE, data->base + REG_MMU_INVALIDATE);
-
-	if (data->type == MTK_IOMMU_V1) {
-		ret = readl_poll_timeout_atomic(data->base + REG_MMU_CPE_DONE,
-					tmp, tmp != 0, 10, 100000);
-		if (ret) {
-			dev_warn(data->dev,
-				 "Partial TLB flush timed out, falling back to full flush\n");
-			mtk_iommu_v1_tlb_flush_all(data);
-		}
-
-		/* Clear the CPE status */
-		writel_relaxed(0, data->base + REG_MMU_CPE_DONE);
-	} else {
-		wmb();
-	}
+	wmb();
 }
 
 static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
@@ -239,13 +211,8 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 	fault_pa = readl_relaxed(data->base + REG_MMU_INVLD_PA);
 	regval = readl_relaxed(data->base + REG_MMU_INT_ID);
 
-	if (data->type == MTK_IOMMU_V1) {
-		fault_larb = MT2701_M4U_TF_LARB(regval);
-		fault_port = MT2701_M4U_TF_PORT(regval);
-	} else {
-		fault_larb = MT65XX_M4U_TF_LARB(regval);
-		fault_port = MT65XX_M4U_TF_PORT(regval);
-	}
+	fault_larb = MT65XX_M4U_TF_LARB(regval);
+	fault_port = MT65XX_M4U_TF_PORT(regval);
 
 	/*
 	 * MTK v1 iommu HW could not determine whether the fault is read or
@@ -277,8 +244,8 @@ static void mtk_iommu_v1_config(struct mtk_iommu_v1_data *data,
 	int i;
 
 	for (i = 0; i < fwspec->num_ids; ++i) {
-		larbid = mt2701_m4u_to_larb(fwspec->ids[i]);
-		portid = mt2701_m4u_to_port(fwspec->ids[i]);
+		larbid = mt6589_m4u_to_larb(fwspec->ids[i]);
+		portid = mt6589_m4u_to_port(fwspec->ids[i]);
 		larb_mmu = &data->larb_imu[larbid];
 
 		dev_dbg(dev, "%s iommu port: %d\n",
@@ -511,12 +478,12 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 	data = dev_iommu_priv_get(dev);
 
 	/* Link the consumer device with the smi-larb device(supplier) */
-	larbid = mt2701_m4u_to_larb(fwspec->ids[0]);
-	if (larbid >= MT2701_LARB_NR_MAX)
+	larbid = mt6589_m4u_to_larb(fwspec->ids[0]);
+	if (larbid >= MT6589_LARB_NR_MAX)
 		return ERR_PTR(-EINVAL);
 
 	for (idx = 1; idx < fwspec->num_ids; idx++) {
-		larbidx = mt2701_m4u_to_larb(fwspec->ids[idx]);
+		larbidx = mt6589_m4u_to_larb(fwspec->ids[idx]);
 		if (larbid != larbidx) {
 			dev_err(dev, "Can only use one larb. Fail@larb%d-%d.\n",
 				larbid, larbidx);
@@ -558,7 +525,7 @@ static void mtk_iommu_v1_release_device(struct device *dev)
 	unsigned int larbid;
 
 	data = dev_iommu_priv_get(dev);
-	larbid = mt2701_m4u_to_larb(fwspec->ids[0]);
+	larbid = mt6589_m4u_to_larb(fwspec->ids[0]);
 	larbdev = data->larb_imu[larbid].dev;
 	device_link_remove(dev, larbdev);
 }
@@ -575,9 +542,6 @@ static int mtk_iommu_v1_hw_init(const struct mtk_iommu_v1_data *data)
 	}
 
 	regval = F_MMU_TF_PROTECT_SEL(2);
-	if (data->type == MTK_IOMMU_V1)
-		regval |= F_MMU_CTRL_COHERENT_EN;
-
 	writel_relaxed(regval, data->base + REG_MMU_CTRL_REG);
 
 	regval = F_INT_TRANSLATION_FAULT |
@@ -626,8 +590,7 @@ static const struct iommu_ops mtk_iommu_v1_ops = {
 };
 
 static const struct of_device_id mtk_iommu_v1_of_ids[] = {
-	{ .compatible = "mediatek,mt2701-m4u", .data = (void *)MTK_IOMMU_V1 },
-	{ .compatible = "mediatek,mt6589-m4u", .data = (void *)MTK_IOMMU_MT65XX },
+	{ .compatible = "mediatek,mt6589-m4u" },
 	{}
 };
 MODULE_DEVICE_TABLE(of, mtk_iommu_v1_of_ids);
@@ -651,7 +614,6 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	data->dev = dev;
-	data->type = (enum mtk_iommu_type)of_device_get_match_data(dev);
 
 	/* Protect memory. HW will access here while translation fault.*/
 	protect = devm_kcalloc(dev, 2, MTK_PROTECT_PA_ALIGN,
