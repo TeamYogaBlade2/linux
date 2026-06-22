@@ -527,8 +527,8 @@ static const u8 mtk_smi_larb_mt8195_ostd[][SMI_LARB_PORT_NR_MAX] = {
 
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt2701 = {
 	.port_in_larb = {
-		LARB0_PORT_OFFSET, LARB1_PORT_OFFSET,
-		LARB2_PORT_OFFSET, LARB3_PORT_OFFSET
+		MT2701_LARB0_PORT_OFFSET, MT2701_LARB1_PORT_OFFSET,
+		MT2701_LARB2_PORT_OFFSET, MT2701_LARB3_PORT_OFFSET
 	},
 	.config_port = mtk_smi_larb_config_port_gen1,
 };
