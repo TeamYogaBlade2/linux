@@ -427,29 +427,20 @@
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
-		/*
-		 * #define M4U_BASE0                0xf0205200
-		 * #define M4U_BASE1                0xf0205800 //0x16010000
-		 * #define M4U_BASEg                0xf0205000
-		 */
-
-		iommu0: iommu@10205200 {
+		iommu: iommu@10205000 {
 			compatible = "mediatek,mt6589-m4u";
-			reg = <0x10205200 0x1000>;
-			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>;
+			reg = <0x10205000 0x200>,
+			      <0x10205200 0x600>,
+			      <0x10205800 0x600>;
+			reg-names = "global", "m4u0", "m4u1";
+			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 107 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 108 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&infracfg CLK_INFRA_M4U>;
 			clock-names = "bclk";
-			mediatek,larbs = <&larb0>, <&larb1>, <&larb3>;
-			#iommu-cells = <1>;
-		};
-
-		iommu1: iommu@10205800 {
-			compatible = "mediatek,mt6589-m4u";
-			reg = <0x10205800 0x1000>;
-			interrupts = <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&infracfg CLK_INFRA_M4U>;
-			clock-names = "bclk";
-			mediatek,larbs = <&larb2>, <&larb4>;
+			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
+					 <&larb3>, <&larb4>;
 			#iommu-cells = <1>;
 		};
 
@@ -589,10 +580,10 @@
 			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>,
 				 <&dispsys CLK_DISP0_OVL_SMI>;
-			iommus = <&iommu1 MT6589_M4U_PORT_OVL_CH0>,
-				 <&iommu1 MT6589_M4U_PORT_OVL_CH1>,
-				 <&iommu1 MT6589_M4U_PORT_OVL_CH2>,
-				 <&iommu1 MT6589_M4U_PORT_OVL_CH3>;
+			iommus = <&iommu MT6589_M4U_PORT_OVL_CH0>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
@@ -603,7 +594,7 @@
 			clocks = <&dispsys CLK_DISP0_RDMA0_ENGINE>,
 				 <&dispsys CLK_DISP0_RDMA0_SMI>,
 				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
-			iommus = <&iommu1 MT6589_M4U_PORT_RDMA0>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
@@ -614,7 +605,7 @@
 			clocks = <&dispsys CLK_DISP0_RDMA1_ENGINE>,
 				 <&dispsys CLK_DISP0_RDMA1_SMI>,
 				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
-			iommus = <&iommu1 MT6589_M4U_PORT_RDMA1>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
