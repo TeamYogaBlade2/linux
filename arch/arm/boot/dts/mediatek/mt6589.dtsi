@@ -129,11 +129,13 @@
 				power-domain@MT6589_POWER_DOMAIN_MD1 {
 					reg = <MT6589_POWER_DOMAIN_MD1>;
 					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
 				};
 
 				power-domain@MT6589_POWER_DOMAIN_MD2 {
 					reg = <MT6589_POWER_DOMAIN_MD2>;
 					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
 				};
 
 				power-domain@MT6589_POWER_DOMAIN_DPY {
@@ -154,6 +156,7 @@
 						 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
 					clock-names = "mfg", "mfg_as";
 					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
 				};
 
 				power-domain@MT6589_POWER_DOMAIN_ISP {
