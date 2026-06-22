@@ -40,7 +40,6 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0xac00),
-			BUS_PROT_INFRA_SI0_CTL_INV(0x0400),
 		},
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
@@ -71,6 +70,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0x0020),
+			BUS_PROT_INFRA_SI0_CTL_INV(0x0400),
 		},
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
