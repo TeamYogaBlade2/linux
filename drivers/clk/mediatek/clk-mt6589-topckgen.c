@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
@@ -85,7 +85,7 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_AD_MSDC_H208M_CK, "ad_msdc_h208m_ck", "msdcpll", 1, 8), // ?
 };
 
-static const char * axi_parents[] = {
+static const char * const axi_parents[] = {
 	"clk26m",
 	"syspll_d3",
 	"syspll_d4",
@@ -95,7 +95,7 @@ static const char * axi_parents[] = {
 	"syspll_d3p5",
 };
 
-static const char * smi_parents[] = {
+static const char * const smi_parents[] = {
 	"clk26m",
 	"syspll_d3",
 	"syspll_d8",
@@ -164,7 +164,7 @@ static const char * const msdc1_parents[] = {
 	"syspll_d6",
 	"syspll_d5",
 	"univpll1_d4",
-	"unicpll2_d4",
+	"univpll2_d4",
 	"ad_msdc_h208m_ck",
 };
 
@@ -173,7 +173,7 @@ static const char * const msdc2_parents[] = {
 	"syspll_d6",
 	"syspll_d5",
 	"univpll1_d4",
-	"unicpll2_d4",
+	"univpll2_d4",
 	"ad_msdc_h208m_ck",
 };
 
@@ -182,7 +182,7 @@ static const char * const msdc3_parents[] = {
 	"syspll_d6",
 	"syspll_d5",
 	"univpll1_d4",
-	"unicpll2_d4",
+	"univpll2_d4",
 	"ad_msdc_h208m_ck",
 };
 
@@ -191,7 +191,7 @@ static const char * const msdc4_parents[] = {
 	"syspll_d6",
 	"syspll_d5",
 	"univpll1_d4",
-	"unicpll2_d4",
+	"univpll2_d4",
 	"ad_msdc_h208m_ck",
 };
 
@@ -314,7 +314,7 @@ static const char * const msdc0_parents[] = {
 	"syspll_d6",
 	"syspll_d5",
 	"univpll1_d4",
-	"unicpll2_d4",
+	"univpll2_d4",
 	"ad_msdc_h208m_ck",
 };
 

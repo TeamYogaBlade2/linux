@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  *
  * Based on clk-mt2712-apmixedsys.c
  * Copyright (c) 2017 MediaTek Inc.
@@ -117,6 +117,8 @@ static int clk_mt6589_apmixed_probe(struct platform_device *pdev)
 		goto unregister_plls;
 	}
 
+	platform_set_drvdata(pdev, clk_data);
+
 	return 0;
 
 unregister_plls:
@@ -150,7 +152,7 @@ static struct platform_driver clk_mt6589_apmixed_drv = {
 		.of_match_table = of_match_clk_mt6589_apmixed,
 	},
 };
-module_platform_driver(clk_mt6589_apmixed_drv)
+module_platform_driver(clk_mt6589_apmixed_drv);
 
 MODULE_DESCRIPTION("MediaTek MT6589 apmixedsys clocks driver");
 MODULE_LICENSE("GPL");
