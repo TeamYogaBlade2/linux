@@ -40,5 +40,261 @@
 				linux,keycodes = <KEY_HOME>;
 			};
 		};
+
+		mt6320regulator: mt6320regulator {
+			compatible = "mediatek,mt6320-regulator";
+
+			/* BUCK regulators */
+			mt6320_buck_vproc: buck_vproc {
+				regulator-name = "vproc";
+				regulator-min-microvolt = <700000>;
+				regulator-max-microvolt = <1493750>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_buck_vsram: buck_vsram {
+				regulator-name = "vsram";
+				regulator-min-microvolt = <700000>;
+				regulator-max-microvolt = <1493750>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_buck_vcore: buck_vcore {
+				regulator-name = "vcore";
+				regulator-min-microvolt = <700000>;
+				regulator-max-microvolt = <1493750>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_buck_vm: buck_vm {
+				regulator-name = "vm";
+				regulator-min-microvolt = <700000>;
+				regulator-max-microvolt = <1493750>;
+				regulator-ramp-delay = <12500>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_buck_vio18: buck_vio18 {
+				regulator-name = "vio18";
+				regulator-min-microvolt = <1500000>;
+				regulator-max-microvolt = <2120000>;
+				regulator-ramp-delay = <25000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_buck_vpa: buck_vpa {
+				regulator-name = "vpa";
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <3650000>;
+			};
+
+			mt6320_buck_vrf18: buck_vrf18 {
+				regulator-name = "vrf18";
+				regulator-min-microvolt = <1050000>;
+				regulator-max-microvolt = <1825000>;
+				regulator-ramp-delay = <25000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			/* TODO: add GPU OD */
+			mt6320_buck_vrf18_2: buck_vrf18_2 {
+				regulator-name = "vrf18_2";
+				regulator-min-microvolt = <1050000>;
+				regulator-max-microvolt = <1825000>;
+				regulator-ramp-delay = <25000>;
+			};
+
+			/* Analog LDOs */
+			mt6320_ldo_vrf28: ldo_vrf28 {
+				regulator-name = "vrf28";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <2850000>;
+				regulator-enable-ramp-delay = <100>;
+			};
+
+			mt6320_ldo_vtcxo: ldo_vtcxo {
+				regulator-name = "vtcxo";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-enable-ramp-delay = <90>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_va: ldo_va {
+				regulator-name = "va";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <2500000>;
+				regulator-enable-ramp-delay = <216>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_va28: ldo_va28 {
+				regulator-name = "va28";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-enable-ramp-delay = <216>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vcama: ldo_vcama {
+				regulator-name = "vcama";
+				regulator-min-microvolt = <1500000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vrf28_2: ldo_vrf28_2 {
+				regulator-name = "vrf28_2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <2850000>;
+				regulator-enable-ramp-delay = <100>;
+			};
+
+			mt6320_ldo_vtcxo_2: ldo_vtcxo_2 {
+				regulator-name = "vtcxo_2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <2850000>;
+				regulator-enable-ramp-delay = <90>;
+			};
+
+			/* Digital LDOs */
+			mt6320_ldo_vio28: ldo_vio28 {
+				regulator-name = "vio28";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-enable-ramp-delay = <216>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vusb: ldo_vusb {
+				regulator-name = "vusb";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vmc1: ldo_vmc1 {
+				regulator-name = "vmc1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <36>;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vmch1: ldo_vmch1 {
+				regulator-name = "vmch1";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <36>;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vemc_3v3: ldo_vemc_3v3 {
+				regulator-name = "vemc_3v3";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <36>;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vemc_1v8: ldo_vemc_1v8 {
+				regulator-name = "vemc_1v8";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <36>;
+			};
+
+			mt6320_ldo_vgp1: ldo_vgp1 {
+				regulator-name = "vgp1";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vgp2: ldo_vgp2 {
+				regulator-name = "vgp2";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vgp3: ldo_vgp3 {
+				regulator-name = "vgp3";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vgp4: ldo_vgp4 {
+				regulator-name = "vgp4";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vgp5: ldo_vgp5 {
+				regulator-name = "vgp5";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vgp6: ldo_vgp6 {
+				regulator-name = "vgp6";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vsim1: ldo_vsim1 {
+				regulator-name = "vsim1";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vsim2: ldo_vsim2 {
+				regulator-name = "vsim2";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+
+			mt6320_ldo_vibr: ldo_vibr {
+				regulator-name = "vibr";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-enable-ramp-delay = <36>;
+			};
+
+			mt6320_ldo_vrtc: ldo_vrtc {
+				regulator-name = "vrtc";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			mt6320_ldo_vast: ldo_vast {
+				regulator-name = "vast";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <1200000>;
+				regulator-enable-ramp-delay = <216>;
+			};
+		};
 	};
 };
