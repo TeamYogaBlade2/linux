@@ -34,6 +34,10 @@ description: |
   u2 port2    0x1800    U2PHY_COM
               ...
 
+  Some V1 SoCs (e.g. MT6589) have the FMREG bank at a non-standard
+  offset (0x0f00 instead of 0x0100).  These use a separate reg entry
+  with name "legacy-fm".
+
   Version 2/3:
   port        offset    bank
   u2 port0    0x0000    MISC
@@ -71,7 +75,6 @@ properties:
       - items:
           - enum:
               - mediatek,mt2701-tphy
-              - mediatek,mt6589-tphy
               - mediatek,mt7623-tphy
               - mediatek,mt7622-tphy
               - mediatek,mt8516-tphy
@@ -96,6 +99,7 @@ properties:
         deprecated: true
       - const: mediatek,mt2712-u3phy
         deprecated: true
+      - const: mediatek,mt6589-tphy
       - const: mediatek,mt8173-u3phy
 
   reg:
@@ -103,7 +107,19 @@ properties:
       Register shared by multiple ports, exclude port's private register.
       It is needed for T-PHY V1, such as mt2701 and mt8173, but not for
       T-PHY V2/V3, such as mt2712.
-    maxItems: 1
+      Some V1 SoCs (e.g. MT6589) require a second register range for the
+      legacy frequency meter block.
+    minItems: 1
+    maxItems: 2
+
+  reg-names:
+    description:
+      Names for the shared register ranges.
+    minItems: 1
+    maxItems: 2
+    items:
+      - const: sif
+      - const: legacy-fm
 
   "#address-cells":
     enum: [1, 2]
@@ -331,4 +347,23 @@ examples:
         };
     };
 
-...
+  - |
+    #include <dt-bindings/phy/phy.h>
+    t-phy@11220000 {
+        compatible = "mediatek,mt6589-tphy", "mediatek,generic-tphy-v1";
+        reg = <0x11220000 0x0800>,
+              <0x11220f00 0x0100>;
+        reg-names = "sif", "legacy-fm";
+        mediatek,src-ref-clk-mhz = <48>;
+        mediatek,src-coef = <22>;
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        u2port0: usb-phy@11220800 {
+            reg = <0x11220800 0x0100>;
+            clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+            clock-names = "ref";
+            #phy-cells = <1>;
+        };
+    };
