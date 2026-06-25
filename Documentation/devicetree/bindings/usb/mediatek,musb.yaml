@@ -68,6 +68,9 @@ properties:
     description: Connector for dual role switch
     type: object
 
+  vusb-supply:
+    description: Regulator for USB 3.3V power
+
 dependencies:
   usb-role-switch: [ connector ]
   connector: [ usb-role-switch ]
@@ -104,6 +107,7 @@ examples:
                  <&pericfg CLK_PERI_USB_SLV>;
         clock-names = "main","mcu","univpll";
         power-domains = <&scpsys MT2701_POWER_DOMAIN_IFR_MSC>;
+        vusb-supply = <&usb_vusb>;
         usb-role-switch;
 
         connector {
