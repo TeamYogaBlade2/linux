@@ -73,7 +73,12 @@
 #define PA6_RG_U2_DISCTH		GENMASK(7, 4)
 #define PA6_RG_U2_SQTH		GENMASK(3, 0)
 
+#define U3P_USBPHYACR3		0x01c
+#define PA3_RG_USB20_PUPD_BIST_EN	BIT(12)
+
 #define U3P_U2PHYACR4		0x020
+#define P2C_RG_USB20_DM_100K_EN		BIT(17)
+#define P2C_RG_USB20_DP_100K_EN		BIT(16)
 #define P2C_RG_USB20_GPIO_CTL		BIT(9)
 #define P2C_USB20_GPIO_MODE		BIT(8)
 #define P2C_U2_GPIO_CTR_MSK	(P2C_RG_USB20_GPIO_CTL | P2C_USB20_GPIO_MODE)
@@ -111,9 +116,15 @@
 
 #define U3P_U2PHYDTM1		0x06C
 #define P2C_RG_UART_EN			BIT(16)
+#define P2C_FORCE_VBUSVALID		BIT(13)
+#define P2C_FORCE_SESSEND		BIT(12)
+#define P2C_FORCE_BVALID		BIT(11)
+#define P2C_FORCE_AVALID		BIT(10)
 #define P2C_FORCE_IDDIG		BIT(9)
+#define P2C_FORCE_IDPULLUP		BIT(8)
 #define P2C_RG_VBUSVALID		BIT(5)
 #define P2C_RG_SESSEND			BIT(4)
+#define P2C_RG_BVALID		BIT(3)
 #define P2C_RG_AVALID			BIT(2)
 #define P2C_RG_IDDIG			BIT(1)
 
@@ -291,6 +302,21 @@ struct mtk_phy_pdata {
 	 * support sw way, also support it for v2/v3 optionally.
 	 */
 	bool sw_efuse_supported;
+	/* disable DP/DM 100k pull-down */
+	bool disable_dpdm_100k;
+	/*
+	 * Clear PUPD_BIST_EN (U3P_USBPHYACR3 bit12) after PMIC charger
+	 * detection to release D+/D- from BIST mode and allow normal
+	 * USB operation. Required on smartphone SoCs that delegate VBUS
+	 * and charger detection to an external PMIC.
+	 */
+	bool disable_pupd_bist;
+	/* RG_USB20_SQTH override (0 = default 2) */
+	u8 sqth_val;
+	/* Force bits for device mode */
+	u32 device_force_mask;
+	/* Force bits for host mode */
+	u32 host_force_mask;
 	enum mtk_phy_version version;
 };
 
@@ -337,6 +363,7 @@ struct mtk_phy_instance {
 struct mtk_tphy {
 	struct device *dev;
 	void __iomem *sif_base;	/* only shared sif */
+	void __iomem *legacy_fm_base; /* legacy FM block (e.g., MT6589) */
 	const struct mtk_phy_pdata *pdata;
 	struct mtk_phy_instance **phys;
 	int nphys;
@@ -852,7 +879,24 @@ static void u2_phy_instance_init(struct mtk_tphy *tphy,
 	/* DP/DM BC1.1 path Disable */
 	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
 
-	mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH, 2);
+	/* Disable DP/DM 100K resistors */
+	if (tphy->pdata->disable_dpdm_100k) {
+		mtk_phy_clear_bits(com + U3P_U2PHYACR4,
+				   P2C_RG_USB20_DP_100K_EN |
+				   P2C_RG_USB20_DM_100K_EN);
+	}
+
+	/* PUPD_BIST_EN clear */
+	if (tphy->pdata->disable_pupd_bist)
+		mtk_phy_clear_bits(com + U3P_USBPHYACR3, PA3_RG_USB20_PUPD_BIST_EN);
+
+	/* SQTH override */
+	if (tphy->pdata->sqth_val) {
+		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH,
+				     tphy->pdata->sqth_val);
+	} else {
+		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH, 2);
+	}
 
 	/* Workaround only for mt8195, HW fix it for others (V3) */
 	u2_phy_pll_26m_set(tphy, instance);
@@ -879,6 +923,24 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 
 		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
 	}
+
+	/* Force device mode bits during power on */
+	if (tphy->pdata->device_force_mask) {
+		u32 tmp = readl(com + U3P_U2PHYDTM1);
+		tmp |= tphy->pdata->device_force_mask;
+		if (tphy->pdata->device_force_mask & P2C_FORCE_VBUSVALID)
+			tmp |= P2C_RG_VBUSVALID;
+		if (tphy->pdata->device_force_mask & P2C_FORCE_AVALID)
+			tmp |= P2C_RG_AVALID;
+		if (tphy->pdata->device_force_mask & P2C_FORCE_BVALID)
+			tmp |= P2C_RG_BVALID;
+		if (tphy->pdata->device_force_mask & P2C_FORCE_SESSEND)
+			tmp |= P2C_RG_SESSEND;
+		if (tphy->pdata->device_force_mask & P2C_FORCE_IDDIG)
+			tmp |= P2C_RG_IDDIG;
+		writel(tmp, com + U3P_U2PHYDTM1);
+	}
+
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
 
@@ -900,6 +962,18 @@ static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
 		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
 
 		mtk_phy_clear_bits(com + U3D_U2PHYDCR0, P2C_RG_SIF_U2PLL_FORCE_ON);
+	}
+
+	/* Clear all force bits */
+	if (tphy->pdata->device_force_mask || tphy->pdata->host_force_mask) {
+		u32 tmp = readl(com + U3P_U2PHYDTM1);
+		tmp &= ~(P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
+			 P2C_FORCE_BVALID | P2C_FORCE_SESSEND |
+			 P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP);
+		/* Also clear corresponding normal bits */
+		tmp &= ~(P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID |
+			 P2C_RG_SESSEND | P2C_RG_IDDIG);
+		writel(tmp, com + U3P_U2PHYDTM1);
 	}
 
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
@@ -940,6 +1014,35 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 		break;
 	default:
 		return;
+	}
+
+	/* Apply dynamic force bits for host/device mode */
+	if (tphy->pdata->device_force_mask || tphy->pdata->host_force_mask) {
+		u32 force = 0;
+
+		switch (mode) {
+		case PHY_MODE_USB_DEVICE:
+			force = tphy->pdata->device_force_mask;
+			break;
+		case PHY_MODE_USB_HOST:
+			force = tphy->pdata->host_force_mask;
+			break;
+		default:
+			break;
+		}
+
+		/* update only force-related bits in tmp */
+		tmp &= ~(P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
+			 P2C_FORCE_BVALID | P2C_FORCE_SESSEND |
+			 P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP);
+		tmp |= force;
+
+		/* also set the corresponding normal bits */
+		if (force & P2C_FORCE_VBUSVALID) tmp |= P2C_RG_VBUSVALID;
+		if (force & P2C_FORCE_AVALID)    tmp |= P2C_RG_AVALID;
+		if (force & P2C_FORCE_BVALID)    tmp |= P2C_RG_BVALID;
+		if (force & P2C_FORCE_SESSEND)   tmp |= P2C_RG_SESSEND;
+		if (force & P2C_FORCE_IDDIG)     tmp |= P2C_RG_IDDIG;
 	}
 	writel(tmp, u2_banks->com + U3P_U2PHYDTM1);
 }
@@ -1073,7 +1176,10 @@ static void phy_v1_banks_init(struct mtk_tphy *tphy,
 	switch (instance->type) {
 	case PHY_TYPE_USB2:
 		u2_banks->misc = NULL;
-		u2_banks->fmreg = tphy->sif_base + SSUSB_SIFSLV_V1_U2FREQ;
+		if (tphy->legacy_fm_base)
+			u2_banks->fmreg = tphy->legacy_fm_base;
+		else
+			u2_banks->fmreg = tphy->sif_base + SSUSB_SIFSLV_V1_U2FREQ;
 		u2_banks->com = instance->port_base + SSUSB_SIFSLV_V1_U2PHY_COM;
 		break;
 	case PHY_TYPE_USB3:
@@ -1530,6 +1636,16 @@ static const struct mtk_phy_pdata tphy_v3_pdata = {
 	.version = MTK_PHY_V3,
 };
 
+static const struct mtk_phy_pdata mt6589_pdata = {
+	.disable_pupd_bist = true,
+	.disable_dpdm_100k = true,
+	.sqth_val = 2,
+	.device_force_mask = P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
+			     P2C_FORCE_SESSEND,
+	.host_force_mask = P2C_FORCE_IDDIG,
+	.version = MTK_PHY_V1,
+};
+
 static const struct mtk_phy_pdata mt8173_pdata = {
 	.avoid_rx_sen_degradation = true,
 	.version = MTK_PHY_V1,
@@ -1544,6 +1660,7 @@ static const struct mtk_phy_pdata mt8195_pdata = {
 static const struct of_device_id mtk_tphy_id_table[] = {
 	{ .compatible = "mediatek,mt2701-u3phy", .data = &tphy_v1_pdata },
 	{ .compatible = "mediatek,mt2712-u3phy", .data = &tphy_v2_pdata },
+	{ .compatible = "mediatek,mt6589-tphy", .data = &mt6589_pdata },
 	{ .compatible = "mediatek,mt8173-u3phy", .data = &mt8173_pdata },
 	{ .compatible = "mediatek,mt8195-tphy", .data = &mt8195_pdata },
 	{ .compatible = "mediatek,generic-tphy-v1", .data = &tphy_v1_pdata },
@@ -1589,6 +1706,13 @@ static int mtk_tphy_probe(struct platform_device *pdev)
 			dev_err(dev, "failed to remap sif regs\n");
 			return PTR_ERR(tphy->sif_base);
 		}
+	}
+
+	struct resource *fm_res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "legacy-fm");
+	if (fm_res) {
+		tphy->legacy_fm_base = devm_ioremap_resource(dev, fm_res);
+		if (IS_ERR(tphy->legacy_fm_base))
+			return PTR_ERR(tphy->legacy_fm_base);
 	}
 
 	if (tphy->pdata->version < MTK_PHY_V3) {
