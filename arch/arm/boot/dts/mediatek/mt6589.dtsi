@@ -316,8 +316,8 @@
 
 		spi1: spi@11016000 {
 			compatible = "mediatek,mt6589-spi";
-			#address-cells = <1>; 
-			#size-cells = <0>; 
+			#address-cells = <1>;
+			#size-cells = <0>;
 			reg = <0x11016000 0x1000>;
 			interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&clk26m>, /* FIXME */
@@ -524,9 +524,12 @@
 		*/
 
 		u2phy0: t-phy@11220000 {
-			compatible = "mediatek,mt6589-tphy",
-				     "mediatek,generic-tphy-v1";
-			reg = <0x11220000 0x0800>;
+			compatible = "mediatek,mt6589-tphy";
+			reg = <0x11220000 0x0800>,
+			      <0x11220f00 0x0100>;
+			reg-names = "sif", "legacy-fm";
+			mediatek,src-ref-clk-mhz = <48>;
+			mediatek,src-coef = <22>;
 			ranges;
 			status = "okay";
 			#address-cells = <1>;
