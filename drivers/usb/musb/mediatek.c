@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/usb/role.h>
 #include <linux/usb/usb_phy_generic.h>
+#include <linux/regulator/consumer.h>
 #include "musb_core.h"
 #include "musb_dma.h"
 
@@ -50,6 +51,7 @@ struct mtk_glue {
 	struct clk_bulk_data clks[MTK_MUSB_CLKS_NUM];
 	enum usb_role role;
 	struct usb_role_switch *role_sw;
+	struct regulator *vusb;
 };
 
 static int mtk_musb_clks_get(struct mtk_glue *glue)
@@ -68,6 +70,7 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 	struct musb *musb = glue->musb;
 	u8 devctl = readb(musb->mregs + MUSB_DEVCTL);
 	enum usb_role new_role;
+	int ret;
 
 	if (role == glue->role)
 		return 0;
@@ -77,8 +80,14 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 		musb->xceiv->otg->state = OTG_STATE_A_WAIT_VRISE;
 		glue->phy_mode = PHY_MODE_USB_HOST;
 		new_role = USB_ROLE_HOST;
-		if (glue->role == USB_ROLE_NONE)
+		if (glue->role == USB_ROLE_NONE) {
+			if (glue->vusb) {
+				ret = regulator_enable(glue->vusb);
+				if (ret)
+					dev_err(glue->dev, "failed to enable vusb: %d\n", ret);
+			}
 			phy_power_on(glue->phy);
+		}
 
 		devctl |= MUSB_DEVCTL_SESSION;
 		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
@@ -90,8 +99,14 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 		new_role = USB_ROLE_DEVICE;
 		devctl &= ~MUSB_DEVCTL_SESSION;
 		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
-		if (glue->role == USB_ROLE_NONE)
+		if (glue->role == USB_ROLE_NONE) {
+			if (glue->vusb) {
+				ret = regulator_enable(glue->vusb);
+				if (ret)
+					dev_err(glue->dev, "failed to enable vusb: %d\n", ret);
+			}
 			phy_power_on(glue->phy);
+		}
 
 		MUSB_DEV_MODE(musb);
 		break;
@@ -100,8 +115,11 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 		new_role = USB_ROLE_NONE;
 		devctl &= ~MUSB_DEVCTL_SESSION;
 		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
-		if (glue->role != USB_ROLE_NONE)
+		if (glue->role != USB_ROLE_NONE) {
 			phy_power_off(glue->phy);
+			if (glue->vusb)
+				regulator_disable(glue->vusb);
+		}
 
 		break;
 	default:
@@ -455,6 +473,16 @@ static int mtk_musb_probe(struct platform_device *pdev)
 	if (IS_ERR(glue->phy))
 		return dev_err_probe(dev, PTR_ERR(glue->phy),
 				"fail to getting phy\n");
+
+	glue->vusb = devm_regulator_get_optional(dev, "vusb");
+		if (IS_ERR(glue->vusb)) {
+			ret = PTR_ERR(glue->vusb);
+			if (ret == -EPROBE_DEFER)
+				return -EPROBE_DEFER;
+			if (ret != -ENODEV)
+				return dev_err_probe(dev, ret, "fail to getting vusb-supply\n");
+			glue->vusb = NULL;
+		}
 
 	glue->usb_phy = usb_phy_generic_register();
 	if (IS_ERR(glue->usb_phy))
