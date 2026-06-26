@@ -213,7 +213,6 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
-			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -229,7 +228,6 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
-			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -245,7 +243,6 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
-			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -261,7 +258,6 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
-			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
