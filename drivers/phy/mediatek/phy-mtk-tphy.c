@@ -92,6 +92,7 @@
 #define P2R_RG_U2PLL_FRA_EN		BIT(3)
 
 #define U3D_U2PHYDCR0		0x060
+#define P2C_RG_USB20_PLL_STABLE		BIT(25)
 #define P2C_RG_SIF_U2PLL_FORCE_ON	BIT(24)
 
 #define U3P_U2PHYDTM0		0x068
@@ -127,6 +128,7 @@
 #define P2C_RG_BVALID		BIT(3)
 #define P2C_RG_AVALID			BIT(2)
 #define P2C_RG_IDDIG			BIT(1)
+#define P2C_RG_IDPULLUP		BIT(0)
 
 #define U3P_U2PHYBC12C		0x080
 #define P2C_RG_CHGDT_EN		BIT(0)
@@ -311,6 +313,8 @@ struct mtk_phy_pdata {
 	 * and charger detection to an external PMIC.
 	 */
 	bool disable_pupd_bist;
+	/* MT6589 specific wordarounds */
+	bool need_mt6589_workaround;
 	/* RG_USB20_SQTH override (0 = default 2) */
 	u8 sqth_val;
 	/* Force bits for device mode */
@@ -904,12 +908,50 @@ static void u2_phy_instance_init(struct mtk_tphy *tphy,
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
 
+static void mt6589_u2_phy_recover(struct mtk_tphy *tphy,
+				  struct mtk_phy_instance *instance)
+{
+	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	void __iomem *com = u2_banks->com;
+
+	/* PUPD_BIST_EN clear (PMIC charger detection) */
+	mtk_phy_clear_bits(com + U3P_USBPHYACR3, PA3_RG_USB20_PUPD_BIST_EN);
+
+	/* Clear UART force and normal bits to ensure USB function */
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_UART_EN);
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_UART_EN);
+
+	/* Release force suspendm */
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
+
+	/* Clear all previously forced pull/termination/xcvr settings */
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM0,
+			   P2C_RG_DMPULLDOWN | P2C_RG_DPPULLDOWN |
+			   P2C_RG_XCVRSEL | P2C_RG_TERMSEL | P2C_RG_DATAIN |
+			   P2C_FORCE_DATAIN | P2C_FORCE_DM_PULLDOWN |
+			   P2C_FORCE_DP_PULLDOWN | P2C_FORCE_XCVRSEL |
+			   P2C_FORCE_TERMSEL | P2C_FORCE_SUSPENDM);
+
+	/* BC1.2 disable, OTG VBUS comparator enable */
+	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
+	mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
+
+	/* Force ID pull-up (required for OTG detection on MT6589) */
+	mtk_phy_set_bits(com + U3P_U2PHYDTM1,
+			 P2C_FORCE_IDPULLUP | P2C_RG_IDPULLUP);
+
+	udelay(800);
+}
+
 static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 	struct mtk_phy_instance *instance)
 {
 	struct u2phy_banks *u2_banks = &instance->u2_banks;
 	void __iomem *com = u2_banks->com;
 	u32 index = instance->index;
+
+	if (tphy->pdata->need_mt6589_workaround)
+		mt6589_u2_phy_recover(tphy, instance);
 
 	/* OTG Enable */
 	mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
@@ -944,6 +986,49 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
 
+static void mt6589_u2_phy_savecurrent(struct mtk_tphy *tphy,
+				       struct mtk_phy_instance *instance)
+{
+	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	void __iomem *com = u2_banks->com;
+
+	/* Ensure UART off */
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_UART_EN);
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_UART_EN);
+
+	/* Release force suspendm briefly to configure pulldowns */
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
+
+	/* Set DP/DM pulldowns, XCVRSEL=01, TERMSEL=1, clear DATAIN */
+	u32 tm0 = readl(com + U3P_U2PHYDTM0);
+	tm0 |= P2C_RG_DMPULLDOWN | P2C_RG_DPPULLDOWN;
+	tm0 &= ~P2C_RG_XCVRSEL;
+	tm0 |= FIELD_PREP(P2C_RG_XCVRSEL, 1); /* 01 */
+	tm0 |= P2C_RG_TERMSEL;
+	tm0 &= ~P2C_RG_DATAIN;
+	writel(tm0, com + U3P_U2PHYDTM0);
+
+	/* Force DP/DM pulldown, XCVRSEL, TERMSEL, DATAIN */
+	mtk_phy_set_bits(com + U3P_U2PHYDTM0,
+			 P2C_FORCE_DATAIN | P2C_FORCE_DM_PULLDOWN |
+			 P2C_FORCE_DP_PULLDOWN | P2C_FORCE_XCVRSEL |
+			 P2C_FORCE_TERMSEL);
+
+	/* Disable BC1.2 and OTG VBUS comparator */
+	mtk_phy_clear_bits(com + U3P_USBPHYACR6,
+			   PA6_RG_U2_BC11_SW_EN | PA6_RG_U2_OTG_VBUSCMP_EN);
+
+	udelay(800);
+
+	/* Set PLL stable bit (U3D_U2PHYDCR0 bit25) */
+	mtk_phy_set_bits(com + U3D_U2PHYDCR0, P2C_RG_USB20_PLL_STABLE);
+	udelay(1);
+
+	/* Assert force suspendm to enter low power */
+	mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
+	udelay(1);
+}
+
 static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
 	struct mtk_phy_instance *instance)
 {
@@ -972,9 +1057,12 @@ static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
 			 P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP);
 		/* Also clear corresponding normal bits */
 		tmp &= ~(P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID |
-			 P2C_RG_SESSEND | P2C_RG_IDDIG);
+			 P2C_RG_SESSEND | P2C_RG_IDDIG | P2C_RG_IDPULLUP);
 		writel(tmp, com + U3P_U2PHYDTM1);
 	}
+
+	if (tphy->pdata->need_mt6589_workaround)
+		mt6589_u2_phy_savecurrent(tphy, instance);
 
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
 }
@@ -991,6 +1079,29 @@ static void u2_phy_instance_exit(struct mtk_tphy *tphy,
 
 		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_FORCE_SUSPENDM);
 	}
+}
+
+static void mt6589_u2_phy_host_transition(struct mtk_tphy *tphy,
+					  struct mtk_phy_instance *instance)
+{
+	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	void __iomem *com = u2_banks->com;
+	u32 tmp;
+
+	/* Step 1: force idle state (SESSEND=1, clear VBUS/AVALID/BVALID/IDDIG) */
+	tmp = readl(com + U3P_U2PHYDTM1);
+	tmp |= P2C_RG_SESSEND;
+	tmp &= ~(P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID | P2C_RG_IDDIG);
+	tmp |= (P2C_FORCE_VBUSVALID | P2C_FORCE_SESSEND | P2C_FORCE_BVALID |
+		P2C_FORCE_AVALID | P2C_FORCE_IDDIG);
+	writel(tmp, com + U3P_U2PHYDTM1);
+
+	mdelay(5);
+
+	/* Step 2: force host mode (SESSEND=0, set VBUS/AVALID/BVALID) */
+	tmp &= ~P2C_RG_SESSEND;
+	tmp |= (P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID);
+	writel(tmp, com + U3P_U2PHYDTM1);
 }
 
 static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
@@ -1038,13 +1149,23 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 		tmp |= force;
 
 		/* also set the corresponding normal bits */
-		if (force & P2C_FORCE_VBUSVALID) tmp |= P2C_RG_VBUSVALID;
-		if (force & P2C_FORCE_AVALID)    tmp |= P2C_RG_AVALID;
-		if (force & P2C_FORCE_BVALID)    tmp |= P2C_RG_BVALID;
-		if (force & P2C_FORCE_SESSEND)   tmp |= P2C_RG_SESSEND;
-		if (force & P2C_FORCE_IDDIG)     tmp |= P2C_RG_IDDIG;
+		if (force & P2C_FORCE_VBUSVALID)
+			tmp |= P2C_RG_VBUSVALID;
+		if (force & P2C_FORCE_AVALID)
+			tmp |= P2C_RG_AVALID;
+		if (force & P2C_FORCE_BVALID)
+			tmp |= P2C_RG_BVALID;
+		if (force & P2C_FORCE_SESSEND)
+			tmp |= P2C_RG_SESSEND;
+		if (force & P2C_FORCE_IDDIG)
+			tmp |= P2C_RG_IDDIG;
+		if (force & P2C_FORCE_IDPULLUP)
+			tmp |= P2C_RG_IDPULLUP;
 	}
 	writel(tmp, u2_banks->com + U3P_U2PHYDTM1);
+
+	if (tphy->pdata->need_mt6589_workaround && mode == PHY_MODE_USB_HOST)
+		mt6589_u2_phy_host_transition(tphy, instance);
 }
 
 static void pcie_phy_instance_init(struct mtk_tphy *tphy,
@@ -1639,10 +1760,13 @@ static const struct mtk_phy_pdata tphy_v3_pdata = {
 static const struct mtk_phy_pdata mt6589_pdata = {
 	.disable_pupd_bist = true,
 	.disable_dpdm_100k = true,
+	.need_mt6589_workaround = true,
 	.sqth_val = 2,
 	.device_force_mask = P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
-			     P2C_FORCE_SESSEND,
-	.host_force_mask = P2C_FORCE_IDDIG,
+			     P2C_FORCE_SESSEND | P2C_FORCE_IDPULLUP,
+	.host_force_mask = P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP |
+			   P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
+			   P2C_FORCE_BVALID,
 	.version = MTK_PHY_V1,
 };
 
