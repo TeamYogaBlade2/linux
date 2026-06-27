@@ -1796,7 +1796,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 	SYS_DATA *psSysData;
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	struct sync_fence *apsFence[SGX_MAX_SRC_SYNCS_TA] = {};
+	struct dma_fence *apsFence[SGX_MAX_SRC_SYNCS_TA] = {};
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
 	if(!hDeviceKM || !hSwapChain || !ppsMemInfos || !ppsSyncInfos || ui32NumMemSyncInfos < 1)
@@ -1904,7 +1904,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 					  (IMG_VOID *)abUnique, IMG_NULL);
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 			for(i = 0; i < SGX_MAX_SRC_SYNCS_TA && apsFence[i]; i++)
-				sync_fence_put(apsFence[i]);
+				dma_fence_put(apsFence[i]);
 #endif
 			goto Exit;
 		}
@@ -1961,7 +1961,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 				PVR_DPF((PVR_DBG_ERROR,"PVRSRVSwapToDCBuffer2KM: Failed to allocate space for meminfo list"));
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 				for(i = 0; i < SGX_MAX_SRC_SYNCS_TA && apsFence[i]; i++)
-					sync_fence_put(apsFence[i]);
+					dma_fence_put(apsFence[i]);
 #endif
 				goto Exit;
 			}
@@ -2047,7 +2047,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 	 * will persist.
 	 */
 	for(i = 0; i < SGX_MAX_SRC_SYNCS_TA && apsFence[i]; i++)
-		sync_fence_put(apsFence[i]);
+		dma_fence_put(apsFence[i]);
 #endif
 
 	if (ppsCompiledSyncInfos != ppsSyncInfos)
@@ -2117,8 +2117,8 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVSwapToDCBuffer2KM: Failed to submit command"));
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-		sync_fence_put(psCommand->pvCleanupFence);
-		sync_fence_put(*phFence);
+		dma_fence_put(psCommand->pvCleanupFence);
+		dma_fence_put(*phFence);
 		*phFence = IMG_NULL;
 #endif
 		goto Exit;
@@ -2136,7 +2136,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVSwapToDCBuffer2KM: Failed to schedule MISR"));
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-		sync_fence_put(*phFence);
+		dma_fence_put(*phFence);
 		*phFence = IMG_NULL;
 #endif
 		goto Exit;
@@ -2167,7 +2167,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 		{
 			PVR_DPF((PVR_DBG_ERROR,"PVRSRVSwapToDCBuffer2KM: Failed to allocate space for meminfo list"));
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-			sync_fence_put(*phFence);
+			dma_fence_put(*phFence);
 			*phFence = IMG_NULL;
 #endif
 			goto Exit;
