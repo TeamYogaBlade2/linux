@@ -106,6 +106,7 @@
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		apmixedsys: syscon@10209000 {
@@ -234,8 +235,8 @@
 
 		spi1: spi@11016000 {
 			compatible = "mediatek,mt6589-spi";
-			#address-cells = <1>; 
-			#size-cells = <0>; 
+			#address-cells = <1>;
+			#size-cells = <0>;
 			reg = <0x11016000 0x1000>;
 			interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&clk26m>, /* FIXME */
