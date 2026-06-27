@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
+#if !defined(__SGX_BRIDGE_H__)
 #define __SGX_BRIDGE_H__
 
 #include "sgxapi_km.h"
