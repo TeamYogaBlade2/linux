@@ -18,10 +18,6 @@
 #include "pvr_sync.h"
 #endif
 
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-#include "systrace.h"
-#endif
-
 /*!
 ******************************************************************************
 
@@ -45,13 +41,6 @@ PVRSRV_ERROR SGXDoKickKM(IMG_HANDLE hDevHandle, SGX_CCB_KICK *psCCBKick)
 	SGXMKIF_CMDTA_SHARED *psTACmd;
 	IMG_UINT32 i;
 	IMG_HANDLE hDevMemContext = IMG_NULL;
-#if  defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-	PVRSRV_DEVICE_NODE      *psDeviceNode;
-	PVRSRV_SGXDEV_INFO      *psDevInfo;
-
-	psDeviceNode = (PVRSRV_DEVICE_NODE *)hDevHandle;
-	psDevInfo = (PVRSRV_SGXDEV_INFO *)psDeviceNode->pvDevice;
-#endif
 #if defined(FIX_HW_BRN_31620)
 	hDevMemContext = psCCBKick->hDevMemContext;
 #endif
@@ -874,9 +863,6 @@ PVRSRV_ERROR SGXDoKickKM(IMG_HANDLE hDevHandle, SGX_CCB_KICK *psCCBKick)
 #endif
 	PVR_TTRACE(PVRSRV_TRACE_GROUP_KICK, PVRSRV_TRACE_CLASS_FUNCTION_EXIT,
 			KICK_TOKEN_DOKICK);
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-	SystraceTAKick(psDevInfo, psCCBKick->ui32FrameNum, psCCBKick->sHWRTDataDevAddr.uiAddr, psCCBKick->bIsFirstKick);
-#endif
 	return eError;
 }
 

@@ -87,10 +87,6 @@
 #include "pvr_sync.h"
 #endif
 
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-#include "systrace.h"
-#endif
-
 #if defined(SUPPORT_DRI_DRM)
 #include "pvr_drm.h"
 #endif
@@ -1000,10 +996,6 @@ static int __init PVRCore_Init(void)
 #endif /* defined(PVR_LDM_DEVICE_CLASS) */
 #endif /* !defined(SUPPORT_DRI_DRM) */
 
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-	SystraceCreateFS();
-#endif
-
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 	PVRSyncDeviceInit();
 #endif
@@ -1150,10 +1142,6 @@ static void __exit PVRCore_Cleanup(void)
 #endif
 
 	RemoveProcEntries();
-
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-	SystraceDestroyFS();
-#endif
 
 	PVR_TRACE(("PVRCore_Cleanup: unloading"));
 }

@@ -29,10 +29,6 @@
 #include "srvkm.h"
 #include "ttrace.h"
 
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-#include "systrace.h"
-#endif
-
 IMG_UINT32 g_ui32HostIRQCountSample = 0;
 
 #if defined(PVRSRV_USSE_EDM_STATUS_DEBUG)
@@ -1987,72 +1983,6 @@ IMG_BOOL SGX_ISRHandler (IMG_VOID *pvData)
 }
 
 /*
-	SGX Systrace Handler
-*/
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-static IMG_VOID SGXSystraceHandler(PVRSRV_DEVICE_NODE *psDeviceNode)
-{
-	PVRSRV_SGXDEV_INFO *psDevInfo = (PVRSRV_SGXDEV_INFO *)psDeviceNode->pvDevice;
-	IMG_UINT32 ui32SgxClockSpeed, ui32DataCount, ui32HostTimestamp;
-
-	/* NOTE: Not thread safe. MISR should only run in one thread */
-	static PVRSRV_SGX_HWPERF_CB_ENTRY asSGXHWPerf[8];
-
-	if(SystraceIsCapturingHWData() && psDevInfo->bSystraceInitialised)
-	{
-		SGXReadHWPerfCBKM((IMG_HANDLE) psDeviceNode,
-						8,
-						asSGXHWPerf,
-						(IMG_UINT32 *)&ui32DataCount,
-						(IMG_UINT32 *)&ui32SgxClockSpeed,
-						(IMG_UINT32 *)&ui32HostTimestamp);
-
-		SystraceHWPerfPackets(psDevInfo, asSGXHWPerf, ui32DataCount, ui32SgxClockSpeed);
-	}
-	else if(SystraceIsCapturingHWData() && !psDevInfo->bSystraceInitialised)
-	{
-		SGX_MISC_INFO sSGXMiscInfo;
-
-		if(OSAllocMem(PVRSRV_OS_PAGEABLE_HEAP, sizeof(PVRSRV_SYSTRACE_DATA),
-					  (IMG_VOID **)&psDevInfo->psSystraceData, 0,
-					  "Systrace data storage") != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "SGXSystraceHandler: Failed to allocate systrace data"));
-			return;
-		}
-
-		OSMemSet(psDevInfo->psSystraceData, 0, sizeof(PVRSRV_SYSTRACE_DATA));
-
-		/* Prepare the SGXMiscInfo request in order to stop recording data*/
-		sSGXMiscInfo.eRequest = SGX_MISC_INFO_REQUEST_SET_HWPERF_STATUS;
-		sSGXMiscInfo.uData.sSetHWPerfStatus.ui32NewHWPerfStatus = PVRSRV_SGX_HWPERF_STATUS_GRAPHICS_ON | PVRSRV_SGX_HWPERF_STATUS_PERIODIC_ON;
-
-		/* Call into SGX DDK KM Services*/
-		SGXGetMiscInfoKM(psDevInfo, &sSGXMiscInfo, psDeviceNode, NULL);
-
-		psDevInfo->bSystraceInitialised = IMG_TRUE;
-
-		/* Initialize the first context to be 1 (0 is idle)*/
-		psDevInfo->psSystraceData->ui32CurrentCtxID = 1;
-	}
-	else if(psDevInfo->bSystraceInitialised)
-	{
-		SGX_MISC_INFO sSGXMiscInfo;
-
-		/* Prepare the SGXMiscInfo request in order to stop recording data*/
-		sSGXMiscInfo.eRequest = SGX_MISC_INFO_REQUEST_SET_HWPERF_STATUS;
-		sSGXMiscInfo.uData.sSetHWPerfStatus.ui32NewHWPerfStatus = 0;
-
-		/* Call into SGX DDK KM Services*/
-		SGXGetMiscInfoKM(psDevInfo, &sSGXMiscInfo, psDeviceNode, NULL);
-
-		OSFreeMem(PVRSRV_OS_PAGEABLE_HEAP, sizeof(PVRSRV_SYSTRACE_DATA), psDevInfo->psSystraceData, NULL);
-		psDevInfo->bSystraceInitialised = IMG_FALSE;
-	}
-}
-#endif
-
-/*
 	SGX MISR Handler
 */
 static IMG_VOID SGX_MISRHandler (IMG_VOID *pvData)
@@ -2075,11 +2005,6 @@ static IMG_VOID SGX_MISRHandler (IMG_VOID *pvData)
 #endif
 
 	SGXTestActivePowerEvent(psDeviceNode, ISR_ID);
-
-#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)
-	SGXSystraceHandler(psDeviceNode);
-#endif
-
 }
 #endif /* #if defined (SYS_USING_INTERRUPTS) */
 

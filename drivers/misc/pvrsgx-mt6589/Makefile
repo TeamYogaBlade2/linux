@@ -60,7 +60,6 @@ pvrsrvkm-y := \
 	services4/srvkm/env/linux/mutex.o \
 	services4/srvkm/env/linux/event.o \
 	services4/srvkm/env/linux/osperproc.o \
-	services4/srvkm/env/linux/systrace.o \
 	services4/srvkm/common/buffer_manager.o \
 	services4/srvkm/common/devicemem.o \
 	services4/srvkm/common/deviceclass.o \
@@ -113,5 +112,3 @@ mtklfb-y := \
 
 obj-$(CONFIG_PVR_SGX_MT6589) += pvrsrvkm.o
 obj-$(CONFIG_PVR_SGX_MT6589) += mtklfb.o
-
-
