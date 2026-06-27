@@ -1,5 +1,5 @@
 OPTIM = -Os
-VER:=eng
+VER:=user
 
 ccflags-y := \
 	-I$(src)/include4 \
@@ -34,14 +34,6 @@ ccflags-y += \
 	-D__linux__ $(OPTIM) -g
 
 ccflags-y += -Wno-declaration-after-statement
-
-ifneq ($(strip $(TARGET_BUILD_VARIANT)),)
-ifneq ($(strip $(TARGET_BUILD_VARIANT)),eng)
-ifneq ($(strip $(MTK_3D_DEBUG_FOR_USER_VERSION)),yes)
-VER:=user
-endif
-endif
-endif
 
 ccflags-y += \
 	-include $(src)/include4/config_kernel_$(VER).h
