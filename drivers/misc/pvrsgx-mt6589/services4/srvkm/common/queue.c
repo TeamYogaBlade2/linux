@@ -47,11 +47,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 #include <linux/version.h>
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0))
-#include <linux/sw_sync.h>
-#else
 #include <../drivers/staging/android/sw_sync.h>
-#endif
 static struct sync_fence *AllocQueueFence(struct sw_sync_timeline *psTimeline, IMG_UINT32 ui32FenceValue, const char *szName)
 {
 	struct sync_fence *psFence = IMG_NULL;
@@ -959,7 +955,7 @@ static
 PVRSRV_ERROR CheckIfSyncIsQueued(PVRSRV_SYNC_OBJECT *psSync, COMMAND_COMPLETE_DATA *psCmdData)
 {
 	IMG_UINT32 k;
- 
+
 	if (psCmdData->bInUse)
 	{
 		for (k=0;k<psCmdData->ui32SrcSyncCount;k++)
@@ -1225,7 +1221,7 @@ PVRSRV_ERROR PVRSRVProcessQueues(IMG_BOOL	bFlush)
 	{
 		OSWaitus(1);
 	};
-	
+
 	psQueue = psSysData->psQueueList;
 
 	if(!psQueue)
@@ -1448,9 +1444,9 @@ PVRSRV_ERROR PVRSRVRegisterCmdProcListKM(IMG_UINT32		ui32DevIndex,
 				PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterCmdProcListKM: Failed to alloc cmd %d", ui32CmdTypeCounter));
 				goto ErrorExit;
 			}
-			
+
 			psDeviceCommandData[ui32CmdTypeCounter].apsCmdCompleteData[ui32CmdCounter] = psCmdCompleteData;
-			
+
 			/* clear memory */
 			OSMemSet(psCmdCompleteData, 0x00, ui32AllocSize);
 
@@ -1477,7 +1473,7 @@ ErrorExit:
 				"PVRSRVRegisterCmdProcListKM: Failed to clean up after error, device 0x%x",
 				ui32DevIndex));
 	}
-	
+
 	return eError;
 }
 
@@ -1529,7 +1525,7 @@ PVRSRV_ERROR PVRSRVRemoveCmdProcListKM(IMG_UINT32 ui32DevIndex,
 			for (ui32CmdCounter = 0; ui32CmdCounter < DC_NUM_COMMANDS_PER_TYPE; ui32CmdCounter++)
 			{
 				psCmdCompleteData = psDeviceCommandData[ui32CmdTypeCounter].apsCmdCompleteData[ui32CmdCounter];
-				
+
 				/* free the cmd complete structure array entries */
 				if (psCmdCompleteData != IMG_NULL)
 				{

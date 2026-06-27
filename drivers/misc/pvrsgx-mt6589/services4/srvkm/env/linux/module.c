@@ -41,12 +41,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/version.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
-#ifndef AUTOCONF_INCLUDED
-#include <linux/config.h>
-#endif
-#endif
-
 #if defined(SUPPORT_DRI_DRM) && !defined(SUPPORT_DRI_DRM_PLUGIN)
 #define	PVR_MOD_STATIC
 #else
@@ -242,7 +236,7 @@ static IMG_UINT32 gPVRPowerLevel;
 #define	LDM_DRV	struct pci_driver
 #endif /* PVR_LDM_PCI_MODULE */
 /*
- * This is the driver interface we support.  
+ * This is the driver interface we support.
  */
 #if defined(PVR_LDM_PLATFORM_MODULE)
 static void PVRSRVDriverRemove(LDM_DEV *device);
@@ -356,7 +350,7 @@ static int __devinit PVRSRVDriverProbe(LDM_DEV *pDevice, const struct pci_device
 	{
 		return -EINVAL;
 	}
-#endif	
+#endif
 	/* SysInitialise only designed to be called once.
 	 */
 	psSysData = SysAcquireDataNoCheck();
@@ -404,7 +398,7 @@ static void __devexit PVRSRVDriverRemove(LDM_DEV *pDevice)
 	PVR_TRACE(("PVRSRVDriverRemove(pDevice=%p)", pDevice));
 
 	SysAcquireData(&psSysData);
-	
+
 #if defined(DEBUG) && defined(PVR_MANUAL_POWER_CONTROL)
 	if (gPVRPowerLevel != 0)
 	{
@@ -446,7 +440,7 @@ static IMG_BOOL bDriverIsShutdown;
  @Description
 
  Suspend device operation for system shutdown.  This is called as part of the
- system halt/reboot process.  The driver is put into a quiescent state by 
+ system halt/reboot process.  The driver is put into a quiescent state by
  setting the power state to D3.
 
  @input pDevice - the device for which shutdown is requested
@@ -636,7 +630,7 @@ PVR_MOD_STATIC int PVRSRVDriverResume(LDM_DEV *pDevice)
  * 	echo 2 > /proc/pvr/power_control
  * To resume the device, type:
  * 	echo 0 > /proc/pvr/power_control
- * 
+ *
  * The following example shows how to suspend/resume the device independently
  * of the rest of the system.
  * Suspend the device:
@@ -685,7 +679,7 @@ IMG_INT PVRProcSetPowerLevel(struct file *file, const IMG_CHAR *buffer, IMG_UINT
 	return (count);
 }
 
-void ProcSeqShowPowerLevel(struct seq_file *sfile,void* el)	
+void ProcSeqShowPowerLevel(struct seq_file *sfile,void* el)
 {
 	seq_printf(sfile, "%lu\n", gPVRPowerLevel);
 }
@@ -759,7 +753,7 @@ static int PVRSRVOpen(struct inode unref__ * pInode, struct file *pFile)
 	psPrivateData->hBlockAlloc = hBlockAlloc;
 	PRIVATE_DATA(pFile) = psPrivateData;
 	iRet = 0;
-err_unlock:	
+err_unlock:
 	LinuxUnLockMutex(&gPVRSRVLock);
 	return iRet;
 }
@@ -952,7 +946,7 @@ static int __init PVRCore_Init(void)
 	}
 
 	LinuxBridgeInit();
-	
+
 
 	PVRMMapInit();
 
@@ -1034,9 +1028,7 @@ static int __init PVRCore_Init(void)
 	}
 
 	psDev = device_create(psPvrClass, NULL, MKDEV(AssignedMajorNumber, 0),
-#if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,26))
 				  NULL,
-#endif /* (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,26)) */
 				  DEVNAME);
 	if (IS_ERR(psDev))
 	{
@@ -1109,7 +1101,7 @@ init_failed:
 
  @Function		PVRCore_Cleanup
 
- @Description	
+ @Description
 
  Remove the driver from the kernel.
 
@@ -1154,19 +1146,7 @@ static void __exit PVRCore_Cleanup(void)
 	device_destroy(psPvrClass, MKDEV(AssignedMajorNumber, 0));
 	class_destroy(psPvrClass);
 #endif
-
-#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,22))
-	if (
-#endif	/* (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,22)) */
-		unregister_chrdev((IMG_UINT)AssignedMajorNumber, DEVNAME)
-#if !(LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,22))
-								;
-#else	/* (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,22)) */
-								)
-	{
-		PVR_DPF((PVR_DBG_ERROR," can't unregister device major %d", AssignedMajorNumber));
-	}
-#endif	/* (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,22)) */
+		unregister_chrdev((IMG_UINT)AssignedMajorNumber, DEVNAME);
 #endif	/* !defined(SUPPORT_DRI_DRM) */
 
 #if defined(PVR_LDM_MODULE)

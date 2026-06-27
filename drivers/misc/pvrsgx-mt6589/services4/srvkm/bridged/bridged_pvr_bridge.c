@@ -91,11 +91,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 #include <linux/file.h>
 #include <linux/version.h>
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0))
-#include <linux/sync.h>
-#else
 #include <../drivers/staging/android/sync.h>
-#endif
 #endif
 
 #include "srvkm.h"
@@ -513,7 +509,7 @@ PVRSRVAllocDeviceMemBW(IMG_UINT32 ui32BridgeID,
 			psAllocDeviceMemOUT->eError = PVRSRV_ERROR_INVALID_PARAMS;
 			return 0;
 		}
-	
+
 		if (psAllocDeviceMemIN->pabMapChunk == IMG_NULL)
 		{
 			PVR_DPF((PVR_DBG_ERROR, "PVRSRVAllocDeviceMemBW: Called in sparse mapping mode but without MapChunk array"));
@@ -4741,7 +4737,7 @@ IMG_INT BridgedDispatchKM(PVRSRV_PER_PROCESS_DATA * psPerProc,
 		psBridgeOut = (IMG_PVOID)((IMG_PBYTE)psBridgeIn + PVRSRV_MAX_BRIDGE_IN_SIZE);
 
 		/* check we are not using a bigger bridge than allocated */
-		if((psBridgePackageKM->ui32InBufferSize > PVRSRV_MAX_BRIDGE_IN_SIZE) || 
+		if((psBridgePackageKM->ui32InBufferSize > PVRSRV_MAX_BRIDGE_IN_SIZE) ||
 			(psBridgePackageKM->ui32OutBufferSize > PVRSRV_MAX_BRIDGE_OUT_SIZE))
 		{
 			goto return_fault;

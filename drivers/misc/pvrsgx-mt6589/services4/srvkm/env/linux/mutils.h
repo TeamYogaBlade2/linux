@@ -45,13 +45,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/version.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
-#ifndef AUTOCONF_INCLUDED
-#include <linux/config.h>
-#endif
-#endif
-
-#if !(defined(__i386__) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26)))
+#if !(defined(__i386__))
 #if defined(SUPPORT_LINUX_X86_PAT)
 #undef SUPPORT_LINUX_X86_PAT
 #endif
@@ -76,10 +70,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #define	PGPROT_UC(pv)	pgprot_noncached(pv)
 
-#if defined(__i386__) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26))
+#if defined(__i386__)
 	#define	IOREMAP(pa, bytes)	ioremap_cache(pa, bytes)
-#else	
-	#if defined(__arm__) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0))
+#else
+	#if defined(__arm__)
 		#define	IOREMAP(pa, bytes)	ioremap_cached(pa, bytes)
 	#else
 		#define IOREMAP(pa, bytes)	ioremap(pa, bytes)
@@ -94,19 +88,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	#endif
 #else
 	#if defined(__arm__)
-		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27))
-			#define IOREMAP_WC(pa, bytes) ioremap_wc(pa, bytes)
-		#else
-			#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22))
-				#define	IOREMAP_WC(pa, bytes)	ioremap_nocache(pa, bytes)
-			#else
-				#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)) || (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,17))
-					#define	IOREMAP_WC(pa, bytes)	__ioremap(pa, bytes, L_PTE_BUFFERABLE)
-				#else
-					#define IOREMAP_WC(pa, bytes)	__ioremap(pa, bytes, , L_PTE_BUFFERABLE, 1)
-				#endif
-			#endif
-		#endif
+		#define IOREMAP_WC(pa, bytes) ioremap_wc(pa, bytes)
 	#else
 		#define IOREMAP_WC(pa, bytes)	ioremap_nocache(pa, bytes)
 	#endif
@@ -117,4 +99,3 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 IMG_VOID PVRLinuxMUtilsInit(IMG_VOID);
 
 #endif /* __IMG_LINUX_MUTILS_H__ */
-

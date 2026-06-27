@@ -45,38 +45,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifdef __linux__
 #include <linux/version.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
-#ifndef AUTOCONF_INCLUDED
-#include <linux/config.h>
-#endif
-#endif
-
 #include <linux/sched.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,9)
 #include <linux/hardirq.h>
-#else
-#include <asm/hardirq.h>
-#endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
 #include <linux/mutex.h>
-#else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
-#include <linux/semaphore.h>
-#else
-#include <asm/semaphore.h>
-#endif
-#endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
 static DEFINE_MUTEX(lock);
 #define	DOWN(m) mutex_lock(m)
 #define	UP(m) mutex_unlock(m)
-#else
-static DECLARE_MUTEX(lock);
-#define	DOWN(m) down(m)
-#define	UP(m) up(m)
-#endif
 
 #define ACQUIRE_SYNC_OBJ  do {							\
 		if (in_interrupt()) { 							\
@@ -351,7 +327,7 @@ IMG_VOID PVRSRVResManDisconnect(PRESMAN_CONTEXT psResManContext,
 		FreeResourceByCriteria(psResManContext, RESMAN_CRITERIA_RESTYPE, RESMAN_TYPE_TRANSFER_CONTEXT, 0, 0, IMG_TRUE);
 		FreeResourceByCriteria(psResManContext, RESMAN_CRITERIA_RESTYPE, RESMAN_TYPE_SHARED_PB_DESC_CREATE_LOCK, 0, 0, IMG_TRUE);
 		FreeResourceByCriteria(psResManContext, RESMAN_CRITERIA_RESTYPE, RESMAN_TYPE_SHARED_PB_DESC, 0, 0, IMG_TRUE);
-		
+
 		/* COMMON types: */
 		FreeResourceByCriteria(psResManContext, RESMAN_CRITERIA_RESTYPE, RESMAN_TYPE_SYNC_INFO, 0, 0, IMG_TRUE);
 		FreeResourceByCriteria(psResManContext, RESMAN_CRITERIA_RESTYPE, RESMAN_TYPE_DEVICECLASSMEM_MAPPING, 0, 0, IMG_TRUE);
@@ -762,7 +738,7 @@ static PVRSRV_ERROR FreeResourceByPtr(RESMAN_ITEM	*psItem,
 			"FreeResourceByPtr: Type 0x%x, Addr 0x%p, "
 			"Param 0x%x, FnCall %p, Flags 0x%x",
 			psItem->ui32ResType,
-			psItem->pvParam, 
+			psItem->pvParam,
             psItem->ui32Param,
 			psItem->pfnFreeResource, psItem->ui32Flags));
 
@@ -782,7 +758,7 @@ static PVRSRV_ERROR FreeResourceByPtr(RESMAN_ITEM	*psItem,
 			        "FreeResourceByPtr: Type 0x%x, Addr 0x%p, "
 			        "Param 0x%x, FnCall %p, Flags 0x%x",
                     psItem->ui32ResType,
-			        psItem->pvParam, 
+			        psItem->pvParam,
                     psItem->ui32Param,
 			        psItem->pfnFreeResource, psItem->ui32Flags));
 #endif

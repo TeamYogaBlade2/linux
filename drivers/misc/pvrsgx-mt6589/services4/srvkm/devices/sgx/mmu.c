@@ -356,12 +356,8 @@ static INLINE IMG_VOID CheckPT(MMU_PT_INFO *psPTInfoList)
 
 #include <linux/version.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
 #ifndef AUTOCONF_INCLUDED
 #include <linux/config.h>
-#endif
-#else
-#include <generated/autoconf.h>
 #endif
 
 #include <linux/mm.h>
@@ -461,28 +457,28 @@ static INLINE IMG_VOID MakeKernelPageReadOnly(IMG_PVOID ulCPUVAddr)
 /*___________________________________________________________________________
 
 	Information for SUPPORT_PDUMP_MULTI_PROCESS feature.
-	
+
 	The client marked for pdumping will set the bPDumpActive flag in
 	the MMU Context (see MMU_Initialise).
-	
+
 	Shared heap allocations should be persistent so all apps which
 	are pdumped will see the allocation. Persistent flag over-rides
 	the bPDumpActive flag (see pdump_common.c/DbgWrite function).
-	
+
 	The idea is to dump PT,DP for shared heap allocations, but only
 	dump the PDE if the allocation is mapped into the kernel or active
 	client context. This ensures if a background app allocates on a
 	shared heap then all clients can access it in the pdump toolchain.
-	
-	
-	
+
+
+
 	PD		PT		DP
 	+-+
 	| |--->	+-+
 	+-+		| |--->	+-+
 			+-+		+ +
 					+-+
-					
+
 	PD allocation/free: pdump flags are 0 (only need PD for active apps)
 	PT allocation/free: pdump flags are 0
 						unless PT is for a shared heap, in which case persistent is set
@@ -494,11 +490,11 @@ static INLINE IMG_VOID MakeKernelPageReadOnly(IMG_PVOID ulCPUVAddr)
 						otherwise ignore.
 	PT entries			pdump flags are 0
 						unless PTE is for a shared heap, in which case persistent is set
-						
+
 	NOTE: PDump common code:-
 	PDumpMallocPages and PDumpMemKM also set the persistent flag for
 	shared heap allocations.
-	
+
   ___________________________________________________________________________
 */
 
@@ -704,7 +700,7 @@ static IMG_BOOL BRN31620FreePageTable(MMU_HEAP *psMMUHeap, IMG_UINT32 ui32PDInde
 
 	PVR_ASSERT(psMMUHeap != IMG_NULL);
 
-	/* 
+	/*
 	 * Clear the PT info for this PD index so even if we don't
 	 * free the memory here apsPTInfoList[PDIndex] will trigger
 	 * an "allocation" in _DeferredAllocPagetables which
@@ -852,10 +848,10 @@ _AllocPageTableMemory (MMU_HEAP *pMMUHeap,
 	}
 	else
 	{
-		/* 
+		/*
 		   We cannot use IMG_SYS_PHYADDR here, as that is 64-bit for 32-bit PAE builds.
-		   The physical address in this call to RA_Alloc is specifically the SysPAddr 
-		   of local (card) space, and it is highly unlikely we would ever need to 
+		   The physical address in this call to RA_Alloc is specifically the SysPAddr
+		   of local (card) space, and it is highly unlikely we would ever need to
 		   support > 4GB of local (card) memory (this does assume that such local
 		   memory will be mapped into System physical memory space at a low address so
 		   that any and all local memory exists within the 4GB SYSPAddr range).
@@ -988,7 +984,7 @@ _FreePageTableMemory (MMU_HEAP *pMMUHeap, MMU_PT_INFO *psPTInfoList)
 		IMG_CPU_PHYADDR sCpuPAddr;
 
 		/*  derive the system physical address */
-		sCpuPAddr = OSMapLinToCPUPhys(psPTInfoList->hPTPageOSMemHandle, 
+		sCpuPAddr = OSMapLinToCPUPhys(psPTInfoList->hPTPageOSMemHandle,
 									  psPTInfoList->PTPageCpuVAddr);
 		sSysPAddr = SysCpuPAddrToSysPAddr (sCpuPAddr);
 
@@ -1392,7 +1388,7 @@ _DeferredAllocPagetables(MMU_HEAP *pMMUHeap, IMG_DEV_VIRTADDR DevVAddr, IMG_UINT
 #if defined(PDUMP)
 	{
 		IMG_UINT32 ui32Flags = 0;
-		
+
 		/* pdump the PD Page modifications */
 		if( MMU_IsHeapShared(pMMUHeap) )
 		{
@@ -1726,14 +1722,14 @@ static IMG_VOID MMU_SetPDumpAttribs(PDUMP_MMU_ATTRIB *psMMUAttrib,
 {
 	/* Sets up device ID, contains pdump memspace name */
 	psMMUAttrib->sDevId = psDeviceNode->sDevId;
-	
+
 	psMMUAttrib->pszPDRegRegion = IMG_NULL;
 	psMMUAttrib->ui32DataPageMask = ui32DataPageMask;
-	
+
 	psMMUAttrib->ui32PTEValid = SGX_MMU_PTE_VALID;
 	psMMUAttrib->ui32PTSize = ui32PTSize;
 	psMMUAttrib->ui32PTEAlignShift = SGX_MMU_PTE_ADDR_ALIGNSHIFT;
-	
+
 	psMMUAttrib->ui32PDEMask = SGX_MMU_PDE_ADDR_MASK;
 	psMMUAttrib->ui32PDEAlignShift = SGX_MMU_PDE_ADDR_ALIGNSHIFT;
 }
@@ -1900,7 +1896,7 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 			{
 				PVR_DPF((PVR_DBG_ERROR, "MMU_Initialise: ERROR call to OSAllocPages failed"));
 				return PVRSRV_ERROR_FAILED_TO_ALLOC_PAGES;
-			}				
+			}
 
 			/* Get a physical address */
 			if(psDevInfo->pvBRN31620DummyPageCpuVAddr)
@@ -1934,7 +1930,7 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 			{
 				PVR_DPF((PVR_DBG_ERROR, "MMU_Initialise: ERROR call to OSAllocPages failed"));
 				return PVRSRV_ERROR_FAILED_TO_ALLOC_PAGES;
-			}				
+			}
 
 			/* Get a physical address */
 			if(psDevInfo->pvBRN31620DummyPTCpuVAddr)
@@ -1955,10 +1951,10 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 	}
 	else
 	{
-		/* 
+		/*
 		   We cannot use IMG_SYS_PHYADDR here, as that is 64-bit for 32-bit PAE builds.
-		   The physical address in this call to RA_Alloc is specifically the SysPAddr 
-		   of local (card) space, and it is highly unlikely we would ever need to 
+		   The physical address in this call to RA_Alloc is specifically the SysPAddr
+		   of local (card) space, and it is highly unlikely we would ever need to
 		   support > 4GB of local (card) memory (this does assume that such local
 		   memory will be mapped into System physical memory space at a low address so
 		   that any and all local memory exists within the 4GB SYSPAddr range).
@@ -2150,7 +2146,7 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 				return PVRSRV_ERROR_FAILED_TO_MAP_PAGE_TABLE;
 			}
 
-			OSMemSet(psDevInfo->pvBRN31620DummyPTCpuVAddr,0,SGX_MMU_PAGE_SIZE);		
+			OSMemSet(psDevInfo->pvBRN31620DummyPTCpuVAddr,0,SGX_MMU_PAGE_SIZE);
 			PDUMPMALLOCPAGETABLE(&psDeviceNode->sDevId, psDevInfo->hBRN31620DummyPTOSMemHandle, 0, psDevInfo->pvBRN31620DummyPTCpuVAddr, SGX_MMU_PAGE_SIZE, 0, PDUMP_PT_UNIQUETAG);
 		}
 #endif /* #if defined(FIX_HW_BRN_31620) */
@@ -2291,7 +2287,7 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 		PDUMPCOMMENT("BRN31620 Dump dummy page contents");
 		PDUMPMEMPTENTRIES(&sMMUAttrib,  psDevInfo->hBRN31620DummyPageOSMemHandle, psDevInfo->pvBRN31620DummyPageCpuVAddr, SGX_MMU_PAGE_SIZE, 0, IMG_TRUE, PDUMP_PD_UNIQUETAG, PDUMP_PT_UNIQUETAG);
 
-		/* Dump the wiring */		
+		/* Dump the wiring */
 		for(i=0;i<SGX_MMU_PT_SIZE;i++)
 		{
 			PDUMPMEMPTENTRIES(&sMMUAttrib, psDevInfo->hBRN31620DummyPTOSMemHandle, &pui32PT[i], sizeof(IMG_UINT32), 0, IMG_FALSE, PDUMP_PD_UNIQUETAG, PDUMP_PT_UNIQUETAG);
@@ -2484,7 +2480,7 @@ MMU_Finalise (MMU_CONTEXT *psMMUContext)
 							SGX_MMU_PAGE_SIZE,
 							psDevInfo->pvBRN31620DummyPTCpuVAddr,
 							psDevInfo->hBRN31620DummyPTOSMemHandle);
-	
+
 		}
 #endif
 #if defined(SUPPORT_SGX_MMU_DUMMY_PAGE)
@@ -3160,13 +3156,13 @@ MMU_Alloc (MMU_HEAP *pMMUHeap,
 		{
 			IMG_CHAR asCurrentProcessName[128];
 
-			PVR_DPF((PVR_DBG_ERROR,"MMU_Alloc: RA_Alloc of VMArena failed"));	
+			PVR_DPF((PVR_DBG_ERROR,"MMU_Alloc: RA_Alloc of VMArena failed"));
 			OSGetCurrentProcessNameKM(asCurrentProcessName, 128);
 			PVR_DPF((PVR_DBG_ERROR,"MMU_Alloc: Alloc of DevVAddr failed from heap %s ID%d, pid: %d, task: %s",
  									pMMUHeap->psDevArena->pszName,
 									pMMUHeap->psDevArena->ui32HeapID,
 									OSGetCurrentProcessIDKM(),
-									asCurrentProcessName));									
+									asCurrentProcessName));
 		#if defined (MEM_TRACK_INFO_DEBUG)
 			PVRSRVPrintMemTrackInfo(0);
 		#endif
@@ -3512,7 +3508,7 @@ MMU_MapPage (MMU_HEAP *pMMUHeap,
 #if !defined(SUPPORT_SGX_MMU_DUMMY_PAGE)
 	{
 		IMG_UINT32 uTmp = pui32Tmp[ui32Index];
-		
+
 		/* Is the current page already valid? (should not be unless it was allocated and not deallocated) */
 #if defined(FIX_HW_BRN_31620)
 		if ((uTmp & SGX_MMU_PTE_VALID) && ((DevVAddr.uiAddr & BRN31620_PDE_CACHE_FILL_MASK) != BRN31620_DUMMY_PAGE_OFFSET))
@@ -3658,7 +3654,7 @@ MMU_MapPages (MMU_HEAP *pMMUHeap,
 	PVR_DPF ((PVR_DBG_MESSAGE, "MMU_MapPages: heap:%s, heap_id:%d devVAddr=%08X, SysPAddr=" SYSPADDR_FMT ", size=0x%" SIZE_T_FMT_LEN "x",
 								pMMUHeap->psDevArena->pszName,
 								pMMUHeap->psDevArena->ui32HeapID,
-								DevVAddr.uiAddr, 
+								DevVAddr.uiAddr,
 								SysPAddr.uiAddr,
 								uSize));
 
@@ -3750,7 +3746,7 @@ MMU_MapPagesSparse (MMU_HEAP *pMMUHeap,
 	PVR_DPF ((PVR_DBG_MESSAGE, "MMU_MapPagesSparse: heap:%s, heap_id:%d devVAddr=%08X, SysPAddr=" SYSPADDR_FMT ", VM space=0x%" SIZE_T_FMT_LEN "x, PHYS space=0x%x",
 								pMMUHeap->psDevArena->pszName,
 								pMMUHeap->psDevArena->ui32HeapID,
-								DevVAddr.uiAddr, 
+								DevVAddr.uiAddr,
 								SysPAddr.uiAddr,
 								uSizeVM,
 								ui32ChunkSize * ui32NumPhysChunks));
@@ -4010,10 +4006,10 @@ MMU_MapShadowSparse (MMU_HEAP          *pMMUHeap,
 				CpuPAddr = OSMemHandleToCpuPAddr(hOSMemHandle, uOffset);
 			}
 			DevPAddr = SysCpuPAddrToDevPAddr (PVRSRV_DEVICE_TYPE_SGX, CpuPAddr);
-	
+
 			/* check the physical alignment of the memory to map */
 			PVR_ASSERT((DevPAddr.uiAddr & pMMUHeap->ui32DataPageMask) == 0);
-	
+
 			PVR_DPF ((PVR_DBG_MESSAGE,
 					"Offset=0x%x: CpuVAddr=%p, CpuPAddr=" CPUPADDR_FMT ", DevVAddr=%08X, DevPAddr=" DEVPADDR_FMT,
 					uOffset,
@@ -4021,7 +4017,7 @@ MMU_MapShadowSparse (MMU_HEAP          *pMMUHeap,
 					CpuPAddr.uiAddr,
 					MapDevVAddr.uiAddr,
 					DevPAddr.uiAddr));
-	
+
 			MMU_MapPage (pMMUHeap, MapDevVAddr, DevPAddr, ui32MemFlags);
 			uOffset += ui32PAdvance;
 		}
@@ -4344,10 +4340,10 @@ PVRSRV_ERROR MMU_BIFResetPDAlloc(PVRSRV_SGXDEV_INFO *psDevInfo)
 	{
 		/* non-UMA system */
 
-		/* 
+		/*
 		   We cannot use IMG_SYS_PHYADDR here, as that is 64-bit for 32-bit PAE builds.
-		   The physical address in this call to RA_Alloc is specifically the SysPAddr 
-		   of local (card) space, and it is highly unlikely we would ever need to 
+		   The physical address in this call to RA_Alloc is specifically the SysPAddr
+		   of local (card) space, and it is highly unlikely we would ever need to
 		   support > 4GB of local (card) memory (this does assume that such local
 		   memory will be mapped into System physical memory space at a low address so
 		   that any and all local memory exists within the 4GB SYSPAddr range).
@@ -4693,5 +4689,3 @@ static IMG_VOID PageTest(IMG_VOID* pMem, IMG_DEV_PHYADDR sDevPAddr)
 /******************************************************************************
  End of file (mmu.c)
 ******************************************************************************/
-
-

@@ -44,9 +44,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __SERVICES_PROC_H__
 #define __SERVICES_PROC_H__
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0))
-#include <asm/system.h>
-#endif
 #include <linux/seq_file.h>
 #include "img_defs.h"
 

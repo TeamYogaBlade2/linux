@@ -41,11 +41,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/version.h>
 #include <linux/errno.h>
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15))
 #include <linux/mutex.h>
-#else
-#include <asm/semaphore.h>
-#endif
 #include <linux/module.h>
 
 #include <img_defs.h>
@@ -69,8 +65,6 @@ static inline char mtk_GetMutexName(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 
 #endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15))
-
 #if !defined(CONFIG_PROVE_LOCKING)
 IMG_VOID LinuxInitMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
@@ -80,11 +74,11 @@ IMG_VOID LinuxInitMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 
 IMG_VOID LinuxLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
-	MTKPP_LOG(MTKPP_ID_MUTEX, "Lock %c %p: %d (current:%d)", 
+	MTKPP_LOG(MTKPP_ID_MUTEX, "Lock %c %p: %d (current:%d)",
 		mtk_GetMutexName(psPVRSRVMutex), psPVRSRVMutex, psPVRSRVMutex->hHeldBy, current->pid);
 
     mutex_lock(psPVRSRVMutex);
-	
+
 #if defined(MTK_DEBUG_PROC_PRINT)
 	psPVRSRVMutex->hHeldBy = current->pid;
 #endif
@@ -92,11 +86,11 @@ IMG_VOID LinuxLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 
 IMG_VOID LinuxLockMutexNested(PVRSRV_LINUX_MUTEX *psPVRSRVMutex, unsigned int uiLockClass)
 {
-	MTKPP_LOG(MTKPP_ID_MUTEX, "LockNested %c %p,c%d: %d (current:%d)", 
+	MTKPP_LOG(MTKPP_ID_MUTEX, "LockNested %c %p,c%d: %d (current:%d)",
 		mtk_GetMutexName(psPVRSRVMutex), psPVRSRVMutex, uiLockClass, psPVRSRVMutex->hHeldBy, current->pid);
-	
+
 	mutex_lock_nested(psPVRSRVMutex, uiLockClass);
-	
+
 #if defined(MTK_DEBUG_PROC_PRINT)
 	psPVRSRVMutex->hHeldBy = current->pid;
 #endif
@@ -104,9 +98,9 @@ IMG_VOID LinuxLockMutexNested(PVRSRV_LINUX_MUTEX *psPVRSRVMutex, unsigned int ui
 
 PVRSRV_ERROR LinuxLockMutexInterruptible(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
-	MTKPP_LOG(MTKPP_ID_MUTEX, "LockInterruptible %c %p: %d (current:%d)", 
+	MTKPP_LOG(MTKPP_ID_MUTEX, "LockInterruptible %c %p: %d (current:%d)",
 		mtk_GetMutexName(psPVRSRVMutex), psPVRSRVMutex, psPVRSRVMutex->hHeldBy, current->pid);
-	
+
     if(mutex_lock_interruptible(psPVRSRVMutex) == -EINTR)
     {
         return PVRSRV_ERROR_MUTEX_INTERRUPTIBLE_ERROR;
@@ -124,11 +118,11 @@ IMG_INT32 LinuxTryLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
 	IMG_INT32 ret;
 
-	MTKPP_LOG(MTKPP_ID_MUTEX, "TryLock %c %p: %d (current:%d)", 
+	MTKPP_LOG(MTKPP_ID_MUTEX, "TryLock %c %p: %d (current:%d)",
 		mtk_GetMutexName(psPVRSRVMutex), psPVRSRVMutex, psPVRSRVMutex->hHeldBy, current->pid);
-	
+
 	ret = mutex_trylock(psPVRSRVMutex);
-	
+
 #if defined(MTK_DEBUG_PROC_PRINT)
 	if (ret) psPVRSRVMutex->hHeldBy = current->pid;
 #endif
@@ -138,9 +132,9 @@ IMG_INT32 LinuxTryLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 
 IMG_VOID LinuxUnLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
-	MTKPP_LOG(MTKPP_ID_MUTEX, "UnLock %c %p: %d (current:%d)", 
+	MTKPP_LOG(MTKPP_ID_MUTEX, "UnLock %c %p: %d (current:%d)",
 		mtk_GetMutexName(psPVRSRVMutex), psPVRSRVMutex, psPVRSRVMutex->hHeldBy, current->pid);
-	
+
 #if defined(MTK_DEBUG_PROC_PRINT)
 	psPVRSRVMutex->hHeldBy = 0;
 #endif
@@ -152,67 +146,3 @@ IMG_BOOL LinuxIsLockedMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
 {
     return (mutex_is_locked(psPVRSRVMutex)) ? IMG_TRUE : IMG_FALSE;
 }
-
-
-#else /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)) */
-
-
-IMG_VOID LinuxInitMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    init_MUTEX(&psPVRSRVMutex->sSemaphore);
-    atomic_set(&psPVRSRVMutex->Count, 0);
-}
-
-IMG_VOID LinuxLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    down(&psPVRSRVMutex->sSemaphore);
-    atomic_dec(&psPVRSRVMutex->Count);
-}
-
-IMG_VOID LinuxLockMutexNested(PVRSRV_LINUX_MUTEX *psPVRSRVMutex, unsigned int uiLockClass)
-{
-	LinuxLockMutex(psPVRSRVMutex);
-}
-
-PVRSRV_ERROR LinuxLockMutexInterruptible(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    if(down_interruptible(&psPVRSRVMutex->sSemaphore) == -EINTR)
-    {
-        /* The process was sent a signal while waiting for the semaphore
-         * (e.g. a kill signal from userspace)
-         */
-        return PVRSRV_ERROR_MUTEX_INTERRUPTIBLE_ERROR;
-    }else{
-        atomic_dec(&psPVRSRVMutex->Count);
-        return PVRSRV_OK;
-    }
-}
-
-IMG_INT32 LinuxTryLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    IMG_INT32 Status = down_trylock(&psPVRSRVMutex->sSemaphore);
-    if(Status == 0)
-    {
-        atomic_dec(&psPVRSRVMutex->Count);
-    }
-
-    return Status == 0;
-}
-
-IMG_VOID LinuxUnLockMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    atomic_inc(&psPVRSRVMutex->Count);
-    up(&psPVRSRVMutex->sSemaphore);
-}
-
-IMG_BOOL LinuxIsLockedMutex(PVRSRV_LINUX_MUTEX *psPVRSRVMutex)
-{
-    IMG_INT32 iCount;
-    
-    iCount = atomic_read(&psPVRSRVMutex->Count);
-
-    return (IMG_BOOL)iCount;
-}
-
-#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15)) */
-

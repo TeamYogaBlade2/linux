@@ -1,36 +1,28 @@
 /**********************************************************************
  *
  * Copyright(C) 2008 Imagination Technologies Ltd. All rights reserved.
- * 
+ *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
  * version 2, as published by the Free Software Foundation.
- * 
- * This program is distributed in the hope it will be useful but, except 
- * as otherwise stated in writing, without any warranty; without even the 
- * implied warranty of merchantability or fitness for a particular purpose. 
+ *
+ * This program is distributed in the hope it will be useful but, except
+ * as otherwise stated in writing, without any warranty; without even the
+ * implied warranty of merchantability or fitness for a particular purpose.
  * See the GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License along with
  * this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
- * 
+ *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
  * Contact Information:
  * Imagination Technologies Ltd. <gpl-support@imgtec.com>
- * Home Park Estate, Kings Langley, Herts, WD4 8LZ, UK 
+ * Home Park Estate, Kings Langley, Herts, WD4 8LZ, UK
  *
  ******************************************************************************/
-
-#include <linux/version.h>
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38))
-#ifndef AUTOCONF_INCLUDED
-#include <linux/config.h>
-#endif
-#endif
 
 #include <linux/version.h>
 
@@ -85,15 +77,9 @@
 
 MODULE_SUPPORTED_DEVICE(DEVNAME);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34))
 //#define MTK_DSS_DRIVER(drv, dev) struct omap_dss_driver *drv = (dev) != NULL ? (dev)->driver : NULL
 //#define MTK_DSS_MANAGER(man, dev) struct omap_overlay_manager *man = (dev) != NULL ? (dev)->manager : NULL
 #define	WAIT_FOR_VSYNC(man)	((man)->wait_for_vsync)
-#else
-//#define MTK_DSS_DRIVER(drv, dev) struct omap_dss_device *drv = (dev)
-//#define MTK_DSS_MANAGER(man, dev) struct omap_dss_device *man = (dev)
-#define	WAIT_FOR_VSYNC(man)	((man)->wait_vsync)
-#endif
 
 #ifdef MTK_DEBUG_TIMER_MONITOR
 static struct timer_list g_sTimer;
@@ -211,7 +197,7 @@ MTKLFB_ERROR MTKLFBGetLibFuncAddr (char *szFunctionName, PFN_DC_GET_PVRJTABLE *p
 		return (MTKLFB_ERROR_INVALID_PARAMS);
 	}
 
-	
+
 	*ppfnFuncTable = PVRGetDisplayClassJTable;
 
 	return (MTKLFB_OK);
@@ -236,15 +222,7 @@ static void WorkQueueHandler(struct work_struct *psWork)
 
 MTKLFB_ERROR MTKLFBCreateSwapQueue(MTKLFB_SWAPCHAIN *psSwapChain)
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
 	psSwapChain->psWorkQueue = alloc_ordered_workqueue(DEVNAME, WQ_FREEZABLE | WQ_MEM_RECLAIM);
-#else
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36))
-	psSwapChain->psWorkQueue = create_freezable_workqueue(DEVNAME);
-#else
-	psSwapChain->psWorkQueue = __create_workqueue(DEVNAME, 1, 1, 1);
-#endif
-#endif
 	if (psSwapChain->psWorkQueue == NULL)
 	{
 		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't create workqueue\n", __FUNCTION__, psSwapChain->uiFBDevID);
@@ -284,7 +262,7 @@ void MTKLFBFlip(MTKLFB_DEVINFO *psDevInfo, MTKLFB_BUFFER *psBuffer)
 
 	ulYResVirtual = psBuffer->ulYOffset + sFBVar.yres;
 
-	
+
 	if (sFBVar.xres_virtual != sFBVar.xres || sFBVar.yres_virtual < ulYResVirtual)
 	{
 		sFBVar.xres_virtual = sFBVar.xres;
@@ -358,7 +336,7 @@ static int MTKLFBFrameBufferEvents(struct notifier_block *psNotif,
 	struct fb_info *psFBInfo = psFBEvent->info;
 	MTKLFB_BOOL bBlanked;
 
-	
+
 	if (event != FB_EVENT_BLANK)
 	{
 		return 0;
@@ -455,14 +433,14 @@ static void MTKLFBEarlyResumeHandler(struct early_suspend *h)
 	}
 }
 
-#endif 
+#endif
 
 MTKLFB_ERROR MTKLFBEnableLFBEventNotification(MTKLFB_DEVINFO *psDevInfo)
 {
 	int                res;
 	MTKLFB_ERROR         eError;
 
-	
+
 	memset(&psDevInfo->sLINNotifBlock, 0, sizeof(psDevInfo->sLINNotifBlock));
 
 	psDevInfo->sLINNotifBlock.notifier_call = MTKLFBFrameBufferEvents;
@@ -505,7 +483,7 @@ MTKLFB_ERROR MTKLFBDisableLFBEventNotification(MTKLFB_DEVINFO *psDevInfo)
 	unregister_early_suspend(&psDevInfo->sEarlySuspend);
 #endif
 
-	
+
 	res = fb_unregister_client(&psDevInfo->sLINNotifBlock);
 	if (res != 0)
 	{
@@ -576,7 +554,7 @@ int PVR_DRM_MAKENAME(DISPLAY_CONTROLLER, _Ioctl)(struct drm_device unref__ *dev,
 				bLeaveVT ? "Leave VT" : "Enter VT"));
 
 			MTKLFBCreateSwapChainLock(psDevInfo);
-			
+
 			MTKLFBAtomicBoolSet(&psDevInfo->sLeaveVT, bLeaveVT);
 			if (psDevInfo->psSwapChain != NULL)
 			{
@@ -698,7 +676,7 @@ void PVR_DRM_MAKENAME(DISPLAY_CONTROLLER, _Cleanup)(struct drm_device unref__ *d
 #else
 static void __exit MTKLFB_Cleanup(void)
 #endif
-{    
+{
 	if(MTKLFBDeInit() != MTKLFB_OK)
 	{
 		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: MTKLFBDeInit failed\n", __FUNCTION__);

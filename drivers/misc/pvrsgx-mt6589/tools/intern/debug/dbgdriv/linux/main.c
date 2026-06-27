@@ -197,9 +197,7 @@ static int __init dbgdrv_init(void)
 	}
 
 	psDev = device_create(psDbgDrvClass, NULL, MKDEV(AssignedMajorNumber, 0),
-#if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,26))
 						  NULL,
-#endif
 						  DRVNAME);
 	if (IS_ERR(psDev))
 	{

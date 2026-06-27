@@ -48,11 +48,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/string.h>
 #include <asm/page.h>
 #include <linux/vmalloc.h>
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,15))
 #include <linux/mutex.h>
-#else
-#include <asm/semaphore.h>
-#endif
 #include <linux/hardirq.h>
 
 #if defined(SUPPORT_DBGDRV_EVENT_OBJECTS)
@@ -82,7 +78,7 @@ IMG_UINT32	gPVRDebugLevel = (DBGPRIV_FATAL | DBGPRIV_ERROR | DBGPRIV_WARNING);
 ******************************************************************************
 
  @Function     PVRSRVDebugPrintf
-	
+
  @Description  To output a debug message to the user
 
  @Input uDebugLevel: The current debug level
@@ -180,7 +176,7 @@ void PVRSRVDebugPrintf	(
  		 */
  		if (bTrace == IMG_FALSE)
 		{
-			snprintf(szBufferEnd, szBufferLimit - szBufferEnd, 
+			snprintf(szBufferEnd, szBufferLimit - szBufferEnd,
 			         " [%d, %s]", (int)ui32Line, pszFileName);
 			szBufferEnd += strlen(szBufferEnd);
 		}
@@ -284,19 +280,11 @@ IMG_VOID HostCreateRegDeclStreams(IMG_VOID)
     /* FIXME: Not yet implemented */
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
 typedef	struct mutex		MUTEX;
 #define	INIT_MUTEX(m)		mutex_init(m)
 #define	DOWN_TRYLOCK(m)		(!mutex_trylock(m))
 #define	DOWN(m)			mutex_lock(m)
 #define UP(m)			mutex_unlock(m)
-#else
-typedef	struct semaphore	MUTEX;
-#define	INIT_MUTEX(m)		init_MUTEX(m)
-#define	DOWN_TRYLOCK(m)		down_trylock(m)
-#define	DOWN(m)			down(m)
-#define UP(m)			up(m)
-#endif
 
 IMG_VOID *HostCreateMutex(IMG_VOID)
 {

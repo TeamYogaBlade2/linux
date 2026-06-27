@@ -87,7 +87,7 @@ struct ion_device *gpsIonDev;
 PVRSRV_ERROR IonInit(IMG_VOID)
 {
     gpsIonDev = g_ion_device;
-    return PVRSRV_OK;    
+    return PVRSRV_OK;
 }
 
 IMG_VOID IonDeinit(IMG_VOID)
@@ -178,9 +178,7 @@ static struct ion_platform_data gsGenericConfig =
 {
 	.nr = 3,
 	.heaps =
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,4,39))
 	(struct ion_platform_heap [])
-#endif
 	{
 		{
 			.type = ION_HEAP_TYPE_SYSTEM_CONTIG,

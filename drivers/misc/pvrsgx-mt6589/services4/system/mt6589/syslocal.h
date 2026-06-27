@@ -1,26 +1,26 @@
 /**********************************************************************
  *
  * Copyright (C) Imagination Technologies Ltd. All rights reserved.
- * 
+ *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
  * version 2, as published by the Free Software Foundation.
- * 
- * This program is distributed in the hope it will be useful but, except 
- * as otherwise stated in writing, without any warranty; without even the 
- * implied warranty of merchantability or fitness for a particular purpose. 
+ *
+ * This program is distributed in the hope it will be useful but, except
+ * as otherwise stated in writing, without any warranty; without even the
+ * implied warranty of merchantability or fitness for a particular purpose.
  * See the GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License along with
  * this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
- * 
+ *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
  * Contact Information:
  * Imagination Technologies Ltd. <gpl-support@imgtec.com>
- * Home Park Estate, Kings Langley, Herts, WD4 8LZ, UK 
+ * Home Park Estate, Kings Langley, Herts, WD4 8LZ, UK
  *
  ******************************************************************************/
 
@@ -38,63 +38,22 @@
 #endif
 #include <asm/atomic.h>
 
-#if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,26))
 #include <linux/semaphore.h>
 #include <linux/resource.h>
-#else 
-#include <asm/semaphore.h>
-#if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22))
-#include <asm/arch/resource.h>
-#endif 
-#endif 
 
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 #if !defined(LDM_PLATFORM)
 #error "LDM_PLATFORM must be set"
 #endif
-//#define	PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO
-//#include <linux/platform_device.h>
+
 #endif
-
-//#if ((defined(DEBUG) || defined(TIMING)) &&
-//    (LINUX_VERSION_CODE == KERNEL_VERSION(2,6,34))) &&
-//    !defined(PVR_NO_OMAP_TIMER)
-//#define	PVR_OMAP4_TIMING_PRCM
-//#endif
-
-//#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
-//#include <plat/gpu.h>
-//#if !defined(PVR_NO_OMAP_TIMER)
-//#define	PVR_OMAP_USE_DM_TIMER_API
-//#include <plat/dmtimer.h>
-//#endif
-//#endif
-
-//#if !defined(PVR_NO_OMAP_TIMER)
-//#define PVR_OMAP_TIMER_BASE_IN_SYS_SPEC_DATA
-//#endif
-#endif 
-
-//#if !defined(NO_HARDWARE) &&
-//     defined(SYS_USING_INTERRUPTS)
-//#define SGX_OCP_REGS_ENABLED
-//#endif
-
-//#if defined(__linux__)
-//#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35)) && defined(SGX_OCP_REGS_ENABLED)
-//#if !defined(SGX544)
-//#define SGX_OCP_NO_INT_BYPASS
-//#endif
-//#endif
-//#endif
 
 #if defined (__cplusplus)
 extern "C" {
 #endif
 
- 
- 
+
+
 IMG_VOID DisableSystemClocks(SYS_DATA *psSysData);
 PVRSRV_ERROR EnableSystemClocks(SYS_DATA *psSysData);
 
@@ -122,7 +81,7 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData);
 #define	SYS_SPECIFIC_DATA_CLEAR(psSysSpecData, flag) ((IMG_VOID)((psSysSpecData)->ui32SysSpecificData &= ~(flag)))
 
 #define	SYS_SPECIFIC_DATA_TEST(psSysSpecData, flag) (((psSysSpecData)->ui32SysSpecificData & (flag)) != 0)
- 
+
 typedef struct _SYS_SPECIFIC_DATA_TAG_
 {
 	IMG_UINT32	ui32SysSpecificData;
@@ -155,7 +114,7 @@ typedef struct _SYS_SPECIFIC_DATA_TAG_
 //#if defined(PVR_OMAP_USE_DM_TIMER_API)
 //	struct omap_dm_timer *psGPTimer;
 //#endif
-#endif	
+#endif
 } SYS_SPECIFIC_DATA;
 
 extern SYS_SPECIFIC_DATA *gpsSysSpecificData;
@@ -178,7 +137,7 @@ IMG_VOID UnwrapSystemPowerChange(SYS_SPECIFIC_DATA *psSysSpecData);
 PVRSRV_ERROR SysPMRuntimeRegister(void);
 PVRSRV_ERROR SysPMRuntimeUnregister(void);
 
-#else 
+#else
 
 #ifdef INLINE_IS_PRAGMA
 #pragma inline(SysPMRuntimeRegister)
@@ -196,7 +155,7 @@ static INLINE PVRSRV_ERROR SysPMRuntimeUnregister(void)
 	return PVRSRV_OK;
 }
 
-#endif 
+#endif
 
 /*
 #if defined(MTK_USE_GDC)
@@ -209,6 +168,4 @@ IMG_VOID OnSGXResetDone(void);
 }
 #endif
 
-#endif	
-
-
+#endif
