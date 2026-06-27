@@ -480,7 +480,7 @@ _VMallocWrapper(IMG_SIZE_T uiBytes,
 #endif
 
 	/* Allocate virtually contiguous pages */
-    pvRet = __vmalloc(uiBytes, gfp_mask, PGProtFlags);
+    pvRet = __vmalloc(uiBytes, gfp_mask);
 
 #if defined(DEBUG_LINUX_MEMORY_ALLOCATIONS)
     if (pvRet)
@@ -836,51 +836,49 @@ FreePagePool(IMG_VOID)
 static struct shrinker g_sShrinker;
 #endif
 
-static int
-ShrinkPagePool(struct shrinker *psShrinker, struct shrink_control *psShrinkControl)
+static unsigned long
+PVRCountPagePoolObjects(struct shrinker *psShrinker, struct shrink_control *psSc)
 {
-	unsigned long uNumToScan = psShrinkControl->nr_to_scan;
+	PVR_ASSERT(psShrinker == g_sShrinker);
+	(void)psShrinker;
+	(void)psSc;
 
-	PVR_ASSERT(psShrinker == &g_sShrinker);
+	return (unsigned long)atomic_read(&g_sPagePoolEntryCount);
+}
+
+static unsigned long
+PVRScanPagePoolObjects(struct shrinker *psShrinker, struct shrink_control *psSc)
+{
+	unsigned long nr = psSc->nr_to_scan;
+	unsigned long freed = 0;
+	LinuxPagePoolEntry *entry, *tmp;
+
+	PVR_ASSERT(psShrinker == g_sShrinker);
 	(void)psShrinker;
 
-	if (uNumToScan != 0)
-	{
-		LinuxPagePoolEntry *psPagePoolEntry, *psTempPoolEntry;
+	if (nr == 0)
+		return 0;
 
-		PVR_TRACE(("%s: Number to scan: %ld", __FUNCTION__, uNumToScan));
-		PVR_TRACE(("%s: Pages in pool before scan: %d", __FUNCTION__, atomic_read(&g_sPagePoolEntryCount)));
+	PVR_TRACE(("%s: nr_to_scan=%lu\n", __func__, nr));
+	PVR_TRACE(("%s: before scan: %d pages\n", __func__, atomic_read(&g_sPagePoolEntryCount)));
 
-		if (!PagePoolTrylock())
-		{
-			PVR_TRACE(("%s: Couldn't get page pool lock", __FUNCTION__));
-			return -1;
-		}
+	if (!PagePoolTrylock())
+		return SHRINK_STOP;
 
-		list_for_each_entry_safe(psPagePoolEntry, psTempPoolEntry, &g_sPagePoolList, sPagePoolItem)
-		{
-			RemoveEntryFromPool(psPagePoolEntry);
-
-			FreePageToLinux(psPagePoolEntry->psPage);
-			LinuxPagePoolEntryFree(psPagePoolEntry);
-
-			if (--uNumToScan == 0)
-			{
-				break;
-			}
-		}
-
-		if (list_empty(&g_sPagePoolList))
-		{
-			PVR_ASSERT(atomic_read(&g_sPagePoolEntryCount) == 0);
-		}
-
-		PagePoolUnlock();
-
-		PVR_TRACE(("%s: Pages in pool after scan: %d", __FUNCTION__, atomic_read(&g_sPagePoolEntryCount)));
+	list_for_each_entry_safe(entry, tmp, &g_sPagePoolList, sPagePoolItem) {
+		RemoveEntryFromPool(entry);
+		FreePageToLinux(entry->psPage);
+		LinuxPagePoolEntryFree(entry);
+		freed++;
+		if (--nr == 0)
+			break;
 	}
 
-	return atomic_read(&g_sPagePoolEntryCount);
+	PagePoolUnlock();
+
+	PVR_TRACE(("%s: after scan: %d pages, freed=%lu\n", __func__,
+		   atomic_read(&g_sPagePoolEntryCount), freed));
+	return freed;
 }
 #endif
 
@@ -2522,13 +2520,7 @@ static IMG_VOID LinuxMMCleanup_MemRecords_ForEachVa(DEBUG_MEM_ALLOC_REC *psCurre
 
 
 #if defined(PVR_LINUX_MEM_AREA_POOL_ALLOW_SHRINK)
-static struct shrinker g_sShrinker =
-{
-	.shrink = ShrinkPagePool,
-	.seeks = DEFAULT_SEEKS
-};
-
-static IMG_BOOL g_bShrinkerRegistered;
+static struct shrinker *g_sShrinker = NULL;
 #endif
 
 IMG_VOID
@@ -2552,10 +2544,8 @@ LinuxMMCleanup(IMG_VOID)
 #endif
 
 #if defined(PVR_LINUX_MEM_AREA_POOL_ALLOW_SHRINK)
-	if (g_bShrinkerRegistered)
-	{
-		unregister_shrinker(&g_sShrinker);
-	}
+	if (g_sShrinker)
+		shrinker_free(g_sShrinker);
 #endif
 
     /*
@@ -2661,8 +2651,17 @@ LinuxMMInit(IMG_VOID)
 #endif
 
 #if defined(PVR_LINUX_MEM_AREA_POOL_ALLOW_SHRINK)
-	register_shrinker(&g_sShrinker);
-	g_bShrinkerRegistered = IMG_TRUE;
+	if (!g_sShrinker) {
+		g_sShrinker = shrinker_alloc(0, "pvr");
+		if (!g_sShrinker) {
+			PVR_TRACE("Failed to register shrinker");
+			goto failed;
+		}
+		g_sShrinker->count_objects = PVRCountPagePoolObjects;
+		g_sShrinker->scan_objects = PVRScanPagePoolObjects;
+		g_sShrinker->seeks = DEFAULT_SEEKS;
+		shrinker_register(g_sShrinker);
+	}
 #endif
 
     return PVRSRV_OK;
