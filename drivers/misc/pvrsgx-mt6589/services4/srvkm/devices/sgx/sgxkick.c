@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
-#include <stddef.h> /* For the macro offsetof() */
+#include <linux/stddef.h> /* For the macro offsetof() */
 #include "services_headers.h"
 #include "sgxinfo.h"
 #include "sgxinfokm.h"

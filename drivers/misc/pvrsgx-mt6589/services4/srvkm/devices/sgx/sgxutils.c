@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
-#include <stddef.h>
+#include <linux/stddef.h>
 
 #include "sgxdefs.h"
 #include "services_headers.h"
