@@ -1,43 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Device specific reset routines
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include "sgxdefs.h"
 #include "sgxmmu.h"
@@ -67,11 +28,11 @@ IMG_VOID SGXInitClocks(PVRSRV_SGXDEV_INFO	*psDevInfo,
 					   IMG_UINT32			ui32PDUMPFlags)
 {
 	IMG_UINT32	ui32RegVal;
-	
+
 #if !defined(PDUMP)
 	PVR_UNREFERENCED_PARAMETER(ui32PDUMPFlags);
 #endif /* PDUMP */
-	
+
 	ui32RegVal = psDevInfo->ui32ClkGateCtl;
 	OSWriteHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_CLKGATECTL, ui32RegVal);
     OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_CLKGATECTL);
@@ -167,7 +128,7 @@ static IMG_VOID SGXResetSetupBIFContexts(PVRSRV_SGXDEV_INFO	*psDevInfo,
 #if !defined(PDUMP)
 	PVR_UNREFERENCED_PARAMETER(ui32PDUMPFlags);
 #endif /* PDUMP */
-	
+
 	#if defined(SGX_FEATURE_MULTIPLE_MEM_CONTEXTS)
 	/* Set up EDM for bank 0 to point at kernel context */
 	ui32RegVal = (SGX_BIF_DIR_LIST_INDEX_EDM << EUR_CR_BIF_BANK0_INDEX_EDM_SHIFT);
@@ -200,7 +161,7 @@ static IMG_VOID SGXResetSetupBIFContexts(PVRSRV_SGXDEV_INFO	*psDevInfo,
 		#endif /* SGX_BIF_DIR_LIST_INDEX_EDM */
 
 		ui32RegVal = (IMG_UINT32)(psDevInfo->sKernelPDDevPAddr.uiAddr >> SGX_MMU_PDE_ADDR_ALIGNSHIFT);
-		
+
 #if defined(FIX_HW_BRN_28011)
 		OSWriteHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_BIF_DIR_LIST_BASE0, ui32RegVal);
         OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_BIF_DIR_LIST_BASE0);
@@ -518,13 +479,13 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 	PDUMPREGWITHFLAGS(SGX_PDUMPREG_NAME, EUR_CR_BIF_36BIT_ADDRESSING, EUR_CR_BIF_36BIT_ADDRESSING_ENABLE_MASK, ui32PDUMPFlags);
 #else
 	#if defined(EUR_CR_BIF_36BIT_ADDRESSING)
-		OSWriteHWReg(psDevInfo->pvRegsBaseKM, 
-				EUR_CR_BIF_36BIT_ADDRESSING, 
+		OSWriteHWReg(psDevInfo->pvRegsBaseKM,
+				EUR_CR_BIF_36BIT_ADDRESSING,
 				0);
 		OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_BIF_36BIT_ADDRESSING);
-		PDUMPREGWITHFLAGS(SGX_PDUMPREG_NAME, 
-				EUR_CR_BIF_36BIT_ADDRESSING, 
-				0, 
+		PDUMPREGWITHFLAGS(SGX_PDUMPREG_NAME,
+				EUR_CR_BIF_36BIT_ADDRESSING,
+				0,
 				ui32PDUMPFlags);
 	#endif
 #endif
@@ -643,7 +604,7 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 		/* Bring BIF out of reset. */
 		SGXResetSoftReset(psDevInfo, IMG_FALSE, ui32PDUMPFlags, IMG_TRUE);
 		SGXResetSleep(psDevInfo, ui32PDUMPFlags, IMG_FALSE);
-	}	
+	}
 
 	/*
 		Initialise the BIF memory contexts before bringing the rest of SGX out of reset.
@@ -680,7 +641,7 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 
 {
 	IMG_UINT32 ui32RegVal;
-	
+
 	PVR_UNREFERENCED_PARAMETER(bHardwareRecovery);
 
 #if !defined(PDUMP)
@@ -772,7 +733,7 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
     OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_MASTER_SOFT_RESET);
 	PDUMPCOMMENTWITHFLAGS(ui32PDUMPFlags, "Remove the resets from all of SGX\r\n");
 	PDUMPREGWITHFLAGS(SGX_PDUMPREG_NAME, EUR_CR_MASTER_SOFT_RESET, ui32RegVal, ui32PDUMPFlags);
-	
+
 	SGXResetSleep(psDevInfo, ui32PDUMPFlags, IMG_TRUE);
 
 	PDUMPCOMMENTWITHFLAGS(ui32PDUMPFlags, "Turn on the slave cores' clock gating\r\n");
@@ -787,7 +748,7 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 	/* disable prefetch */
 	ui32RegVal = (1<<EUR_CR_MASTER_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT);
 	#else
-	ui32RegVal = (1<<EUR_CR_MASTER_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT) | EUR_CR_MASTER_BIF_MMU_CTRL_PREFETCHING_ON_MASK; 
+	ui32RegVal = (1<<EUR_CR_MASTER_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT) | EUR_CR_MASTER_BIF_MMU_CTRL_PREFETCHING_ON_MASK;
 	#endif
 	#if !defined(FIX_HW_BRN_31620) && !defined(FIX_HW_BRN_31671)
 	/* enable the DC TLB */
@@ -803,7 +764,7 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 	/* disable prefetch */
 	ui32RegVal = (1<<EUR_CR_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT);
 	#else
-	ui32RegVal = (1<<EUR_CR_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT) | EUR_CR_BIF_MMU_CTRL_PREFETCHING_ON_MASK; 
+	ui32RegVal = (1<<EUR_CR_BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT) | EUR_CR_BIF_MMU_CTRL_PREFETCHING_ON_MASK;
 	#endif
 	#if !defined(FIX_HW_BRN_31620) && !defined(FIX_HW_BRN_31671)
 	/* enable the DC TLB */
@@ -825,9 +786,9 @@ IMG_VOID SGXReset(PVRSRV_SGXDEV_INFO	*psDevInfo,
 
 	SGXResetInitBIFContexts(psDevInfo, ui32PDUMPFlags);
 	SGXResetSetupBIFContexts(psDevInfo, ui32PDUMPFlags);
-	
+
 	PDUMPCOMMENTWITHFLAGS(ui32PDUMPFlags, "End of SGX MP reset sequence\r\n");
-}	
+}
 #endif /* SGX_FEATURE_MP */
 
 

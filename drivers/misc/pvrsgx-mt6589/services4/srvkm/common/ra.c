@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
+
 /*************************************************************************/ /*!
 @Title          Resource Allocator
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
@@ -6,77 +8,41 @@
   allocator was originally intended to manage address spaces in
   practice the resource allocator is generic and can manages arbitrary
   sets of integers.
- 
+
   Resources are allocated from arenas. Arena's can be created with an
   initial span of resources. Further resources spans can be added to
   arenas. A call back mechanism allows an arena to request further
   resource spans on demand.
- 
+
   Each arena maintains an ordered list of resource segments each
   described by a boundary tag. Each boundary tag describes a segment
   of resources which are either 'free', available for allocation, or
   'busy' currently allocated. Adjacent 'free' segments are always
   coallesced to avoid fragmentation.
- 
+
   For allocation, all 'free' segments are kept on lists of 'free'
   segments in a table index by pvr_log2(segment size). ie Each table index
   n holds 'free' segments in the size range 2**(n-1) -> 2**n.
- 
+
   Allocation policy is based on an *almost* best fit
   stratedy. Choosing any segment from the appropriate table entry
   guarantees that we choose a segment which is with a power of 2 of
   the size we are allocating.
- 
+
   Allocated segments are inserted into a self scaling hash table which
   maps the base resource of the span to the relevant boundary
   tag. This allows the code to get back to the bounary tag without
   exporting explicit boundary tag references through the API.
- 
+
   Each arena has an associated quantum size, all allocations from the
   arena are made in multiples of the basic quantum.
- 
+
   On resource exhaustion in an arena, a callback if provided will be
   used to request further resources. Resouces spans allocated by the
   callback mechanism are delimited by special boundary tag markers of
   zero span, 'span' markers. Span markers are never coallesced. Span
   markers are used to detect when an imported span is completely free
   and can be deallocated by the callback mechanism.
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
 /* Issues:
@@ -1001,11 +967,11 @@ _AttemptAllocAligned (RA_ARENA *pArena,
 					aligned_base = pBT->base;
 				PVR_DPF ((PVR_DBG_MESSAGE,
 						  "RA_AttemptAllocAligned: pBT-base=0x" UINTPTR_FMT " "
-						  "pBT-size=0x%" SIZE_T_FMT_LEN "x alignedbase=0x" 
+						  "pBT-size=0x%" SIZE_T_FMT_LEN "x alignedbase=0x"
 						  UINTPTR_FMT " size=0x%" SIZE_T_FMT_LEN "x",
-						pBT->base, 
-                        pBT->uSize, 
-                        aligned_base, 
+						pBT->base,
+                        pBT->uSize,
+                        aligned_base,
                         uSize));
 
 				if (pBT->base + pBT->uSize >= aligned_base + uSize)
@@ -1584,13 +1550,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						  (eNextSpan == IMPORTED_RESOURCE_SPAN_END)))
 					{
 						/* error - next span must be live, free or end */
-						PVR_DPF((PVR_DBG_ERROR, 
-								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+						PVR_DPF((PVR_DBG_ERROR,
+								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1603,13 +1569,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						  (eNextSpan == IMPORTED_RESOURCE_SPAN_END)))
 					{
 						/* error - next span must be live or end */
-						PVR_DPF((PVR_DBG_ERROR, 
+						PVR_DPF((PVR_DBG_ERROR,
 								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1623,13 +1589,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						(eNextSpan == IMPORTED_RESOURCE_SPAN_END))
 					{
 						/* error - next span cannot be live, free or end */
-						PVR_DPF((PVR_DBG_ERROR, 
+						PVR_DPF((PVR_DBG_ERROR,
 								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1643,13 +1609,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						  (eNextSpan == IMPORTED_RESOURCE_SPAN_FREE)))
 					{
 						/* error - next span must be live or free */
-						PVR_DPF((PVR_DBG_ERROR, 
-								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+						PVR_DPF((PVR_DBG_ERROR,
+								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1657,13 +1623,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 				break;
 
 				default:
-					PVR_DPF((PVR_DBG_ERROR, 
-							"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+					PVR_DPF((PVR_DBG_ERROR,
+							"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 							") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-							pSegment->ui32BoundaryTagID, 
-							pSegment->base, 
-							pSegment->pNextSegment->ui32BoundaryTagID, 
-							pSegment->pNextSegment->base, 
+							pSegment->ui32BoundaryTagID,
+							pSegment->base,
+							pSegment->pNextSegment->ui32BoundaryTagID,
+							pSegment->pNextSegment->base,
 							pArena->name));
 
 					PVR_DBG_BREAK;
@@ -1688,13 +1654,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						  (eNextSpan == RESOURCE_SPAN_LIVE)))
 					{
 						/* error - next span must be free or live */
-						PVR_DPF((PVR_DBG_ERROR, 
-								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+						PVR_DPF((PVR_DBG_ERROR,
+								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1707,13 +1673,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 						  (eNextSpan == RESOURCE_SPAN_LIVE)))
 					{
 						/* error - next span must be free or live */
-						PVR_DPF((PVR_DBG_ERROR, 
-								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+						PVR_DPF((PVR_DBG_ERROR,
+								"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 								") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 						PVR_DBG_BREAK;
@@ -1721,13 +1687,13 @@ IMG_UINT32 ValidateArena(RA_ARENA *pArena)
 				break;
 
 				default:
-					PVR_DPF((PVR_DBG_ERROR, 
-							"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT 
+					PVR_DPF((PVR_DBG_ERROR,
+							"ValidateArena ERROR: adjacent boundary tags %d (base=0x" UINTPTR_FMT
 							") and %d (base=0x" UINTPTR_FMT ") are incompatible (arena: %s)",
-								pSegment->ui32BoundaryTagID, 
-								pSegment->base, 
-								pSegment->pNextSegment->ui32BoundaryTagID, 
-								pSegment->pNextSegment->base, 
+								pSegment->ui32BoundaryTagID,
+								pSegment->base,
+								pSegment->pNextSegment->ui32BoundaryTagID,
+								pSegment->pNextSegment->base,
 								pArena->name));
 
 					PVR_DBG_BREAK;
@@ -2100,17 +2066,17 @@ PVRSRV_ERROR RA_GetStats(RA_ARENA *pArena,
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "span count\t\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "span count\t\t%" SIZE_T_FMT_LEN "u\n",
                              pArena->sStatistics.uSpanCount);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "live segment count\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "live segment count\t%" SIZE_T_FMT_LEN "u\n",
                              pArena->sStatistics.uLiveSegmentCount);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "free segment count\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "free segment count\t%" SIZE_T_FMT_LEN "u\n",
                              pArena->sStatistics.uFreeSegmentCount);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
@@ -2121,22 +2087,22 @@ PVRSRV_ERROR RA_GetStats(RA_ARENA *pArena,
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "total allocs\t\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "total allocs\t\t%" SIZE_T_FMT_LEN "u\n",
                             pArena->sStatistics.uCumulativeAllocs);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "total frees\t\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "total frees\t\t%" SIZE_T_FMT_LEN "u\n",
                             pArena->sStatistics.uCumulativeFrees);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "import count\t\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "import count\t\t%" SIZE_T_FMT_LEN "u\n",
                             pArena->sStatistics.uImportCount);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
 	CHECK_SPACE(ui32StrLen);
-	i32Count = OSSNPrintf(pszStr, 100, "export count\t\t%" SIZE_T_FMT_LEN "u\n", 
+	i32Count = OSSNPrintf(pszStr, 100, "export count\t\t%" SIZE_T_FMT_LEN "u\n",
                             pArena->sStatistics.uExportCount);
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 
@@ -2178,7 +2144,7 @@ PVRSRV_ERROR RA_GetStats(RA_ARENA *pArena,
 }
 
 PVRSRV_ERROR RA_GetStatsFreeMem(RA_ARENA *pArena,
-								IMG_CHAR **ppszStr, 
+								IMG_CHAR **ppszStr,
 								IMG_UINT32 *pui32StrLen)
 {
 	IMG_CHAR 	*pszStr = *ppszStr;
@@ -2191,7 +2157,7 @@ PVRSRV_ERROR RA_GetStatsFreeMem(RA_ARENA *pArena,
 	UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 	*ppszStr = pszStr;
 	*pui32StrLen = ui32StrLen;
-	
+
 	return PVRSRV_OK;
 }
 #endif
@@ -2199,7 +2165,3 @@ PVRSRV_ERROR RA_GetStatsFreeMem(RA_ARENA *pArena,
 /******************************************************************************
  End of file (ra.c)
 ******************************************************************************/
-
-
-
-

@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Debug Driver
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    32 Bit kernel mode debug driver
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #ifdef LINUX
 #include <linux/string.h>
@@ -213,7 +173,7 @@ IMG_VOID * IMG_CALLCONV ExtDBGDrivFindStream(IMG_CHAR * pszName, IMG_BOOL bReset
 	else
 	{
 		PVR_DPF((PVR_DBG_ERROR, "pfnConnectNotifier not initialised.\n"));
-	}		
+	}
 
 	/* Release API Mutex */
 	HostReleaseMutex(g_pvAPIMutex);
@@ -507,15 +467,15 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivWriteStringCM(PDBG_STREAM psStream,IMG_CHAR * 
 IMG_UINT32 IMG_CALLCONV ExtDBGDrivWriteCM(PDBG_STREAM psStream,IMG_UINT8 * pui8InBuf,IMG_UINT32 ui32InBuffSize,IMG_UINT32 ui32Level)
 {
 	IMG_UINT32	ui32Ret;
-	
+
 	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
-	
+
 	ui32Ret=DBGDrivWriteCM(psStream, pui8InBuf, ui32InBuffSize, ui32Level);
-	
+
 	/* Release API Mutex */
 	HostReleaseMutex(g_pvAPIMutex);
-	
+
 	return ui32Ret;
 }
 
@@ -909,7 +869,7 @@ void MonoOut(IMG_CHAR * pszString,IMG_BOOL bNewLine)
 
 		HostMemSet((IMG_VOID *)(DBGDRIV_MONOBASE + (160 * (g_ui32MonoLines - 1))),0,160);
 	}
-#endif	
+#endif
 }
 
 /*!****************************************************************************
@@ -939,7 +899,7 @@ static IMG_UINT32 WriteExpandingBuffer(PDBG_STREAM psStream,IMG_UINT8 * pui8InBu
 	}
 
 	/*
-		Check if we can expand the buffer 
+		Check if we can expand the buffer
 	*/
 	if (psStream->psCtrl->ui32Flags & DEBUG_FLAGS_NO_BUF_EXPANDSION)
 	{
@@ -960,7 +920,7 @@ static IMG_UINT32 WriteExpandingBuffer(PDBG_STREAM psStream,IMG_UINT8 * pui8InBu
 			IMG_UINT32	ui32NewBufSize;
 
 			/*
-				Find new buffer size 
+				Find new buffer size
 			*/
 			ui32NewBufSize = 2 * psStream->ui32Size;
 
@@ -972,8 +932,8 @@ static IMG_UINT32 WriteExpandingBuffer(PDBG_STREAM psStream,IMG_UINT8 * pui8InBu
 				ui32NewBufSize += ui32InBuffSize;
 			}
 
-			/* 
-				Attempt to expand the buffer 
+			/*
+				Attempt to expand the buffer
 			*/
 			if (!ExpandStreamBuffer(psStream,ui32NewBufSize))
 			{
@@ -993,8 +953,8 @@ static IMG_UINT32 WriteExpandingBuffer(PDBG_STREAM psStream,IMG_UINT8 * pui8InBu
 				}
 			}
 
-			/* 
-				Recalc the space in the buffer 
+			/*
+				Recalc the space in the buffer
 			*/
 			ui32Space = SpaceInStream(psStream);
 			PVR_DPF((PVR_DBGDRIV_MESSAGE, "Expanded buffer, free space = %x",
@@ -1053,7 +1013,7 @@ IMG_VOID * IMG_CALLCONV DBGDrivCreateStream(IMG_CHAR *		pszName,
 	PDBG_LASTFRAME_BUFFER	psLFBuffer;
 	PDBG_STREAM_CONTROL psCtrl;
 	IMG_UINT32		ui32Off;
-	IMG_VOID *		pvBase;	
+	IMG_VOID *		pvBase;
 	static IMG_CHAR pszNameInitSuffix[] = "_Init";
 	IMG_UINT32		ui32OffSuffix;
 
@@ -1142,7 +1102,7 @@ IMG_VOID * IMG_CALLCONV DBGDrivCreateStream(IMG_CHAR *		pszName,
 	if (!pvBase)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"DBGDriv: Couldn't alloc InitStream buffer\n\r"));
-		
+
 		if ((psStream->psCtrl->ui32Flags & DEBUG_FLAGS_USE_NONPAGED_MEM) != 0)
 		{
 			HostNonPageablePageFree(psStream->pvBase);
@@ -1214,7 +1174,7 @@ IMG_VOID * IMG_CALLCONV DBGDrivCreateStream(IMG_CHAR *		pszName,
 	g_psLFBufferList = psLFBuffer;
 
 	AddSIDEntry(psStream);
-	
+
 	return((IMG_VOID *) psStream);
 }
 
@@ -1243,7 +1203,7 @@ void IMG_CALLCONV DBGDrivDestroyStream(PDBG_STREAM psStream)
 	}
 
 	RemoveSIDEntry(psStream);
-	
+
 	psLFBuffer = FindLFBuf(psStream);
 
 	/*
@@ -1321,7 +1281,7 @@ void IMG_CALLCONV DBGDrivDestroyStream(PDBG_STREAM psStream)
 		HostPageablePageFree(psStream->pvBase);
 		HostPageablePageFree(psStream->psInitStream->pvBase);
 	}
-	
+
 	HostNonPageablePageFree(psStream->psInitStream);
 	HostNonPageablePageFree(psStream);
 	HostNonPageablePageFree(psLFBuffer);
@@ -1422,7 +1382,7 @@ static void IMG_CALLCONV DBGDrivInvalidateStream(PDBG_STREAM psStream)
 	IMG_UINT32 ui32Off = 0;
 	IMG_UINT32 ui32WPtr = psStream->ui32WPtr;
 	IMG_PUINT8 pui8Buffer = (IMG_UINT8 *) psStream->pvBase;
-	
+
 	PVR_DPF((PVR_DBG_ERROR, "DBGDrivInvalidateStream: An error occurred for stream %s\r\n", psStream->szName ));
 
 	/*
@@ -2243,7 +2203,7 @@ void IMG_CALLCONV DBGDrivSetFrame(PDBG_STREAM psStream,IMG_UINT32 ui32Frame)
 		/*
 			If in framed hotkey mode, then set start frame.
 		*/
-		if (((psStream->psCtrl->ui32CapMode & DEBUG_CAPMODE_FRAMED) != 0) && 
+		if (((psStream->psCtrl->ui32CapMode & DEBUG_CAPMODE_FRAMED) != 0) &&
 			((psStream->psCtrl->ui32CapMode & DEBUG_CAPMODE_HOTKEY) != 0))
 		{
 			if (!g_bHotkeyMiddump)
@@ -2703,8 +2663,8 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 	IMG_UINT32	ui32NewROffset;
 	IMG_UINT32	ui32SpaceInOldBuf;
 
-	/* 
-		First check new size is bigger than existing size 
+	/*
+		First check new size is bigger than existing size
 	*/
 	if (psStream->ui32Size >= ui32NewSize)
 	{
@@ -2712,12 +2672,12 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 	}
 
 	/*
-		Calc space in old buffer 
+		Calc space in old buffer
 	*/
 	ui32SpaceInOldBuf = SpaceInStream(psStream);
 
 	/*
-		Allocate new buffer 
+		Allocate new buffer
 	*/
 	ui32NewSizeInPages = ((ui32NewSize + 0xfffUL) & ~0xfffUL) / 4096UL;
 
@@ -2744,7 +2704,7 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 		if (psStream->ui32RPtr <= psStream->ui32WPtr)
 		{
 			/*
-				No wrapping of data so copy data to start of new buffer 
+				No wrapping of data so copy data to start of new buffer
 			*/
 		HostMemCopy(pvNewBuf,
 					(IMG_VOID *)((IMG_UINTPTR_T)psStream->pvBase + psStream->ui32RPtr),
@@ -2753,18 +2713,18 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 		else
 		{
 			IMG_UINT32	ui32FirstCopySize;
-	
+
 			/*
-				The data has wrapped around the buffer, copy beginning of buffer first 
+				The data has wrapped around the buffer, copy beginning of buffer first
 			*/
 			ui32FirstCopySize = psStream->ui32Size - psStream->ui32RPtr;
-	
+
 			HostMemCopy(pvNewBuf,
 					(IMG_VOID *)((IMG_UINTPTR_T)psStream->pvBase + psStream->ui32RPtr),
 					ui32FirstCopySize);
-	
+
 			/*
-				Now second half 
+				Now second half
 			*/
 			HostMemCopy((IMG_VOID *)((IMG_UINTPTR_T)pvNewBuf + ui32FirstCopySize),
 					(IMG_VOID *)(IMG_PBYTE)psStream->pvBase,
@@ -2780,12 +2740,12 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 	}
 
 	/*
-		New Write offset is at end of data 
-	*/                                                        
+		New Write offset is at end of data
+	*/
 	ui32NewWOffset = psStream->ui32Size - ui32SpaceInOldBuf;
 
 	/*
-		Free old buffer 
+		Free old buffer
 	*/
 	if ((psStream->psCtrl->ui32Flags & DEBUG_FLAGS_USE_NONPAGED_MEM) != 0)
 	{
@@ -2797,7 +2757,7 @@ IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 	}
 
 	/*
-		Now set new params up 
+		Now set new params up
 	*/
 	psStream->pvBase = pvNewBuf;
 	psStream->ui32RPtr = ui32NewROffset;

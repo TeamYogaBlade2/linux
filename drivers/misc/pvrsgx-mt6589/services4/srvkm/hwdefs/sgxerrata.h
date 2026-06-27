@@ -1,46 +1,5 @@
-/*************************************************************************/ /*!
-@Title          SGX HW errata definitions
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Specifies associations between SGX core revisions
-                and SW workarounds required to fix HW errata that exist
-                in specific core revisions
-@License        Dual MIT/GPLv2
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
 #ifndef _SGXERRATA_KM_H_
 #define _SGXERRATA_KM_H_
 
@@ -76,19 +35,19 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	#endif
 
 	#if SGX_CORE_REV == 120
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
 		#define FIX_HW_BRN_28889/* Workaround in services (srvkm) */
 	#else
 	#if SGX_CORE_REV == 121
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
 		#define FIX_HW_BRN_28889/* Workaround in services (srvkm) */
 	#else
 	#if SGX_CORE_REV == 125
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
 		#define FIX_HW_BRN_28889/* Workaround in services (srvkm) */
 	#else
 	#if SGX_CORE_REV == 130
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
 		#define FIX_HW_BRN_28889/* Workaround in services (srvkm) */
 	#else
 	#if SGX_CORE_REV == SGX_CORE_REV_HEAD
@@ -134,13 +93,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	#endif
 
 	#if SGX_CORE_REV == 121
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
 		#define FIX_HW_BRN_23944/* Workaround in code (services) */
 		#define FIX_HW_BRN_23410/* Workaround in code (services) and ucode */
 	#else
 	#if SGX_CORE_REV == 126
-		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */	
-	#else	
+		#define FIX_HW_BRN_22934/* Workaround in sgx featuredefs */
+	#else
 	#if SGX_CORE_REV == SGX_CORE_REV_HEAD
 		/* RTL head - no BRNs to apply */
 	#else
@@ -220,7 +179,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		#define FIX_HW_BRN_31272/* workaround in services (srvclient) and uKernel */
 		#define FIX_HW_BRN_31278/* disabled prefetching in MMU */
 		#define FIX_HW_BRN_31542/* workaround in uKernel and Services */
-		#define FIX_HW_BRN_31671/* workaround in uKernel */		
+		#define FIX_HW_BRN_31671/* workaround in uKernel */
  		#define FIX_HW_BRN_31780/* workaround in uKernel */
 		#define FIX_HW_BRN_32044/* workaround in uKernel, services and client drivers */
 		#define FIX_HW_BRN_32085 /* workaround in services: prefetch fix applied, investigating PT based fix */
@@ -321,7 +280,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		#endif
 		#define FIX_HW_BRN_33920/* workaround in ukernel */
 		#define FIX_HW_BRN_36513 /* workaround in uKernel and Services */
-	#else	
+	#else
 	#if SGX_CORE_REV == 105
  		#define FIX_HW_BRN_31780/* workaround in uKernel */
 		#if defined(SUPPORT_SGX_LOW_LATENCY_SCHEDULING) && defined(SGX_FEATURE_MP)
@@ -424,7 +383,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		#endif
 		#define FIX_HW_BRN_36513 /* workaround in uKernel and Services */
 		/* add BRNs here */
-	#else	
+	#else
 	#if SGX_CORE_REV == SGX_CORE_REV_HEAD
 		#if defined(SUPPORT_SGX_LOW_LATENCY_SCHEDULING) && defined(SGX_FEATURE_MP)
 			#define FIX_HW_BRN_33657/* workaround in ukernel*/

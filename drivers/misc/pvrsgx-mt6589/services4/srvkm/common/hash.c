@@ -1,49 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Self scaling hash tables.
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description
-   Implements simple self scaling hash tables. Hash collisions are
-   handled by chaining entries together. Hash tables are increased in
-   size when they become more than (50%?) full and decreased in size
-   when less than (25%?) full. Hash tables are never decreased below
-   their initial size.
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include "pvr_debug.h"
 #include "img_defs.h"
@@ -108,7 +63,7 @@ struct _HASH_TABLE_
 	@Input          uKeySize - the size of the hash key, in bytes.
 	@Input          pKey - a pointer to the key to hash.
 	@Input          uHashTabLen - the length of the hash table.
-    
+
 	@Return 	    the hash value.
 ******************************************************************************/
 IMG_UINT32
@@ -182,7 +137,7 @@ HASH_Key_Comp_Default (IMG_SIZE_T uKeySize, IMG_VOID *pKey1, IMG_VOID *pKey2)
 	@Input          pBucket - the bucket
 	@Input          ppBucketTable - the hash table
 	@Input          uSize - the size of the hash table
-    
+
 	@Return         PVRSRV_ERROR
 ******************************************************************************/
 static PVRSRV_ERROR
@@ -218,7 +173,7 @@ _ChainInsert (HASH_TABLE *pHash, BUCKET *pBucket, BUCKET **ppBucketTable, IMG_UI
 	@Input          uOldSize - the size of the old hash table
 	@Input          ppNewTable - the new hash table
 	@Input          uNewSize - the size of the new hash table
-    
+
 	@Return         None
 ******************************************************************************/
 static PVRSRV_ERROR
@@ -382,7 +337,7 @@ HASH_TABLE * HASH_Create (IMG_UINT32 uInitialLen)
                     removed before calling this function.
 
 	@Input          pHash - hash table
-    
+
 	@Return 	    None
 ******************************************************************************/
 IMG_VOID
@@ -681,7 +636,7 @@ HASH_Iterate(HASH_TABLE *pHash, HASH_pfnCallback pfnCallback)
 		{
 			PVRSRV_ERROR eError;
 			BUCKET *pNextBucket = pBucket->pNext;
-			
+
 			eError = pfnCallback((IMG_UINTPTR_T) ((IMG_VOID *) *(pBucket->k)), (IMG_UINTPTR_T) pBucket->v);
 
 			/* The callback might want us to break out early */

@@ -1,43 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Linux mmap interface declaration
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #if !defined(__MMAP_H__)
 #define __MMAP_H__
@@ -83,7 +44,7 @@ typedef struct KV_OFFSET_STRUCT_TAG
 
     /* Memory area associated with this offset structure */
     LinuxMemArea                *psLinuxMemArea;
-    
+
 #if !defined(PVR_MAKE_ALL_PFNS_SPECIAL)
     /* ID of the thread that owns this structure */
     IMG_UINT32			ui32TID;
@@ -113,7 +74,7 @@ typedef struct KV_OFFSET_STRUCT_TAG
 #if defined(DEBUG_LINUX_MMAP_AREAS)
     const IMG_CHAR		*pszName;
 #endif
-    
+
    /* List entry field for MMap list */
    struct list_head		sMMapItem;
 
@@ -140,7 +101,7 @@ IMG_VOID PVRMMapCleanup(IMG_VOID);
 /*!
  *******************************************************************************
  * @Function Registers a memory area with the mmap code
- *          
+ *
  * @Input psLinuxMemArea
  *
  * @Return PVRSRV_ERROR status
@@ -169,7 +130,7 @@ PVRSRV_ERROR PVRMMapRemoveRegisteredArea(LinuxMemArea *psLinuxMemArea);
  * @Input hMHandle              Handle associated with the memory to map.
  *				This is a (secure) handle to the OS specific
  *				memory handle structure (hOSMemHandle), or
- *				a handle to a structure that contains the 
+ *				a handle to a structure that contains the
  *				memory handle.
  * @Output pui32MMapOffset      The page aligned offset that the client must
  *				pass to the mmap2 system call.
@@ -182,7 +143,7 @@ PVRSRV_ERROR PVRMMapRemoveRegisteredArea(LinuxMemArea *psLinuxMemArea);
  * @Output pui32RealByteOffset   The size that the mapping will really be,
  *				that the client must also pass to mmap/munmap.
  *
- * @Output pui32UserVAddr	Pointer to returned user mode address of 
+ * @Output pui32UserVAddr	Pointer to returned user mode address of
  * 				mapping.
  * @Return PVRSRV_ERROR
  ******************************************************************************/
@@ -218,15 +179,14 @@ PVRMMapReleaseMMapData(PVRSRV_PER_PROCESS_DATA *psPerProc,
 /*!
  *******************************************************************************
  * @Function driver mmap entry point
- * 
+ *
  * @Input pFile : user file structure
  *
  * @Input ps_vma : vm area structure
- * 
+ *
  * @Return 0 for success, -errno for failure.
  ******************************************************************************/
 int PVRMMap(struct file* pFile, struct vm_area_struct* ps_vma);
 
 
 #endif	/* __MMAP_H__ */
-

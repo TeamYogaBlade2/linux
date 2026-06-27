@@ -1,45 +1,4 @@
-/*************************************************************************/ /*!
-@File
-@Title          Device class services functions
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Kernel services functions for device class devices
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include "services_headers.h"
 #include "buffer_manager.h"
@@ -105,7 +64,7 @@ typedef struct PVRSRV_DC_SWAPCHAIN_TAG
 typedef struct PVRSRV_DC_SWAPCHAIN_REF_TAG
 {
 	struct PVRSRV_DC_SWAPCHAIN_TAG		*psSwapChain;
-	IMG_HANDLE							hResItem;	
+	IMG_HANDLE							hResItem;
 } PVRSRV_DC_SWAPCHAIN_REF;
 
 
@@ -1118,19 +1077,19 @@ static PVRSRV_ERROR DestroyDCSwapChain(PVRSRV_DC_SWAPCHAIN *psSwapChain)
 		{
 			psDCInfo->psDCSwapChainShared = psSwapChain->psNext;
 		}
-		else 
+		else
 		{
 			PVRSRV_DC_SWAPCHAIN *psCurrentSwapChain;
-			psCurrentSwapChain = psDCInfo->psDCSwapChainShared; 		
+			psCurrentSwapChain = psDCInfo->psDCSwapChainShared;
 			while( psCurrentSwapChain->psNext )
 			{
-				if( psCurrentSwapChain->psNext != psSwapChain ) 
+				if( psCurrentSwapChain->psNext != psSwapChain )
 				{
 					psCurrentSwapChain = psCurrentSwapChain->psNext;
 					continue;
 				}
 				psCurrentSwapChain->psNext = psSwapChain->psNext;
-				break;				
+				break;
 			}
 		}
 	}
@@ -1201,7 +1160,7 @@ static PVRSRV_ERROR DestroyDCSwapChainRefCallBack(IMG_PVOID pvParam,
 		}
 	}
 
-	if(--psSwapChainRef->psSwapChain->ui32RefCount == 0) 
+	if(--psSwapChainRef->psSwapChain->ui32RefCount == 0)
 	{
 		eError = DestroyDCSwapChain(psSwapChainRef->psSwapChain);
 	}
@@ -1215,9 +1174,9 @@ static PVRSRV_DC_SWAPCHAIN* PVRSRVFindSharedDCSwapChainKM(PVRSRV_DISPLAYCLASS_IN
 {
 	PVRSRV_DC_SWAPCHAIN *psCurrentSwapChain;
 
-	for(psCurrentSwapChain = psDCInfo->psDCSwapChainShared; 
-		psCurrentSwapChain; 
-		psCurrentSwapChain = psCurrentSwapChain->psNext) 
+	for(psCurrentSwapChain = psDCInfo->psDCSwapChainShared;
+		psCurrentSwapChain;
+		psCurrentSwapChain = psCurrentSwapChain->psNext)
 	{
 		if(psCurrentSwapChain->ui32SwapChainID == ui32SwapChainID)
 			return psCurrentSwapChain;
@@ -1226,7 +1185,7 @@ static PVRSRV_DC_SWAPCHAIN* PVRSRVFindSharedDCSwapChainKM(PVRSRV_DISPLAYCLASS_IN
 }
 
 static PVRSRV_ERROR PVRSRVCreateDCSwapChainRefKM(PVRSRV_PER_PROCESS_DATA	*psPerProc,
-												 PVRSRV_DC_SWAPCHAIN 		*psSwapChain, 
+												 PVRSRV_DC_SWAPCHAIN 		*psSwapChain,
 												 PVRSRV_DC_SWAPCHAIN_REF 	**ppsSwapChainRef)
 {
 	PVRSRV_DC_SWAPCHAIN_REF *psSwapChainRef = IMG_NULL;
@@ -1302,13 +1261,13 @@ PVRSRV_ERROR PVRSRVCreateDCSwapChainKM (PVRSRV_PER_PROCESS_DATA	*psPerProc,
 	{
 		/* Query - use pui32SwapChainID as input */
 		psSwapChain = PVRSRVFindSharedDCSwapChainKM(psDCInfo, *pui32SwapChainID );
-		if( psSwapChain  ) 
-		{	
-			/* Create new reference */		   
-			eError = PVRSRVCreateDCSwapChainRefKM(psPerProc, 
-												  psSwapChain, 
+		if( psSwapChain  )
+		{
+			/* Create new reference */
+			eError = PVRSRVCreateDCSwapChainRefKM(psPerProc,
+												  psSwapChain,
 												  &psSwapChainRef);
-			if( eError != PVRSRV_OK ) 
+			if( eError != PVRSRV_OK )
 			{
 				PVR_DPF((PVR_DBG_ERROR,"PVRSRVCreateDCSwapChainKM: Couldn't create swap chain reference"));
 				return eError;
@@ -1318,7 +1277,7 @@ PVRSRV_ERROR PVRSRVCreateDCSwapChainKM (PVRSRV_PER_PROCESS_DATA	*psPerProc,
 			return PVRSRV_OK;
 		}
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVCreateDCSwapChainKM: No shared SwapChain found for query"));
-		return PVRSRV_ERROR_FLIP_CHAIN_EXISTS;		
+		return PVRSRV_ERROR_FLIP_CHAIN_EXISTS;
 	}
 
 	/* Allocate swapchain control structure for srvkm */
@@ -1390,7 +1349,7 @@ PVRSRV_ERROR PVRSRVCreateDCSwapChainKM (PVRSRV_PER_PROCESS_DATA	*psPerProc,
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVCreateDCSwapChainKM: Failed to get DC info"));
 		return eError;
 	}
-	
+
 	psSwapChain->ui32MinSwapInterval = sDisplayInfo.ui32MinSwapInterval;
 	psSwapChain->ui32MaxSwapInterval = sDisplayInfo.ui32MaxSwapInterval;
 
@@ -1411,11 +1370,11 @@ PVRSRV_ERROR PVRSRVCreateDCSwapChainKM (PVRSRV_PER_PROCESS_DATA	*psPerProc,
 		goto ErrorExit;
 	}
 
-	/* Create new reference */		   
-	eError = PVRSRVCreateDCSwapChainRefKM(psPerProc, 
-										  psSwapChain, 
+	/* Create new reference */
+	eError = PVRSRVCreateDCSwapChainRefKM(psPerProc,
+										  psSwapChain,
 										  &psSwapChainRef);
-	if( eError != PVRSRV_OK ) 
+	if( eError != PVRSRV_OK )
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVCreateDCSwapChainKM: Couldn't create swap chain reference"));
 		PDUMPCOMMENT("Swapchain allocation failed.");
@@ -1428,12 +1387,12 @@ PVRSRV_ERROR PVRSRVCreateDCSwapChainKM (PVRSRV_PER_PROCESS_DATA	*psPerProc,
 	/* Save pointer in DC structure if it's shared struct */
 	if( ui32Flags & PVRSRV_CREATE_SWAPCHAIN_SHARED )
 	{
-   		if(! psDCInfo->psDCSwapChainShared ) 
+   		if(! psDCInfo->psDCSwapChainShared )
 		{
 			psDCInfo->psDCSwapChainShared = psSwapChain;
-		} 
-		else 
-		{	
+		}
+		else
+		{
 			PVRSRV_DC_SWAPCHAIN *psOldHead = psDCInfo->psDCSwapChainShared;
 			psDCInfo->psDCSwapChainShared = psSwapChain;
 			psSwapChain->psNext = psOldHead;
@@ -1949,7 +1908,7 @@ PVRSRV_ERROR PVRSRVSwapToDCBuffer2KM(IMG_HANDLE	hDeviceKM,
 #endif
 			goto Exit;
 		}
-				
+
 		OSMemCopy(ppsCompiledSyncInfos, ppsSyncInfos, sizeof(PVRSRV_KERNEL_SYNC_INFO *) * ui32NumSyncInfos);
 		for(j = 0, i = ui32NumSyncInfos; j < psSwapChain->ui32LastNumSyncInfos; j++)
 		{
@@ -2765,7 +2724,7 @@ FoundDevice:
 				PVR_DPF((PVR_DBG_ERROR,"PVRSRVOpenBCDeviceKM: Failed sync info alloc"));
 				goto ErrorExit;
 			}
-			
+
 			/*
 				get the buffers from the buffer class
 				drivers by index, passing-in the syncdata objects

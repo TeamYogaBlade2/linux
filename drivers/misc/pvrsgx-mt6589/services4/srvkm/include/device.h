@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Common Device header
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Device related function templates and defines
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #ifndef __DEVICE_H__
 #define __DEVICE_H__
@@ -46,7 +6,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined(__cplusplus)
 extern "C" {
 #endif
-	
+
 #include "ra.h"  		/* RA_ARENA */
 #include "resman.h"		/* PRESMAN_ITEM */
 
@@ -87,7 +47,7 @@ typedef struct _DEVICE_MEMORY_HEAP_INFO_
 
 	/* backing store identifier string */
 	IMG_CHAR				*pszBSName;
-	
+
 	/* Device virtual address of base of heap */
 	IMG_DEV_VIRTADDR		sDevVAddrBase;
 
@@ -99,10 +59,10 @@ typedef struct _DEVICE_MEMORY_HEAP_INFO_
 
 	/* Heap type: per device, kernel only, shared, shared_exported */
 	DEVICE_MEMORY_HEAP_TYPE	DevMemHeapType;
-	
+
 	/* kernel heap handle */
 	IMG_HANDLE				hDevMemHeap;
-	
+
 	/* ptr to local memory allocator for this heap */
 	RA_ARENA				*psLocalDevMemArena;
 
@@ -118,18 +78,18 @@ typedef struct _DEVICE_MEMORY_INFO_
 	/* size of address space, as log2 */
 	IMG_UINT32				ui32AddressSpaceSizeLog2;
 
-	/* 
-		flags, includes physical memory resource types available to the system.  
-		Allows for validation at heap creation, define PVRSRV_BACKINGSTORE_XXX 
+	/*
+		flags, includes physical memory resource types available to the system.
+		Allows for validation at heap creation, define PVRSRV_BACKINGSTORE_XXX
 	*/
 	IMG_UINT32				ui32Flags;
 
 	/* heap count.  Doesn't include additional heaps from PVRSRVCreateDeviceMemHeap */
 	IMG_UINT32				ui32HeapCount;
-	
+
 	/* the sync heap id - common code needs to know */
 	IMG_UINT32				ui32SyncHeapID;
-	
+
 	/* heap for buffer mappings  */
 	IMG_UINT32				ui32MappingHeapID;
 
@@ -178,9 +138,9 @@ typedef struct DEV_ARENA_DESCRIPTOR_TAG
 typedef struct _PDUMP_MMU_ATTRIB_
 {
 	PVRSRV_DEVICE_IDENTIFIER	sDevId;
-	
+
 	IMG_CHAR	*pszPDRegRegion;
-	
+
 	/* data page info */
 	IMG_UINT32 ui32DataPageMask;
 
@@ -247,7 +207,7 @@ typedef struct _PVRSRV_DEVICE_NODE_
 
 	IMG_VOID				(*pfnMMUMapShadow)(MMU_HEAP            *pMMU,
 											   IMG_DEV_VIRTADDR    MapBaseDevVAddr,
-											   IMG_SIZE_T          uSize, 
+											   IMG_SIZE_T          uSize,
 											   IMG_CPU_VIRTADDR    CpuVAddr,
 											   IMG_HANDLE          hOSMemHandle,
 											   IMG_DEV_VIRTADDR    *pDevVAddr,
@@ -314,21 +274,21 @@ typedef struct _PVRSRV_DEVICE_NODE_
 	/* private device information */
 	IMG_VOID				*pvDevice;
 	IMG_UINT32				ui32pvDeviceSize; /* required by GetClassDeviceInfo API */
-		
+
 	/* Resource Manager Context */
 	PRESMAN_CONTEXT			hResManContext;
-	
+
 	/* pointer back to parent sysdata */
 	PSYS_DATA				psSysData;
-	
+
 	/* default MMU PT/PD backing store to use for the device */
 	RA_ARENA				*psLocalDevMemArena;
-	
+
 	IMG_UINT32				ui32Flags;
-	
+
 	struct _PVRSRV_DEVICE_NODE_	*psNext;
 	struct _PVRSRV_DEVICE_NODE_	**ppsThis;
-	
+
 #if defined(PDUMP)
 	/* 	device-level callback which is called when pdump.exe starts.
 	 *	Should be implemented in device-specific init code, e.g. sgxinit.c
@@ -389,8 +349,8 @@ PVRSRV_ERROR IMG_CALLCONV PollForInterruptKM(IMG_UINT32 ui32Value,
 
 #endif /* #if defined (USING_ISR_INTERRUPTS) */
 
-/* The following functions don't really belong here (srvkm.h might be a better 
- * place), but as they use the device data structures, this is the most convenient 
+/* The following functions don't really belong here (srvkm.h might be a better
+ * place), but as they use the device data structures, this is the most convenient
  * place for them. */
 PVRSRV_ERROR IMG_CALLCONV PVRSRVInit(PSYS_DATA psSysData);
 IMG_VOID IMG_CALLCONV PVRSRVDeInit(PSYS_DATA psSysData);
@@ -401,7 +361,7 @@ IMG_VOID IMG_CALLCONV PVRSRVMISR(IMG_VOID *pvSysData);
 #if defined(__cplusplus)
 }
 #endif
-	
+
 #endif /* __DEVICE_H__ */
 
 /******************************************************************************

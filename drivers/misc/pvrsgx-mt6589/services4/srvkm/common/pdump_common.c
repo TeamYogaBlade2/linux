@@ -1,43 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Common PDump functions
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #if defined(PDUMP)
 #include <linux/stdarg.h>
@@ -297,8 +258,8 @@ PVRSRV_ERROR PDumpRegKM(IMG_CHAR *pszPDumpRegName,
  *					with the expected value
 **************************************************************************/
 PVRSRV_ERROR PDumpRegPolWithFlagsKM(IMG_CHAR *pszPDumpRegName,
-									IMG_UINT32 ui32RegAddr, 
-									IMG_UINT32 ui32RegValue, 
+									IMG_UINT32 ui32RegAddr,
+									IMG_UINT32 ui32RegValue,
 									IMG_UINT32 ui32Mask,
 									IMG_UINT32 ui32Flags,
 									PDUMP_POLL_OPERATOR	eOperator)
@@ -357,9 +318,9 @@ PVRSRV_ERROR PDumpRegPolKM(IMG_CHAR *pszPDumpRegName, IMG_UINT32 ui32RegAddr, IM
  * Returns        : None
  * Description    : Malloc memory pages
 
-FIXME: This function assumes pvLinAddr is the address of the start of the 
+FIXME: This function assumes pvLinAddr is the address of the start of the
 block for this hOSMemHandle.
-If this isn't true, the call to PDumpOSCPUVAddrToDevPAddr below will be 
+If this isn't true, the call to PDumpOSCPUVAddrToDevPAddr below will be
 incorrect.  (Consider using OSMemHandleToCPUPAddr() instead?)
 The only caller at the moment is in buffer_manager.c, which does the right
 thing.
@@ -421,12 +382,12 @@ PVRSRV_ERROR PDumpMallocPages (PVRSRV_DEVICE_IDENTIFIER	*psDevID,
 	ui32Offset = 0;
 	ui32NumPages = ui32NumBytes >> ui32PageSizeShift;
 	while (ui32NumPages)
-	{ 
+	{
 		ui32NumPages--;
 
-		/* See FIXME in function header. 
-		 * Currently:  linux pdump uses OSMemHandle and Offset 
-		 *             other OSes use the LinAddr. 
+		/* See FIXME in function header.
+		 * Currently:  linux pdump uses OSMemHandle and Offset
+		 *             other OSes use the LinAddr.
 		 */
  		/* Calculate the device physical address for this page */
 		PDumpOSCPUVAddrToDevPAddr(psDevID->eDeviceType,
@@ -517,7 +478,7 @@ PVRSRV_ERROR PDumpMallocPageTable (PVRSRV_DEVICE_IDENTIFIER	*psDevId,
 			ui32PTSize,
 			&sDevPAddr);
 
-	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "MALLOC :%s:PA_" UINTPTR_FMT DEVPADDR_FMT 
+	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "MALLOC :%s:PA_" UINTPTR_FMT DEVPADDR_FMT
 												 " 0x%X %u 0x" DEVPADDR_FMT "\r\n",
 											psDevId->pszPDumpDevName,
 											(IMG_UINTPTR_T)hUniqueTag,
@@ -568,7 +529,7 @@ PVRSRV_ERROR PDumpFreePages	(BM_HEAP 			*psBMHeap,
 	/*
 		Write a comment to the PDUMP2 script streams indicating the memory free
 	*/
-	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "-- FREE :%s:VA_%08X\r\n", 
+	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "-- FREE :%s:VA_%08X\r\n",
 							psDeviceNode->sDevId.pszPDumpDevName, sDevVAddr.uiAddr);
 	if(eErr != PVRSRV_OK)
 	{
@@ -597,8 +558,8 @@ PVRSRV_ERROR PDumpFreePages	(BM_HEAP 			*psBMHeap,
 			PVR_ASSERT(sDevPAddr.uiAddr != 0);
 
 			eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "FREE :%s:PA_" UINTPTR_FMT DEVPADDR_FMT "\r\n",
-									psDeviceNode->sDevId.pszPDumpDevName, 
-                                    (IMG_UINTPTR_T)hUniqueTag, 
+									psDeviceNode->sDevId.pszPDumpDevName,
+                                    (IMG_UINTPTR_T)hUniqueTag,
                                     sDevPAddr.uiAddr);
 			if(eErr != PVRSRV_OK)
 			{
@@ -712,7 +673,7 @@ PVRSRV_ERROR PDumpPDRegWithFlags(PDUMP_MMU_ATTRIB *psMMUAttrib,
 
 	PDUMP_LOCK();
 	if(psMMUAttrib->pszPDRegRegion != IMG_NULL)
-	{	
+	{
 		pszRegString = psMMUAttrib->pszPDRegRegion;
 	}
 	else
@@ -739,7 +700,7 @@ PVRSRV_ERROR PDumpPDRegWithFlags(PDUMP_MMU_ATTRIB *psMMUAttrib,
 		return eErr;
 	}
 	PDumpOSWriteString2(hScript, ui32Flags);
-	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "SHR :%s:$1 :%s:$1 0x4\r\n", 
+	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "SHR :%s:$1 :%s:$1 0x4\r\n",
 			psMMUAttrib->sDevId.pszPDumpDevName,
 			psMMUAttrib->sDevId.pszPDumpDevName);
 	if(eErr != PVRSRV_OK)
@@ -795,7 +756,7 @@ PVRSRV_ERROR PDumpPDRegWithFlags(PDUMP_MMU_ATTRIB *psMMUAttrib,
  *					Used for registers specifying physical addresses
  					e.g. MMU page directory register
 **************************************************************************/
-PVRSRV_ERROR PDumpPDReg	(PDUMP_MMU_ATTRIB *psMMUAttrib, 
+PVRSRV_ERROR PDumpPDReg	(PDUMP_MMU_ATTRIB *psMMUAttrib,
 					 IMG_UINT32 ui32Reg,
 					 IMG_UINT32 ui32Data,
 					 IMG_HANDLE hUniqueTag)
@@ -959,7 +920,7 @@ static PVRSRV_ERROR _PDumpMemIntKM(IMG_PVOID pvAltLinAddr,
 	}
 
 	psMMUAttrib = ((BM_BUF*)psMemInfo->sMemBlk.hBuffer)->pMapping->pBMHeap->psMMUAttrib;
-	
+
 	/*
 		check the offset and size don't exceed the bounds of the allocation
 	*/
@@ -1054,7 +1015,7 @@ static PVRSRV_ERROR _PDumpMemIntKM(IMG_PVOID pvAltLinAddr,
 	while(ui32NumPages)
 	{
 		ui32NumPages--;
-	
+
 		/* calculate the DevV page address */
 		sDevVPageAddr.uiAddr = sDevVAddr.uiAddr - ui32PageByteOffset;
 
@@ -1172,7 +1133,7 @@ PVRSRV_ERROR PDumpMemPDEntriesKM(PDUMP_MMU_ATTRIB *psMMUAttrib,
 								 IMG_HANDLE hUniqueTag2)
 {
 	PDUMP_MMU_ATTRIB sMMUAttrib;
-	
+
 	/* Override the (variable) PT size since PDs are always 4K in size */
 	sMMUAttrib = *psMMUAttrib;
 	sMMUAttrib.ui32PTSize = (IMG_UINT32)HOST_PAGESIZE();
@@ -1328,7 +1289,7 @@ PVRSRV_ERROR PDumpMemPTEntriesKM(PDUMP_MMU_ATTRIB *psMMUAttrib,
 		/*
 			Write a comment to the MMU script stream indicating the page table load
 		*/
-		
+
 		if (bInitialisePages)
 		{
 			eErr = PDumpOSBufprintf(hScript,
@@ -2119,11 +2080,11 @@ PVRSRV_ERROR PDumpTASignatureRegisters	(PVRSRV_DEVICE_IDENTIFIER *psDevId,
 	*/
 	PDUMP_LOCK();
 	PDumpRegisterRange(psDevId,
-						pszFileName, 
-						pui32Registers, 
-						ui32NumRegisters, 
-						&ui32FileOffset, 
-						sizeof(IMG_UINT32), 
+						pszFileName,
+						pui32Registers,
+						ui32NumRegisters,
+						&ui32FileOffset,
+						sizeof(IMG_UINT32),
 						ui32Flags);
 	PDUMP_UNLOCK();
 	return PVRSRV_OK;
@@ -2193,7 +2154,7 @@ PVRSRV_ERROR PDumpRegRead(IMG_CHAR *pszPDumpRegName,
 
 	PDUMP_LOCK();
 	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "RDW :%s:0x%X\r\n",
-							pszPDumpRegName, 
+							pszPDumpRegName,
 							ui32RegOffset);
 	if(eErr != PVRSRV_OK)
 	{
@@ -2265,7 +2226,7 @@ PVRSRV_ERROR PDumpCycleCountRegRead(PVRSRV_DEVICE_IDENTIFIER *psDevId,
 	PDUMP_GET_SCRIPT_STRING();
 
 	PDUMP_LOCK();
-	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "RDW :%s:0x%X\r\n", 
+	eErr = PDumpOSBufprintf(hScript, ui32MaxLen, "RDW :%s:0x%X\r\n",
 							psDevId->pszPDumpRegName,
 							ui32RegOffset);
 	if(eErr != PVRSRV_OK)
@@ -2559,7 +2520,7 @@ PVRSRV_ERROR PDumpMemUM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 										ui32BytesToCopy,
 										ui32Flags,
 										hUniqueTag);
-		
+
 				if (eError != PVRSRV_OK)
 				{
 					/*
@@ -2589,7 +2550,7 @@ PVRSRV_ERROR PDumpMemUM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 		for (ui32BytesDumped = 0; ui32BytesDumped < ui32Bytes;)
 		{
 			IMG_UINT32 ui32BytesToDump = MIN(PDUMP_TEMP_BUFFER_SIZE, ui32Bytes - ui32BytesDumped);
-	
+
 			eError = OSCopyFromUser(psPerProc,
 						   pvAddrKM,
 						   pvAddrUM,
@@ -2599,14 +2560,14 @@ PVRSRV_ERROR PDumpMemUM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 				PVR_DPF((PVR_DBG_ERROR, "PDumpMemUM: OSCopyFromUser failed (%d)", eError));
 				return eError;
 			}
-	
+
 			eError = PDumpMemKM(pvAddrKM,
 						   psMemInfo,
 						   ui32CurrentOffset,
 						   ui32BytesToDump,
 						   ui32Flags,
 						   hUniqueTag);
-	
+
 			if (eError != PVRSRV_OK)
 			{
 				/*
@@ -2620,7 +2581,7 @@ PVRSRV_ERROR PDumpMemUM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 				PVR_ASSERT(ui32BytesDumped == 0);
 				return eError;
 			}
-	
+
 			VPTR_INC(pvAddrUM, ui32BytesToDump);
 			ui32CurrentOffset += ui32BytesToDump;
 			ui32BytesDumped += ui32BytesToDump;
@@ -2694,7 +2655,7 @@ PVRSRV_ERROR PDumpSetMMUContext(PVRSRV_DEVICE_TYPE eDeviceType,
 								IMG_UINT32 *pui32MMUContextID,
 								IMG_UINT32 ui32MMUType,
 								IMG_HANDLE hUniqueTag1,
-								IMG_HANDLE hOSMemHandle, 
+								IMG_HANDLE hOSMemHandle,
 								IMG_VOID *pvPDCPUAddr)
 {
 	IMG_UINT8 *pui8LinAddr = (IMG_UINT8 *)pvPDCPUAddr;
@@ -2722,7 +2683,7 @@ PVRSRV_ERROR PDumpSetMMUContext(PVRSRV_DEVICE_TYPE eDeviceType,
 	sDevPAddr.uiAddr &= ~((PVRSRV_4K_PAGE_SIZE) -1);
 
 	eErr = PDumpOSBufprintf(hScript,
-						ui32MaxLen, 
+						ui32MaxLen,
 						"MMU :%s:v%d %d :%s:PA_" UINTPTR_FMT DEVPADDR_FMT "\r\n",
 						pszMemSpace,
 						ui32MMUContextID,
@@ -2773,7 +2734,7 @@ PVRSRV_ERROR PDumpClearMMUContext(PVRSRV_DEVICE_TYPE eDeviceType,
 	*/
 	PDUMP_LOCK();
 	eErr = PDumpOSBufprintf(hScript,
-						ui32MaxLen, 
+						ui32MaxLen,
 						"MMU :%s:v%d\r\n",
 						pszMemSpace,
 						ui32MMUContextID);
@@ -2799,18 +2760,18 @@ PVRSRV_ERROR PDumpClearMMUContext(PVRSRV_DEVICE_TYPE eDeviceType,
 
 /*****************************************************************************
  FUNCTION	: PDumpStoreMemToFile
-    
+
  PURPOSE	: Dumps a given addr:size to a file
 
  PARAMETERS	:
 
- RETURNS	: 
+ RETURNS	:
 *****************************************************************************/
 PVRSRV_ERROR PDumpStoreMemToFile(PDUMP_MMU_ATTRIB *psMMUAttrib,
 						         IMG_CHAR *pszFileName,
-								 IMG_UINT32 ui32FileOffset, 
+								 IMG_UINT32 ui32FileOffset,
 								 PVRSRV_KERNEL_MEM_INFO *psMemInfo,
-								 IMG_UINT32 uiAddr, 
+								 IMG_UINT32 uiAddr,
 								 IMG_UINT32 ui32Size,
 								 IMG_UINT32 ui32PDumpFlags,
 								 IMG_HANDLE hUniqueTag)
@@ -2827,13 +2788,13 @@ PVRSRV_ERROR PDumpStoreMemToFile(PDUMP_MMU_ATTRIB *psMMUAttrib,
 		virtual address
 	*/
 	ui32PageOffset = (IMG_UINT32)((IMG_UINTPTR_T)psMemInfo->pvLinAddrKM & psMMUAttrib->ui32DataPageMask);
-	
+
 	/* calculate the DevV page address */
 	sDevVPageAddr.uiAddr = uiAddr - ui32PageOffset;
-	
+
 	/* get the physical page address based on the device virtual address */
 	BM_GetPhysPageAddr(psMemInfo, sDevVPageAddr, &sDevPAddr);
-	
+
 	/* convert DevP page address to byte address */
 	sDevPAddr.uiAddr += ui32PageOffset;
 
@@ -2849,18 +2810,18 @@ PVRSRV_ERROR PDumpStoreMemToFile(PDUMP_MMU_ATTRIB *psMMUAttrib,
 			 pszFileName);
 
 	PDumpOSWriteString2(hScript, ui32PDumpFlags);
-	
+
 	PDUMP_UNLOCK();
-	return PVRSRV_OK;	
+	return PVRSRV_OK;
 }
 
 /*****************************************************************************
  FUNCTION	: PDumpRegBasedCBP
-    
+
  PURPOSE	: Dump CBP command to script
 
  PARAMETERS	:
-			  
+
  RETURNS	: None
 *****************************************************************************/
 PVRSRV_ERROR PDumpRegBasedCBP(IMG_CHAR		*pszPDumpRegName,
@@ -2885,7 +2846,7 @@ PVRSRV_ERROR PDumpRegBasedCBP(IMG_CHAR		*pszPDumpRegName,
 	PDumpOSWriteString2(hScript, ui32Flags);
 
 	PDUMP_UNLOCK();
-	return PVRSRV_OK;		
+	return PVRSRV_OK;
 }
 
 
@@ -2907,10 +2868,10 @@ IMG_EXPORT IMG_VOID PDumpConnectionNotify(IMG_VOID)
 	SYS_DATA			*psSysData;
 	PVRSRV_DEVICE_NODE	*psThis;
 	PVR_DPF((PVR_DBG_WARNING, "PDump has connected."));
-	
+
 	/* Loop over all known devices */
 	SysAcquireData(&psSysData);
-	
+
 	psThis = psSysData->psDeviceNodeList;
 	while (psThis)
 	{
@@ -2945,7 +2906,7 @@ IMG_UINT32 DbgWrite(PDBG_STREAM psStream, IMG_UINT8 *pui8Data, IMG_UINT32 ui32BC
 	{
 		return ui32BCount;
 	}
-	
+
 #if defined(SUPPORT_PDUMP_MULTI_PROCESS)
 	/* Return if process is not marked for pdumping, unless it's persistent.
 	 */
@@ -2994,7 +2955,7 @@ IMG_UINT32 DbgWrite(PDBG_STREAM psStream, IMG_UINT8 *pui8Data, IMG_UINT32 ui32BC
 				return 0xFFFFFFFFU;
 			}
 		}
-		
+
 		/* reset buffer counters */
 		ui32BCount = ui32Off; ui32Off = 0; ui32BytesWritten = 0;
 	}
@@ -3016,7 +2977,7 @@ IMG_UINT32 DbgWrite(PDBG_STREAM psStream, IMG_UINT8 *pui8Data, IMG_UINT32 ui32BC
 			}
 			else
 			{
-				ui32BytesWritten = PDumpOSDebugDriverWrite(	psStream, 
+				ui32BytesWritten = PDumpOSDebugDriverWrite(	psStream,
 															PDUMP_WRITE_MODE_CONTINUOUS,
 															&pui8Data[ui32Off], ui32BCount, 1, 0);
 			}
@@ -3026,20 +2987,20 @@ IMG_UINT32 DbgWrite(PDBG_STREAM psStream, IMG_UINT8 *pui8Data, IMG_UINT32 ui32BC
 			if (ui32Flags & PDUMP_FLAGS_LASTFRAME)
 			{
 				IMG_UINT32	ui32DbgFlags;
-	
+
 				ui32DbgFlags = 0;
 				if (ui32Flags & PDUMP_FLAGS_RESETLFBUFFER)
 				{
 					ui32DbgFlags |= WRITELF_FLAGS_RESETBUF;
 				}
-	
+
 				ui32BytesWritten = PDumpOSDebugDriverWrite(	psStream,
 															PDUMP_WRITE_MODE_LASTFRAME,
 															&pui8Data[ui32Off], ui32BCount, 1, ui32DbgFlags);
 			}
 			else
 			{
-				ui32BytesWritten = PDumpOSDebugDriverWrite(	psStream, 
+				ui32BytesWritten = PDumpOSDebugDriverWrite(	psStream,
 															PDUMP_WRITE_MODE_BINCM,
 															&pui8Data[ui32Off], ui32BCount, 1, 0);
 			}

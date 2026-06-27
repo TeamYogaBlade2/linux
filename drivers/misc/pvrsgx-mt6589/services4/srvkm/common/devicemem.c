@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Device addressable memory functions
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Device addressable memory APIs
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include <stddef.h>
 
@@ -125,7 +85,7 @@ static PVRSRV_KERNEL_SYNC_INFO *g_psSyncInfoList = IMG_NULL;
  Adds the current psMemTrackInfo instance to the head of list represented by gMemTrackInfo
 
  @Input	   psMemTrackInfo :
- @Output 
+ @Output
 
  @Return
 
@@ -147,10 +107,10 @@ IMG_VOID IMG_CALLCONV PVRSRVAddMemTrackInfo(PVRSRV_MEM_TRACK_INFO *psMemTrackInf
 	{
 		PVRSRV_MEM_TRACK_INFO *psFreePtr;
 		psFreePtr = g_psMemTrackInfoTail;
-		g_psMemTrackInfoTail = g_psMemTrackInfoTail->prev; 
+		g_psMemTrackInfoTail = g_psMemTrackInfoTail->prev;
 		g_psMemTrackInfoTail->next = IMG_NULL;
 		OSFreeMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						psFreePtr, IMG_NULL);
 		g_ui32NumOfOpsRecorded--;
 	}
@@ -166,9 +126,9 @@ IMG_VOID IMG_CALLCONV PVRSRVAddMemTrackInfo(PVRSRV_MEM_TRACK_INFO *psMemTrackInf
  Dumps the mem tracking info
 
  @Input	   ui32FaultAddr:
- @Output   
+ @Output
 
- @Return  
+ @Return
 
 ******************************************************************************/
 IMG_EXPORT
@@ -187,7 +147,7 @@ IMG_VOID IMG_CALLCONV PVRSRVPrintMemTrackInfo(IMG_UINT32 ui32FaultAddr)
 		{
 			PVR_DPF((PVR_DBG_MESSAGE,"***************************\n"));
 		}
-		PVR_DPF((PVR_DBG_MESSAGE,"0x%-8x | 0x%-8zx | %-13s | %-11d | %-6u  | %-15s | %10s | %-15u ",	
+		PVR_DPF((PVR_DBG_MESSAGE,"0x%-8x | 0x%-8zx | %-13s | %-11d | %-6u  | %-15s | %10s | %-15u ",
 				psMemTrackInfo->sDevVAddr.uiAddr,
 				psMemTrackInfo->uSize,
 				apszMemOpNames[psMemTrackInfo->eOp],
@@ -499,7 +459,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVGetDeviceMemHeapInfoKM(IMG_HANDLE					hDevCookie
 				{
 					hDevMemHeap = BM_CreateHeap(hDevMemContext,
 												&psDeviceMemoryHeap[i]);
-				
+
 					if (hDevMemHeap == IMG_NULL)
 					{
 						return PVRSRV_ERROR_OUT_OF_MEMORY;
@@ -760,7 +720,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVAllocSyncInfoKM(IMG_HANDLE					hDevCookie,
 		OSFreeMem(PVRSRV_PAGEABLE_SELECT, sizeof(PVRSRV_KERNEL_SYNC_INFO), psKernelSyncInfo, IMG_NULL);
 		return PVRSRV_ERROR_OUT_OF_MEMORY;
 	}
-	
+
 
 	/* Get the devnode from the devheap */
 	pBMContext = (BM_CONTEXT*)hDevMemContext;
@@ -999,7 +959,7 @@ PVRSRV_ERROR FreeMemCallBackCommon(PVRSRV_KERNEL_MEM_INFO *psMemInfo,
 
 #if defined (MEM_TRACK_INFO_DEBUG)
 	eError = OSAllocMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						(IMG_VOID **)&psMemTrackInfo, IMG_NULL,
 						"Mem tracking info");
 	if (eError != PVRSRV_OK)
@@ -1113,7 +1073,7 @@ static PVRSRV_ERROR FreeDeviceMemCallBack(IMG_PVOID  pvParam,
 										  IMG_BOOL   bDummy)
 {
 	PVRSRV_KERNEL_MEM_INFO	*psMemInfo = (PVRSRV_KERNEL_MEM_INFO *)pvParam;
-	
+
 	PVR_UNREFERENCED_PARAMETER(bDummy);
 
 	return FreeMemCallBackCommon(psMemInfo, ui32Param,
@@ -1343,7 +1303,7 @@ PVRSRV_ERROR IMG_CALLCONV _PVRSRVAllocDeviceMemKM(IMG_HANDLE				hDevCookie,
 
 #if defined (MEM_TRACK_INFO_DEBUG)
 	eError = OSAllocMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						(IMG_VOID **)&psMemTrackInfo, IMG_NULL,
 						"Mem tracking info");
 	if (eError != PVRSRV_OK)
@@ -1358,7 +1318,7 @@ PVRSRV_ERROR IMG_CALLCONV _PVRSRVAllocDeviceMemKM(IMG_HANDLE				hDevCookie,
 	OSGetCurrentProcessNameKM(psMemTrackInfo->asTaskName, 128);
 
 	OSStringCopy(psMemTrackInfo->heapId, psMemInfo->heapId);
-	
+
 	PVRSRVAddMemTrackInfo(psMemTrackInfo);
 #endif
 	/*
@@ -1382,7 +1342,7 @@ static PVRSRV_ERROR IonUnmapCallback(IMG_PVOID  pvParam,
 									 IMG_BOOL   bDummy)
 {
 	PVRSRV_KERNEL_MEM_INFO	*psMemInfo = (PVRSRV_KERNEL_MEM_INFO *)pvParam;
-	
+
 	PVR_UNREFERENCED_PARAMETER(bDummy);
 
 	return FreeMemCallBackCommon(psMemInfo, ui32Param, PVRSRV_FREE_CALLBACK_ORIGIN_ALLOCATOR);
@@ -1516,7 +1476,7 @@ PVRSRV_ERROR PVRSRVMapIonHandleKM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 								  IMG_UINT64 *pui64Stamp)
 {
 	PVRSRV_ENV_PER_PROCESS_DATA *psPerProcEnv = PVRSRVProcessPrivateData(psPerProc);
-	PVRSRV_DEVICE_NODE *psDeviceNode; 
+	PVRSRV_DEVICE_NODE *psDeviceNode;
 	PVRSRV_KERNEL_MEM_INFO *psNewKernelMemInfo;
 	IMG_SYS_PHYADDR *pasSysPhysAddr;
 	IMG_SYS_PHYADDR *pasAdjustedSysPhysAddr;
@@ -1590,7 +1550,7 @@ PVRSRV_ERROR PVRSRVMapIonHandleKM(PVRSRV_PER_PROCESS_DATA *psPerProc,
 		PVR_DPF((PVR_DBG_ERROR, "%s: ion allocator returned fewer page addresses "
 								"than specified chunk size(s)", __FUNCTION__));
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto exitFailedAdjustedAlloc; 
+		goto exitFailedAdjustedAlloc;
 	}
 
 	/*
@@ -1863,7 +1823,7 @@ static PVRSRV_ERROR UnwrapExtMemoryCallBack(IMG_PVOID  pvParam,
 											IMG_BOOL   bDummy)
 {
 	PVRSRV_KERNEL_MEM_INFO	*psMemInfo = (PVRSRV_KERNEL_MEM_INFO *)pvParam;
-	
+
 	PVR_UNREFERENCED_PARAMETER(bDummy);
 
 	return FreeMemCallBackCommon(psMemInfo, ui32Param,
@@ -2122,7 +2082,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVWrapExtMemoryKM(IMG_HANDLE				hDevCookie,
 
 #if defined (MEM_TRACK_INFO_DEBUG)
 	eError = OSAllocMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						(IMG_VOID **)&psMemTrackInfo, IMG_NULL,
 						"Mem tracking info");
 	if (eError != PVRSRV_OK)
@@ -2467,7 +2427,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVMapDeviceMemoryKM(PVRSRV_PER_PROCESS_DATA	*psPer
 
 #if defined (MEM_TRACK_INFO_DEBUG)
 	eError = OSAllocMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						(IMG_VOID **)&psMemTrackInfo, IMG_NULL,
 						"Mem tracking info");
 	if (eError != PVRSRV_OK)
@@ -2836,7 +2796,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVMapDeviceClassMemoryKM(PVRSRV_PER_PROCESS_DATA	*
 	*ppsMemInfo = psMemInfo;
 #if defined (MEM_TRACK_INFO_DEBUG)
 	eError = OSAllocMem(PVRSRV_PAGEABLE_SELECT,
-						sizeof(PVRSRV_MEM_TRACK_INFO), 
+						sizeof(PVRSRV_MEM_TRACK_INFO),
 						(IMG_VOID **)&psMemTrackInfo, IMG_NULL,
 						"Mem tracking info");
 	if (eError != PVRSRV_OK)
@@ -2866,7 +2826,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVMapDeviceClassMemoryKM(PVRSRV_PER_PROCESS_DATA	*
 		 *
 		 *	A better method is to pdump the allocation from the DC driver, so the
 		 *	BM_Wrap pdumps only the virtual memory which better represents the driver
-		 *	behaviour.	
+		 *	behaviour.
 		 */
 		PDUMPCOMMENT("Dump display surface");
 		PDUMPMEM(IMG_NULL, psMemInfo, uOffset, psMemInfo->uAllocSize, PDUMP_FLAGS_CONTINUOUS, ((BM_BUF*)psMemInfo->sMemBlk.hBuffer)->pMapping);
@@ -2986,7 +2946,7 @@ IMG_VOID IMG_CALLCONV PVRSRVFreeMemOps(IMG_VOID)
 						psFreePtr, IMG_NULL);
 	}
 }
-#endif		
+#endif
 
 static PVRSRV_ERROR PVRSRVDumpSync(PVRSRV_KERNEL_SYNC_INFO *psKernelSyncInfo)
 {

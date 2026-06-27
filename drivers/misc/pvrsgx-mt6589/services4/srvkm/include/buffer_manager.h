@@ -1,45 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Buffer Management.
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Manages buffers mapped into two virtual memory spaces, host and
-                device and referenced by handles.
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #ifndef _BUFFER_MANAGER_H_
 #define _BUFFER_MANAGER_H_
@@ -121,7 +80,7 @@ struct _BM_HEAP_
 	DEV_ARENA_DESCRIPTOR	sDevArena;
 	MMU_HEAP				*pMMUHeap;
 	PDUMP_MMU_ATTRIB 		*psMMUAttrib;
-	
+
 	struct _BM_HEAP_ 		*psNext;
 	struct _BM_HEAP_ 		**ppsThis;
 	/* BIF tile stride for this heap */
@@ -565,7 +524,7 @@ IMG_BOOL BM_MapPageAtOffset(IMG_HANDLE hBMHandle, IMG_UINT32 ui32Offset);
  @Input     hBMHandle - Handle to BM mapping
 
  @Input     ui32VirtOffset - Virtual offset into allocation
- 
+
  @Output    pui32PhysOffset - Physical offset
 
  @Return	IMG_TRUE if the virtual offset is physically backed
@@ -589,7 +548,7 @@ IMG_BOOL BM_VirtOffsetToPhysical(IMG_HANDLE hBMHandle,
    memory allocation to be refcounted, and shared iff the IDs chosen
    match */
 /* This API is difficult to use, but saves a lot of plumbing in other
-   APIs.  The next generation of this library should have this functionality 
+   APIs.  The next generation of this library should have this functionality
    plumbed in properly */
 PVRSRV_ERROR BM_XProcWorkaroundSetShareIndex(IMG_UINT32 ui32Index);
 PVRSRV_ERROR BM_XProcWorkaroundUnsetShareIndex(IMG_UINT32 ui32Index);

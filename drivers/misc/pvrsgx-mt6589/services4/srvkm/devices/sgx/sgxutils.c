@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Device specific utility routines
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Device specific functions
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include <stddef.h>
 
@@ -102,7 +62,7 @@ static IMG_VOID SGXPostActivePowerEvent(PVRSRV_DEVICE_NODE	* psDeviceNode,
 	if ((psSGXHostCtl->ui32PowerStatus & PVRSRV_USSE_EDM_POWMAN_POWEROFF_RESTART_IMMEDIATE) != 0)
 	{
 		PVR_DPF((PVR_DBG_MESSAGE, "SGXPostActivePowerEvent: SGX requests immediate restart"));
-		
+
 		/*
 			Events were queued during the active power
 			request, so SGX will need to be restarted.
@@ -671,7 +631,7 @@ PVRSRV_ERROR SGXScheduleCCBCommandKM(PVRSRV_DEVICE_NODE		*psDeviceNode,
 		if (ui32CallerID == ISR_ID)
 		{
 			SYS_DATA *psSysData;
-			
+
 			/*
 				ISR failed to acquire lock so it must be held by a kernel thread.
 				Bring up and kick SGX if necessary when the lock is available.
@@ -853,7 +813,7 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 		sCommand.ui32Data[0] = ui32CleanupType;
 		sCommand.ui32Data[1] = (psHWDataDevVAddr == IMG_NULL) ? 0 : psHWDataDevVAddr->uiAddr;
 		PDUMPCOMMENTWITHFLAGS(0, "Request ukernel resource clean-up, Type %u, Data 0x%X", sCommand.ui32Data[0], sCommand.ui32Data[1]);
-	
+
 		eError = SGXScheduleCCBCommandKM(psDeviceNode, SGXMKIF_CMD_CLEANUP, &sCommand, KERNEL_ID, 0, IMG_NULL, IMG_FALSE);
 		if (eError != PVRSRV_OK)
 		{
@@ -862,7 +822,7 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 				PVR_DBG_BREAK;
 				return eError;
 		}
-		
+
 		/* Wait for the uKernel process the cleanup request */
 		#if !defined(NO_HARDWARE)
 		if(PollForValueKM(&psHostCtl->ui32CleanupStatus,
@@ -878,7 +838,7 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 			PVR_DBG_BREAK;
 		}
 		#endif
-	
+
 		#if defined(PDUMP)
 		/*
 			Pdump the poll as well.
@@ -898,7 +858,7 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 					0,
 					MAKEUNIQUETAG(psHostCtlMemInfo));
 		#endif /* PDUMP */
-	
+
 		if (eError != PVRSRV_OK)
 		{
 			return eError;
@@ -917,7 +877,7 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 		eError = PVRSRV_OK;
 		psHostCtl->ui32CleanupStatus &= ~(PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE | PVRSRV_USSE_EDM_CLEANUPCMD_DONE);
 	}
-	
+
 	PDUMPMEM(IMG_NULL, psHostCtlMemInfo, offsetof(SGXMKIF_HOST_CTL, ui32CleanupStatus), sizeof(IMG_UINT32), 0, MAKEUNIQUETAG(psHostCtlMemInfo));
 
 	/* Request the cache invalidate */
@@ -990,7 +950,7 @@ static PVRSRV_ERROR SGXCleanupHWRenderContextCallback(IMG_PVOID		pvParam,
 	    /* Free the Device Mem allocated */
 	    PVRSRVFreeDeviceMemKM(psCleanup->psDeviceNode,
 	            psCleanup->psHWRenderContextMemInfo);
-	
+
 	    /* Finally, free the cleanup structure itself */
 		OSFreeMem(PVRSRV_OS_PAGEABLE_HEAP,
 				  sizeof(SGX_HW_RENDER_CONTEXT_CLEANUP),
@@ -1060,7 +1020,7 @@ static PVRSRV_ERROR SGXCleanupHWTransferContextCallback(IMG_PVOID	pvParam,
 	    /* Free the Device Mem allocated */
 	    PVRSRVFreeDeviceMemKM(psCleanup->psDeviceNode,
 	            psCleanup->psHWTransferContextMemInfo);
-	
+
 	    /* Finally, free the cleanup structure itself */
 		OSFreeMem(PVRSRV_OS_PAGEABLE_HEAP,
 				  sizeof(SGX_HW_TRANSFER_CONTEXT_CLEANUP),
@@ -1114,8 +1074,8 @@ IMG_HANDLE SGXRegisterHWRenderContextKM(IMG_HANDLE				hDeviceNode,
     eError = PVRSRVAllocDeviceMemKM(hDeviceNode,
                                psPerProc,
                                psHeapInfo->hDevMemHeap,
-                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE 
-                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT 
+                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE
+                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT
                                  | PVRSRV_MEM_CACHE_CONSISTENT,
                                ui32HWRenderContextSize,
                                32,
@@ -1146,7 +1106,7 @@ IMG_HANDLE SGXRegisterHWRenderContextKM(IMG_HANDLE				hDeviceNode,
     psHWRenderContextDevVAddr->uiAddr = psCleanup->psHWRenderContextMemInfo->sDevVAddr.uiAddr;
 
     /* Retrieve the PDDevPAddr */
-    eError = PVRSRVLookupHandle(psPerProc->psHandleBase, 
+    eError = PVRSRVLookupHandle(psPerProc->psHandleBase,
                            &hDevMemContextInt,
                            hDevMemContext,
                            PVRSRV_HANDLE_TYPE_DEV_MEM_CONTEXT);
@@ -1160,13 +1120,13 @@ IMG_HANDLE SGXRegisterHWRenderContextKM(IMG_HANDLE				hDeviceNode,
     psMMUContext = BM_GetMMUContextFromMemContext(hDevMemContextInt);
     sPDDevPAddr = psDeviceNode->pfnMMUGetPDDevPAddr(psMMUContext);
 
-	/* 
+	/*
 	   The PDDevPAddr needs to be shifted-down, as the uKernel expects it in the
 	   format it will be inserted into the DirList registers in.
 	*/
 	ui32PDDevPAddrInDirListFormat = (IMG_UINT32)(sPDDevPAddr.uiAddr >> SGX_MMU_PTE_ADDR_ALIGNSHIFT);
 
-    /* 
+    /*
        patch-in the Page-Directory Device-Physical address. Note that this is
        copied-in one byte at a time, as we have no guarantee that the usermode-
        provided ui32OffsetToPDDevPAddr is a validly-aligned address for the
@@ -1186,11 +1146,11 @@ IMG_HANDLE SGXRegisterHWRenderContextKM(IMG_HANDLE				hDeviceNode,
 	PDUMPCOMMENTWITHFLAGS(PDUMP_FLAGS_CONTINUOUS, "HW Render context struct");
 
 	PDUMPMEM(
-        IMG_NULL, 
+        IMG_NULL,
         psCleanup->psHWRenderContextMemInfo,
-        0, 
-        ui32HWRenderContextSize, 
-        PDUMP_FLAGS_CONTINUOUS, 
+        0,
+        ui32HWRenderContextSize,
+        PDUMP_FLAGS_CONTINUOUS,
         MAKEUNIQUETAG(psCleanup->psHWRenderContextMemInfo));
 
     /* PDUMP the PDDevPAddr */
@@ -1302,8 +1262,8 @@ IMG_HANDLE SGXRegisterHWTransferContextKM(IMG_HANDLE				hDeviceNode,
     eError = PVRSRVAllocDeviceMemKM(hDeviceNode,
                                psPerProc,
                                psHeapInfo->hDevMemHeap,
-                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE 
-                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT 
+                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE
+                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT
                                  | PVRSRV_MEM_CACHE_CONSISTENT,
                                ui32HWTransferContextSize,
                                32,
@@ -1334,7 +1294,7 @@ IMG_HANDLE SGXRegisterHWTransferContextKM(IMG_HANDLE				hDeviceNode,
     psHWTransferContextDevVAddr->uiAddr = psCleanup->psHWTransferContextMemInfo->sDevVAddr.uiAddr;
 
     /* Retrieve the PDDevPAddr */
-    eError = PVRSRVLookupHandle(psPerProc->psHandleBase, 
+    eError = PVRSRVLookupHandle(psPerProc->psHandleBase,
                            &hDevMemContextInt,
                            hDevMemContext,
                            PVRSRV_HANDLE_TYPE_DEV_MEM_CONTEXT);
@@ -1348,13 +1308,13 @@ IMG_HANDLE SGXRegisterHWTransferContextKM(IMG_HANDLE				hDeviceNode,
     psMMUContext = BM_GetMMUContextFromMemContext(hDevMemContextInt);
     sPDDevPAddr = psDeviceNode->pfnMMUGetPDDevPAddr(psMMUContext);
 
-	/* 
+	/*
 	   The PDDevPAddr needs to be shifted-down, as the uKernel expects it in the
 	   format it will be inserted into the DirList registers in.
 	*/
 	ui32PDDevPAddrInDirListFormat = (IMG_UINT32)(sPDDevPAddr.uiAddr >> SGX_MMU_PTE_ADDR_ALIGNSHIFT);
 
-    /* 
+    /*
        patch-in the Page-Directory Device-Physical address. Note that this is
        copied-in one byte at a time, as we have no guarantee that the usermode-
        provided ui32OffsetToPDDevPAddr is a validly-aligned address for the
@@ -1374,11 +1334,11 @@ IMG_HANDLE SGXRegisterHWTransferContextKM(IMG_HANDLE				hDeviceNode,
 	PDUMPCOMMENTWITHFLAGS(PDUMP_FLAGS_CONTINUOUS, "HW Transfer context struct");
 
 	PDUMPMEM(
-        IMG_NULL, 
+        IMG_NULL,
         psCleanup->psHWTransferContextMemInfo,
-        0, 
-        ui32HWTransferContextSize, 
-        PDUMP_FLAGS_CONTINUOUS, 
+        0,
+        ui32HWTransferContextSize,
+        PDUMP_FLAGS_CONTINUOUS,
         MAKEUNIQUETAG(psCleanup->psHWTransferContextMemInfo));
 
     /* PDUMP the PDDevPAddr */
@@ -1465,11 +1425,11 @@ PVRSRV_ERROR SGXSetTransferContextPriorityKM(
     {
         psCleanup = (SGX_HW_TRANSFER_CONTEXT_CLEANUP *)hHWTransferContext;
 
-        if ((ui32OffsetOfPriorityField + sizeof(ui32Priority)) 
+        if ((ui32OffsetOfPriorityField + sizeof(ui32Priority))
             >= psCleanup->psHWTransferContextMemInfo->uAllocSize)
         {
             PVR_DPF((
-                PVR_DBG_ERROR, 
+                PVR_DBG_ERROR,
                 "SGXSetTransferContextPriorityKM: invalid context prioirty offset"));
 
             return PVRSRV_ERROR_INVALID_PARAMS;
@@ -1507,11 +1467,11 @@ PVRSRV_ERROR SGXSetRenderContextPriorityKM(
     if (hHWRenderContext != IMG_NULL)
     {
         psCleanup = (SGX_HW_RENDER_CONTEXT_CLEANUP *)hHWRenderContext;
-        if ((ui32OffsetOfPriorityField + sizeof(ui32Priority)) 
+        if ((ui32OffsetOfPriorityField + sizeof(ui32Priority))
             >= psCleanup->psHWRenderContextMemInfo->uAllocSize)
         {
             PVR_DPF((
-                PVR_DBG_ERROR, 
+                PVR_DBG_ERROR,
                 "SGXSetContextPriorityKM: invalid HWRenderContext prioirty offset"));
 
             return PVRSRV_ERROR_INVALID_PARAMS;
@@ -1590,7 +1550,7 @@ static PVRSRV_ERROR SGXCleanupHW2DContextCallback(IMG_PVOID  pvParam,
 	    /* Free the Device Mem allocated */
 	    PVRSRVFreeDeviceMemKM(psCleanup->psDeviceNode,
 	            psCleanup->psHW2DContextMemInfo);
-	
+
 	    /* Finally, free the cleanup structure itself */
 	    OSFreeMem(PVRSRV_OS_PAGEABLE_HEAP,
 				  sizeof(SGX_HW_2D_CONTEXT_CLEANUP),
@@ -1642,8 +1602,8 @@ IMG_HANDLE SGXRegisterHW2DContextKM(IMG_HANDLE				hDeviceNode,
     eError = PVRSRVAllocDeviceMemKM(hDeviceNode,
                                psPerProc,
                                psHeapInfo->hDevMemHeap,
-                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE 
-                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT 
+                               PVRSRV_MEM_READ | PVRSRV_MEM_WRITE
+                                 | PVRSRV_MEM_NO_SYNCOBJ | PVRSRV_MEM_EDM_PROTECT
                                  | PVRSRV_MEM_CACHE_CONSISTENT,
                                ui32HW2DContextSize,
                                32,
@@ -1668,12 +1628,12 @@ IMG_HANDLE SGXRegisterHW2DContextKM(IMG_HANDLE				hDeviceNode,
 		PVR_DPF((PVR_DBG_ERROR, "SGXRegisterHW2DContextKM: Couldn't copy user-mode copy of HWContext into device memory"));
 		goto exit2;
 	}
- 
+
     /* Pass the DevVAddr of the new context back up through the bridge */
     psHW2DContextDevVAddr->uiAddr = psCleanup->psHW2DContextMemInfo->sDevVAddr.uiAddr;
 
     /* Retrieve the PDDevPAddr */
-    eError = PVRSRVLookupHandle(psPerProc->psHandleBase, 
+    eError = PVRSRVLookupHandle(psPerProc->psHandleBase,
                            &hDevMemContextInt,
                            hDevMemContext,
                            PVRSRV_HANDLE_TYPE_DEV_MEM_CONTEXT);
@@ -1687,13 +1647,13 @@ IMG_HANDLE SGXRegisterHW2DContextKM(IMG_HANDLE				hDeviceNode,
     psMMUContext = BM_GetMMUContextFromMemContext(hDevMemContextInt);
     sPDDevPAddr = psDeviceNode->pfnMMUGetPDDevPAddr(psMMUContext);
 
-	/* 
+	/*
 	   The PDDevPAddr needs to be shifted-down, as the uKernel expects it in the
 	   format it will be inserted into the DirList registers in.
 	*/
 	ui32PDDevPAddrInDirListFormat = sPDDevPAddr.uiAddr >> SGX_MMU_PTE_ADDR_ALIGNSHIFT;
 
-    /* 
+    /*
        patch-in the Page-Directory Device-Physical address. Note that this is
        copied-in one byte at a time, as we have no guarantee that the usermode-
        provided ui32OffsetToPDDevPAddr is a validly-aligned address for the
@@ -1713,11 +1673,11 @@ IMG_HANDLE SGXRegisterHW2DContextKM(IMG_HANDLE				hDeviceNode,
 	PDUMPCOMMENTWITHFLAGS(PDUMP_FLAGS_CONTINUOUS, "HW 2D context struct");
 
 	PDUMPMEM(
-        IMG_NULL, 
+        IMG_NULL,
         psCleanup->psHW2DContextMemInfo,
-        0, 
-        ui32HW2DContextSize, 
-        PDUMP_FLAGS_CONTINUOUS, 
+        0,
+        ui32HW2DContextSize,
+        PDUMP_FLAGS_CONTINUOUS,
         MAKEUNIQUETAG(psCleanup->psHW2DContextMemInfo));
 
     /* PDUMP the PDDevPAddr */

@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          MMU Management
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Implements basic low level control of MMU.
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #ifndef _MMU_H_
 #define _MMU_H_
@@ -50,7 +10,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	FUNCTION:   MMU_Initialise
 
 	PURPOSE:    Initialise the mmu module.
-	                	
+
 	PARAMETERS:	None
 	RETURNS:	PVRSRV_ERROR
 ******************************************************************************/
@@ -62,7 +22,7 @@ MMU_Initialise (PVRSRV_DEVICE_NODE *psDeviceNode, MMU_CONTEXT **ppsMMUContext, I
 	FUNCTION:   MMU_Finalise
 
 	PURPOSE:    Finalise the mmu module, deallocate all resources.
-	                	
+
 	PARAMETERS:	None.
 	RETURNS:	None.
 ******************************************************************************/
@@ -74,9 +34,9 @@ MMU_Finalise (MMU_CONTEXT *psMMUContext);
 ******************************************************************************
 	FUNCTION:   MMU_InsertHeap
 
-	PURPOSE:    Inserts shared heap into the specified context 
+	PURPOSE:    Inserts shared heap into the specified context
 				from the kernel context
-	                	
+
 	PARAMETERS:	None.
 	RETURNS:	None.
 ******************************************************************************/
@@ -90,7 +50,7 @@ MMU_InsertHeap(MMU_CONTEXT *psMMUContext, MMU_HEAP *psMMUHeap);
     PURPOSE:    Create an mmu device.
 
     PARAMETERS: In: psMMUContext -
-                In: psDevArena - 
+                In: psDevArena -
 				Out: ppsVMArena
     RETURNS:	MMU_HEAP
 ******************************************************************************/
@@ -105,9 +65,9 @@ MMU_Create (MMU_CONTEXT *psMMUContext,
 	FUNCTION:   MMU_Delete
 
 	PURPOSE:    Delete an mmu device.
-	                	
+
 	PARAMETERS:	In:  pMMUHeap - The mmu to delete.
-	RETURNS:	
+	RETURNS:
 ******************************************************************************/
 IMG_VOID
 MMU_Delete (MMU_HEAP *pMMUHeap);
@@ -118,7 +78,7 @@ MMU_Delete (MMU_HEAP *pMMUHeap);
     PURPOSE:    Allocate space in an mmu's virtual address space.
     PARAMETERS:	In:  pMMUHeap - MMU to allocate on.
                 In:  uSize - Size in bytes to allocate.
-                Out: pActualSize - If non null receives actual size allocated. 
+                Out: pActualSize - If non null receives actual size allocated.
                 In:  uFlags - Allocation flags.
                 In:  uDevVAddrAlignment - Required alignment.
                 Out: pDevVAddr - Receives base address of allocation.
@@ -153,11 +113,11 @@ MMU_Free (MMU_HEAP *pMMUHeap,
 
 	PURPOSE:    Enable an mmu. Establishes pages tables and takes the mmu out
 	            of bypass and waits for the mmu to acknowledge enabled.
-	                	
+
 	PARAMETERS:	In:  pMMUHeap - the mmu
 	RETURNS:	None
 ******************************************************************************/
-IMG_VOID 
+IMG_VOID
 MMU_Enable (MMU_HEAP *pMMUHeap);
 
 /*
@@ -165,11 +125,11 @@ MMU_Enable (MMU_HEAP *pMMUHeap);
 	FUNCTION:   MMU_Disable
 
 	PURPOSE:    Disable an mmu, takes the mmu into bypass.
-	                	
+
 	PARAMETERS:	In:  pMMUHeap - the mmu
 	RETURNS:	None
 ******************************************************************************/
-IMG_VOID 
+IMG_VOID
 MMU_Disable (MMU_HEAP *pMMUHeap);
 
 /*
@@ -184,7 +144,7 @@ MMU_Disable (MMU_HEAP *pMMUHeap);
 	            In:  SysPAddr - the system physical address of the page to map.
 	            In:  uSize - size of memory range in bytes
                 In:  ui32MemFlags - page table flags.
-	            In:  hUniqueTag - A unique ID for use as a tag identifier 
+	            In:  hUniqueTag - A unique ID for use as a tag identifier
 	RETURNS:	None
 ******************************************************************************/
 IMG_VOID
@@ -210,7 +170,7 @@ MMU_MapPages (MMU_HEAP *pMMUHeap,
 				In:  ui32NumPhysChunks - Number of physical chunks
 				In:  pabMapChunk - Mapping array
                 In:  ui32MemFlags - page table flags.
-	            In:  hUniqueTag - A unique ID for use as a tag identifier 
+	            In:  hUniqueTag - A unique ID for use as a tag identifier
 	RETURNS:	None
 ******************************************************************************/
 IMG_VOID
@@ -230,7 +190,7 @@ MMU_MapPagesSparse (MMU_HEAP *pMMUHeap,
 
 	PURPOSE:    Create a mapping for a range of pages from a CPU virtual
                 adddress to a specified device virtual address.
-	                	
+
 	PARAMETERS: In:  pMMUHeap - the mmu.
                 In:  MapBaseDevVAddr - A page aligned device virtual address
                                        to start mapping from.
@@ -260,7 +220,7 @@ MMU_MapShadow (MMU_HEAP          * pMMUHeap,
 
 	PURPOSE:    Create a mapping for a range of pages from a CPU virtual
                 adddress to a specified device virtual address.
-	                	
+
 	PARAMETERS: In:  pMMUHeap - the mmu.
                 In:  MapBaseDevVAddr - A page aligned device virtual address
                                        to start mapping from.
@@ -295,7 +255,7 @@ MMU_MapShadowSparse (MMU_HEAP          * pMMUHeap,
 	FUNCTION:   MMU_UnmapPages
 
 	PURPOSE:    unmaps pages and invalidates virtual address.
-	                	
+
 	PARAMETERS:	In:  psMMUHeap - the mmu.
 	            In:  sDevVAddr - the device virtual address.
 	            In:  ui32PageCount - page count.
@@ -311,9 +271,9 @@ MMU_UnmapPages (MMU_HEAP *psMMUHeap,
 ******************************************************************************
 	FUNCTION:   MMU_MapScatter
 
-	PURPOSE:    Create a mapping for a list of pages to a specified device 
+	PURPOSE:    Create a mapping for a list of pages to a specified device
 				virtual address.
-	                	
+
 	PARAMETERS:	In:  pMMUHeap - the mmu.
 	            In:  DevVAddr - the device virtual address.
 	            In:  psSysAddr - the list of physical addresses of the pages to
@@ -336,7 +296,7 @@ MMU_MapScatter (MMU_HEAP *pMMUHeap,
     PURPOSE:    extracts physical address from MMU page tables
 
     PARAMETERS: In:  pMMUHeap - the mmu
-	PARAMETERS: In:  sDevVPageAddr - the virtual address to extract physical 
+	PARAMETERS: In:  sDevVPageAddr - the virtual address to extract physical
 					page mapping from
     RETURNS:    IMG_DEV_PHYADDR
 ******************************************************************************/
@@ -362,7 +322,7 @@ MMU_GetPDDevPAddr(MMU_CONTEXT *pMMUContext);
 ******************************************************************************
     FUNCTION:   EnableHostAccess
 
-    PURPOSE:    Enables Host accesses to device memory, by passing the device 
+    PURPOSE:    Enables Host accesses to device memory, by passing the device
     			MMU address translation
 
     PARAMETERS: In: psMMUContext
@@ -376,7 +336,7 @@ EnableHostAccess (MMU_CONTEXT *psMMUContext);
 ******************************************************************************
     FUNCTION:   DisableHostAccess
 
-    PURPOSE:    Disables Host accesses to device memory, by passing the device 
+    PURPOSE:    Disables Host accesses to device memory, by passing the device
     			MMU address translation
 
     PARAMETERS: In: psMMUContext
@@ -447,7 +407,7 @@ PVRSRV_ERROR MMU_UnmapExtSystemCacheRegs(PVRSRV_DEVICE_NODE *psDeviceNode);
 /*
 ******************************************************************************
 	FUNCTION:   MMU_IsHeapShared
-	
+
 	PURPOSE:    Is this heap shared?
 	PARAMETERS: In: pMMU_Heap
 	RETURNS:    true if heap is shared

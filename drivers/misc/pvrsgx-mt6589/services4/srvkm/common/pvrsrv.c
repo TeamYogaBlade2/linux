@@ -1,44 +1,4 @@
-/*************************************************************************/ /*!
-@Title          core services functions
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Main APIs for core services functions
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include "services_headers.h"
 #include "buffer_manager.h"
@@ -1010,10 +970,10 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 		PVR_UNREFERENCED_PARAMETER(bAllowPreemption);
 		#if !defined(__linux__)
 		PVR_UNREFERENCED_PARAMETER(ui32PollPeriodus);
-		#endif	
-		
+		#endif
+
 		/* For the Emulator we want the system to stop when a lock-up is detected so the state can be analysed.
-		 * Also the Emulator is much slower than real silicon so timeouts are not valid. 
+		 * Also the Emulator is much slower than real silicon so timeouts are not valid.
 		 */
 		do
 		{
@@ -1026,7 +986,7 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 			OSWaitus(ui32PollPeriodus);
 			#else
 			OSReleaseThreadQuanta();
-			#endif	
+			#endif
 
 		} while (ui32Timeoutus); /* Endless loop only for the Emulator */
 	}
@@ -1047,7 +1007,7 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 			{
 				return PVRSRV_OK;
 			}
-			
+
 			if (bAllowPreemption)
 			{
 				OSSleepms(ui32PollPeriodus / 1000);
@@ -1057,7 +1017,7 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 				OSWaitus(ui32PollPeriodus);
 			}
 		} END_LOOP_UNTIL_TIMEOUT();
-	
+
 		PVR_DPF((PVR_DBG_ERROR,"PollForValueKM: Timeout. Expected 0x%x but found 0x%x (mask 0x%x).",
 				ui32Value, ui32ActualValue, ui32Mask));
 	}
@@ -1302,10 +1262,10 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVGetMiscInfoKM(PVRSRV_MISC_INFO *psMiscInfo)
 		IMG_CHAR			*pszStr;
 		IMG_UINT32			ui32StrLen;
 		IMG_INT32			i32Count;
-		
+
 		pszStr = psMiscInfo->pszMemoryStr;
 		ui32StrLen = psMiscInfo->ui32MemoryStrLen;
-  
+
 		psMiscInfo->ui32StatePresent |= PVRSRV_MISC_INFO_FREEMEM_PRESENT;
 
 		/* triple loop over devices:contexts:heaps */
@@ -1315,7 +1275,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVGetMiscInfoKM(PVRSRV_MISC_INFO *psMiscInfo)
 													&i32Count,
 													&pszStr,
 													PVRSRV_MISC_INFO_FREEMEM_PRESENT);
-		
+
 		i32Count = OSSNPrintf(pszStr, 100, "\n");
 		UPDATE_SPACE(pszStr, i32Count, ui32StrLen);
 	}
@@ -1738,9 +1698,9 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVSaveRestoreLiveSegments(IMG_HANDLE hArena, IMG_P
 			}
 
 			PVR_DPF((
-                PVR_DBG_MESSAGE, 
-                "PVRSRVSaveRestoreLiveSegments: Base " CPUPADDR_FMT " size %" SIZE_T_FMT_LEN "x", 
-                sSegDetails.sCpuPhyAddr.uiAddr, 
+                PVR_DBG_MESSAGE,
+                "PVRSRVSaveRestoreLiveSegments: Base " CPUPADDR_FMT " size %" SIZE_T_FMT_LEN "x",
+                sSegDetails.sCpuPhyAddr.uiAddr,
                 sSegDetails.uiSize));
 
 			/* Map the device's local memory area onto the host. */
@@ -1821,7 +1781,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVSaveRestoreLiveSegments(IMG_HANDLE hArena, IMG_P
 
 IMG_EXPORT
 const IMG_CHAR *PVRSRVGetErrorStringKM(PVRSRV_ERROR eError)
-{ 
+{
 /* PRQA S 5087 1 */ /* include file required here */
 #include "pvrsrv_errors.h"
 }

@@ -1,45 +1,4 @@
-/*************************************************************************/ /*!
-@Title          Buffer management functions for Linux
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Manages buffers mapped into two memory spaces - cpu and device,
-                either of which can be virtual or physical.
-@License        Dual MIT/GPLv2
-
-The contents of this file are subject to the MIT license as set out below.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-Alternatively, the contents of this file may be used under the terms of
-the GNU General Public License Version 2 ("GPL") in which case the provisions
-of GPL are applicable instead of those above.
-
-If you wish to allow use of your version of this file only under the terms of
-GPL, and not to allow others to use your version of this file under the terms
-of the MIT license, indicate your decision by deleting the provisions above
-and replace them with the notice and other provisions required by GPL as set
-out in the file called "GPL-COPYING" included in this distribution. If you do
-not delete the provisions above, a recipient may use your version of this file
-under the terms of either the MIT license or GPL.
-
-This License is also included in this distribution in the file called
-"MIT-COPYING".
-
-EXCEPT AS OTHERWISE STATED IN A NEGOTIATED AGREEMENT: (A) THE SOFTWARE IS
-PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT; AND (B) IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/ /**************************************************************************/
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include "services_headers.h"
 
@@ -209,7 +168,7 @@ AllocMemory (BM_CONTEXT			*pBMContext,
 				BM_FreeMemory(pArena, IMG_NULL, pMapping);
 				return IMG_FALSE;
 			}
-		
+
 			/* uDevVAddrAlignment is currently set to zero so QAC generates warning which we override */
 			/* PRQA S 3356,3358 1 */
 			PVR_ASSERT (uDevVAddrAlignment>1?(pMapping->DevVAddr.uiAddr%uDevVAddrAlignment)==0:1);
@@ -410,14 +369,14 @@ WrapMemory (BM_HEAP *psBMHeap,
 	IMG_UINT32 ui32Attribs = ui32Flags & ~(PVRSRV_MEM_READ | PVRSRV_MEM_WRITE);
 
 	PVR_DPF ((PVR_DBG_MESSAGE,
-			  "WrapMemory(psBMHeap=%p, size=0x%" SIZE_T_FMT_LEN "x, offset=0x%" SIZE_T_FMT_LEN 
+			  "WrapMemory(psBMHeap=%p, size=0x%" SIZE_T_FMT_LEN "x, offset=0x%" SIZE_T_FMT_LEN
 			  "x, bPhysContig=0x%x, sysPAddr=0x" SYSPADDR_FMT ", pvCPUVAddr = 0x%p, flags=0x%x)",
-			  psBMHeap, 
-              uSize, 
-              uiBaseOffset, 
-              bPhysContig, 
+			  psBMHeap,
+              uSize,
+              uiBaseOffset,
+              bPhysContig,
 			  psAddr->uiAddr,
-              pvCPUVAddr, 
+              pvCPUVAddr,
               ui32Flags));
 
 	PVR_ASSERT((psAddr->uiAddr & (uPageSize - 1)) == 0);
@@ -706,7 +665,7 @@ ZeroBuf(BM_BUF *pBuf, BM_MAPPING *pMapping, IMG_SIZE_T uBytes, IMG_UINT32 ui32Fl
 				returned at allocation. Note the double indirection when
 				passing the buffer.
 
-	
+
 	@Input      pBuf - buffer descriptor to free.
 	@Input      ui32Flags - flags
 	@Input      bFromAllocator - Is this being called by the
@@ -779,7 +738,7 @@ FreeBuf (BM_BUF *pBuf, IMG_UINT32 ui32Flags, IMG_BOOL bFromAllocator)
 				{
 					IMG_UINT32 ui32FreeSize = sizeof(IMG_BOOL) * pBuf->pMapping->ui32NumVirtChunks;
 					IMG_PVOID pvFreePtr = pBuf->pMapping->pabMapChunk;
-					
+
 					/* With sparse allocations we don't go through the sub-alloc RA */
 					BM_FreeMemory(pBuf->pMapping->pBMHeap, pBuf->DevVAddr.uiAddr, pBuf->pMapping);
 					OSFreeMem(PVRSRV_OS_PAGEABLE_HEAP,
@@ -1280,7 +1239,7 @@ static IMG_VOID *BM_CreateHeap_AnyVaCb(BM_HEAP *psBMHeap, va_list va)
 
 	@Description	Creates and initialises a BM heap for a given BM context.
 
-	@Return 
+	@Return
 		valid heap handle - success
 		IMG_NULL - failure
 
@@ -1306,7 +1265,7 @@ BM_CreateHeap (IMG_HANDLE hBMContext,
 
 	/*
 	 * Ensure that the heap size is a multiple of the data page size.
-	 */ 
+	 */
 	PVR_ASSERT((psDevMemHeapInfo->ui32HeapSize & (psDevMemHeapInfo->ui32DataPageSize - 1)) == 0);
 	PVR_ASSERT(psDevMemHeapInfo->ui32HeapSize > 0);
 
@@ -1423,7 +1382,7 @@ ErrorExit:
 
 	@Description	Destroys a BM heap
 
-	@Return 
+	@Return
 		valid heap handle - success
 		IMG_NULL - failure
 
@@ -1634,7 +1593,7 @@ BM_Alloc (  IMG_HANDLE			hDevMemHeap,
 	@Input      psDeviceNode
     @Input      psSysPAddr - system address array
     @Input      uPageSize - size of address array
-    
+
 	@Return     IMG_BOOL
 
  *****************************************************************************/
@@ -1763,13 +1722,13 @@ BM_Wrap (	IMG_HANDLE hDevMemHeap,
 	}
 
 	PVR_DPF ((PVR_DBG_MESSAGE,
-		  "BM_Wrap (uSize=0x%" SIZE_T_FMT_LEN "x, uOffset=0x%" SIZE_T_FMT_LEN 
+		  "BM_Wrap (uSize=0x%" SIZE_T_FMT_LEN "x, uOffset=0x%" SIZE_T_FMT_LEN
 		  "x, bPhysContig=0x%x, syspAddr=0x" SYSPADDR_FMT ", pvCPUVAddr=0x%p, ui32Flags=0x%x)",
-			uSize, 
-            uOffset, 
-            bPhysContig, 
+			uSize,
+            uOffset,
+            bPhysContig,
 			psSysAddr->uiAddr,
-            pvCPUVAddr, 
+            pvCPUVAddr,
             ui32Flags));
 
 	SysAcquireData(&psSysData);
@@ -1816,8 +1775,8 @@ BM_Wrap (	IMG_HANDLE hDevMemHeap,
 		{
 			PVR_DPF((PVR_DBG_MESSAGE,
 					"BM_Wrap (Matched previous Wrap! uSize=0x%" SIZE_T_FMT_LEN "x, uOffset=0x%" SIZE_T_FMT_LEN "x, SysAddr=" SYSPADDR_FMT ")",
-					uSize, 
-                    uOffset, 
+					uSize,
+                    uOffset,
                     sHashAddress.uiAddr));
 
 			PVRSRVBMBufIncRef(pBuf);
@@ -1829,10 +1788,10 @@ BM_Wrap (	IMG_HANDLE hDevMemHeap,
 		}
 		else
 		{
-		  /* Otherwise removed that item from the hash table 
+		  /* Otherwise removed that item from the hash table
 			 (a workaround for buffer device class) */
 			HASH_Remove(psBMContext->pBufferHash, (IMG_UINTPTR_T)sHashAddress.uiAddr);
-		}	
+		}
 	}
 
 	/*
@@ -2286,7 +2245,7 @@ DevMemoryAlloc (BM_CONTEXT *pBMContext,
 
 	MTKPP_LOG(MTKPP_ID_DEVMEM, "pid=%u dev=%p size=%u alloc",
 		OSGetCurrentProcessIDKM(),
-		(void *) pMapping->DevVAddr.uiAddr, 
+		(void *) pMapping->DevVAddr.uiAddr,
 		pMapping->uSize
 		);
 
@@ -2328,7 +2287,7 @@ DevMemoryFree (BM_MAPPING *pMapping)
 		{
 			ui32PSize = (IMG_UINT32)pMapping->uSize;
 		}
-	
+
 		PDUMPFREEPAGES(pMapping->pBMHeap,
 	                    pMapping->DevVAddr,
 	                    ui32PSize,
@@ -2344,10 +2303,10 @@ DevMemoryFree (BM_MAPPING *pMapping)
 
 	MTKPP_LOG(MTKPP_ID_DEVMEM, "pid=%u dev=%p size=%u free",
 		OSGetCurrentProcessIDKM(),
-		(void *) pMapping->DevVAddr.uiAddr, 
+		(void *) pMapping->DevVAddr.uiAddr,
 		pMapping->uSize
 		);
-	
+
 }
 
 /* If this array grows larger, it might be preferable to use a hashtable rather than an array. */
@@ -2723,7 +2682,7 @@ BM_ImportMemory (IMG_VOID *pH,
 	IMG_SIZE_T uDevVAddrAlignment = 0; /* ? */
 
 	PVR_DPF ((PVR_DBG_MESSAGE,
-			  "BM_ImportMemory (pBMContext=0x%p, uRequestSize=0x%" SIZE_T_FMT_LEN 
+			  "BM_ImportMemory (pBMContext=0x%p, uRequestSize=0x%" SIZE_T_FMT_LEN
 			  "x, ui32Flags=0x%x, uAlign=0x%" SIZE_T_FMT_LEN "x)",
 			  pBMContext, uRequestSize, ui32Flags, uDevVAddrAlignment));
 
@@ -2905,13 +2864,13 @@ BM_ImportMemory (IMG_VOID *pH,
 			ui32Attribs &= ~PVRSRV_HAP_CACHETYPE_MASK;
 			ui32Attribs |= (pMapping->ui32Flags & PVRSRV_HAP_CACHETYPE_MASK);
 		}
-		
+
 		if (pMapping->ui32Flags & PVRSRV_MEM_ALLOCATENONCACHEDMEM)
 		{
 			ui32Attribs &= ~PVRSRV_MEM_ALLOCATENONCACHEDMEM;
 			ui32Attribs |= (pMapping->ui32Flags & PVRSRV_MEM_ALLOCATENONCACHEDMEM);
-		}		
-		
+		}
+
 		/* allocate pages from the OS RAM */
 		if (OSAllocPages(ui32Attribs,
 						 uPSize,
@@ -3009,7 +2968,7 @@ BM_ImportMemory (IMG_VOID *pH,
 					pMapping->uSize));
 			goto fail_dev_mem_alloc;
 		}
-	
+
 		/* uDevVAddrAlignment is currently set to zero so QAC generates warning which we override */
 		/* PRQA S 3356,3358 1 */
 		PVR_ASSERT (uDevVAddrAlignment>1?(pMapping->DevVAddr.uiAddr%uDevVAddrAlignment)==0:1);
@@ -3375,7 +3334,7 @@ IMG_BOOL BM_MapPageAtOffset(IMG_HANDLE hBMHandle, IMG_UINT32 ui32Offset)
  @Input     hBMHandle - Handle to BM mapping
 
  @Input     ui32VirtOffset - Virtual offset into allocation
- 
+
  @Output    pui32PhysOffset - Physical offset
 
  @Return	IMG_TRUE if the virtual offset is physically backed
