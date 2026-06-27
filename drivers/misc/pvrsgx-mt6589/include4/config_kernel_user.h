@@ -43,7 +43,7 @@
 #define PVR_LDM_DRIVER_REGISTRATION_NAME "pvrsrvkm"
 #define SUPPORT_LARGE_GENERAL_HEAP
 #define ANDROID
-#define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC
+//#define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC
 //#define SUPPORT_ION_HEADER "linux/ion.h"
 //#define SUPPORT_ION_PRIV_HEADER "../drivers/gpu/ion/ion_priv.h"
 #define USE_RGBA_8888_FB
