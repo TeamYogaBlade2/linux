@@ -1,28 +1,4 @@
-/**********************************************************************
- *
- * Copyright(C) 2008 Imagination Technologies Ltd. All rights reserved.
- * 
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- * 
- * This program is distributed in the hope it will be useful but, except 
- * as otherwise stated in writing, without any warranty; without even the 
- * implied warranty of merchantability or fitness for a particular purpose. 
- * See the GNU General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
- * 
- * The full GNU General Public License is included in this distribution in
- * the file called "COPYING".
- *
- * Contact Information:
- * Imagination Technologies Ltd. <gpl-support@imgtec.com>
- * Home Park Estate, Kings Langley, Herts, WD4 8LZ, UK 
- *
- ******************************************************************************/
+// SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/version.h>
 #include <linux/kernel.h>
@@ -167,9 +143,9 @@ static PVRSRV_ERROR OpenDCDevice(IMG_UINT32 uiPVRDevID,
 		return PVRSRV_ERROR_INVALID_DEVICE;
 	}
 
-	
+
 	psDevInfo->sSystemBuffer.psSyncData = psSystemBufferSyncData;
-	
+
 	eError = MTKLFBUnblankDisplay(psDevInfo);
 	if (eError != MTKLFB_OK)
 	{
@@ -178,9 +154,9 @@ static PVRSRV_ERROR OpenDCDevice(IMG_UINT32 uiPVRDevID,
 		return PVRSRV_ERROR_UNBLANK_DISPLAY_FAILED;
 	}
 
-	
+
 	*phDevice = (IMG_HANDLE)psDevInfo;
-	
+
 	return PVRSRV_OK;
 }
 
@@ -202,16 +178,16 @@ static PVRSRV_ERROR EnumDCFormats(IMG_HANDLE hDevice,
                                   DISPLAY_FORMAT *psFormat)
 {
 	MTKLFB_DEVINFO	*psDevInfo;
-	
+
 	if(!hDevice || !pui32NumFormats)
 	{
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
 
 	psDevInfo = (MTKLFB_DEVINFO*)hDevice;
-	
+
 	*pui32NumFormats = 1;
-	
+
 	if(psFormat)
 	{
 		psFormat[0] = psDevInfo->sDisplayFormat;
@@ -220,7 +196,7 @@ static PVRSRV_ERROR EnumDCFormats(IMG_HANDLE hDevice,
 	return PVRSRV_OK;
 }
 
-static PVRSRV_ERROR EnumDCDims(IMG_HANDLE hDevice, 
+static PVRSRV_ERROR EnumDCDims(IMG_HANDLE hDevice,
                                DISPLAY_FORMAT *psFormat,
                                IMG_UINT32 *pui32NumDims,
                                DISPLAY_DIMS *psDim)
@@ -236,12 +212,12 @@ static PVRSRV_ERROR EnumDCDims(IMG_HANDLE hDevice,
 
 	*pui32NumDims = 1;
 
-	
+
 	if(psDim)
 	{
 		psDim[0] = psDevInfo->sDisplayDim;
 	}
-	
+
 	return PVRSRV_OK;
 }
 
@@ -249,7 +225,7 @@ static PVRSRV_ERROR EnumDCDims(IMG_HANDLE hDevice,
 static PVRSRV_ERROR GetDCSystemBuffer(IMG_HANDLE hDevice, IMG_HANDLE *phBuffer)
 {
 	MTKLFB_DEVINFO	*psDevInfo;
-	
+
 	if(!hDevice || !phBuffer)
 	{
 		return PVRSRV_ERROR_INVALID_PARAMS;
@@ -266,7 +242,7 @@ static PVRSRV_ERROR GetDCSystemBuffer(IMG_HANDLE hDevice, IMG_HANDLE *phBuffer)
 static PVRSRV_ERROR GetDCInfo(IMG_HANDLE hDevice, DISPLAY_INFO *psDCInfo)
 {
 	MTKLFB_DEVINFO	*psDevInfo;
-	
+
 	if(!hDevice || !psDCInfo)
 	{
 		return PVRSRV_ERROR_INVALID_PARAMS;
@@ -280,7 +256,7 @@ static PVRSRV_ERROR GetDCInfo(IMG_HANDLE hDevice, DISPLAY_INFO *psDCInfo)
 }
 
 static PVRSRV_ERROR GetDCBufferAddr(IMG_HANDLE        hDevice,
-                                    IMG_HANDLE        hBuffer, 
+                                    IMG_HANDLE        hBuffer,
                                     IMG_SYS_PHYADDR   **ppsSysAddr,
                                     IMG_UINT32        *pui32ByteSize,
                                     IMG_VOID          **ppvCpuVAddr,
@@ -357,8 +333,8 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 	IMG_UINT32 ui32BuffersToSkip;
 
 	UNREFERENCED_PARAMETER(ui32OEMFlags);
-	
-	
+
+
 	if(!hDevice
 	|| !psDstSurfAttrib
 	|| !psSrcSurfAttrib
@@ -369,8 +345,8 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 	}
 
 	psDevInfo = (MTKLFB_DEVINFO*)hDevice;
-	
-	
+
+
 	if (psDevInfo->sDisplayInfo.ui32MaxSwapChains == 0)
 	{
 		return PVRSRV_ERROR_NOT_SUPPORTED;
@@ -378,60 +354,60 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 
 	MTKLFBCreateSwapChainLock(psDevInfo);
 
-	
+
 	if(psDevInfo->psSwapChain != NULL)
 	{
 		eError = PVRSRV_ERROR_FLIP_CHAIN_EXISTS;
 		goto ExitUnLock;
 	}
-	
-	
+
+
 	if(ui32BufferCount > psDevInfo->sDisplayInfo.ui32MaxSwapChainBuffers)
 	{
 		eError = PVRSRV_ERROR_TOOMANYBUFFERS;
 		goto ExitUnLock;
 	}
-	
+
 	if ((psDevInfo->sFBInfo.ulRoundedBufferSize * (unsigned long)ui32BufferCount) > psDevInfo->sFBInfo.ulFBSize)
 	{
 		eError = PVRSRV_ERROR_TOOMANYBUFFERS;
 		goto ExitUnLock;
 	}
 
-	
+
 	ui32BuffersToSkip = psDevInfo->sDisplayInfo.ui32MaxSwapChainBuffers - ui32BufferCount;
 
-	
+
 	if(psDstSurfAttrib->pixelformat != psDevInfo->sDisplayFormat.pixelformat
 	|| psDstSurfAttrib->sDims.ui32ByteStride != psDevInfo->sDisplayDim.ui32ByteStride
 	|| psDstSurfAttrib->sDims.ui32Width != psDevInfo->sDisplayDim.ui32Width
 	|| psDstSurfAttrib->sDims.ui32Height != psDevInfo->sDisplayDim.ui32Height)
 	{
-		
+
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		goto ExitUnLock;
-	}		
+	}
 
 	if(psDstSurfAttrib->pixelformat != psSrcSurfAttrib->pixelformat
 	|| psDstSurfAttrib->sDims.ui32ByteStride != psSrcSurfAttrib->sDims.ui32ByteStride
 	|| psDstSurfAttrib->sDims.ui32Width != psSrcSurfAttrib->sDims.ui32Width
 	|| psDstSurfAttrib->sDims.ui32Height != psSrcSurfAttrib->sDims.ui32Height)
 	{
-		
+
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		goto ExitUnLock;
-	}		
+	}
 
-	
+
 	UNREFERENCED_PARAMETER(ui32Flags);
-	
+
 #if defined(PVR_MTKFB3_UPDATE_MODE)
 	if (!MTKLFBSetUpdateMode(psDevInfo, PVR_MTKFB3_UPDATE_MODE))
 	{
 		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't set frame buffer update mode %d\n", __FUNCTION__, psDevInfo->uiFBDevID, PVR_MTKFB3_UPDATE_MODE);
 	}
 #endif
-	
+
 	psSwapChain = (MTKLFB_SWAPCHAIN*)MTKLFBAllocKernelMem(sizeof(MTKLFB_SWAPCHAIN));
 	if(!psSwapChain)
 	{
@@ -451,12 +427,12 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 	psSwapChain->bNotVSynced = MTKLFB_TRUE;
 	psSwapChain->uiFBDevID = psDevInfo->uiFBDevID;
 
-	
+
 	for(i=0; i<ui32BufferCount-1; i++)
 	{
 		psBuffer[i].psNext = &psBuffer[i+1];
 	}
-	
+
 	psBuffer[i].psNext = &psBuffer[0];
 
 	for (i = 0; i < ui32BufferCount; i++)
@@ -475,7 +451,7 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 	}
 
 	if (MTKLFBCreateSwapQueue(psSwapChain) != MTKLFB_OK)
-	{ 
+	{
 		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Failed to create workqueue\n", __FUNCTION__, psDevInfo->uiFBDevID);
 		eError = PVRSRV_ERROR_UNABLE_TO_INSTALL_ISR;
 		goto ErrorFreeBuffers;
@@ -523,12 +499,12 @@ static PVRSRV_ERROR DestroyDCSwapChain(IMG_HANDLE hDevice,
 	MTKLFB_SWAPCHAIN *psSwapChain;
 	MTKLFB_ERROR eError;
 
-	
+
 	if(!hDevice || !hSwapChain)
 	{
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
-	
+
 	psDevInfo = (MTKLFB_DEVINFO*)hDevice;
 	psSwapChain = (MTKLFB_SWAPCHAIN*)hSwapChain;
 
@@ -575,8 +551,8 @@ static PVRSRV_ERROR SetDCDstRect(IMG_HANDLE hDevice,
 	UNREFERENCED_PARAMETER(hSwapChain);
 	UNREFERENCED_PARAMETER(psRect);
 
-	
-	
+
+
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
 
@@ -588,7 +564,7 @@ static PVRSRV_ERROR SetDCSrcRect(IMG_HANDLE hDevice,
 	UNREFERENCED_PARAMETER(hSwapChain);
 	UNREFERENCED_PARAMETER(psRect);
 
-	
+
 
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
@@ -601,7 +577,7 @@ static PVRSRV_ERROR SetDCDstColourKey(IMG_HANDLE hDevice,
 	UNREFERENCED_PARAMETER(hSwapChain);
 	UNREFERENCED_PARAMETER(ui32CKColour);
 
-	
+
 
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
@@ -614,7 +590,7 @@ static PVRSRV_ERROR SetDCSrcColourKey(IMG_HANDLE hDevice,
 	UNREFERENCED_PARAMETER(hSwapChain);
 	UNREFERENCED_PARAMETER(ui32CKColour);
 
-	
+
 
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
@@ -628,19 +604,19 @@ static PVRSRV_ERROR GetDCBuffers(IMG_HANDLE hDevice,
 	MTKLFB_SWAPCHAIN *psSwapChain;
 	PVRSRV_ERROR eError;
 	unsigned i;
-	
-	
-	if(!hDevice 
+
+
+	if(!hDevice
 	|| !hSwapChain
 	|| !pui32BufferCount
 	|| !phBuffer)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, 
+		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
 			"%s: invalid params\n", __FUNCTION__);
 
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
-	
+
 	psDevInfo = (MTKLFB_DEVINFO*)hDevice;
 	psSwapChain = (MTKLFB_SWAPCHAIN*)hSwapChain;
 
@@ -654,16 +630,16 @@ static PVRSRV_ERROR GetDCBuffers(IMG_HANDLE hDevice,
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		goto Exit;
 	}
-	
-	
+
+
 	*pui32BufferCount = (IMG_UINT32)psSwapChain->ulBufferCount;
-	
-	
+
+
 	for(i=0; i<psSwapChain->ulBufferCount; i++)
 	{
 		phBuffer[i] = (IMG_HANDLE)&psSwapChain->psBuffer[i];
 	}
-	
+
 	eError = PVRSRV_OK;
 
 Exit:
@@ -685,8 +661,8 @@ static PVRSRV_ERROR SwapToDCBuffer(IMG_HANDLE hDevice,
 	UNREFERENCED_PARAMETER(hPrivateTag);
 	UNREFERENCED_PARAMETER(ui32ClipRectCount);
 	UNREFERENCED_PARAMETER(psClipRect);
-	
-	
+
+
 
 	return PVRSRV_OK;
 }
@@ -766,7 +742,7 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 	MTKLFB_BUFFER *psBuffer;
 	MTKLFB_SWAPCHAIN *psSwapChain;
 
-	
+
 	if(!hCmdCookie || !pvData)
 	{
 		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
@@ -775,7 +751,7 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 		return IMG_FALSE;
 	}
 
-	
+
 	psFlipCmd = (DISPLAYCLASS_FLIP_COMMAND*)pvData;
 
 	if (psFlipCmd == IMG_NULL)
@@ -786,7 +762,7 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 		return IMG_FALSE;
 	}
 
-	
+
 	psDevInfo = (MTKLFB_DEVINFO*)psFlipCmd->hExtDevice;
 	psBuffer = (MTKLFB_BUFFER*)psFlipCmd->hExtBuffer;
 	psSwapChain = (MTKLFB_SWAPCHAIN*) psFlipCmd->hExtSwapChain;
@@ -861,7 +837,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 					psLINFBInfo->screen_size :
 					psLINFBInfo->fix.smem_len;
 
-	
+
 	if (FBSize == 0 || psLINFBInfo->fix.line_length == 0)
 	{
 		eError = MTKLFB_ERROR_INVALID_DEVICE;
@@ -923,7 +899,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 			": Device %u: LCM of stride and page size: %lu\n",
 			psDevInfo->uiFBDevID, ulLCM));
 
-	
+
 	psPVRFBInfo->sSysAddr.uiAddr = psLINFBInfo->fix.smem_start;
 	psPVRFBInfo->sCPUVAddr = psLINFBInfo->screen_base;
 
@@ -932,17 +908,17 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	psPVRFBInfo->ulByteStride =  psLINFBInfo->fix.line_length;
 	psPVRFBInfo->ulFBSize = FBSize;
 	psPVRFBInfo->ulBufferSize = psPVRFBInfo->ulHeight * psPVRFBInfo->ulByteStride;
-	
+
 	psPVRFBInfo->ulRoundedBufferSize = RoundUpToMultiple(psPVRFBInfo->ulBufferSize, ulLCM);
 
 	if(psLINFBInfo->var.bits_per_pixel == 16)
 	{
 		if((psLINFBInfo->var.red.length == 5) &&
-			(psLINFBInfo->var.green.length == 6) && 
-			(psLINFBInfo->var.blue.length == 5) && 
+			(psLINFBInfo->var.green.length == 6) &&
+			(psLINFBInfo->var.blue.length == 5) &&
 			(psLINFBInfo->var.red.offset == 11) &&
-			(psLINFBInfo->var.green.offset == 5) && 
-			(psLINFBInfo->var.blue.offset == 0) && 
+			(psLINFBInfo->var.green.offset == 5) &&
+			(psLINFBInfo->var.blue.offset == 0) &&
 			(psLINFBInfo->var.red.msb_right == 0))
 		{
 			psPVRFBInfo->ePixelFormat = PVRSRV_PIXEL_FORMAT_RGB565;
@@ -955,21 +931,21 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	else if(psLINFBInfo->var.bits_per_pixel == 32)
 	{
 		if((psLINFBInfo->var.red.length == 8) &&
-			(psLINFBInfo->var.green.length == 8) && 
-			(psLINFBInfo->var.blue.length == 8) && 
+			(psLINFBInfo->var.green.length == 8) &&
+			(psLINFBInfo->var.blue.length == 8) &&
 			(psLINFBInfo->var.red.offset == 16) &&
-			(psLINFBInfo->var.green.offset == 8) && 
-			(psLINFBInfo->var.blue.offset == 0) && 
+			(psLINFBInfo->var.green.offset == 8) &&
+			(psLINFBInfo->var.blue.offset == 0) &&
 			(psLINFBInfo->var.red.msb_right == 0))
 		{
 			psPVRFBInfo->ePixelFormat = PVRSRV_PIXEL_FORMAT_ARGB8888;
 		}
 		else if((psLINFBInfo->var.red.length == 8) &&
-			(psLINFBInfo->var.green.length == 8) && 
-			(psLINFBInfo->var.blue.length == 8) && 
+			(psLINFBInfo->var.green.length == 8) &&
+			(psLINFBInfo->var.blue.length == 8) &&
 			(psLINFBInfo->var.red.offset == 0) &&
-			(psLINFBInfo->var.green.offset == 8) && 
-			(psLINFBInfo->var.blue.offset == 16) && 
+			(psLINFBInfo->var.green.offset == 8) &&
+			(psLINFBInfo->var.blue.offset == 16) &&
 			(psLINFBInfo->var.red.msb_right == 0))
 		{
 			// yu-fu: PVR2D does not support ABGR8888 ...
@@ -979,7 +955,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 		{
 			xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Unknown FB format\n", __FUNCTION__, uiFBDevID);
 		}
-	}	
+	}
 	else
 	{
 		xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Unknown FB format\n", __FUNCTION__, uiFBDevID);
@@ -991,7 +967,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	psDevInfo->sFBInfo.ulPhysicalHeightmm =
 		((int)psLINFBInfo->var.height > 0) ? psLINFBInfo->var.height : 0;
 
-	
+
 	psDevInfo->sFBInfo.sSysAddr.uiAddr = psPVRFBInfo->sSysAddr.uiAddr;
 	psDevInfo->sFBInfo.sCPUVAddr = psPVRFBInfo->sCPUVAddr;
 
@@ -1015,7 +991,7 @@ static void MTKLFBDeInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 
 	psLINFBOwner = psLINFBInfo->fbops->owner;
 
-	if (psLINFBInfo->fbops->fb_release != NULL) 
+	if (psLINFBInfo->fbops->fb_release != NULL)
 	{
 		(void) psLINFBInfo->fbops->fb_release(NULL, psLINFBInfo, 0);
 	}
@@ -1031,7 +1007,7 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 	IMG_UINT32		aui32SyncCountList[MTKLFB_COMMAND_COUNT][2];
 	MTKLFB_DEVINFO		*psDevInfo = NULL;
 
-	
+
 	psDevInfo = (MTKLFB_DEVINFO *)MTKLFBAllocKernelMem(sizeof(MTKLFB_DEVINFO));
 
 	if(psDevInfo == NULL)
@@ -1042,21 +1018,21 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 		goto ErrorExit;
 	}
 
-	
+
 	memset(psDevInfo, 0, sizeof(MTKLFB_DEVINFO));
 
 	psDevInfo->uiFBDevID = uiFBDevID;
 
-	
+
 	if(!(*gpfnGetPVRJTable)(&psDevInfo->sPVRJTable))
 	{
 		goto ErrorFreeDevInfo;
 	}
 
-	
+
 	if(MTKLFBInitFBDev(psDevInfo) != MTKLFB_OK)
 	{
-		
+
 		goto ErrorFreeDevInfo;
 	}
 
@@ -1081,14 +1057,14 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 		": Device %u: Maximum number of swap chain buffers: %u\n",
 		psDevInfo->uiFBDevID, psDevInfo->sDisplayInfo.ui32MaxSwapChainBuffers));
 
-	
+
 	psDevInfo->sSystemBuffer.sSysAddr = psDevInfo->sFBInfo.sSysAddr;
 	psDevInfo->sSystemBuffer.sCPUVAddr = psDevInfo->sFBInfo.sCPUVAddr;
 	psDevInfo->sSystemBuffer.psDevInfo = psDevInfo;
 
 	MTKLFBInitBufferForSwap(&psDevInfo->sSystemBuffer);
 
-	
+
 
 	psDevInfo->sDCJTable.ui32TableSize = sizeof(PVRSRV_DC_SRV2DISP_KMJTABLE);
 	psDevInfo->sDCJTable.pfnOpenDCDevice = OpenDCDevice;
@@ -1108,7 +1084,7 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 	psDevInfo->sDCJTable.pfnSwapToDCBuffer = SwapToDCBuffer;
 	psDevInfo->sDCJTable.pfnSetDCState = SetDCState;
 
-	
+
 	if(psDevInfo->sPVRJTable.pfnPVRSRVRegisterDCDevice(
 		&psDevInfo->sDCJTable,
 		&psDevInfo->uiPVRDevID) != PVRSRV_OK)
@@ -1121,15 +1097,15 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 	DEBUG_PRINTK((KERN_INFO DRIVER_PREFIX
 		": Device %u: PVR Device ID: %u\n",
 		psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID));
-	
-	
+
+
 	pfnCmdProcList[DC_FLIP_COMMAND] = ProcessFlip;
 
-	
-	aui32SyncCountList[DC_FLIP_COMMAND][0] = 0; 
-	aui32SyncCountList[DC_FLIP_COMMAND][1] = 10; 
 
-	
+	aui32SyncCountList[DC_FLIP_COMMAND][0] = 0;
+	aui32SyncCountList[DC_FLIP_COMMAND][1] = 10;
+
+
 
 
 
@@ -1177,14 +1153,14 @@ MTKLFB_ERROR MTKLFBInit(void)
 		return MTKLFB_ERROR_INIT_FAILURE;
 	}
 
-	
+
 	for(i = uiMaxFBDevIDPlusOne; i-- != 0;)
 	{
 		MTKLFB_DEVINFO *psDevInfo = MTKLFBInitDev(i);
 
 		if (psDevInfo != NULL)
 		{
-			
+
 			MTKLFBSetDevInfoPtr(psDevInfo->uiFBDevID, psDevInfo);
 			uiDevicesFound++;
 		}
@@ -1217,19 +1193,19 @@ static MTKLFB_BOOL MTKLFBDeInitDev(MTKLFB_DEVINFO *psDevInfo)
 		return MTKLFB_FALSE;
 	}
 
-	
+
 	if (psPVRJTable->pfnPVRSRVRemoveDCDevice(psDevInfo->uiPVRDevID) != PVRSRV_OK)
 	{
 		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
 			": %s: Device %u: PVR Device %u: Couldn't remove device from PVR Services\n", __FUNCTION__, psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID);
 		return MTKLFB_FALSE;
 	}
-	
+
 	MTKLFBDeInitFBDev(psDevInfo);
 
 	MTKLFBSetDevInfoPtr(psDevInfo->uiFBDevID, NULL);
 
-	
+
 	MTKLFBFreeKernelMem(psDevInfo);
 
 	return MTKLFB_TRUE;
@@ -1253,4 +1229,3 @@ MTKLFB_ERROR MTKLFBDeInit(void)
 
 	return (bError) ? MTKLFB_ERROR_INIT_FAILURE : MTKLFB_OK;
 }
-
