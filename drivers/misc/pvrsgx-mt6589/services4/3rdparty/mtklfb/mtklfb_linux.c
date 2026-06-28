@@ -18,6 +18,7 @@
 #include <linux/fb.h>
 #include <linux/console.h>
 #include <linux/mutex.h>
+#include <linux/printk.h>
 
 //#include <mach/vrfb.h>
 
@@ -67,7 +68,7 @@ static void MTKLFBMonitorHandle(unsigned long ui32Data)
 {
 	if (g_bEnableMonitor)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, "MTKLFB: pan display timeout:\n");
+		pr_err("%s: MTKLFB: pan display timeout:\n", DRIVER_PREFIX);
 	}
 }
 
@@ -185,7 +186,7 @@ void MTKLFBQueueBufferForSwap(MTKLFB_SWAPCHAIN *psSwapChain, MTKLFB_BUFFER *psBu
 
 	if (res == 0)
 	{
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Buffer already on work queue\n", __FUNCTION__, psSwapChain->uiFBDevID);
+		pr_warn("%s: %s: Device %u: Buffer already on work queue\n", DRIVER_PREFIX, __FUNCTION__, psSwapChain->uiFBDevID);
 	}
 }
 
@@ -201,7 +202,7 @@ MTKLFB_ERROR MTKLFBCreateSwapQueue(MTKLFB_SWAPCHAIN *psSwapChain)
 	psSwapChain->psWorkQueue = alloc_ordered_workqueue(DEVNAME, WQ_FREEZABLE | WQ_MEM_RECLAIM);
 	if (psSwapChain->psWorkQueue == NULL)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't create workqueue\n", __FUNCTION__, psSwapChain->uiFBDevID);
+		pr_err("%s: %s: Device %u: Couldn't create workqueue\n", DRIVER_PREFIX, __FUNCTION__, psSwapChain->uiFBDevID);
 
 		return (MTKLFB_ERROR_INIT_FAILURE);
 	}
@@ -249,7 +250,7 @@ void MTKLFBFlip(MTKLFB_DEVINFO *psDevInfo, MTKLFB_BUFFER *psBuffer)
 		res = fb_set_var(psDevInfo->psLINFBInfo, &sFBVar);
 		if (res != 0)
 		{
-			xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: fb_set_var failed (Y Offset: %lu, Error: %d)\n", __FUNCTION__, psDevInfo->uiFBDevID, psBuffer->ulYOffset, res);
+			pr_err("%s: %s: Device %u: fb_set_var failed (Y Offset: %lu, Error: %d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, psBuffer->ulYOffset, res);
 		}
 	}
 	else
@@ -257,7 +258,7 @@ void MTKLFBFlip(MTKLFB_DEVINFO *psDevInfo, MTKLFB_BUFFER *psBuffer)
 		res = fb_pan_display(psDevInfo->psLINFBInfo, &sFBVar);
 		if (res != 0)
 		{
-			xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: fb_pan_display failed (Y Offset: %lu, Error: %d)\n", __FUNCTION__, psDevInfo->uiFBDevID, psBuffer->ulYOffset, res);
+			pr_err("%s: %s: Device %u: fb_pan_display failed (Y Offset: %lu, Error: %d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, psBuffer->ulYOffset, res);
 		}
 	}
 
@@ -358,8 +359,7 @@ MTKLFB_ERROR MTKLFBUnblankDisplay(MTKLFB_DEVINFO *psDevInfo)
 	MTKLFB_CONSOLE_UNLOCK();
 	if (res != 0 && res != -EINVAL)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: fb_blank failed (%d)\n", __FUNCTION__, psDevInfo->uiFBDevID, res);
+		pr_err("%s: %s: Device %u: fb_blank failed (%d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, res);
 		return (MTKLFB_ERROR_GENERIC);
 	}
 
@@ -427,8 +427,7 @@ MTKLFB_ERROR MTKLFBEnableLFBEventNotification(MTKLFB_DEVINFO *psDevInfo)
 	res = fb_register_client(&psDevInfo->sLINNotifBlock);
 	if (res != 0)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: fb_register_client failed (%d)\n", __FUNCTION__, psDevInfo->uiFBDevID, res);
+		pr_err("%s: %s: Device %u: fb_register_client failed (%d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, res);
 
 		return (MTKLFB_ERROR_GENERIC);
 	}
@@ -436,8 +435,7 @@ MTKLFB_ERROR MTKLFBEnableLFBEventNotification(MTKLFB_DEVINFO *psDevInfo)
 	eError = MTKLFBUnblankDisplay(psDevInfo);
 	if (eError != MTKLFB_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: UnblankDisplay failed (%d)\n", __FUNCTION__, psDevInfo->uiFBDevID, eError);
+		pr_err("%s: %s: Device %u: UnblankDisplay failed (%d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, eError);
 		return eError;
 	}
 
@@ -463,8 +461,7 @@ MTKLFB_ERROR MTKLFBDisableLFBEventNotification(MTKLFB_DEVINFO *psDevInfo)
 	res = fb_unregister_client(&psDevInfo->sLINNotifBlock);
 	if (res != 0)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: fb_unregister_client failed (%d)\n", __FUNCTION__, psDevInfo->uiFBDevID, res);
+		pr_err("%s: %s: Device %u: fb_unregister_client failed (%d)\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, res);
 		return (MTKLFB_ERROR_GENERIC);
 	}
 
@@ -489,8 +486,7 @@ static MTKLFB_DEVINFO *MTKLFBPVRDevIDToDevInfo(unsigned uiPVRDevID)
 		}
 	}
 
-	xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-		": %s: PVR Device %u: Couldn't find device\n", __FUNCTION__, uiPVRDevID);
+	pr_err("%s: %s: PVR Device %u: Couldn't find device\n", DRIVER_PREFIX, __FUNCTION__, uiPVRDevID);
 
 	return NULL;
 }
@@ -574,8 +570,7 @@ int PVR_DRM_MAKENAME(DISPLAY_CONTROLLER, _Ioctl)(struct drm_device unref__ *dev,
 						pszMode = "(Unknown Mode)";
 						break;
 				}
-				xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: PVR Device %u: Display %s\n",
-				__FUNCTION__, uiPVRDevID, pszMode);
+				pr_warn("%s: %s: PVR Device %u: Display %s\n", DRIVER_PREFIX, __FUNCTION__, uiPVRDevID, pszMode);
 			}
 #endif
 			switch(uiCmd)
@@ -631,7 +626,7 @@ static int __init MTKLFB_Init(void)
 
 	if(MTKLFBInit() != MTKLFB_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: MTKLFBInit failed\n", __FUNCTION__);
+		pr_err("%s: %s: MTKLFBInit failed\n", DRIVER_PREFIX, __FUNCTION__);
 		return -ENODEV;
 	}
 
@@ -655,7 +650,7 @@ static void __exit MTKLFB_Cleanup(void)
 {
 	if(MTKLFBDeInit() != MTKLFB_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": %s: MTKLFBDeInit failed\n", __FUNCTION__);
+		pr_err("%s: %s: MTKLFBDeInit failed\n", DRIVER_PREFIX, __FUNCTION__);
 	}
 
 #ifdef MTK_DEBUG_LFB

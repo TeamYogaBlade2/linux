@@ -15,8 +15,6 @@
 #include <linux/notifier.h>
 #include <linux/mutex.h>
 
-#include <linux/xlog.h>
-
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif

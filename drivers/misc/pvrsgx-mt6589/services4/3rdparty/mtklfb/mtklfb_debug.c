@@ -2,6 +2,7 @@
 #include <linux/uaccess.h>
 #include <linux/debugfs.h>
 #include <linux/spinlock.h>
+#include <linux/printk.h>
 
 #include "img_defs.h"
 #include "servicesext.h"
@@ -44,7 +45,7 @@ PVRSRV_ERROR MTKPrintDebugInfoKM(IMG_UINT32 iTemp)
 	spin_lock(&g_kLock);
 	for (i = 0; i < MAX_COUNT; ++i)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, "[%d]%s\n", i, g_szDebugInfo[i]);
+		pr_err("%s: [%d]%s\n", DRIVER_PREFIX, i, g_szDebugInfo[i]);
 	}
 	spin_unlock(&g_kLock);
 	return PVRSRV_OK;
@@ -58,7 +59,7 @@ static void do_command(const char *input)
 	}
 	else
 	{
-    xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX ": invalid debug command...\n");
+    pr_err("%s: invalid debug command...\n", DRIVER_PREFIX);
 }
 }
 
@@ -66,7 +67,7 @@ static void process_commands(char *input)
 {
     char *ptr = NULL;
 
-    xlog_printk(ANDROID_LOG_DEBUG, DRIVER_PREFIX, DRIVER_PREFIX ": %s\n", input);
+    pr_debug("%s: %s\n", DRIVER_PREFIX, input);
 
     while ((ptr = strsep(&input, " ")) != NULL)
     {
@@ -111,7 +112,7 @@ static ssize_t debug_write(struct file *file, const char __user *ubuf, size_t co
     return count;
 }
 
-static struct file_operations debug_fops = 
+static struct file_operations debug_fops =
 {
     .read  = debug_read,
     .write = debug_write,

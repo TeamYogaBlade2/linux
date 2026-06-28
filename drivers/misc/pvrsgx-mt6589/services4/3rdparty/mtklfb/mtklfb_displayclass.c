@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/string.h>
 #include <linux/notifier.h>
+#include <linux/printk.h>
 
 #include "img_defs.h"
 #include "servicesext.h"
@@ -404,7 +405,7 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 #if defined(PVR_MTKFB3_UPDATE_MODE)
 	if (!MTKLFBSetUpdateMode(psDevInfo, PVR_MTKFB3_UPDATE_MODE))
 	{
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't set frame buffer update mode %d\n", __FUNCTION__, psDevInfo->uiFBDevID, PVR_MTKFB3_UPDATE_MODE);
+		pr_warn("%s: %s: Device %u: Couldn't set frame buffer update mode %d\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, PVR_MTKFB3_UPDATE_MODE);
 	}
 #endif
 
@@ -452,7 +453,7 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 
 	if (MTKLFBCreateSwapQueue(psSwapChain) != MTKLFB_OK)
 	{
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Failed to create workqueue\n", __FUNCTION__, psDevInfo->uiFBDevID);
+		pr_warn("%s: %s: Device %u: Failed to create workqueue\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID);
 		eError = PVRSRV_ERROR_UNABLE_TO_INSTALL_ISR;
 		goto ErrorFreeBuffers;
 	}
@@ -460,7 +461,7 @@ static PVRSRV_ERROR CreateDCSwapChain(IMG_HANDLE hDevice,
 	if (MTKLFBEnableLFBEventNotification(psDevInfo)!= MTKLFB_OK)
 	{
 		eError = PVRSRV_ERROR_UNABLE_TO_ENABLE_EVENT;
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't enable framebuffer event notification\n", __FUNCTION__, psDevInfo->uiFBDevID);
+		pr_warn("%s: %s: Device %u: Couldn't enable framebuffer event notification\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID);
 		goto ErrorDestroySwapQueue;
 	}
 
@@ -512,8 +513,7 @@ static PVRSRV_ERROR DestroyDCSwapChain(IMG_HANDLE hDevice,
 
 	if (SwapChainHasChanged(psDevInfo, psSwapChain))
 	{
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: Swap chain mismatch\n", __FUNCTION__, psDevInfo->uiFBDevID);
+		pr_warn("%s: %s: Device %u: Swap chain mismatch\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID);
 
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		goto ExitUnLock;
@@ -524,7 +524,7 @@ static PVRSRV_ERROR DestroyDCSwapChain(IMG_HANDLE hDevice,
 	eError = MTKLFBDisableLFBEventNotification(psDevInfo);
 	if (eError != MTKLFB_OK)
 	{
-		xlog_printk(ANDROID_LOG_WARN, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Couldn't disable framebuffer event notification\n", __FUNCTION__, psDevInfo->uiFBDevID);
+		pr_warn("%s: %s: Device %u: Couldn't disable framebuffer event notification\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID);
 	}
 
 	MTKLFBFreeKernelMem(psSwapChain->psBuffer);
@@ -611,8 +611,7 @@ static PVRSRV_ERROR GetDCBuffers(IMG_HANDLE hDevice,
 	|| !pui32BufferCount
 	|| !phBuffer)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
-			"%s: invalid params\n", __FUNCTION__);
+		pr_err("%s: %s: invalid params\n", DRIVER_PREFIX, __FUNCTION__);
 
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
@@ -624,8 +623,7 @@ static PVRSRV_ERROR GetDCBuffers(IMG_HANDLE hDevice,
 
 	if (SwapChainHasChanged(psDevInfo, psSwapChain))
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
-			"%s: Device %u: Swap chain mismatch\n", __FUNCTION__, psDevInfo->uiFBDevID);
+		pr_err("%s: %s: Device %u: Swap chain mismatch\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID);
 
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		goto Exit;
@@ -745,8 +743,7 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 
 	if(!hCmdCookie || !pvData)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
-			"hCmdCookie(%p) or pvData(%p) is NULL\n", hCmdCookie, pvData);
+		pr_err("%s: hCmdCookie(%p) or pvData(%p) is NULL\n", DRIVER_PREFIX, hCmdCookie, pvData);
 
 		return IMG_FALSE;
 	}
@@ -756,8 +753,7 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 
 	if (psFlipCmd == IMG_NULL)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX,
-			"psFlipCmd is NULL\n");
+		pr_err("%s: psFlipCmd is NULL\n", DRIVER_PREFIX);
 
 		return IMG_FALSE;
 	}
@@ -826,7 +822,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 
         if (res != 0)
         {
-            xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: fb_set_var failed (Error: %d)\n", __FUNCTION__, uiFBDevID, res);
+            pr_info("%s: %s: Device %u: fb_set_var failed (Error: %d)\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID, res);
             eError = MTKLFB_ERROR_INIT_FAILURE;
             goto ErrorRelSem;
         }
@@ -847,8 +843,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	psLINFBOwner = psLINFBInfo->fbops->owner;
 	if (!try_module_get(psLINFBOwner))
 	{
-		xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: Couldn't get framebuffer module\n", __FUNCTION__, uiFBDevID);
+		pr_info("%s: %s: Device %u: Couldn't get framebuffer module\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 
 		goto ErrorRelSem;
 	}
@@ -860,8 +855,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 		res = psLINFBInfo->fbops->fb_open(NULL, psLINFBInfo, 0);
 		if (res != 0)
 		{
-			xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX
-				" %s: Device %u: Couldn't open framebuffer(%d)\n", __FUNCTION__, uiFBDevID, res);
+			pr_info("%s: %s: Device %u: Couldn't open framebuffer(%d)\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID, res);
 
 			goto ErrorModPut;
 		}
@@ -925,7 +919,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 		}
 		else
 		{
-			xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Unknown FB format\n", __FUNCTION__, uiFBDevID);
+			pr_info("%s: %s: Device %u: Unknown FB format\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 		}
 	}
 	else if(psLINFBInfo->var.bits_per_pixel == 32)
@@ -953,12 +947,12 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 		}
 		else
 		{
-			xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Unknown FB format\n", __FUNCTION__, uiFBDevID);
+			pr_info("%s: %s: Device %u: Unknown FB format\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 		}
 	}
 	else
 	{
-		xlog_printk(ANDROID_LOG_INFO, DRIVER_PREFIX, DRIVER_PREFIX ": %s: Device %u: Unknown FB format\n", __FUNCTION__, uiFBDevID);
+		pr_info("%s: %s: Device %u: Unknown FB format\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 	}
 
 	psDevInfo->sFBInfo.ulPhysicalWidthmm =
@@ -1012,8 +1006,7 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 
 	if(psDevInfo == NULL)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: Couldn't allocate device information structure\n", __FUNCTION__, uiFBDevID);
+		pr_err("%s: %s: Device %u: Couldn't allocate device information structure\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 
 		goto ErrorExit;
 	}
@@ -1089,8 +1082,7 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 		&psDevInfo->sDCJTable,
 		&psDevInfo->uiPVRDevID) != PVRSRV_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: PVR Services device registration failed\n", __FUNCTION__, uiFBDevID);
+		pr_err("%s: %s: Device %u: PVR Services device registration failed\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 
 		goto ErrorDeInitFBDev;
 	}
@@ -1114,8 +1106,7 @@ static MTKLFB_DEVINFO *MTKLFBInitDev(unsigned uiFBDevID)
 															aui32SyncCountList,
 															MTKLFB_COMMAND_COUNT) != PVRSRV_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: Couldn't register command processing functions with PVR Services\n", __FUNCTION__, uiFBDevID);
+		pr_err("%s: %s: Device %u: Couldn't register command processing functions with PVR Services\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
 		goto ErrorUnregisterDevice;
 	}
 
@@ -1188,16 +1179,14 @@ static MTKLFB_BOOL MTKLFBDeInitDev(MTKLFB_DEVINFO *psDevInfo)
 
 	if (psPVRJTable->pfnPVRSRVRemoveCmdProcList (psDevInfo->uiPVRDevID, MTKLFB_COMMAND_COUNT) != PVRSRV_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: PVR Device %u: Couldn't unregister command processing functions\n", __FUNCTION__, psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID);
+		pr_err("%s: %s: Device %u: PVR Device %u: Couldn't unregister command processing functions\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID);
 		return MTKLFB_FALSE;
 	}
 
 
 	if (psPVRJTable->pfnPVRSRVRemoveDCDevice(psDevInfo->uiPVRDevID) != PVRSRV_OK)
 	{
-		xlog_printk(ANDROID_LOG_ERROR, DRIVER_PREFIX, DRIVER_PREFIX
-			": %s: Device %u: PVR Device %u: Couldn't remove device from PVR Services\n", __FUNCTION__, psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID);
+		pr_err("%s: %s: Device %u: PVR Device %u: Couldn't remove device from PVR Services\n", DRIVER_PREFIX, __FUNCTION__, psDevInfo->uiFBDevID, psDevInfo->uiPVRDevID);
 		return MTKLFB_FALSE;
 	}
 
