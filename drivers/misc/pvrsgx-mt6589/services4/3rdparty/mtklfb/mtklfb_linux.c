@@ -62,7 +62,7 @@ static bool g_bEnableMonitor;
 #endif
 
 #ifdef MTK_DEBUG_TIMER_MONITOR
-static void MTKLFBMonitorHandle(unsigned long ui32Data)
+static void MTKLFBMonitorHandle(struct timer_list *t)
 {
 	if (g_bEnableMonitor)
 	{
@@ -83,12 +83,12 @@ static void MTKLFBEndMonitor(void)
 
 static void MTKLFBTimerInit(void)
 {
-    setup_timer(&g_sTimer, MTKLFBMonitorHandle, 0);
+	timer_setup(&g_sTimer, MTKLFBMonitorHandle, 0);
 }
 
 static void MTKLFBTimerEnd(void)
 {
-	del_timer(&g_sTimer);
+	timer_delete(&g_sTimer);
 }
 #endif
 
@@ -312,7 +312,7 @@ static int MTKLFBFrameBufferEvents(struct notifier_block *psNotif,
 	MTKLFB_BOOL bBlanked;
 
 
-	if (event != FB_EVENT_BLANK)
+	if (event != 0x09) // FIXME: FB_EVENT_BLANK
 	{
 		return 0;
 	}
