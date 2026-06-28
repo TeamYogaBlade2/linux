@@ -1,7 +1,6 @@
 
 #include "mtk_sysfreq.h"
 #include "mach/mt_gpufreq.h"
-#include "mach/mt_clkmgr.h"
 #include <mach/sync_write.h>
 
 static bool mt_keep_freq_non_od_set = false;
@@ -97,4 +96,3 @@ void MtkSetKeepFreq(void)
         }
     }
 }
-

@@ -7,7 +7,6 @@
 #include <linux/mutex.h>
 
 
-
 #include "sgxdefs.h"
 #include "services_headers.h"
 #include "sysinfo.h"
@@ -15,7 +14,6 @@
 #include "sysconfig.h"
 #include "sgxinfokm.h"
 #include "syslocal.h"
-#include "mach/mt_clkmgr.h"
 
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
