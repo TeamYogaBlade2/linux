@@ -45,7 +45,6 @@
 #else /* defined(SUPPORT_DRI_DRM) */
 
 #define DRVNAME "dbgdrv"
-MODULE_SUPPORTED_DEVICE(DRVNAME);
 
 #if (defined(LDM_PLATFORM) || defined(LDM_PCI)) && !defined(SUPPORT_DRI_DRM)
 static struct class *psDbgDrvClass;
