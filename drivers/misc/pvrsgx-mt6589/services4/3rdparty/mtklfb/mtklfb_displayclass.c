@@ -8,6 +8,7 @@
 #include <linux/string.h>
 #include <linux/notifier.h>
 #include <linux/printk.h>
+#include <linux/file.h>
 
 #include "img_defs.h"
 #include "servicesext.h"
@@ -784,20 +785,32 @@ static IMG_BOOL ProcessFlip(IMG_HANDLE  hCmdCookie,
 static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 {
 	struct fb_info *psLINFBInfo;
-	struct module *psLINFBOwner;
 	MTKLFB_FBINFO *psPVRFBInfo = &psDevInfo->sFBInfo;
 	MTKLFB_ERROR eError = MTKLFB_ERROR_GENERIC;
 	unsigned long FBSize;
 	unsigned long ulLCM;
 	unsigned uiFBDevID = psDevInfo->uiFBDevID;
+	char szDevName[16];
+	struct file *filp = NULL;
 
 	MTKLFB_CONSOLE_LOCK();
 
-	psLINFBInfo = registered_fb[uiFBDevID];
-	if (psLINFBInfo == NULL)
-	{
+	snprintf(szDevName, sizeof(szDevName), "/dev/fb%u", uiFBDevID);
+	filp = filp_open(szDevName, O_RDWR, 0);
+	if (IS_ERR(filp)) {
+		pr_info("%s: %s: Device %u: Cannot open %s (error %ld)\n",
+			DRIVER_PREFIX, __FUNCTION__, uiFBDevID, szDevName, PTR_ERR(filp));
 		eError = MTKLFB_ERROR_INVALID_DEVICE;
+		filp = NULL;
 		goto ErrorRelSem;
+	}
+
+	psLINFBInfo = filp->private_data;
+	if (psLINFBInfo == NULL) {
+		pr_info("%s: %s: Device %u: fb_info is NULL\n",
+			DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
+		eError = MTKLFB_ERROR_INVALID_DEVICE;
+		goto ErrorCloseFile;
 	}
 
 #ifdef USE_RGBA_8888_FB
@@ -830,38 +843,16 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 #endif
 
 	FBSize = (psLINFBInfo->screen_size) != 0 ?
-					psLINFBInfo->screen_size :
-					psLINFBInfo->fix.smem_len;
+				psLINFBInfo->screen_size :
+				psLINFBInfo->fix.smem_len;
 
-
-	if (FBSize == 0 || psLINFBInfo->fix.line_length == 0)
-	{
+	if (FBSize == 0 || psLINFBInfo->fix.line_length == 0) {
 		eError = MTKLFB_ERROR_INVALID_DEVICE;
-		goto ErrorRelSem;
-	}
-
-	psLINFBOwner = psLINFBInfo->fbops->owner;
-	if (!try_module_get(psLINFBOwner))
-	{
-		pr_info("%s: %s: Device %u: Couldn't get framebuffer module\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID);
-
-		goto ErrorRelSem;
-	}
-
-	if (psLINFBInfo->fbops->fb_open != NULL)
-	{
-		int res;
-
-		res = psLINFBInfo->fbops->fb_open(psLINFBInfo, 0);
-		if (res != 0)
-		{
-			pr_info("%s: %s: Device %u: Couldn't open framebuffer(%d)\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID, res);
-
-			goto ErrorModPut;
-		}
+		goto ErrorCloseFile;
 	}
 
 	psDevInfo->psLINFBInfo = psLINFBInfo;
+	psDevInfo->psLINFBFilp = filp;
 
 	ulLCM = LCM(psLINFBInfo->fix.line_length, MTKLFB_PAGE_SIZE);
 
@@ -961,15 +952,15 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	psDevInfo->sFBInfo.ulPhysicalHeightmm =
 		((int)psLINFBInfo->var.height > 0) ? psLINFBInfo->var.height : 0;
 
-
 	psDevInfo->sFBInfo.sSysAddr.uiAddr = psPVRFBInfo->sSysAddr.uiAddr;
 	psDevInfo->sFBInfo.sCPUVAddr = psPVRFBInfo->sCPUVAddr;
 
 	eError = MTKLFB_OK;
 	goto ErrorRelSem;
 
-ErrorModPut:
-	module_put(psLINFBOwner);
+ErrorCloseFile:
+	if (filp)
+		filp_close(filp, NULL);
 ErrorRelSem:
 	MTKLFB_CONSOLE_UNLOCK();
 
@@ -978,20 +969,14 @@ ErrorRelSem:
 
 static void MTKLFBDeInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 {
-	struct fb_info *psLINFBInfo = psDevInfo->psLINFBInfo;
-	struct module *psLINFBOwner;
+	struct file *filp = psDevInfo->psLINFBFilp;
+
+	if (!filp)
+		return;
 
 	MTKLFB_CONSOLE_LOCK();
-
-	psLINFBOwner = psLINFBInfo->fbops->owner;
-
-	if (psLINFBInfo->fbops->fb_release != NULL)
-	{
-		(void) psLINFBInfo->fbops->fb_release(psLINFBInfo, 0);
-	}
-
-	module_put(psLINFBOwner);
-
+	filp_close(filp, NULL);
+	psDevInfo->psLINFBFilp = NULL;
 	MTKLFB_CONSOLE_UNLOCK();
 }
 

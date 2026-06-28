@@ -176,6 +176,7 @@ typedef struct MTKLFB_DEVINFO_TAG
 	MTKLFB_ATOMIC_BOOL     sLeaveVT;
 #endif
 
+	struct file *psLINFBFilp;
 }  MTKLFB_DEVINFO;
 
 #define	MTKLFB_PAGE_SIZE 4096
