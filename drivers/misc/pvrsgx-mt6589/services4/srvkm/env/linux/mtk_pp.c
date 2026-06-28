@@ -10,7 +10,6 @@
 
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
 #include <linux/workqueue.h>
-#include <linux/aee.h>
 #endif
 
 #if defined(MTK_DEBUG) && defined(MTK_DEBUG_PROC_PRINT)
@@ -24,17 +23,17 @@ static void *g_MTKPP_4_SGXDumpDebugInfo_current;
 
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
 
-typedef struct MTKPP_WORKQUEUE_t 
-{	
-	int cycle;  
-	struct workqueue_struct     *psWorkQueue;   
+typedef struct MTKPP_WORKQUEUE_t
+{
+	int cycle;
+	struct workqueue_struct     *psWorkQueue;
 } MTKPP_WORKQUEUE;
 MTKPP_WORKQUEUE g_MTKPP_workqueue;
 
-typedef struct MTKPP_WORKQUEUE_WORKER_t 
-{      
-	struct work_struct          sWork;  
-} MTKPP_WORKQUEUE_WORKER; 
+typedef struct MTKPP_WORKQUEUE_WORKER_t
+{
+	struct work_struct          sWork;
+} MTKPP_WORKQUEUE_WORKER;
 MTKPP_WORKQUEUE_WORKER g_MTKPP_worker;
 
 #endif
@@ -67,7 +66,7 @@ static int MTKPP_PrintTime(char *buf, int n)
 
 	t = cpu_clock(smp_processor_id());
 	nanosec_rem = do_div(t, 1000000000);
-	
+
 	return snprintf(buf, n, "[%5lu.%06lu] ", (unsigned long) t, nanosec_rem / 1000);
 }
 
@@ -78,7 +77,7 @@ static void MTKPP_PrintQueueBuffer(MTK_PROC_PRINT_DATA *data, const char *fmt, .
 	int len;
 
 	MTKPP_Lock(data);
-	
+
 	if ((data->current_line >= data->line_array_size)
 		|| (data->current_data >= (data->data_array_size - 128)))
 	{
@@ -89,14 +88,14 @@ static void MTKPP_PrintQueueBuffer(MTK_PROC_PRINT_DATA *data, const char *fmt, .
 
 	/* move to next line */
 	buf = data->line[data->current_line++] = data->data + data->current_data;
-	
+
 	/* print string */
 	va_start(args, fmt);
 	len = vsnprintf(buf, (data->data_array_size - data->current_data), fmt, args);
 	va_end(args);
-	
+
 	data->current_data += len + 1;
-	
+
 	MTKPP_UnLock(data);
 }
 
@@ -107,7 +106,7 @@ static void MTKPP_PrintQueueBuffer2(MTK_PROC_PRINT_DATA *data, const char *fmt, 
 	int len;
 
 	MTKPP_Lock(data);
-	
+
 	if ((data->current_line >= data->line_array_size)
 		|| (data->current_data >= (data->data_array_size - 128)))
 	{
@@ -128,9 +127,9 @@ static void MTKPP_PrintQueueBuffer2(MTK_PROC_PRINT_DATA *data, const char *fmt, 
 	va_start(args, fmt);
 	len = vsnprintf(buf, (data->data_array_size - data->current_data), fmt, args);
 	va_end(args);
-	
+
 	data->current_data += len + 1 ;
-	
+
 	MTKPP_UnLock(data);
 }
 
@@ -141,7 +140,7 @@ static void MTKPP_PrintRingBuffer(MTK_PROC_PRINT_DATA *data, const char *fmt, ..
 	int len, s;
 
 	MTKPP_Lock(data);
-	
+
 	if ((data->current_line >= data->line_array_size)
 		|| (data->current_data >= (data->data_array_size - 128)))
 	{
@@ -162,18 +161,18 @@ static void MTKPP_PrintRingBuffer(MTK_PROC_PRINT_DATA *data, const char *fmt, ..
 	va_start(args, fmt);
 	len = vsnprintf(buf, (data->data_array_size - data->current_data), fmt, args);
 	va_end(args);
-	
+
 	data->current_data += len + 1 ;
 
 	/* clear data which are overlaid by the new log */
 	buf += len; s = data->current_line;
-	while (s < data->line_array_size 
-		&& data->line[s] != NULL 
+	while (s < data->line_array_size
+		&& data->line[s] != NULL
 		&& data->line[s] <= buf)
 	{
 		data->line[s++] = NULL;
 	}
-	
+
 	MTKPP_UnLock(data);
 }
 
@@ -187,7 +186,7 @@ static MTK_PROC_PRINT_DATA *MTKPP_AllocStruct(int type)
 		_MTKPP_DEBUG_LOG("%s: vmalloc fail", __func__);
 		goto err_out;
 	}
-	
+
 	MTKPP_InitLock(data);
 
 	switch (type)
@@ -213,10 +212,10 @@ static MTK_PROC_PRINT_DATA *MTKPP_AllocStruct(int type)
 	data->type = type;
 
 	return data;
-		
+
 err_out2:
 	vfree(data);
-err_out:	
+err_out:
 	return NULL;
 
 }
@@ -230,7 +229,7 @@ static void MTKPP_FreeStruct(MTK_PROC_PRINT_DATA **data)
 static void MTKPP_AllocData(MTK_PROC_PRINT_DATA *data, int data_size, int max_line)
 {
 	MTKPP_Lock(data);
-		
+
 	data->data = (char *)kmalloc(sizeof(char)*data_size, GFP_ATOMIC);
 	if (data->data == NULL)
 	{
@@ -246,33 +245,33 @@ static void MTKPP_AllocData(MTK_PROC_PRINT_DATA *data, int data_size, int max_li
 
 	data->data_array_size = data_size;
 	data->line_array_size = max_line;
-	
+
 	MTKPP_UnLock(data);
 
 	return;
-	
+
 err_alloc_data:
 	kfree(data->data);
-err_alloc_struct:	
+err_alloc_struct:
 	MTKPP_UnLock(data);
 	return;
-	
+
 }
 
 static void MTKPP_FreeData(MTK_PROC_PRINT_DATA *data)
 {
 	MTKPP_Lock(data);
-	
+
 	kfree(data->line);
 	kfree(data->data);
-	
+
 	data->line = NULL;
 	data->data = NULL;
 	data->data_array_size = 0;
 	data->line_array_size = 0;
 	data->current_data = 0;
 	data->current_line = 0;
-		
+
 	MTKPP_UnLock(data);
 }
 
@@ -283,25 +282,25 @@ static void MTKPP_CleanData(MTK_PROC_PRINT_DATA *data)
 	memset(data->line, 0, sizeof(char*)*data->line_array_size);
 	data->current_data = 0;
 	data->current_line = 0;
-	
+
 	MTKPP_UnLock(data);
 }
 
 static void* MTKPP_SeqStart(struct seq_file *s, loff_t *pos)
 {
 	loff_t *spos;
-	
+
 	spos = kmalloc(sizeof(loff_t), GFP_KERNEL);
-	
+
 	spin_lock_irqsave(&g_MTKPP_4_SGXDumpDebugInfo_lock, g_MTKPP_4_SGXDumpDebugInfo_irqflags);
 
-	if (*pos >= MTKPP_ID_SIZE)	
+	if (*pos >= MTKPP_ID_SIZE)
 	{
 		return NULL;
 	}
 
 	if (spos == NULL)
-	{	
+	{
 		return NULL;
 	}
 
@@ -313,14 +312,14 @@ static void* MTKPP_SeqNext(struct seq_file *s, void *v, loff_t *pos)
 {
 	loff_t *spos = (loff_t *) v;
 	*pos = ++(*spos);
-	
+
 	return (*pos < MTKPP_ID_SIZE) ? spos : NULL;
 }
 
 static void MTKPP_SeqStop(struct seq_file *s, void *v)
 {
 	spin_unlock_irqrestore(&g_MTKPP_4_SGXDumpDebugInfo_lock, g_MTKPP_4_SGXDumpDebugInfo_irqflags);
-	
+
 	kfree(v);
 }
 
@@ -330,13 +329,13 @@ static int MTKPP_SeqShow(struct seq_file *sfile, void *v)
 	int off, i;
 	loff_t *spos = (loff_t *) v;
 
-    off = *spos;	
+    off = *spos;
 	data = g_MTKPPdata[off];
-		
+
 	seq_printf(sfile, "\n" "===== buffer_id = %d =====\n", off);
 
 	MTKPP_Lock(data);
-	
+
 	switch (data->type)
 	{
 		case MTKPP_BUFFERTYPE_QUEUEBUFFER:
@@ -368,9 +367,9 @@ static int MTKPP_SeqShow(struct seq_file *sfile, void *v)
 		default:
 			break;
 	}
-	
+
 	MTKPP_UnLock(data);
-	
+
 	return 0;
 }
 
@@ -396,9 +395,9 @@ static struct file_operations g_MTKPP_proc_ops = {
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
 
 static IMG_VOID MTKPP_WORKR_Handle(struct work_struct *_psWork)
-{	
-	struct MTKPP_WORKQUEUE_WORKER_t* psWork = 
-	container_of(_psWork, MTKPP_WORKQUEUE_WORKER, sWork);  
+{
+	struct MTKPP_WORKQUEUE_WORKER_t* psWork =
+	container_of(_psWork, MTKPP_WORKQUEUE_WORKER, sWork);
 
 	/* avoid the build warnning */
 	psWork = psWork;
@@ -419,7 +418,7 @@ void MTKPP_Init(void)
 	} mtk_pp_register_tabls[] =
 	{
 		/* buffer is allocated in MTK_PP_4_SGXOSTimer_register */
-		{MTKPP_ID_SGXDumpDebugInfo, MTKPP_BUFFERTYPE_QUEUEBUFFER,   0,                  0}, 
+		{MTKPP_ID_SGXDumpDebugInfo, MTKPP_BUFFERTYPE_QUEUEBUFFER,   0,                  0},
 		{MTKPP_ID_DEVMEM,           MTKPP_BUFFERTYPE_RINGBUFFER,    1024 * 1024 * 2,    1024 * 64},
 		{MTKPP_ID_SYNC,             MTKPP_BUFFERTYPE_RINGBUFFER,    1024 * 8,           128},
 		{MTKPP_ID_MUTEX,            MTKPP_BUFFERTYPE_RINGBUFFER,    1024 * 32,          512},
@@ -432,7 +431,7 @@ void MTKPP_Init(void)
 			_MTKPP_DEBUG_LOG("%s: index(%d) != tabel_uid(%d)", __func__, i, mtk_pp_register_tabls[i].uid);
 			goto err_out;
 		}
-		
+
 		g_MTKPPdata[i] = MTKPP_AllocStruct(mtk_pp_register_tabls[i].type);
 
 		if (g_MTKPPdata[i] == NULL)
@@ -448,34 +447,34 @@ void MTKPP_Init(void)
 				mtk_pp_register_tabls[i].data_size,
 				mtk_pp_register_tabls[i].max_line
 				);
-			
+
 			MTKPP_CleanData(g_MTKPPdata[i]);
 		}
 	}
-	
+
 	g_MTKPP_proc = create_proc_entry("gpulog", 0, NULL);
 	g_MTKPP_proc->proc_fops = &g_MTKPP_proc_ops;
-	
+
 	g_MTKPP_4_SGXDumpDebugInfo_current = NULL;
 	spin_lock_init(&g_MTKPP_4_SGXDumpDebugInfo_lock);
-	
+
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
 	g_MTKPP_workqueue.psWorkQueue = alloc_ordered_workqueue("mwp", WQ_FREEZABLE | WQ_MEM_RECLAIM);
 	INIT_WORK(&g_MTKPP_worker.sWork, MTKPP_WORKR_Handle);
 #endif
 
 	return;
-	
-err_out:	
+
+err_out:
 	return;
 }
 
 void MTKPP_Deinit(void)
 {
 	int i;
-	
+
 	remove_proc_entry("gpulog", NULL);
-	
+
 	for (i = (MTKPP_ID_SIZE - 1); i >= 0; --i)
 	{
 		MTKPP_FreeData(g_MTKPPdata[i]);
@@ -485,13 +484,13 @@ void MTKPP_Deinit(void)
 
 MTK_PROC_PRINT_DATA *MTKPP_GetData(MTKPP_ID id)
 {
-	return (id >= 0 && id < MTKPP_ID_SIZE) ? 
+	return (id >= 0 && id < MTKPP_ID_SIZE) ?
 		g_MTKPPdata[id] : NULL;
 }
 
 MTK_PROC_PRINT_DATA *MTKPP_4_SGXDumpDebugInfo_GetData()
 {
-	return (g_MTKPP_4_SGXDumpDebugInfo_current == (void *)current) ? 
+	return (g_MTKPP_4_SGXDumpDebugInfo_current == (void *)current) ?
 		g_MTKPPdata[MTKPP_ID_SGXDumpDebugInfo] : NULL;
 }
 
@@ -506,7 +505,7 @@ void MTKPP_4_SGXDumpDebugInfo_Aquire(void)
 	};
 
 	MTK_PROC_PRINT_DATA *ppdata = g_MTKPPdata[MTKPP_ID_SGXDumpDebugInfo];
-	
+
 	spin_lock_irqsave(&g_MTKPP_4_SGXDumpDebugInfo_lock, g_MTKPP_4_SGXDumpDebugInfo_irqflags);
 
 	g_MTKPP_4_SGXDumpDebugInfo_current = (void *)current;
@@ -535,7 +534,7 @@ void MTKPP_4_SGXDumpDebugInfo_Aquire(void)
 void MTKPP_4_SGXDumpDebugInfo_Release(void)
 {
 	g_MTKPP_4_SGXDumpDebugInfo_current = NULL;
-	
+
 	spin_unlock_irqrestore(&g_MTKPP_4_SGXDumpDebugInfo_lock, g_MTKPP_4_SGXDumpDebugInfo_irqflags);
 
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
