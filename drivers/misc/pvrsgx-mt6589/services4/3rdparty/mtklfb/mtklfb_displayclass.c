@@ -852,7 +852,7 @@ static MTKLFB_ERROR MTKLFBInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 	{
 		int res;
 
-		res = psLINFBInfo->fbops->fb_open(NULL, psLINFBInfo, 0);
+		res = psLINFBInfo->fbops->fb_open(psLINFBInfo, 0);
 		if (res != 0)
 		{
 			pr_info("%s: %s: Device %u: Couldn't open framebuffer(%d)\n", DRIVER_PREFIX, __FUNCTION__, uiFBDevID, res);
@@ -987,7 +987,7 @@ static void MTKLFBDeInitFBDev(MTKLFB_DEVINFO *psDevInfo)
 
 	if (psLINFBInfo->fbops->fb_release != NULL)
 	{
-		(void) psLINFBInfo->fbops->fb_release(NULL, psLINFBInfo, 0);
+		(void) psLINFBInfo->fbops->fb_release(psLINFBInfo, 0);
 	}
 
 	module_put(psLINFBOwner);
