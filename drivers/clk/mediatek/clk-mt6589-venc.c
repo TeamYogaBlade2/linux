@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
@@ -14,12 +14,6 @@
 #define VENCSYS_CG_SET	0x0004
 #define VENCSYS_CG_CLR	0x0008
 
-/*
- * NOTE: downstream:
- * .set_addr = VENCSYS_CG_CLR,
- * .clr_addr = VENCSYS_CG_SET,
- * .sta_addr = VENCSYS_CG_CON,
- */
 static const struct mtk_gate_regs venc_cg_regs = {
 	.set_ofs = VENCSYS_CG_SET,
 	.clr_ofs = VENCSYS_CG_CLR,
@@ -27,7 +21,7 @@ static const struct mtk_gate_regs venc_cg_regs = {
 };
 
 #define GATE_VENC(_id, _name, _parent, _shift)				\
-	GATE_MTK(_id, _name, _parent, &venc_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr_inv)
+	GATE_MTK(_id, _name, _parent, &venc_cg_regs, _shift, &mtk_clk_gate_ops_setclr_inv)
 
 static const struct mtk_gate venc_clks[] = {
 	GATE_VENC(CLK_VENC_VEN, "venc_ven", "venc_sel", 0),

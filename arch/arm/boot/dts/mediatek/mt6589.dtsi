@@ -8,7 +8,9 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/reset/mt6589-resets.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+#include <dt-bindings/power/mt6589-power.h>
 
 / {
 	#address-cells = <1>;
@@ -42,6 +44,17 @@
 			reg = <0x3>;
 		};
 
+	};
+
+	timer {
+		compatible = "arm,armv7-timer";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>;
+		clock-frequency = <13000000>;
+		arm,cpu-registers-not-fw-configured;
 	};
 
 	clocks {
@@ -102,6 +115,76 @@
 			#reset-cells = <1>;
 		};
 
+		scpsys: syscon@10006000 {
+			compatible = "syscon", "simple-mfd";
+			reg = <0x10006000 0x1000>;
+			#power-domain-cells = <1>;
+
+			spm: power-controller {
+				compatible = "mediatek,mt6589-power-controller";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#power-domain-cells = <1>;
+
+				power-domain@MT6589_POWER_DOMAIN_MD1 {
+					reg = <MT6589_POWER_DOMAIN_MD1>;
+					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_MD2 {
+					reg = <MT6589_POWER_DOMAIN_MD2>;
+					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_DPY {
+					reg = <MT6589_POWER_DOMAIN_DPY>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_DIS {
+					reg = <MT6589_POWER_DOMAIN_DIS>;
+					clocks = <&topckgen CLK_TOP_MUX_DISP>;
+					clock-names = "disp";
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_MFG {
+					reg = <MT6589_POWER_DOMAIN_MFG>;
+					clocks = <&topckgen CLK_TOP_MUX_MFG>,
+						 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
+					clock-names = "mfg", "mfg_as";
+					#power-domain-cells = <0>;
+					mediatek,infracfg = <&infracfg>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_ISP {
+					reg = <MT6589_POWER_DOMAIN_ISP>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_IFR {
+					reg = <MT6589_POWER_DOMAIN_IFR>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_VEN {
+					reg = <MT6589_POWER_DOMAIN_VEN>;
+					clocks = <&topckgen CLK_TOP_MUX_VENC>;
+					clock-names = "venc";
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6589_POWER_DOMAIN_VDE {
+					reg = <MT6589_POWER_DOMAIN_VDE>;
+					clocks = <&topckgen CLK_TOP_MUX_VDEC>;
+					clock-names = "vdec";
+					#power-domain-cells = <0>;
+				};
+			};
+		};
+
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
@@ -130,8 +213,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
-			mediatek,have-pmic;
+			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -146,8 +228,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
-			mediatek,have-pmic;
+			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -162,8 +243,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
-			mediatek,have-pmic;
+			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -178,8 +258,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
-			mediatek,have-pmic;
+			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -194,7 +273,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -210,7 +289,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -226,7 +305,7 @@
 				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
-			clock-div = <16>; /* maybe */
+			clock-div = <16>;
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -244,6 +323,16 @@
 				 <&pericfg CLK_PERI1_SPI1>;
 			clock-names = "parent-clk", "sel-clk", "spi-clk";
 			status = "disabled";
+		};
+
+		gpu: gpu@13000000 {
+			compatible = "mediatek,mt6589-gpu", "img,powervr-sgx544";
+			reg = <0x13000000 0x10000>;
+			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mfgsys CLK_MFG_G3D>,
+				 <&mfgsys CLK_MFG_MEM>,
+				 <&mfgsys CLK_MFG_AXI>;
+			clock-names = "core", "mem", "sys";
 		};
 
 		dispsys: syscon@14000000 {
@@ -290,9 +379,23 @@
 		timer: timer@10008000 {
 			compatible = "mediatek,mt6577-timer";
 			reg = <0x10008000 0x80>;
-			interrupts = <GIC_SPI 113 IRQ_TYPE_LEVEL_LOW>;
+			interrupts = <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&system_clk>, <&rtc_clk>;
 			clock-names = "system-clk", "rtc-clk";
+		};
+
+		pwrap: pwrap@1000f000 {
+			compatible = "mediatek,mt6589-pwrap";
+			reg = <0x1000f000 0x1000>,
+			      <0x11017000 0x1000>;
+			reg-names = "pwrap", "pwrap-bridge";
+			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&infracfg CLK_INFRA_PMICSPI>,
+				 <&infracfg CLK_INFRA_PMICWRAP>;
+			clock-names = "spi", "wrap";
+			resets = <&infracfg MT6589_INFRA_PMIC_WRAP_RST>,
+				 <&pericfg MT6589_PERI_PWRAP_BRIDGE_SW_RST>;
+			reset-names = "pwrap", "pwrap-bridge";
 		};
 
 		sysirq: interrupt-controller@10200100 {
@@ -324,12 +427,12 @@
 			      <0x11000800 0x54>,
 			      <0x11000880 0x54>,
 			      <0x11000900 0x54>;
-			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 66 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 67 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 68 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 69 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 70 IRQ_TYPE_LEVEL_LOW>;
+			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 66 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 67 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 68 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>;
 			dma-requests = <6>;
 			clocks = <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "apdma";
@@ -484,7 +587,8 @@
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			drive-strength = <2>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-down;
+			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 */
 		pins-rst {
@@ -605,7 +709,8 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-up;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
@@ -624,13 +729,15 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-up;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
 			drive-strength = <4>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+			bias-pull-down;
+			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_10>;
 		};
 	};
 
@@ -679,11 +786,44 @@
 		pins-clk {
 			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
 			drive-strength = <2>;
-			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+			bias-pull-down;
+			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-rst {
 			pinmux = <MT6589_GPIO142__FUNC_MSDC4_RSTB>;
+			bias-pull-up;
+		};
+	};
+
+	i2c0_pins: i2c0-default {
+		pins-i2c0 {
+			pinmux = <MT6589_GPIO118__FUNC_SDA0>,
+				 <MT6589_GPIO119__FUNC_SCL0>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_pins: i2c1-default {
+		pin-i2c1 {
+			pinmux = <MT6589_GPIO214__FUNC_SDA1>,
+				 <MT6589_GPIO215__FUNC_SCL1>;
+			bias-pull-up;
+		};
+	};
+
+	i2c2_pins: i2c2-default {
+		pin-i2c2 {
+			pinmux = <MT6589_GPIO216__FUNC_SDA2>,
+				 <MT6589_GPIO217__FUNC_SCL2>;
+			bias-pull-up;
+		};
+	};
+
+	i2c3_pins: i2c3-default {
+		pin-i2c3 {
+			pinmux = <MT6589_GPIO67__FUNC_SDA3>,
+				 <MT6589_GPIO68__FUNC_SCL3>;
 			bias-pull-up;
 		};
 	};

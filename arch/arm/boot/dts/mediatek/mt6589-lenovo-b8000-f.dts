@@ -1,14 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /*
- * Copyright (c) 2025 akku <akkun11.open@gmail.com>
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
-#include "mt6589-lenovo-blade.dtsi"
+#include "mt6589-lenovo-b8000.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
-	compatible = "lenovo,blade-b8000-f", "lenovo,blade", "mediatek,mt6589";
+	compatible = "lenovo,b8000-f", "mediatek,mt6589";
 
 	reg_1p8v: regulator-1p8v {
 		compatible = "regulator-fixed";
