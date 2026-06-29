@@ -10,6 +10,13 @@
  * MT6589 power domain support
  */
 
+#define MT6589_BUS_PROT_INFRA_SI0_CTL(_mask)			\
+		_BUS_PROT(_mask, 0x0200, 0x0200, 0, 0,		\
+			  BUS_PROT_COMPONENT_INFRA |		\
+			  BUS_PROT_REG_UPDATE |			\
+			  BUS_PROT_INVERTED |			\
+			  BUS_PROT_IGNORE_CLR_ACK)
+
 static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 	[MT6589_POWER_DOMAIN_MD1] = {
 		.name = "md1",
@@ -63,6 +70,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0x0020),
+			MT6589_BUS_PROT_INFRA_SI0_CTL(0x0400),
 		},
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,

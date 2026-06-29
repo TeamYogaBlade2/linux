@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
@@ -15,29 +15,10 @@
 #define LARB_CKEN_SET	0x0008
 #define LARB_CKEN_CLR	0x000c
 
-/*
- * downstream
-    {
-        .name = __stringify(CG_VDEC0),
-        .set_addr = VDEC_CKEN_CLR,
-        .clr_addr = VDEC_CKEN_SET,
-        .mask = 0x00000001,
-        .ops = &vdec_cg_grp_ops,
-        .sys = &syss[SYS_VDE],
-    }, {
-        .name = __stringify(CG_VDEC1),
-        .set_addr = LARB_CKEN_CLR,
-        .clr_addr = LARB_CKEN_SET,
-        .mask = 0x00000001,
-        .ops = &vdec_cg_grp_ops,
-        .sys = &syss[SYS_VDE],
-    }
- */
-
 static const struct mtk_gate_regs vdec_cg_regs = {
 	.set_ofs = VDEC_CKEN_SET,
 	.clr_ofs = VDEC_CKEN_CLR,
-	.sta_ofs = VDEC_CKEN_SET, /* many SoCs use set reg as sta reg */
+	.sta_ofs = VDEC_CKEN_SET,
 };
 
 static const struct mtk_gate_regs larb_cg_regs = {
@@ -54,7 +35,7 @@ static const struct mtk_gate_regs larb_cg_regs = {
 
 static const struct mtk_gate vdec_clks[] = {
 	GATE_VDEC(CLK_VDEC0_VDE, "vdec0_vde", "vdec_sel", 0),
-	GATE_LARB(CLK_VDEC1_SMI, "vdec0_smi", "vdec_sel", 0),
+	GATE_LARB(CLK_VDEC1_SMI, "vdec1_smi", "vdec_sel", 0),
 };
 
 static const struct mtk_clk_desc vdec_desc = {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Author: akku <akkun11.open@gmail.com>
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
@@ -42,8 +42,8 @@ static const struct mtk_gate peri_clks[] = {
 	GATE_PERI0(CLK_PERI0_PWM2, "peri_pwm2", "axi_sel", 3), /* maybe */
 	GATE_PERI0(CLK_PERI0_PWM3, "peri_pwm3", "axi_sel", 4), /* maybe */
 	GATE_PERI0(CLK_PERI0_PWM4, "peri_pwm4", "axi_sel", 5), /* maybe */
-	GATE_PERI0(CLK_PERI0_PWM5, "pwri_pwm5", "axi_sel", 6), /* maybe */
-	GATE_PERI0(CLK_PERI0_PWM6, "pwri_pwm6", "axi_sel", 7), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM5, "peri_pwm5", "axi_sel", 6), /* maybe */
+	GATE_PERI0(CLK_PERI0_PWM6, "peri_pwm6", "axi_sel", 7), /* maybe */
 	GATE_PERI0(CLK_PERI0_PWM7, "peri_pwm7", "axi_sel", 8), /* maybe */
 	GATE_PERI0(CLK_PERI0_PWM, "peri_pwm", "axi_sel", 9), /* maybe */
 	GATE_PERI0(CLK_PERI0_USB0, "peri_usb0", "usb20_sel", 10),
