@@ -333,6 +333,7 @@
 				 <&mfgsys CLK_MFG_MEM>,
 				 <&mfgsys CLK_MFG_AXI>;
 			clock-names = "core", "mem", "sys";
+			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
 		};
 
 		dispsys: syscon@14000000 {
