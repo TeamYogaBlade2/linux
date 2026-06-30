@@ -18,11 +18,6 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include "mach/mt_gpufreq.h"
-#include "mach/pmic_mt6320_sw.h"
-#include "mach/upmu_common.h"
-#include "mach/upmu_hw.h"
-
 #define SPM_MFG_PWR_CON 0xF0006214
 
 #define	ONE_MHZ	1000000
@@ -109,6 +104,7 @@ IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
 
 PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 {
+	int ret;
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
 
@@ -140,10 +136,21 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 //    printk("EnableSGXClocks ... Reg[0x%x]=0x%x\n",0x37E,upmu_get_reg_value(0x37E));
 
 
-    enable_clock(MT_CG_MFG_HYD, "MFG");
-    enable_clock(MT_CG_MFG_G3D, "MFG");
-    enable_clock(MT_CG_MFG_MEM, "MFG");
-    enable_clock(MT_CG_MFG_AXI, "MFG");
+	ret = clk_prepare_enable(psSysData->clk_core);
+	if (ret) return ret;
+
+	ret = clk_prepare_enable(psSysData->clk_mem);
+	if (ret) {
+		clk_disable_unprepare(psSysData->clk_core);
+		return ret;
+	}
+
+	ret = clk_prepare_enable(psSysData->clk_sys);
+	if (ret) {
+		clk_disable_unprepare(psSysData->clk_mem);
+		clk_disable_unprepare(psSysData->clk_core);
+		return ret;
+	}
 
     //MFGReset
     {
@@ -203,12 +210,11 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 	}
 #endif
 
-    mt_gpufreq_gpu_clock_ratio(GPU_DVFS_CLOCK_RATIO_OFF);
+	mt_gpufreq_gpu_clock_ratio(GPU_DVFS_CLOCK_RATIO_OFF);
 
-    disable_clock(MT_CG_MFG_AXI, "MFG");
-    disable_clock(MT_CG_MFG_MEM, "MFG");
-    disable_clock(MT_CG_MFG_G3D, "MFG");
-    disable_clock(MT_CG_MFG_HYD, "MFG");
+	clk_disable_unprepare(psSysData->clk_sys);
+	clk_disable_unprepare(psSysData->clk_mem);
+	clk_disable_unprepare(psSysData->clk_core);
 
     if (( g_pmic_cid != 0) && (get_gpu_power_src()==0) && (subsys_is_on(SYS_MFG)==0))
     {

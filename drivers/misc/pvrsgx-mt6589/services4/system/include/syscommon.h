@@ -76,6 +76,10 @@ typedef struct _SYS_DATA_TAG_
 	PFN_HTIMER_CREATE	pfnHighResTimerCreate;
 	PFN_HTIMER_GETUS	pfnHighResTimerGetus;
 	PFN_HTIMER_DESTROY	pfnHighResTimerDestroy;
+
+	struct clk *clk_core;
+	struct clk *clk_mem;
+	struct clk *clk_sys;
 } SYS_DATA;
 
 

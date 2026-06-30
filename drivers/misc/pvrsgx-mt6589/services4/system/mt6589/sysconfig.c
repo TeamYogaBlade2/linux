@@ -239,7 +239,17 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	psTimingInfo->ui32uKernelFreq = SYS_SGX_PDS_TIMER_FREQ;
 #endif
 
+	gpsSysData->clk_core = devm_clk_get_optional(&pdev->dev, "core");
+	if (IS_ERR(gpsSysData->clk_core))
+		return PTR_ERR(gpsSysData->clk_core);
 
+	gpsSysData->clk_mem = devm_clk_get_optional(&pdev->dev, "mem");
+	if (IS_ERR(gpsSysData->clk_mem))
+		return PTR_ERR(gpsSysData->clk_mem);
+
+	gpsSysData->clk_sys = devm_clk_get_optional(&pdev->dev, "sys");
+	if (IS_ERR(gpsSysData->clk_sys))
+		return PTR_ERR(gpsSysData->clk_sys);
 
 	gpsSysSpecificData->ui32SrcClockDiv = 3;
 
