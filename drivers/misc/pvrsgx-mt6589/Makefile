@@ -81,7 +81,7 @@ pvrsrvkm-y := \
 	services4/srvkm/devices/sgx/mmu.o \
 	services4/srvkm/devices/sgx/pb.o \
 	services4/system/mt6589/sysconfig.o \
-	services4/system/mt6589/sysutils.o \
+	services4/system/mt6589/sysutils_linux.o \
 	services4/srvkm/env/linux/mtk_debug.o \
 	services4/srvkm/env/linux/mtk_pp.o \
 	services4/srvkm/env/linux/mtk_hal_mm.o \
