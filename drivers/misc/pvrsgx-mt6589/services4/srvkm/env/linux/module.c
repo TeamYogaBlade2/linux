@@ -193,6 +193,7 @@ static LDM_DRV powervr_driver = {
 #if defined(PVR_LDM_PLATFORM_MODULE)
 	.driver = {
 		.name		= DRVNAME,
+		.of_match_table = powervr_of_match,
 	},
 #endif
 	.probe		= PVRSRVDriverProbe,
@@ -202,7 +203,6 @@ static LDM_DRV powervr_driver = {
 	.suspend	= PVRSRVDriverSuspend,
 	.resume		= PVRSRVDriverResume,
 	.shutdown	= PVRSRVDriverShutdown,
-	.of_match_table = powervr_of_match,
 };
 
 LDM_DEV *gpsPVRLDMDev;
