@@ -10,10 +10,6 @@
 #include "pvr_bridge.h"
 #include "perproc.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 IMG_IMPORT
 PVRSRV_ERROR SGXSubmitTransferKM(IMG_HANDLE hDevHandle, PVRSRV_TRANSFER_SGX_KICK *psKick);
 
@@ -202,10 +198,6 @@ SGXAddSharedPBDescKM(PVRSRV_PER_PROCESS_DATA	*psPerProc,
 IMG_IMPORT PVRSRV_ERROR
 SGXGetInternalDevInfoKM(IMG_HANDLE hDevCookie,
 						SGX_INTERNAL_DEVINFO *psSGXInternalDevInfo);
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __SGX_BRIDGE_KM_H__ */
 

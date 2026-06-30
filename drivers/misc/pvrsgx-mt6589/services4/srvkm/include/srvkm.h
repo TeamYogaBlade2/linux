@@ -5,10 +5,6 @@
 
 #include "servicesint.h"
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
 	/**	Use PVR_DPF() unless message is necessary in release build
 	 */
 	#ifdef PVR_DISABLE_LOGGING
@@ -158,11 +154,6 @@ IMG_UINT32 SyncRollBackReadOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 
 	return psKernelSync->psSyncData->ui32ReadOpsPending--;
 }
 
-
-
-#if defined (__cplusplus)
-}
-#endif
 
 /******************
 HIGHER LEVEL MACROS

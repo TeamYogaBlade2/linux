@@ -3,10 +3,6 @@
 #ifndef __PVR_BRIDGE_H__
 #define __PVR_BRIDGE_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #include "servicesint.h"
 
 /*
@@ -1814,11 +1810,6 @@ typedef struct PVRSRV_BRIDGE_IN_CHG_DEV_MEM_ATTRIBS_TAG
 	IMG_SID				hKernelMemInfo;
 	IMG_UINT32			ui32Attribs;
 } PVRSRV_BRIDGE_IN_CHG_DEV_MEM_ATTRIBS;
-
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __PVR_BRIDGE_H__ */
 

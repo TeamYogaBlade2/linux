@@ -3,10 +3,6 @@
 #ifndef __PERPROC_H__
 #define __PERPROC_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #include "img_types.h"
 #include "resman.h"
 
@@ -78,10 +74,6 @@ IMG_HANDLE PVRSRVFindPerProcessPrivateData(IMG_VOID)
 {
 	return PVRSRVProcessPrivateData(PVRSRVFindPerProcessData());
 }
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __PERPROC_H__ */
 

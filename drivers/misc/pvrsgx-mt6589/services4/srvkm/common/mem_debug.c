@@ -8,11 +8,6 @@
 #include "img_types.h"
 #include "services_headers.h"
 
-#if defined (__cplusplus)
-extern "C"
-{
-#endif
-
 #define STOP_ON_ERROR 0
 
 	/*
@@ -224,11 +219,6 @@ extern "C"
 
 		return OSFreeMem_Debug_Linux_Memory_Allocations(ui32Flags, ui32Size + TEST_BUFFER_PADDING, psInfo, hBlockAlloc, pszFilename, ui32Line);
 	}
-
-#if defined (__cplusplus)
-
-}
-#endif
 
 #endif /* PVRSRV_DEBUG_OS_MEMORY */
 

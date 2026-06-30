@@ -3,10 +3,6 @@
 #ifndef __SGXAPI_KM_H__
 #define __SGXAPI_KM_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #include "sgxdefs.h"
 
 #if (defined(__linux__) || defined(__QNXNTO__)) && !defined(USE_CODE)
@@ -491,10 +487,6 @@ typedef struct _SGX_KICKTA_PDUMP_
 #endif
 #define SGX_MAX_TRANSFER_STATUS_VALS	2
 #define SGX_MAX_TRANSFER_SYNC_OPS	5
-#endif
-
-#if defined (__cplusplus)
-}
 #endif
 
 #endif /* __SGXAPI_KM_H__ */

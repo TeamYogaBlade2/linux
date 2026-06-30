@@ -7,11 +7,6 @@
 #include "sgxinfo.h"
 #include "pvr_bridge.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
-
 /*
  * Bridge Cmd Ids
  */
@@ -563,9 +558,5 @@ typedef struct PVRSRV_BRIDGE_OUT_SGX_READ_HWPERF_CB_TAG
 	IMG_UINT32			ui32ClockSpeed;
 	IMG_UINT32			ui32HostTimeStamp;
 } PVRSRV_BRIDGE_OUT_SGX_READ_HWPERF_CB;
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __SGX_BRIDGE_H__ */

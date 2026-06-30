@@ -5,10 +5,6 @@
 
 #if defined(SUPPORT_PVRSRV_DEVICE_CLASS)
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
 /*!
  * Macro to Read Offset in given command queue
  */
@@ -99,11 +95,6 @@ PVRSRV_ERROR PVRSRVRemoveCmdProcListKM(IMG_UINT32	ui32DevIndex,
 									   IMG_UINT32	ui32CmdCount);
 
 #endif /* !defined(USE_CODE) */
-
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* defined(SUPPORT_PVRSRV_DEVICE_CLASS) */
 

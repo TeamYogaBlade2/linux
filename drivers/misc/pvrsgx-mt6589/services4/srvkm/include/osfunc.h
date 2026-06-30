@@ -8,10 +8,6 @@
 #ifndef __OSFUNC_H__
 #define __OSFUNC_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #if defined(__linux__) && defined(__KERNEL__)
 #include <linux/hardirq.h>
 #include <linux/string.h>
@@ -676,10 +672,6 @@ static INLINE IMG_VOID OSGetCurrentProcessNameKM(IMG_CHAR *pszName, IMG_UINT32 u
 #define OSDumpStack dump_stack
 #else
 #define OSDumpStack()
-#endif
-
-#if defined (__cplusplus)
-}
 #endif
 
 #endif /* __OSFUNC_H__ */

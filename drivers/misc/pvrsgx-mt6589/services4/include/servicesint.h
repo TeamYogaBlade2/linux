@@ -3,10 +3,6 @@
 #if !defined (__SERVICESINT_H__)
 #define __SERVICESINT_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #include "services.h"
 #include "sysinfo.h"
 
@@ -539,10 +535,6 @@ IMG_IMPORT IMG_VOID PVRSRVAddMemTrackInfo(PVRSRV_MEM_TRACK_INFO *psMemTrackInfo)
 IMG_IMPORT IMG_VOID PVRSRVFreeMemOps(IMG_VOID);
 #endif
 
-
-#if defined (__cplusplus)
-}
-#endif
 #endif /* __SERVICESINT_H__ */
 
 /*****************************************************************************

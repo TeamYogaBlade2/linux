@@ -3,10 +3,6 @@
 #ifndef __OSPERPROC_H__
 #define __OSPERPROC_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #if defined(__linux__) || defined(__QNXNTO__)
 PVRSRV_ERROR OSPerProcessPrivateDataInit(IMG_HANDLE *phOsPrivateData);
 PVRSRV_ERROR OSPerProcessPrivateDataDeInit(IMG_HANDLE hOsPrivateData);
@@ -34,10 +30,6 @@ static INLINE PVRSRV_ERROR OSPerProcessSetHandleOptions(PVRSRV_HANDLE_BASE *psHa
 	return PVRSRV_OK;
 }
 #endif	/* defined(__linux__) */
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __OSPERPROC_H__ */
 

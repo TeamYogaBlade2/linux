@@ -10,10 +10,6 @@
 #include "sgxscript.h"
 #include "sgxinfo.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /****************************************************************************/
 /* kernel only defines: 													*/
 /****************************************************************************/
@@ -519,10 +515,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode);
 
 #if defined(SGX_DYNAMIC_TIMING_INFO)
 IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psSGXTimingInfo);
-#endif
-
-#if defined(__cplusplus)
-}
 #endif
 
 #endif /* __SGXINFOKM_H__ */

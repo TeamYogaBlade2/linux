@@ -15,10 +15,6 @@
 #include "pvr_debug.h"
 #include "services.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /*!
  ****************************************************************************
 	device id management structure
@@ -239,10 +235,6 @@ static INLINE IMG_VOID SysDeinitialiseCommon(SYS_DATA *psSysData)
 
 #define	SysReadHWReg(p, o) OSReadHWReg(p, o)
 #define SysWriteHWReg(p, o, v) OSWriteHWReg(p, o, v)
-
-#if defined(__cplusplus)
-}
-#endif
 
 static INLINE IMG_HANDLE SysHighResTimerCreate(IMG_VOID)
 {

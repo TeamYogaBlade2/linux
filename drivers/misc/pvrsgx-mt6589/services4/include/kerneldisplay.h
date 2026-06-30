@@ -5,10 +5,6 @@
 
 #if defined(SUPPORT_PVRSRV_DEVICE_CLASS)
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 typedef PVRSRV_ERROR (*PFN_OPEN_DC_DEVICE)(IMG_UINT32, IMG_HANDLE*, PVRSRV_SYNC_DATA*);
 typedef PVRSRV_ERROR (*PFN_CLOSE_DC_DEVICE)(IMG_HANDLE);
 typedef PVRSRV_ERROR (*PFN_ENUM_DC_FORMATS)(IMG_HANDLE, IMG_UINT32*, DISPLAY_FORMAT*);
@@ -183,11 +179,6 @@ typedef IMG_BOOL (*PFN_DC_GET_PVRJTABLE)(PPVRSRV_DC_DISP2SRV_KMJTABLE);
 
 /* Prototype for platforms that access the JTable via linkage */
 IMG_IMPORT IMG_BOOL PVRGetDisplayClassJTable(PVRSRV_DC_DISP2SRV_KMJTABLE *psJTable);
-
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* defined(SUPPORT_PVRSRV_DEVICE_CLASS) */
 

@@ -21,15 +21,10 @@ typedef		enum	img_tag_TriStateSwitch
 	#define	INLINE
 	#define	FORCE_INLINE
 #else
-#if defined (__cplusplus)
-	#define INLINE					inline
-	#define	FORCE_INLINE			inline
-#else
 #if	!defined(INLINE)
-	#define	INLINE					__inline
+	#define	INLINE					inline
 #endif
-	#define	FORCE_INLINE			static __inline
-#endif
+	#define	FORCE_INLINE			static inline
 #endif
 
 

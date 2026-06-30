@@ -9,10 +9,6 @@
  */
 #include "pdump_osfunc.h"
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
 /*
  *	Pull in pdump flags from services include
  */
@@ -394,10 +390,6 @@ IMG_BOOL PDumpWillCapture(IMG_UINT32 ui32Flags);
 		#else
 			#error Compiler not specified
 		#endif
-#endif
-
-#if defined (__cplusplus)
-}
 #endif
 
 #endif /* _PDUMP_KM_H_ */

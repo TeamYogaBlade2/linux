@@ -24,11 +24,6 @@
 
 #endif
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
-
 
 IMG_VOID DisableSystemClocks(SYS_DATA *psSysData);
 PVRSRV_ERROR EnableSystemClocks(SYS_DATA *psSysData);
@@ -133,9 +128,5 @@ IMG_UINT32 SysCacheBypass(IMG_UINT32 ui32RegVal);
 IMG_VOID OnSGXResetDone(void);
 #endif
 */
-
-#if defined(__cplusplus)
-}
-#endif
 
 #endif

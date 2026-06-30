@@ -3,10 +3,6 @@
 #if !defined (__PVRSRV_ERRORS_H__)
 #define __PVRSRV_ERRORS_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /*
 	NOTE: TO BE INCLUDED ONLY ONCE IN THE UM AND KM SERVICES MODULES
 	PROVIDES IMPLEMENTATIONS OF
@@ -261,9 +257,6 @@ extern "C" {
 			return "Unknown PVRSRV error number";
 	}
 
-#if defined (__cplusplus)
-}
-#endif
 #endif /* __PVRSRV_ERRORS_H__ */
 
 /*****************************************************************************

@@ -3,10 +3,6 @@
 #ifndef __RESMAN_H__
 #define __RESMAN_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /******************************************************************************
  * resman definitions
  *****************************************************************************/
@@ -99,10 +95,6 @@ PVRSRV_ERROR PVRSRVResManConnect(IMG_HANDLE			hPerProc,
 								 PRESMAN_CONTEXT	*phResManContext);
 IMG_VOID PVRSRVResManDisconnect(PRESMAN_CONTEXT hResManContext,
 								IMG_BOOL		bKernelContext);
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __RESMAN_H__ */
 

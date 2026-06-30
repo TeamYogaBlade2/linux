@@ -2,10 +2,6 @@
 
 #include <linux/stdarg.h>
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
 
 /*
  * Some OSes (WinXP,CE) allocate the string on the stack, but some
@@ -340,7 +336,3 @@ IMG_BOOL PDumpOSIsCaptureFrameKM(IMG_VOID);
  * @brief	Set frame counter
  */
 PVRSRV_ERROR PDumpOSSetFrameKM(IMG_UINT32 ui32Frame);
-
-#if defined (__cplusplus)
-}
-#endif

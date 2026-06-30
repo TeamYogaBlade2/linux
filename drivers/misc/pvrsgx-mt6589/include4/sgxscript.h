@@ -4,9 +4,6 @@
 #define __SGXSCRIPT_H__
 
 #include "sgxfeaturedefs.h"
-#if defined (__cplusplus)
-extern "C" {
-#endif
 
 #define	SGX_MAX_INIT_COMMANDS	64
 #define	SGX_MAX_PRINT_COMMANDS	64
@@ -56,10 +53,6 @@ typedef struct _SGX_INIT_SCRIPTS_
 #endif
 	SGX_INIT_COMMAND asSGXREGDebugCommandsSlave[SGX_MAX_PRINT_COMMANDS];
 } SGX_INIT_SCRIPTS;
-
-#if defined(__cplusplus)
-}
-#endif
 
 #endif /* __SGXSCRIPT_H__ */
 

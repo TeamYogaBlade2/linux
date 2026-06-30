@@ -6,10 +6,6 @@
 #include "img_types.h"
 #include "osfunc.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /*
  * Keys passed to the comparsion function are only guaranteed to
  * be aligned on an IMG_UINTPTR_T boundary.
@@ -222,10 +218,6 @@ PVRSRV_ERROR HASH_Iterate(HASH_TABLE *pHash, HASH_pfnCallback pfnCallback);
     @Return         None
 ******************************************************************************/
 IMG_VOID HASH_Dump (HASH_TABLE *pHash);
-#endif
-
-#if defined (__cplusplus)
-}
 #endif
 
 #endif /* _HASH_H_ */

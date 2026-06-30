@@ -4,11 +4,6 @@
 #define _METRICS_
 
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
-
 #if defined(DEBUG) || defined(TIMING)
 
 
@@ -94,11 +89,6 @@ extern IMG_VOID   PVRSRVOutputMetricTotals(IMG_VOID);
 
 
 #endif /* defined(DEBUG) || defined(TIMING) */
-
-#if defined(__cplusplus)
-}
-#endif
-
 
 #endif /* _METRICS_ */
 

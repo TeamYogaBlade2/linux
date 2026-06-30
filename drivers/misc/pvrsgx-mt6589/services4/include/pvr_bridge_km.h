@@ -3,10 +3,6 @@
 #ifndef __PVR_BRIDGE_KM_H_
 #define __PVR_BRIDGE_KM_H_
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 #include "pvr_bridge.h"
 #include "perproc.h"
 
@@ -348,10 +344,6 @@ PVRSRVFreeSharedSysMemoryKM(PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo);
 ******************************************************************************/
 IMG_IMPORT PVRSRV_ERROR
 PVRSRVDissociateMemFromResmanKM(PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo);
-
-#if defined (__cplusplus)
-}
-#endif
 
 #endif /* __PVR_BRIDGE_KM_H_ */
 

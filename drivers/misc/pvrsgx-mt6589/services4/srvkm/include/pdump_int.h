@@ -3,10 +3,6 @@
 #ifndef __PDUMP_INT_H__
 #define __PDUMP_INT_H__
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /*
  *	This file contains internal pdump utility functions which may be accessed
  *	from OS-specific code. The header should not be included outside of srvkm
@@ -49,9 +45,6 @@ IMG_UINT32 PDumpOSDebugDriverWrite(	PDBG_STREAM psStream,
 									IMG_UINT32 ui32Level,
 									IMG_UINT32 ui32DbgDrvFlags);
 
-#if defined (__cplusplus)
-}
-#endif
 #endif /* __PDUMP_INT_H__ */
 
 /******************************************************************************
