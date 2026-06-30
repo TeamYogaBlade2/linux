@@ -34,18 +34,12 @@ IMG_IMPORT IMG_VOID IMG_CALLCONV PVRSRVTimeTraceArray(IMG_UINT32 ui32Group, IMG_
 							IMG_UINT32 ui32Token, IMG_UINT32 ui32TypeSize,
 							IMG_UINT32 ui32Count, IMG_UINT8 *ui8Data);
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTrace)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTrace(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token)
 {
 	PVRSRVTimeTraceArray(ui32Group, ui32Class, ui32Token, 0, 0, NULL);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceUI8)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceUI8(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_UINT8 ui8Value)
 {
@@ -53,9 +47,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceUI8(IMG_UINT32 ui32Group, IMG_UINT32 ui32C
 				1, &ui8Value);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceUI16)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceUI16(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_UINT16 ui16Value)
 {
@@ -63,9 +54,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceUI16(IMG_UINT32 ui32Group, IMG_UINT32 ui32
 				1, (IMG_UINT8 *) &ui16Value);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceUI32)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceUI32(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_UINT32 ui32Value)
 {
@@ -73,9 +61,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceUI32(IMG_UINT32 ui32Group, IMG_UINT32 ui32
 				1, (IMG_UINT8 *) &ui32Value);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceUI64)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceUI64(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_UINT64 ui64Value)
 {
@@ -83,9 +68,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceUI64(IMG_UINT32 ui32Group, IMG_UINT32 ui32
 				1, (IMG_UINT8 *) &ui64Value);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceDevVirtAddr)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceDevVirtAddr(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_DEV_VIRTADDR psVAddr)
 {
@@ -93,9 +75,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceDevVirtAddr(IMG_UINT32 ui32Group, IMG_UINT
 				1, (IMG_UINT8 *) &psVAddr.uiAddr);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceCpuPhyAddr)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceCpuPhyAddr(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_CPU_PHYADDR psPAddr)
 {
@@ -103,9 +82,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceCpuPhyAddr(IMG_UINT32 ui32Group, IMG_UINT3
 				1, (IMG_UINT8 *) &psPAddr.uiAddr);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceDevPhysAddr)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceDevPhysAddr(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_DEV_PHYADDR psPAddr)
 {
@@ -113,9 +89,6 @@ static INLINE IMG_VOID PVRSRVTimeTraceDevPhysAddr(IMG_UINT32 ui32Group, IMG_UINT
 				1, (IMG_UINT8 *) &psPAddr.uiAddr);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceSysPhysAddr)
-#endif
 static INLINE IMG_VOID PVRSRVTimeTraceSysPhysAddr(IMG_UINT32 ui32Group, IMG_UINT32 ui32Class,
 						IMG_UINT32 ui32Token, IMG_SYS_PHYADDR psPAddr)
 {

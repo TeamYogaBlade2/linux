@@ -53,9 +53,6 @@ extern "C" {
 #define SYNC_OP_TAKE				0x40000000UL
 #define SYNC_OP_ROLLBACK			0x20000000UL
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SyncTakeWriteOp)
-#endif
 static INLINE
 IMG_UINT32 SyncTakeWriteOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32OpType)
 {
@@ -77,9 +74,6 @@ IMG_UINT32 SyncTakeWriteOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui3
 	return psKernelSync->psSyncData->ui32WriteOpsPending++;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SyncTakeReadOp)
-#endif
 static INLINE
 IMG_UINT32 SyncTakeReadOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32OpType)
 {
@@ -101,9 +95,6 @@ IMG_UINT32 SyncTakeReadOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32
 	return psKernelSync->psSyncData->ui32ReadOpsPending++;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SyncTakeReadOp2)
-#endif
 static INLINE
 IMG_UINT32 SyncTakeReadOp2(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32OpType)
 {
@@ -125,9 +116,6 @@ IMG_UINT32 SyncTakeReadOp2(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui3
 	return psKernelSync->psSyncData->ui32ReadOps2Pending++;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SyncRollBackWriteOp)
-#endif
 static INLINE
 IMG_UINT32 SyncRollBackWriteOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32OpType)
 {
@@ -149,9 +137,6 @@ IMG_UINT32 SyncRollBackWriteOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32
 	return psKernelSync->psSyncData->ui32WriteOpsPending--;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SyncRollBackReadOp)
-#endif
 static INLINE
 IMG_UINT32 SyncRollBackReadOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSync, IMG_UINT32 ui32OpType)
 {

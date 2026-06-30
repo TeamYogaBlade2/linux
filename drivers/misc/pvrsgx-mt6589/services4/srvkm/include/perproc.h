@@ -53,9 +53,6 @@ IMG_VOID PVRSRVPerProcessDataDisconnect(IMG_UINT32	ui32PID);
 PVRSRV_ERROR PVRSRVPerProcessDataInit(IMG_VOID);
 PVRSRV_ERROR PVRSRVPerProcessDataDeInit(IMG_VOID);
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVFindPerProcessData)
-#endif
 static INLINE
 PVRSRV_PER_PROCESS_DATA *PVRSRVFindPerProcessData(IMG_VOID)
 {
@@ -63,9 +60,6 @@ PVRSRV_PER_PROCESS_DATA *PVRSRVFindPerProcessData(IMG_VOID)
 }
 
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVProcessPrivateData)
-#endif
 static INLINE
 IMG_HANDLE PVRSRVProcessPrivateData(PVRSRV_PER_PROCESS_DATA *psPerProc)
 {
@@ -73,18 +67,12 @@ IMG_HANDLE PVRSRVProcessPrivateData(PVRSRV_PER_PROCESS_DATA *psPerProc)
 }
 
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVPerProcessPrivateData)
-#endif
 static INLINE
 IMG_HANDLE PVRSRVPerProcessPrivateData(IMG_UINT32 ui32PID)
 {
 	return PVRSRVProcessPrivateData(PVRSRVPerProcessData(ui32PID));
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVFindPerProcessPrivateData)
-#endif
 static INLINE
 IMG_HANDLE PVRSRVFindPerProcessPrivateData(IMG_VOID)
 {

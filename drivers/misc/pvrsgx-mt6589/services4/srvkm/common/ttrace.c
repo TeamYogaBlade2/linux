@@ -344,9 +344,6 @@ IMG_VOID PVRSRVTimeTraceDeinit(IMG_VOID)
  @Return Pointer to data payload space, or NULL if no data payload
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVTimeTraceWriteHeader)
-#endif
 static INLINE IMG_VOID *PVRSRVTimeTraceWriteHeader(IMG_UINT32 *pui32TraceItem, IMG_UINT32 ui32Group,
 							IMG_UINT32 ui32Class, IMG_UINT32 ui32Token,
 							IMG_UINT32 ui32Size, IMG_UINT32 ui32Type,

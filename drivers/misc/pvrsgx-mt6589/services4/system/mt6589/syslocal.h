@@ -115,17 +115,11 @@ PVRSRV_ERROR SysPMRuntimeUnregister(void);
 
 #else
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SysPMRuntimeRegister)
-#endif
 static INLINE PVRSRV_ERROR SysPMRuntimeRegister(void)
 {
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SysPMRuntimeUnregister)
-#endif
 static INLINE PVRSRV_ERROR SysPMRuntimeUnregister(void)
 {
 	return PVRSRV_OK;

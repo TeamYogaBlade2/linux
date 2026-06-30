@@ -191,9 +191,6 @@ IMG_VOID SGXTestActivePowerEvent (PVRSRV_DEVICE_NODE	*psDeviceNode,
 
  RETURNS	: Address of space if available, IMG_NULL otherwise
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SGXAcquireKernelCCBSlot)
-#endif
 static INLINE SGXMKIF_COMMAND * SGXAcquireKernelCCBSlot(PVRSRV_SGX_CCB_INFO *psCCB)
 {
 	LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
@@ -1753,9 +1750,6 @@ PVRSRV_ERROR SGXUnregisterHW2DContextKM(IMG_HANDLE hHW2DContext, IMG_BOOL bForce
  @Return	IMG_TRUE - ops complete, IMG_FALSE - ops pending
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SGX2DQuerySyncOpsComplete)
-#endif
 static INLINE
 IMG_BOOL SGX2DQuerySyncOpsComplete(PVRSRV_KERNEL_SYNC_INFO	*psSyncInfo,
 								   IMG_UINT32				ui32ReadOpsPending,

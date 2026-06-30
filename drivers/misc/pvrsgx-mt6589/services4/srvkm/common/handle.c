@@ -271,9 +271,6 @@ typedef IMG_UINTPTR_T HAND_KEY[HAND_KEY_LEN];
 		hParent - parent handle, or IMG_NULL
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(HandleListInit)
-#endif
 static INLINE
 IMG_VOID HandleListInit(IMG_UINT32 ui32Index, struct sHandleList *psList, IMG_HANDLE hParent)
 {
@@ -293,9 +290,6 @@ IMG_VOID HandleListInit(IMG_UINT32 ui32Index, struct sHandleList *psList, IMG_HA
  @Input		psHandle - pointer to handle structure
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(InitParentList)
-#endif
 static INLINE
 IMG_VOID InitParentList(struct sHandle *psHandle)
 {
@@ -316,9 +310,6 @@ IMG_VOID InitParentList(struct sHandle *psHandle)
  @Input		psHandle - pointer to handle structure
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(InitChildEntry)
-#endif
 static INLINE
 IMG_VOID InitChildEntry(struct sHandle *psHandle)
 {
@@ -338,9 +329,6 @@ IMG_VOID InitChildEntry(struct sHandle *psHandle)
  @Return	IMG_TRUE if the list is empty, IMG_FALSE if it isn't.
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(HandleListIsEmpty)
-#endif
 static INLINE
 IMG_BOOL HandleListIsEmpty(IMG_UINT32 ui32Index, struct sHandleList *psList)
 {
@@ -373,9 +361,6 @@ IMG_BOOL HandleListIsEmpty(IMG_UINT32 ui32Index, struct sHandleList *psList)
  @Return	IMG_TRUE if the handle has no subhandles, IMG_FALSE if it does.
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(NoChildren)
-#endif
 static INLINE
 IMG_BOOL NoChildren(struct sHandle *psHandle)
 {
@@ -396,9 +381,6 @@ IMG_BOOL NoChildren(struct sHandle *psHandle)
  @Return	IMG_TRUE if the handle is not a subhandle, IMG_FALSE if it is.
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(NoParent)
-#endif
 static INLINE
 IMG_BOOL NoParent(struct sHandle *psHandle)
 {
@@ -427,9 +409,6 @@ IMG_BOOL NoParent(struct sHandle *psHandle)
  @Return	Parent handle, or IMG_NULL if the handle is not a subhandle.
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(ParentHandle)
-#endif
 static INLINE
 IMG_HANDLE ParentHandle(struct sHandle *psHandle)
 {
@@ -467,9 +446,6 @@ IMG_HANDLE ParentHandle(struct sHandle *psHandle)
 		uiEntryOffset - offset of list item struct in handle structure
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(HandleListInsertBefore)
-#endif
 static INLINE
 IMG_VOID HandleListInsertBefore(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32InsIndex, struct sHandleList *psIns, IMG_SIZE_T uiParentOffset, IMG_UINT32 ui32EntryIndex, struct sHandleList *psEntry, IMG_SIZE_T uiEntryOffset, IMG_UINT32 ui32ParentIndex)
 {
@@ -499,9 +475,6 @@ IMG_VOID HandleListInsertBefore(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32InsIn
 		psChild - pointer to handle structure of child subhandle
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(AdoptChild)
-#endif
 static INLINE
 IMG_VOID AdoptChild(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psParent, struct sHandle *psChild)
 {
@@ -526,9 +499,6 @@ IMG_VOID AdoptChild(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psParent, struct
 		uiParentOffset - offset to list head struct in handle structure
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(HandleListRemove)
-#endif
 static INLINE
 IMG_VOID HandleListRemove(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32EntryIndex, struct sHandleList *psEntry, IMG_SIZE_T uiEntryOffset, IMG_SIZE_T uiParentOffset)
 {
@@ -561,9 +531,6 @@ IMG_VOID HandleListRemove(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32EntryIndex,
  @Input		psHandle - pointer to handle structure of child subhandle
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(UnlinkFromParent)
-#endif
 static INLINE
 IMG_VOID UnlinkFromParent(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psHandle)
 {
@@ -583,9 +550,6 @@ IMG_VOID UnlinkFromParent(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psHandle)
 		pfnIterFunc - function to be called for each handle in the list
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(HandleListIterate)
-#endif
 static INLINE
 PVRSRV_ERROR HandleListIterate(PVRSRV_HANDLE_BASE *psBase, struct sHandleList *psHead, IMG_SIZE_T uiParentOffset, IMG_SIZE_T uiEntryOffset, PVRSRV_ERROR (*pfnIterFunc)(PVRSRV_HANDLE_BASE *, struct sHandle *))
 {
@@ -633,9 +597,6 @@ PVRSRV_ERROR HandleListIterate(PVRSRV_HANDLE_BASE *psBase, struct sHandleList *p
 		pfnIterFunc - function to be called for each subhandle
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(IterateOverChildren)
-#endif
 static INLINE
 PVRSRV_ERROR IterateOverChildren(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psParent, PVRSRV_ERROR (*pfnIterFunc)(PVRSRV_HANDLE_BASE *, struct sHandle *))
 {
@@ -660,9 +621,6 @@ PVRSRV_ERROR IterateOverChildren(PVRSRV_HANDLE_BASE *psBase, struct sHandle *psP
  @Return	Error code or PVRSRV_OK
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(GetHandleStructure)
-#endif
 static INLINE
 PVRSRV_ERROR GetHandleStructure(PVRSRV_HANDLE_BASE *psBase, struct sHandle **ppsHandle, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType)
 {
@@ -713,9 +671,6 @@ PVRSRV_ERROR GetHandleStructure(PVRSRV_HANDLE_BASE *psBase, struct sHandle **pps
  @Return	Parent handle, or IMG_NULL
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(ParentIfPrivate)
-#endif
 static INLINE
 IMG_HANDLE ParentIfPrivate(struct sHandle *psHandle)
 {
@@ -736,9 +691,6 @@ IMG_HANDLE ParentIfPrivate(struct sHandle *psHandle)
 		eType - type of resource
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(InitKey)
-#endif
 static INLINE
 IMG_VOID InitKey(HAND_KEY aKey, PVRSRV_HANDLE_BASE *psBase, IMG_VOID *pvData, PVRSRV_HANDLE_TYPE eType, IMG_HANDLE hParent)
 {
@@ -1252,9 +1204,6 @@ static PVRSRV_ERROR FreeHandleBase(PVRSRV_HANDLE_BASE *psBase)
  @Return	the handle, or IMG_NULL if not found
 
 ******************************************************************************/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(FindHandle)
-#endif
 static INLINE
 IMG_HANDLE FindHandle(PVRSRV_HANDLE_BASE *psBase, IMG_VOID *pvData, PVRSRV_HANDLE_TYPE eType, IMG_HANDLE hParent)
 {

@@ -240,9 +240,6 @@ PVRSRV_ERROR PVRSRVHandleDeInit(IMG_VOID);
 
 #define KERNEL_HANDLE_BASE IMG_NULL
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVAllocHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVAllocHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHandle, IMG_VOID *pvData, PVRSRV_HANDLE_TYPE eType, PVRSRV_HANDLE_ALLOC_FLAG eFlag)
 {
@@ -254,9 +251,6 @@ PVRSRV_ERROR PVRSRVAllocHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHandle,
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVAllocSubHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVAllocSubHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHandle, IMG_VOID *pvData, PVRSRV_HANDLE_TYPE eType, PVRSRV_HANDLE_ALLOC_FLAG eFlag, IMG_HANDLE hParent)
 {
@@ -269,9 +263,6 @@ PVRSRV_ERROR PVRSRVAllocSubHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHand
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVFindHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVFindHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHandle, IMG_VOID *pvData, PVRSRV_HANDLE_TYPE eType)
 {
@@ -282,9 +273,6 @@ PVRSRV_ERROR PVRSRVFindHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE *phHandle, 
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVLookupHandleAnyType)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVLookupHandleAnyType(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvData, PVRSRV_HANDLE_TYPE *peType, IMG_HANDLE hHandle)
 {
@@ -299,9 +287,6 @@ PVRSRV_ERROR PVRSRVLookupHandleAnyType(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *pp
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVLookupHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVLookupHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvData, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType)
 {
@@ -312,9 +297,6 @@ PVRSRV_ERROR PVRSRVLookupHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvData, 
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVLookupSubHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVLookupSubHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvData, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType, IMG_HANDLE hAncestor)
 {
@@ -326,9 +308,6 @@ PVRSRV_ERROR PVRSRVLookupSubHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvDat
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVGetParentHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVGetParentHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *phParent, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType)
 {
@@ -341,9 +320,6 @@ PVRSRV_ERROR PVRSRVGetParentHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *phPare
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVLookupAndReleaseHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVLookupAndReleaseHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID *ppvData, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType)
 {
@@ -354,9 +330,6 @@ PVRSRV_ERROR PVRSRVLookupAndReleaseHandle(PVRSRV_HANDLE_BASE *psBase, IMG_PVOID 
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVReleaseHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVReleaseHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE hHandle, PVRSRV_HANDLE_TYPE eType)
 {
@@ -367,9 +340,6 @@ PVRSRV_ERROR PVRSRVReleaseHandle(PVRSRV_HANDLE_BASE *psBase, IMG_HANDLE hHandle,
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVNewHandleBatch)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVNewHandleBatch(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32BatchSize)
 {
@@ -379,9 +349,6 @@ PVRSRV_ERROR PVRSRVNewHandleBatch(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32Bat
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVCommitHandleBatch)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVCommitHandleBatch(PVRSRV_HANDLE_BASE *psBase)
 {
@@ -390,18 +357,12 @@ PVRSRV_ERROR PVRSRVCommitHandleBatch(PVRSRV_HANDLE_BASE *psBase)
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVReleaseHandleBatch)
-#endif
 static INLINE
 IMG_VOID PVRSRVReleaseHandleBatch(PVRSRV_HANDLE_BASE *psBase)
 {
 	PVR_UNREFERENCED_PARAMETER(psBase);
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVSetMaxHandle)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVSetMaxHandle(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32MaxHandle)
 {
@@ -411,9 +372,6 @@ PVRSRV_ERROR PVRSRVSetMaxHandle(PVRSRV_HANDLE_BASE *psBase, IMG_UINT32 ui32MaxHa
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVGetMaxHandle)
-#endif
 static INLINE
 IMG_UINT32 PVRSRVGetMaxHandle(PVRSRV_HANDLE_BASE *psBase)
 {
@@ -422,9 +380,6 @@ IMG_UINT32 PVRSRVGetMaxHandle(PVRSRV_HANDLE_BASE *psBase)
 	return 0;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVEnableHandlePurging)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVEnableHandlePurging(PVRSRV_HANDLE_BASE *psBase)
 {
@@ -433,9 +388,6 @@ PVRSRV_ERROR PVRSRVEnableHandlePurging(PVRSRV_HANDLE_BASE *psBase)
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVPurgeHandles)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVPurgeHandles(PVRSRV_HANDLE_BASE *psBase)
 {
@@ -444,9 +396,6 @@ PVRSRV_ERROR PVRSRVPurgeHandles(PVRSRV_HANDLE_BASE *psBase)
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVAllocHandleBase)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVAllocHandleBase(PVRSRV_HANDLE_BASE **ppsBase)
 {
@@ -455,9 +404,6 @@ PVRSRV_ERROR PVRSRVAllocHandleBase(PVRSRV_HANDLE_BASE **ppsBase)
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVFreeHandleBase)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVFreeHandleBase(PVRSRV_HANDLE_BASE *psBase)
 {
@@ -466,18 +412,12 @@ PVRSRV_ERROR PVRSRVFreeHandleBase(PVRSRV_HANDLE_BASE *psBase)
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVHandleInit)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVHandleInit(IMG_VOID)
 {
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(PVRSRVHandleDeInit)
-#endif
 static INLINE
 PVRSRV_ERROR PVRSRVHandleDeInit(IMG_VOID)
 {

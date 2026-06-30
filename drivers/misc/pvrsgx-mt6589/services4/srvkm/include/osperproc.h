@@ -13,9 +13,6 @@ PVRSRV_ERROR OSPerProcessPrivateDataDeInit(IMG_HANDLE hOsPrivateData);
 
 PVRSRV_ERROR OSPerProcessSetHandleOptions(PVRSRV_HANDLE_BASE *psHandleBase);
 #else	/* defined(__linux__) */
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(OSPerProcessPrivateDataInit)
-#endif
 static INLINE PVRSRV_ERROR OSPerProcessPrivateDataInit(IMG_HANDLE *phOsPrivateData)
 {
 	PVR_UNREFERENCED_PARAMETER(phOsPrivateData);
@@ -23,9 +20,6 @@ static INLINE PVRSRV_ERROR OSPerProcessPrivateDataInit(IMG_HANDLE *phOsPrivateDa
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(OSPerProcessPrivateDataDeInit)
-#endif
 static INLINE PVRSRV_ERROR OSPerProcessPrivateDataDeInit(IMG_HANDLE hOsPrivateData)
 {
 	PVR_UNREFERENCED_PARAMETER(hOsPrivateData);
@@ -33,9 +27,6 @@ static INLINE PVRSRV_ERROR OSPerProcessPrivateDataDeInit(IMG_HANDLE hOsPrivateDa
 	return PVRSRV_OK;
 }
 
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(OSPerProcessSetHandleOptions)
-#endif
 static INLINE PVRSRV_ERROR OSPerProcessSetHandleOptions(PVRSRV_HANDLE_BASE *psHandleBase)
 {
 	PVR_UNREFERENCED_PARAMETER(psHandleBase);
