@@ -15,14 +15,8 @@
 		#define PVR_LDM_DEVICE_CLASS
 		#define	PVR_LDM_MODULE
 	#else
-		#if defined(LDM_PCI)
+		#if defined(SYS_SHARES_WITH_3PKM)
 			#define PVR_LDM_DEVICE_CLASS
-			#define PVR_LDM_PCI_MODULE
-			#define	PVR_LDM_MODULE
-		#else
-			#if defined(SYS_SHARES_WITH_3PKM)
-				#define PVR_LDM_DEVICE_CLASS
-			#endif
 		#endif
 	#endif
 #define	PVR_MOD_STATIC	static
@@ -49,10 +43,6 @@
 #if defined(PVR_LDM_PLATFORM_MODULE)
 #include <linux/platform_device.h>
 #endif /* PVR_LDM_PLATFORM_MODULE */
-
-#if defined(PVR_LDM_PCI_MODULE)
-#include <linux/pci.h>
-#endif /* PVR_LDM_PCI_MODULE */
 
 #if defined(PVR_LDM_DEVICE_CLASS)
 #include <linux/device.h>
@@ -188,10 +178,6 @@ static IMG_UINT32 gPVRPowerLevel;
 #define	LDM_DRV	struct platform_driver
 #endif /*PVR_LDM_PLATFORM_MODULE */
 
-#if defined(PVR_LDM_PCI_MODULE)
-#define	LDM_DEV	struct pci_dev
-#define	LDM_DRV	struct pci_driver
-#endif /* PVR_LDM_PCI_MODULE */
 /*
  * This is the driver interface we support.
  */
@@ -199,26 +185,9 @@ static IMG_UINT32 gPVRPowerLevel;
 static void PVRSRVDriverRemove(LDM_DEV *device);
 static int PVRSRVDriverProbe(LDM_DEV *device);
 #endif
-#if defined(PVR_LDM_PCI_MODULE)
-static void PVRSRVDriverRemove(LDM_DEV *device);
-static int PVRSRVDriverProbe(LDM_DEV *device, const struct pci_device_id *id);
-#endif
 static int PVRSRVDriverSuspend(LDM_DEV *device, pm_message_t state);
 static void PVRSRVDriverShutdown(LDM_DEV *device);
 static int PVRSRVDriverResume(LDM_DEV *device);
-
-#if defined(PVR_LDM_PCI_MODULE)
-/* This structure is used by the Linux module code */
-struct pci_device_id powervr_id_table[] __devinitdata = {
-	{PCI_DEVICE(SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV_DEVICE_ID)},
-#if defined (SYS_SGX_DEV1_DEVICE_ID)
-	{PCI_DEVICE(SYS_SGX_DEV_VENDOR_ID, SYS_SGX_DEV1_DEVICE_ID)},
-#endif
-	{0}
-};
-
-MODULE_DEVICE_TABLE(pci, powervr_id_table);
-#endif
 
 #if defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
 static struct platform_device_id powervr_id_table[] __devinitdata = {
@@ -233,18 +202,12 @@ static LDM_DRV powervr_driver = {
 		.name		= DRVNAME,
 	},
 #endif
-#if defined(PVR_LDM_PCI_MODULE)
-	.name		= DRVNAME,
-#endif
-#if defined(PVR_LDM_PCI_MODULE) || defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
+#if defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
 	.id_table = powervr_id_table,
 #endif
 	.probe		= PVRSRVDriverProbe,
 #if defined(PVR_LDM_PLATFORM_MODULE)
 	.remove		= PVRSRVDriverRemove,
-#endif
-#if defined(PVR_LDM_PCI_MODULE)
-	.remove		= __devexit_p(PVRSRVDriverRemove),
 #endif
 	.suspend	= PVRSRVDriverSuspend,
 	.resume		= PVRSRVDriverResume,
@@ -286,9 +249,6 @@ static struct platform_device powervr_device = {
 *****************************************************************************/
 #if defined(PVR_LDM_PLATFORM_MODULE)
 static int PVRSRVDriverProbe(LDM_DEV *pDevice)
-#endif
-#if defined(PVR_LDM_PCI_MODULE)
-static int __devinit PVRSRVDriverProbe(LDM_DEV *pDevice, const struct pci_device_id *id)
 #endif
 {
 	SYS_DATA *psSysData;
@@ -345,9 +305,6 @@ static int __devinit PVRSRVDriverProbe(LDM_DEV *pDevice, const struct pci_device
 *****************************************************************************/
 #if defined (PVR_LDM_PLATFORM_MODULE)
 static void PVRSRVDriverRemove(LDM_DEV *pDevice)
-#endif
-#if defined(PVR_LDM_PCI_MODULE)
-static void __devexit PVRSRVDriverRemove(LDM_DEV *pDevice)
 #endif
 {
 	SYS_DATA *psSysData;
@@ -929,14 +886,6 @@ static int __init PVRCore_Init(void)
 #endif
 #endif /* PVR_LDM_PLATFORM_MODULE */
 
-#if defined(PVR_LDM_PCI_MODULE)
-	if ((error = pci_register_driver(&powervr_driver)) != 0)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "PVRCore_Init: unable to register PCI driver (%d)", error));
-
-		goto init_failed;
-	}
-#endif /* PVR_LDM_PCI_MODULE */
 #endif /* defined(PVR_LDM_MODULE) */
 
 #if !defined(PVR_LDM_MODULE)
@@ -1015,9 +964,6 @@ unregister_device:
 sys_deinit:
 #endif
 #if defined(PVR_LDM_MODULE)
-#if defined(PVR_LDM_PCI_MODULE)
-	pci_unregister_driver(&powervr_driver);
-#endif
 
 #if defined (PVR_LDM_PLATFORM_MODULE)
 #if defined(MODULE) && !defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
@@ -1103,10 +1049,6 @@ static void __exit PVRCore_Cleanup(void)
 #endif	/* !defined(SUPPORT_DRI_DRM) */
 
 #if defined(PVR_LDM_MODULE)
-
-#if defined(PVR_LDM_PCI_MODULE)
-	pci_unregister_driver(&powervr_driver);
-#endif
 
 #if defined (PVR_LDM_PLATFORM_MODULE)
 #if defined(MODULE) && !defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
