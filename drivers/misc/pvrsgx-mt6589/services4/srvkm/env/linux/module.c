@@ -22,12 +22,6 @@
 #define	PVR_MOD_STATIC	static
 #endif
 
-#if defined(PVR_LDM_PLATFORM_PRE_REGISTERED)
-#if !defined(NO_HARDWARE)
-#define PVR_USE_PRE_REGISTERED_PLATFORM_DEV
-#endif
-#endif
-
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -189,21 +183,17 @@ static int PVRSRVDriverSuspend(LDM_DEV *device, pm_message_t state);
 static void PVRSRVDriverShutdown(LDM_DEV *device);
 static int PVRSRVDriverResume(LDM_DEV *device);
 
-#if defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-static struct platform_device_id powervr_id_table[] __devinitdata = {
-	{SYS_SGX_DEV_NAME, 0},
-	{}
-};
-#endif
+static const struct of_device_id powervr_of_match[] = {  
+	{ .compatible = "mediatek,mt6589-gpu" },
+	{},
+};  
+MODULE_DEVICE_TABLE(of, powervr_of_match);  
 
 static LDM_DRV powervr_driver = {
 #if defined(PVR_LDM_PLATFORM_MODULE)
 	.driver = {
 		.name		= DRVNAME,
 	},
-#endif
-#if defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-	.id_table = powervr_id_table,
 #endif
 	.probe		= PVRSRVDriverProbe,
 #if defined(PVR_LDM_PLATFORM_MODULE)
@@ -212,24 +202,10 @@ static LDM_DRV powervr_driver = {
 	.suspend	= PVRSRVDriverSuspend,
 	.resume		= PVRSRVDriverResume,
 	.shutdown	= PVRSRVDriverShutdown,
+	.of_match_table = powervr_of_match,
 };
 
 LDM_DEV *gpsPVRLDMDev;
-
-#if defined(MODULE) && defined(PVR_LDM_PLATFORM_MODULE) && \
-	!defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-static void PVRSRVDeviceRelease(struct device unref__ *pDevice)
-{
-}
-
-static struct platform_device powervr_device = {
-	.name			= DEVNAME,
-	.id				= -1,
-	.dev 			= {
-		.release	= PVRSRVDeviceRelease
-	}
-};
-#endif
 
 /*!
 ******************************************************************************
@@ -873,17 +849,6 @@ static int __init PVRCore_Init(void)
 
 		goto init_failed;
 	}
-
-#if defined(MODULE) && !defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-	if ((error = platform_device_register(&powervr_device)) != 0)
-	{
-		platform_driver_unregister(&powervr_driver);
-
-		PVR_DPF((PVR_DBG_ERROR, "PVRCore_Init: unable to register platform device (%d)", error));
-
-		goto init_failed;
-	}
-#endif
 #endif /* PVR_LDM_PLATFORM_MODULE */
 
 #endif /* defined(PVR_LDM_MODULE) */
@@ -966,9 +931,6 @@ sys_deinit:
 #if defined(PVR_LDM_MODULE)
 
 #if defined (PVR_LDM_PLATFORM_MODULE)
-#if defined(MODULE) && !defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-	platform_device_unregister(&powervr_device);
-#endif
 	platform_driver_unregister(&powervr_driver);
 #endif
 
@@ -1051,9 +1013,6 @@ static void __exit PVRCore_Cleanup(void)
 #if defined(PVR_LDM_MODULE)
 
 #if defined (PVR_LDM_PLATFORM_MODULE)
-#if defined(MODULE) && !defined(PVR_USE_PRE_REGISTERED_PLATFORM_DEV)
-	platform_device_unregister(&powervr_device);
-#endif
 	platform_driver_unregister(&powervr_driver);
 #endif
 
