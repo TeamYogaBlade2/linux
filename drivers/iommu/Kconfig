@@ -350,20 +350,6 @@ config MTK_IOMMU_V1
 
 	  if unsure, say N here.
 
-config MTK_IOMMU_MT6589
-	tristate "MediaTek MT6589 IOMMU Support"
-	depends on (ARCH_MEDIATEK && ARM) || COMPILE_TEST
-	select ARM_DMA_USE_IOMMU
-	select IOMMU_API
-	select MEMORY
-	select MTK_SMI
-	help
-	  Support for the M4U on Mediatek MT6589 SoC. M4U is Multimedia Memory
-	  Managememt Unit. This option enables remapping of DMA memory accesses
-	  for the multimedia subsystem.
-
-	  if unsure, say N here.
-
 config HYPERV_IOMMU
 	bool "Hyper-V IRQ Handling"
 	depends on HYPERV && X86
