@@ -3,6 +3,8 @@
 #ifndef _SYSCOMMON_H
 #define _SYSCOMMON_H
 
+#include <linux/platform_device.h>
+
 #include "sysconfig.h"      /* System specific system defines */
 #include "sysinfo.h"		/* globally accessible system info */
 #include "servicesint.h"
@@ -85,7 +87,7 @@ typedef struct _SYS_DATA_TAG_
 PVRSRV_ERROR SysGetDisplaySegmentAddress (IMG_VOID *pvDevInfo, IMG_VOID *pvPhysicalAddress, IMG_UINT32 *pui32Length);
 #endif
 
-PVRSRV_ERROR SysInitialise(IMG_VOID);
+PVRSRV_ERROR SysInitialise(struct platform_device *pdev);
 PVRSRV_ERROR SysFinalise(IMG_VOID);
 
 PVRSRV_ERROR SysDeinitialise(SYS_DATA *psSysData);

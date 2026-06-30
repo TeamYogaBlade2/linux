@@ -193,7 +193,7 @@ static IMG_CHAR *SysCreateVersionString(void)
 }
 */
 
-PVRSRV_ERROR SysInitialise(IMG_VOID)
+PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 {
 	IMG_UINT32			i;
 	PVRSRV_ERROR 		eError;

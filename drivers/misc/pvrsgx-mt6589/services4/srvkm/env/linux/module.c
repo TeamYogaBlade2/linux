@@ -225,7 +225,7 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
 	if (psSysData == IMG_NULL)
 	{
 		gpsPVRLDMDev = pDevice;
-		if (SysInitialise() != PVRSRV_OK)
+		if (SysInitialise(pDevice) != PVRSRV_OK)
 		{
 			return -ENODEV;
 		}
