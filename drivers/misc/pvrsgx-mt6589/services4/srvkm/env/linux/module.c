@@ -36,6 +36,7 @@
 
 #if defined(PVR_LDM_PLATFORM_MODULE)
 #include <linux/platform_device.h>
+#include <linux/of.h>
 #endif /* PVR_LDM_PLATFORM_MODULE */
 
 #if defined(PVR_LDM_DEVICE_CLASS)
@@ -183,11 +184,11 @@ static int PVRSRVDriverSuspend(LDM_DEV *device, pm_message_t state);
 static void PVRSRVDriverShutdown(LDM_DEV *device);
 static int PVRSRVDriverResume(LDM_DEV *device);
 
-static const struct of_device_id powervr_of_match[] = {  
+static const struct of_device_id powervr_of_match[] = {
 	{ .compatible = "mediatek,mt6589-gpu" },
-	{},
-};  
-MODULE_DEVICE_TABLE(of, powervr_of_match);  
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, powervr_of_match);
 
 static LDM_DRV powervr_driver = {
 #if defined(PVR_LDM_PLATFORM_MODULE)
