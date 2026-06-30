@@ -5,14 +5,8 @@
 #if defined(SUPPORT_DRI_DRM) && !defined(SUPPORT_DRI_DRM_PLUGIN)
 #define	PVR_MOD_STATIC
 #else
-	/*
-	 * For LDM drivers, define PVR_LDM_MODULE to indicate generic LDM
-	 * support is required, besides indicating the exact support
-	 * required (e.g. platform, or PCI device).
-	 */
 	#if defined(LDM_PLATFORM)
 		#define PVR_LDM_DEVICE_CLASS
-		#define	PVR_LDM_MODULE
 	#else
 		#if defined(SYS_SHARES_WITH_3PKM)
 			#define PVR_LDM_DEVICE_CLASS
@@ -85,9 +79,7 @@
  * DRVNAME is the name we use to register our driver.
  * DEVNAME is the name we use to register actual device nodes.
  */
-#if defined(PVR_LDM_MODULE)
 #define	DRVNAME		PVR_LDM_DRIVER_REGISTRATION_NAME
-#endif
 #define DEVNAME		PVRSRV_MODNAME
 
 #if defined(SUPPORT_DRI_DRM)
@@ -162,8 +154,6 @@ IMG_UINT32 gui32ReleasePID;
 #if defined(DEBUG) && defined(PVR_MANUAL_POWER_CONTROL)
 static IMG_UINT32 gPVRPowerLevel;
 #endif
-
-#if defined(PVR_LDM_MODULE)
 
 #define	LDM_DEV	struct platform_device
 #define	LDM_DRV	struct platform_driver
@@ -298,16 +288,11 @@ static void PVRSRVDriverRemove(LDM_DEV *pDevice)
 
 	return;
 }
-#endif /* defined(PVR_LDM_MODULE) */
 
-
-#if defined(PVR_LDM_MODULE) || defined(SUPPORT_DRI_DRM)
 PVRSRV_LINUX_MUTEX gsPMMutex;
 static IMG_BOOL bDriverIsSuspended;
 static IMG_BOOL bDriverIsShutdown;
-#endif
 
-#if defined(PVR_LDM_MODULE) || defined(PVR_DRI_DRM_PLATFORM_DEV)
 /*!
 ******************************************************************************
 
@@ -353,10 +338,6 @@ PVR_MOD_STATIC void PVRSRVDriverShutdown(LDM_DEV *pDevice)
 	LinuxUnLockMutex(&gsPMMutex);
 }
 
-#endif /* defined(PVR_LDM_MODULE) || defined(PVR_DRI_DRM_PLATFORM_DEV) */
-
-
-#if defined(PVR_LDM_MODULE) || defined(SUPPORT_DRI_DRM)
 /*!
 ******************************************************************************
 
@@ -476,8 +457,6 @@ PVR_MOD_STATIC int PVRSRVDriverResume(LDM_DEV *pDevice)
 #endif
 	return res;
 }
-#endif /* defined(PVR_LDM_MODULE) || defined(SUPPORT_DRI_DRM) */
-
 
 #if defined(DEBUG) && defined(PVR_MANUAL_POWER_CONTROL) && !defined(SUPPORT_DRI_DRM)
 /*
@@ -774,9 +753,6 @@ static int __init PVRCore_Init(void)
 #endif
 {
 	int error;
-#if !defined(PVR_LDM_MODULE)
-	PVRSRV_ERROR eError;
-#endif
 #if !defined(SUPPORT_DRI_DRM) && defined(PVR_LDM_DEVICE_CLASS)
 	struct device *psDev;
 #endif
@@ -792,9 +768,7 @@ static int __init PVRCore_Init(void)
 #endif
 	PVR_TRACE(("PVRCore_Init"));
 
-#if defined(PVR_LDM_MODULE) || defined(SUPPORT_DRI_DRM)
 	LinuxInitMutex(&gsPMMutex);
-#endif
 	LinuxInitMutex(&gPVRSRVLock);
 
 	if (CreateProcEntries ())
@@ -826,33 +800,12 @@ static int __init PVRCore_Init(void)
 
 	PVRMMapInit();
 
-#if defined(PVR_LDM_MODULE)
-
 	if ((error = platform_driver_register(&powervr_driver)) != 0)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRCore_Init: unable to register platform driver (%d)", error));
 
 		goto init_failed;
 	}
-#endif /* defined(PVR_LDM_MODULE) */
-
-#if !defined(PVR_LDM_MODULE)
-	/*
-	 * Drivers using LDM, will call SysInitialise in the probe/attach code
-	 */
-	if ((eError = SysInitialise()) != PVRSRV_OK)
-	{
-		error = -ENODEV;
-#if defined(TCF_REV) && (TCF_REV == 110)
-		if(eError == PVRSRV_ERROR_NOT_SUPPORTED)
-		{
-			printk("\nAtlas wrapper (FPGA image) version mismatch");
-			error = -ENODEV;
-		}
-#endif
-		goto init_failed;
-	}
-#endif /* !defined(PVR_LDM_MODULE) */
 
 #if !defined(SUPPORT_DRI_DRM)
 	AssignedMajorNumber = register_chrdev(0, DEVNAME, &pvrsrv_fops);
@@ -911,22 +864,9 @@ unregister_device:
 #if !defined(SUPPORT_DRI_DRM)
 sys_deinit:
 #endif
-#if defined(PVR_LDM_MODULE)
 
 	platform_driver_unregister(&powervr_driver);
 
-#else	/* defined(PVR_LDM_MODULE) */
-	/* LDM drivers call SysDeinitialise during PVRSRVDriverRemove */
-	{
-		SYS_DATA *psSysData;
-
-		psSysData = SysAcquireDataNoCheck();
-		if (psSysData != IMG_NULL)
-		{
-			(void) SysDeinitialise(psSysData);
-		}
-	}
-#endif	/* defined(PVR_LDM_MODULE) */
 init_failed:
 	PVRMMapCleanup();
 	LinuxMMCleanup();
@@ -969,14 +909,7 @@ void PVRCore_Cleanup(void)
 static void __exit PVRCore_Cleanup(void)
 #endif
 {
-#if !defined(PVR_LDM_MODULE)
-	SYS_DATA *psSysData;
-#endif
 	PVR_TRACE(("PVRCore_Cleanup"));
-
-#if !defined(PVR_LDM_MODULE)
-	SysAcquireData(&psSysData);
-#endif
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 	PVRSyncDeviceDeInit();
@@ -991,23 +924,7 @@ static void __exit PVRCore_Cleanup(void)
 		unregister_chrdev((IMG_UINT)AssignedMajorNumber, DEVNAME);
 #endif	/* !defined(SUPPORT_DRI_DRM) */
 
-#if defined(PVR_LDM_MODULE)
-
 	platform_driver_unregister(&powervr_driver);
-
-#else /* defined(PVR_LDM_MODULE) */
-#if defined(DEBUG) && defined(PVR_MANUAL_POWER_CONTROL)
-	if (gPVRPowerLevel != 0)
-	{
-		if (PVRSRVSetPowerStateKM(PVRSRV_SYS_POWER_STATE_D0) == PVRSRV_OK)
-		{
-			gPVRPowerLevel = 0;
-		}
-	}
-#endif
-	/* LDM drivers call SysDeinitialise during PVRSRVDriverRemove */
-	(void) SysDeinitialise(psSysData);
-#endif /* defined(PVR_LDM_MODULE) */
 
 	PVRMMapCleanup();
 
