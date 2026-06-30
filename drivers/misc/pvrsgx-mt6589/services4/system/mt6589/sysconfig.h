@@ -3,12 +3,6 @@
 #if !defined(__SOCCONFIG_H__)
 #define __SOCCONFIG_H__
 
-/*#if defined(CONFIG_ARCH_MT6577)
-#define VS_PRODUCT_NAME	"MT6577"
-#else
-#define VS_PRODUCT_NAME	"MT6575"
-#endif*/
-
 #define VS_PRODUCT_NAME "MT6589"
 
 #define SYS_SGX_CLOCK_SPEED     286000000
@@ -19,12 +13,6 @@
 #if !defined(SYS_SGX_ACTIVE_POWER_LATENCY_MS)
 #define SYS_SGX_ACTIVE_POWER_LATENCY_MS		(2)
 #endif
-
-#define SYS_MTK_SGX_REGS_SYS_PHYS_BASE  0x13000000 // MFG_AXI_BASE
-
-#define SYS_MTK_SGX_REGS_SIZE           0xFFFF
-
-#define SYS_MTK_SGX_IRQ				 220 //(188+32) // MT6589_MFG_IRQ_ID
 
 #define DEVICE_SGX_INTERRUPT		(1<<0)
 

@@ -25,9 +25,7 @@ static PVRSRV_DEVICE_NODE *gpsSGXDevNode;
 static IMG_CPU_VIRTADDR gsSGXRegsCPUVAddr;
 #endif
 
-#if defined(PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO)
 extern struct platform_device *gpsPVRLDMDev;
-#endif
 
 IMG_UINT32 PVRSRV_BridgeDispatchKM(IMG_UINT32	Ioctl,
 								   IMG_BYTE		*pInBuf,
@@ -71,17 +69,13 @@ static INLINE PVRSRV_ERROR EnableSystemClocksWrap(SYS_DATA *psSysData)
 
 static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 {
-#if defined(PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO)
 	struct resource *dev_res;
 	int dev_irq;
-#endif
 
 	PVR_UNREFERENCED_PARAMETER(psSysData);
 
 
 	gsSGXDeviceMap.ui32Flags = 0x0;
-
-#if defined(PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO)
 
 	dev_res = platform_get_resource(gpsPVRLDMDev, IORESOURCE_MEM, 0);
 	if (dev_res == NULL)
@@ -107,14 +101,6 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 
 	gsSGXDeviceMap.ui32IRQ = dev_irq;
 	PVR_TRACE(("SGX IRQ: %d", gsSGXDeviceMap.ui32IRQ));
-#else
-	gsSGXDeviceMap.sRegsSysPBase.uiAddr = SYS_MTK_SGX_REGS_SYS_PHYS_BASE;
-	gsSGXDeviceMap.sRegsCpuPBase = SysSysPAddrToCpuPAddr(gsSGXDeviceMap.sRegsSysPBase);
-	gsSGXDeviceMap.ui32RegsSize = SYS_MTK_SGX_REGS_SIZE;
-
-	gsSGXDeviceMap.ui32IRQ = SYS_MTK_SGX_IRQ;
-
-#endif
 #if defined(SGX_OCP_REGS_ENABLED)
 	gsSGXRegsCPUVAddr = OSMapPhysToLin(gsSGXDeviceMap.sRegsCpuPBase,
 	gsSGXDeviceMap.ui32RegsSize,
