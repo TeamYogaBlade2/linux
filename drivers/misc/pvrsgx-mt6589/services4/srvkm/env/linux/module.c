@@ -11,7 +11,6 @@
 	 * required (e.g. platform, or PCI device).
 	 */
 	#if defined(LDM_PLATFORM)
-		#define	PVR_LDM_PLATFORM_MODULE
 		#define PVR_LDM_DEVICE_CLASS
 		#define	PVR_LDM_MODULE
 	#else
@@ -34,10 +33,8 @@
 #endif
 #endif
 
-#if defined(PVR_LDM_PLATFORM_MODULE)
 #include <linux/platform_device.h>
 #include <linux/of.h>
-#endif /* PVR_LDM_PLATFORM_MODULE */
 
 #if defined(PVR_LDM_DEVICE_CLASS)
 #include <linux/device.h>
@@ -168,18 +165,14 @@ static IMG_UINT32 gPVRPowerLevel;
 
 #if defined(PVR_LDM_MODULE)
 
-#if defined(PVR_LDM_PLATFORM_MODULE)
 #define	LDM_DEV	struct platform_device
 #define	LDM_DRV	struct platform_driver
-#endif /*PVR_LDM_PLATFORM_MODULE */
 
 /*
  * This is the driver interface we support.
  */
-#if defined(PVR_LDM_PLATFORM_MODULE)
 static void PVRSRVDriverRemove(LDM_DEV *device);
 static int PVRSRVDriverProbe(LDM_DEV *device);
-#endif
 static int PVRSRVDriverSuspend(LDM_DEV *device, pm_message_t state);
 static void PVRSRVDriverShutdown(LDM_DEV *device);
 static int PVRSRVDriverResume(LDM_DEV *device);
@@ -191,16 +184,12 @@ static const struct of_device_id powervr_of_match[] = {
 MODULE_DEVICE_TABLE(of, powervr_of_match);
 
 static LDM_DRV powervr_driver = {
-#if defined(PVR_LDM_PLATFORM_MODULE)
 	.driver = {
 		.name		= DRVNAME,
 		.of_match_table = powervr_of_match,
 	},
-#endif
 	.probe		= PVRSRVDriverProbe,
-#if defined(PVR_LDM_PLATFORM_MODULE)
 	.remove		= PVRSRVDriverRemove,
-#endif
 	.suspend	= PVRSRVDriverSuspend,
 	.resume		= PVRSRVDriverResume,
 	.shutdown	= PVRSRVDriverShutdown,
@@ -224,9 +213,7 @@ LDM_DEV *gpsPVRLDMDev;
  @Return 0 for success or <0 for an error.
 
 *****************************************************************************/
-#if defined(PVR_LDM_PLATFORM_MODULE)
 static int PVRSRVDriverProbe(LDM_DEV *pDevice)
-#endif
 {
 	SYS_DATA *psSysData;
 
@@ -280,9 +267,7 @@ static int PVRSRVDriverProbe(LDM_DEV *pDevice)
  @Return 0 for success or <0 for an error.
 
 *****************************************************************************/
-#if defined (PVR_LDM_PLATFORM_MODULE)
 static void PVRSRVDriverRemove(LDM_DEV *pDevice)
-#endif
 {
 	SYS_DATA *psSysData;
 
@@ -843,15 +828,12 @@ static int __init PVRCore_Init(void)
 
 #if defined(PVR_LDM_MODULE)
 
-#if defined(PVR_LDM_PLATFORM_MODULE) || defined(SUPPORT_DRI_DRM_PLUGIN)
 	if ((error = platform_driver_register(&powervr_driver)) != 0)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRCore_Init: unable to register platform driver (%d)", error));
 
 		goto init_failed;
 	}
-#endif /* PVR_LDM_PLATFORM_MODULE */
-
 #endif /* defined(PVR_LDM_MODULE) */
 
 #if !defined(PVR_LDM_MODULE)
@@ -931,9 +913,7 @@ sys_deinit:
 #endif
 #if defined(PVR_LDM_MODULE)
 
-#if defined (PVR_LDM_PLATFORM_MODULE)
 	platform_driver_unregister(&powervr_driver);
-#endif
 
 #else	/* defined(PVR_LDM_MODULE) */
 	/* LDM drivers call SysDeinitialise during PVRSRVDriverRemove */
@@ -1013,9 +993,7 @@ static void __exit PVRCore_Cleanup(void)
 
 #if defined(PVR_LDM_MODULE)
 
-#if defined (PVR_LDM_PLATFORM_MODULE)
 	platform_driver_unregister(&powervr_driver);
-#endif
 
 #else /* defined(PVR_LDM_MODULE) */
 #if defined(DEBUG) && defined(PVR_MANUAL_POWER_CONTROL)
