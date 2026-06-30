@@ -84,6 +84,152 @@
 		};
 	};
 
+	/*
+	 * GPU OPP table derived from mt_gpufreq.c and mtk_sysfreq.c.
+	 *
+	 * == DVFS Governor Logic (besides clock/voltage) ==
+	 * The driver uses a load-based governor. The effective load is calculated as:
+	 *     adjusted_load = (original_load * gpufreq_remap) / 100
+	 * The adjusted load is then matched against the gpufreq_lower_bound and
+	 * gpufreq_upper_bound to select the target OPP.
+	 *
+	 * == Actual Tables Registered in mtk_sysfreq.c ==
+	 * 1. TBLTYPE1 (freqs_special_vrf18_2):
+	 *    - F3 (357.5 MHz): lower=40, upper=100, remap=100, volt=1.15V
+	 *    - F5 (286 MHz)  : lower=0,  upper=40,  remap=80,  volt=1.05V
+	 *
+	 * 2. TBLTYPE2 (freqs_special2_vrf18_2):
+	 *    - F2 (403 MHz)  : lower=60, upper=100, remap=100, volt=1.15V
+	 *    - F3 (357.5 MHz): lower=30, upper=60,  remap=90,  volt=1.15V
+	 *    - F5 (286 MHz)  : lower=0,  upper=30,  remap=75,  volt=1.05V
+	 *
+	 * 3. TBLTYPE3 (freqs_special3_vrf18_2):
+	 *    - F1 (476.666 MHz): lower=60, upper=100, remap=100, volt=1.15V
+	 *    - F3 (357.5 MHz) : lower=30, upper=60,  remap=90,  volt=1.15V
+	 *    - F5 (286 MHz)   : lower=0,  upper=30,  remap=75,  volt=1.05V
+	 *
+	 * The MTKSetFreqInfo() function in mtk_sysfreq.c sets the initial frequency
+	 * and then always calls MtkInitSetFreqTbl(TBLTYPE0) -> mt_gpufreq_non_register()
+	 * in the provided code path. However, the actual OPP structures are defined
+	 * above. The effective OPPs used in the kernel are F1, F2, F3, and F5.
+	 *
+	 * F4 (312 MHz), F6 (268.666 MHz), F7 (238.333 MHz), and F8 (156 MHz)
+	 * are defined in the header but are NOT used in any of the registered tables.
+	 * They are kept here as "disabled" for reference.
+	 *
+	 * == Other Non-Clock/Voltage Settings from Code ==
+	 * - PMIC_SETTLE_TIME: 40 us (settling delay for voltage switching).
+	 * - MT_BUCK_ADJUST: Enabled. Allows VRF18_2 voltage scaling.
+	 * - GPU_CLOCK_RATIO: Enabled. Calculates GPU busy time ratio for load.
+	 * - GPU_KEEP_FREQ_NON_OD_BYPASS: Bypass flag for fixed frequency requests.
+	 * - mt_gpufreq_keep_specific_frequency: Allows userspace to fix a specific OPP.
+	 * - mt_gpufreq_thermal_protect: Allows thermal driver to limit max frequency via
+	 *   "limited_power" (which maps to a max frequency ID).
+	 */
+	gpu_opp_table: opp-table-gpu {
+		compatible = "operating-points-v2";
+
+		/*
+		 * OPP: 476.666 MHz, 1.15V
+		 * Used in: TBLTYPE3 (freqs_special3_vrf18_2)
+		 * Load bounds: 60 < load <= 100 (after remap)
+		 * Remap: 100 (no scaling)
+		 */
+		opp-476666000 {
+			opp-hz = /bits/ 64 <476666000>;
+			opp-microvolt = <1150000>;
+			/* Note: Driver uses lower_bound=60, upper_bound=100, remap=100 */
+		};
+
+		/*
+		 * OPP: 403 MHz, 1.15V
+		 * Used in: TBLTYPE2 (freqs_special2_vrf18_2)
+		 * Load bounds: 60 < load <= 100 (after remap)
+		 * Remap: 100 (no scaling)
+		 */
+		opp-403000000 {
+			opp-hz = /bits/ 64 <403000000>;
+			opp-microvolt = <1150000>;
+			/* Note: Driver uses lower_bound=60, upper_bound=100, remap=100 */
+		};
+
+		/*
+		 * OPP: 357.5 MHz, 1.15V
+		 * Used in: TBLTYPE1, TBLTYPE2, TBLTYPE3
+		 * TBLTYPE1: lower=40, upper=100, remap=100
+		 * TBLTYPE2/TBLTYPE3: lower=30, upper=60, remap=90
+		 */
+		opp-357500000 {
+			opp-hz = /bits/ 64 <357500000>;
+			opp-microvolt = <1150000>;
+			/* Note: Driver uses variable bounds/remap depending on table */
+		};
+
+		/*
+		 * OPP: 312 MHz
+		 * NOT USED in any registered table.
+		 * Defined in header as GPU_UNIVPLL1_D2 (F4).
+		 * Kept for reference.
+		 */
+		opp-312000000 {
+			status = "disabled";
+			opp-hz = /bits/ 64 <312000000>;
+			opp-microvolt = <1050000>; /* Estimated, not used in code */
+			/* Note: Not present in any mt_gpufreq_info table */
+		};
+
+		/*
+		 * OPP: 286 MHz, 1.05V
+		 * Used in: TBLTYPE1, TBLTYPE2, TBLTYPE3
+		 * TBLTYPE1: lower=0, upper=40, remap=80
+		 * TBLTYPE2/TBLTYPE3: lower=0, upper=30, remap=75
+		 */
+		opp-286000000 {
+			opp-hz = /bits/ 64 <286000000>;
+			opp-microvolt = <1050000>;
+			/* Note: Driver uses variable bounds/remap depending on table */
+		};
+
+		/*
+		 * OPP: 268.666 MHz
+		 * NOT USED in any registered table.
+		 * Defined in header as GPU_SYSPLL_D3 (F6).
+		 * Kept for reference.
+		 */
+		opp-268666000 {
+			status = "disabled";
+			opp-hz = /bits/ 64 <268666000>;
+			opp-microvolt = <1050000>; /* Estimated, not used in code */
+			/* Note: Not present in any mt_gpufreq_info table */
+		};
+
+		/*
+		 * OPP: 238.333 MHz
+		 * NOT USED in any registered table.
+		 * Defined in header as GPU_MMPLL_D6 (F7).
+		 * Kept for reference.
+		 */
+		opp-238333000 {
+			status = "disabled";
+			opp-hz = /bits/ 64 <238333000>;
+			opp-microvolt = <1050000>; /* Estimated, not used in code */
+			/* Note: Not present in any mt_gpufreq_info table */
+		};
+
+		/*
+		 * OPP: 156 MHz
+		 * NOT USED in any registered table.
+		 * Defined in header as GPU_UNIVPLL1_D4 (F8).
+		 * Kept for reference.
+		 */
+		opp-156000000 {
+			status = "disabled";
+			opp-hz = /bits/ 64 <156000000>;
+			opp-microvolt = <1050000>; /* Estimated, not used in code */
+			/* Note: Not present in any mt_gpufreq_info table */
+		};
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -335,6 +481,7 @@
 				 <&mfgsys CLK_MFG_AXI>;
 			clock-names = "core", "mem", "sys";
 			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
+			operating-points-v2 = <&gpu_opp_table>;
 		};
 
 		dispsys: syscon@14000000 {
