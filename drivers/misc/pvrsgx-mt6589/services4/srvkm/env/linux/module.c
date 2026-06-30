@@ -155,17 +155,14 @@ IMG_UINT32 gui32ReleasePID;
 static IMG_UINT32 gPVRPowerLevel;
 #endif
 
-#define	LDM_DEV	struct platform_device
-#define	LDM_DRV	struct platform_driver
-
 /*
  * This is the driver interface we support.
  */
-static void PVRSRVDriverRemove(LDM_DEV *device);
-static int PVRSRVDriverProbe(LDM_DEV *device);
-static int PVRSRVDriverSuspend(LDM_DEV *device, pm_message_t state);
-static void PVRSRVDriverShutdown(LDM_DEV *device);
-static int PVRSRVDriverResume(LDM_DEV *device);
+static void PVRSRVDriverRemove(struct platform_device *device);
+static int PVRSRVDriverProbe(struct platform_device *device);
+static int PVRSRVDriverSuspend(struct platform_device *device, pm_message_t state);
+static void PVRSRVDriverShutdown(struct platform_device *device);
+static int PVRSRVDriverResume(struct platform_device *device);
 
 static const struct of_device_id powervr_of_match[] = {
 	{ .compatible = "mediatek,mt6589-gpu" },
@@ -173,7 +170,7 @@ static const struct of_device_id powervr_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, powervr_of_match);
 
-static LDM_DRV powervr_driver = {
+static struct platform_driver powervr_driver = {
 	.driver = {
 		.name		= DRVNAME,
 		.of_match_table = powervr_of_match,
@@ -185,7 +182,7 @@ static LDM_DRV powervr_driver = {
 	.shutdown	= PVRSRVDriverShutdown,
 };
 
-LDM_DEV *gpsPVRLDMDev;
+struct platform_device *gpsPVRLDMDev;
 
 /*!
 ******************************************************************************
@@ -203,7 +200,7 @@ LDM_DEV *gpsPVRLDMDev;
  @Return 0 for success or <0 for an error.
 
 *****************************************************************************/
-static int PVRSRVDriverProbe(LDM_DEV *pDevice)
+static int PVRSRVDriverProbe(struct platform_device *pDevice)
 {
 	SYS_DATA *psSysData;
 
@@ -257,7 +254,7 @@ static int PVRSRVDriverProbe(LDM_DEV *pDevice)
  @Return 0 for success or <0 for an error.
 
 *****************************************************************************/
-static void PVRSRVDriverRemove(LDM_DEV *pDevice)
+static void PVRSRVDriverRemove(struct platform_device *pDevice)
 {
 	SYS_DATA *psSysData;
 
@@ -313,7 +310,7 @@ static IMG_BOOL bDriverIsShutdown;
 	!defined(SUPPORT_DRI_DRM_PLUGIN)
 void PVRSRVDriverShutdown(struct drm_device *pDevice)
 #else
-PVR_MOD_STATIC void PVRSRVDriverShutdown(LDM_DEV *pDevice)
+PVR_MOD_STATIC void PVRSRVDriverShutdown(struct platform_device *pDevice)
 #endif
 {
 	PVR_TRACE(("PVRSRVDriverShutdown(pDevice=%p)", pDevice));
@@ -373,7 +370,7 @@ int PVRSRVDriverSuspend(struct pci_dev *pDevice, pm_message_t state)
 int PVRSRVDriverSuspend(struct drm_device *pDevice, pm_message_t state)
 #endif
 #else
-PVR_MOD_STATIC int PVRSRVDriverSuspend(LDM_DEV *pDevice, pm_message_t state)
+PVR_MOD_STATIC int PVRSRVDriverSuspend(struct platform_device *pDevice, pm_message_t state)
 #endif
 {
 	int res = 0;
@@ -430,7 +427,7 @@ int PVRSRVDriverResume(struct pci_dev *pDevice)
 int PVRSRVDriverResume(struct drm_device *pDevice)
 #endif
 #else
-PVR_MOD_STATIC int PVRSRVDriverResume(LDM_DEV *pDevice)
+PVR_MOD_STATIC int PVRSRVDriverResume(struct platform_device *pDevice)
 #endif
 {
 	int res = 0;
