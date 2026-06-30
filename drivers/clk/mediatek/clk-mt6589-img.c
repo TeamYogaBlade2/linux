@@ -26,7 +26,7 @@ static const struct mtk_gate_regs img_cg_regs = {
 static const struct mtk_gate img_clks[] = {
 	GATE_IMG(CLK_IMAGE_LARB3_SMI, "image_larb3_smi", "smi_sel", 0), /* maybe */
 	GATE_IMG(CLK_IMAGE_LARB4_SMI, "image_larb4_smi", "smi_sel", 2), /* maybe */
-	GATE_IMG(CLK_IMAGE_COMMN_SMI, "image_common_smi", "smi_sel", 4), /* maybe */
+	GATE_IMG(CLK_IMAGE_COMMON_SMI, "image_common_smi", "smi_sel", 4), /* maybe */
 	GATE_IMG(CLK_IMAGE_CAM_SMI, "image_cam_smi", "smi_sel", 5), /* maybe */
 	GATE_IMG(CLK_IMAGE_CAM_CAM, "image_cam_cam", "cam_sel", 6),
 	GATE_IMG(CLK_IMAGE_SEN_TG, "image_sen_tg", "camtg_sel", 7),
