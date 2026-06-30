@@ -388,7 +388,7 @@ typedef struct _SGX_CCB_KICK_KM_
 #endif
 
 	IMG_BOOL	bFirstKickOrResume;
-#if defined(NO_HARDWARE) || defined(PDUMP)
+#if defined(PDUMP)
 	IMG_BOOL	bTerminateOrAbort;
 #endif
 
@@ -417,9 +417,6 @@ typedef struct _SGX_CCB_KICK_KM_
 	IMG_HANDLE	h3DSyncInfo;
 #if defined(PDUMP)
 	IMG_UINT32	ui32CCBDumpWOff;
-#endif
-#if defined(NO_HARDWARE)
-	IMG_UINT32	ui32WriteOpsPendingVal;
 #endif
 } SGX_CCB_KICK_KM;
 
@@ -522,26 +519,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode);
 
 #if defined(SGX_DYNAMIC_TIMING_INFO)
 IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psSGXTimingInfo);
-#endif
-
-/****************************************************************************/
-/* kernel only functions: 													*/
-/****************************************************************************/
-#if defined(NO_HARDWARE)
-static INLINE IMG_VOID NoHardwareGenerateEvent(PVRSRV_SGXDEV_INFO		*psDevInfo,
-												IMG_UINT32 ui32StatusRegister,
-												IMG_UINT32 ui32StatusValue,
-												IMG_UINT32 ui32StatusMask)
-{
-	IMG_UINT32 ui32RegVal;
-
-	ui32RegVal = OSReadHWReg(psDevInfo->pvRegsBaseKM, ui32StatusRegister);
-
-	ui32RegVal &= ~ui32StatusMask;
-	ui32RegVal |= (ui32StatusValue & ui32StatusMask);
-
-	OSWriteHWReg(psDevInfo->pvRegsBaseKM, ui32StatusRegister, ui32RegVal);
-}
 #endif
 
 #if defined(__cplusplus)

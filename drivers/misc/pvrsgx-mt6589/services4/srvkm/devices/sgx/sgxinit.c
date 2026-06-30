@@ -651,7 +651,6 @@ PVRSRV_ERROR SGXInitialise(PVRSRV_SGXDEV_INFO	*psDevInfo,
 	}
 #endif /* PDUMP */
 
-#if !defined(NO_HARDWARE)
 	/*
 		Wait for the microkernel to finish initialising.
 	*/
@@ -669,7 +668,6 @@ PVRSRV_ERROR SGXInitialise(PVRSRV_SGXDEV_INFO	*psDevInfo,
 
 		return PVRSRV_ERROR_RETRY;
 	}
-#endif /* NO_HARDWARE */
 
 #if defined(PDUMP)
 	PDUMPCOMMENTWITHFLAGS(PDUMP_FLAGS_CONTINUOUS,
@@ -1786,11 +1784,7 @@ IMG_VOID SGXOSTimer(IMG_VOID *pvData)
 	/* increment a timestamp */
 	psDevInfo->ui32TimeStamp++;
 
-#if defined(NO_HARDWARE)
-	bPoweredDown = IMG_TRUE;
-#else
 	bPoweredDown = (SGXIsDevicePowered(psDeviceNode)) ? IMG_FALSE : IMG_TRUE;
-#endif /* NO_HARDWARE */
 
 	/*
 	 * Check whether EDM timer tasks are getting scheduled. If not, assume
@@ -2534,7 +2528,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	PVRSRV_ERROR	eError;
 	PVRSRV_SGXDEV_INFO 				*psDevInfo;
 	IMG_UINT32 			ui32BuildOptions, ui32BuildOptionsMismatch;
-#if !defined(NO_HARDWARE)
 	PPVRSRV_KERNEL_MEM_INFO			psMemInfo;
 	PVRSRV_SGX_MISCINFO_INFO		*psSGXMiscInfoInt; 	/*!< internal misc info for ukernel */
 	PVRSRV_SGX_MISCINFO_FEATURES	*psSGXFeatures;
@@ -2549,7 +2542,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	};
 	const IMG_UINT32	ui32NumCoreExceptions = sizeof(aui32CoreRevExceptions) / (2*sizeof(IMG_UINT32));
 	IMG_UINT	i;
-#endif
 
 	/* Ensure it's a SGX device */
 	if(psDeviceNode->sDevId.eDeviceType != PVRSRV_DEVICE_TYPE_SGX)
@@ -2595,7 +2587,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 		PVR_DPF((PVR_DBG_MESSAGE, "SGXInit: Client-side and KM driver build options match. [ OK ]"));
 	}
 
-#if !defined (NO_HARDWARE)
 	psMemInfo = psDevInfo->psKernelSGXMiscMemInfo;
 
 	/* Clear state (not strictly necessary since this is the first call) */
@@ -2721,7 +2712,6 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
 	{
 		PVR_DPF((PVR_DBG_MESSAGE, "SGXInit: Driver and microkernel build options match. [ OK ]"));
 	}
-#endif // NO_HARDWARE
 
 	eError = PVRSRV_OK;
 chk_exit:
@@ -2792,7 +2782,6 @@ PVRSRV_ERROR SGXGetMiscInfoUkernel(PVRSRV_SGXDEV_INFO	*psDevInfo,
 	/* FIXME: DWORD value to determine code path in ukernel?
 	 * E.g. could use getMiscInfo to obtain register values for diagnostics? */
 
-#if !defined(NO_HARDWARE)
 	{
 #define MTK_RETRY_SGXGETMISCINFOUKERNEL (3)
 		int retry = MTK_RETRY_SGXGETMISCINFOUKERNEL;
@@ -2844,7 +2833,6 @@ PVRSRV_ERROR SGXGetMiscInfoUkernel(PVRSRV_SGXDEV_INFO	*psDevInfo,
 			return PVRSRV_ERROR_TIMEOUT;
 		}
 	}
-#endif /* NO_HARDWARE */
 
 	return PVRSRV_OK;
 }
@@ -2947,10 +2935,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 				return eError;
 			}
 
-#if defined(NO_HARDWARE)
-			/* clear signal flags */
-			psDevInfo->psSGXHostCtl->ui32BPSetClearSignal = 0;
-#else
 			{
 				IMG_BOOL bExit;
 
@@ -2973,7 +2957,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 					return PVRSRV_ERROR_TIMEOUT;
 				}
 			}
-#endif /* NO_HARDWARE */
 
 			return PVRSRV_OK;
 		}
@@ -2989,7 +2972,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 			/* The uKernel is not used, since if we are stopped on a
 			   breakpoint, it is not possible to guarantee that the
 			   uKernel would be able to run */
-#if !defined(NO_HARDWARE)
 #if defined(SGX_FEATURE_MP)
 			IMG_BOOL bTrappedBPMaster;
 			IMG_UINT32 ui32CoreNum, ui32TrappedBPCoreNum;
@@ -3101,7 +3083,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 #endif /* defined(SGX_FEATURE_PERPIPE_BKPT_REGS) */
 #endif /* defined(SGX_FEATURE_MP) */
 			}
-#endif /* !defined(NO_HARDWARE) */
 			return PVRSRV_OK;
 		}
 
@@ -3110,7 +3091,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 			/* This request resumes from the currently trapped breakpoint. */
 			/* Core number must be supplied */
 			/* Polls for notify to be acknowledged by h/w */
-#if !defined(NO_HARDWARE)
 #if defined(SGX_FEATURE_MP)
 			IMG_UINT32 ui32CoreNum;
 			IMG_BOOL bMaster;
@@ -3163,7 +3143,6 @@ PVRSRV_ERROR SGXGetMiscInfoKM(PVRSRV_SGXDEV_INFO	*psDevInfo,
 				while (ui32OldSeqNum == ui32NewSeqNum);
 #endif /* defined(SGX_FEATURE_PERPIPE_BKPT_REGS) */
 			}
-#endif /* !defined(NO_HARDWARE) */
 			return PVRSRV_OK;
 		}
 #endif /* SGX_FEATURE_DATA_BREAKPOINTS)	*/

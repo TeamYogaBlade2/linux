@@ -159,7 +159,7 @@ typedef struct _SGX_CCB_KICK_
 #endif
 
 	IMG_BOOL	bFirstKickOrResume;
-#if defined(NO_HARDWARE) || defined(PDUMP)
+#if defined(PDUMP)
 	IMG_BOOL	bTerminateOrAbort;
 #endif
 	IMG_BOOL	bLastInScene;
@@ -189,9 +189,6 @@ typedef struct _SGX_CCB_KICK_
 	IMG_HANDLE	h3DSyncInfo;
 #if defined(PDUMP)
 	IMG_UINT32	ui32CCBDumpWOff;
-#endif
-#if defined(NO_HARDWARE)
-	IMG_UINT32	ui32WriteOpsPendingVal;
 #endif
 	IMG_HANDLE	hDevMemContext;
 	IMG_DEV_VIRTADDR	sHWRTDataSetDevAddr;

@@ -215,7 +215,6 @@ static IMG_VOID SGXPollForClockGating (PVRSRV_SGXDEV_INFO	*psDevInfo,
 	PVR_UNREFERENCED_PARAMETER(ui32RegisterValue);
 	PVR_UNREFERENCED_PARAMETER(pszComment);
 
-	#if !defined(NO_HARDWARE)
 	PVR_ASSERT(psDevInfo != IMG_NULL);
 
 	/* PRQA S 0505 1 */ /* QAC does not like assert() */
@@ -230,7 +229,6 @@ static IMG_VOID SGXPollForClockGating (PVRSRV_SGXDEV_INFO	*psDevInfo,
 		SGXDumpDebugInfo(psDevInfo, IMG_FALSE);
 		PVR_DBG_BREAK;
 	}
-	#endif /* NO_HARDWARE */
 
 	PDUMPCOMMENT("%s", pszComment);
 	PDUMPREGPOL(SGX_PDUMPREG_NAME, ui32Register, 0, ui32RegisterValue, PDUMP_POLL_OPERATOR_EQUAL);
@@ -303,7 +301,6 @@ PVRSRV_ERROR SGXPrePowerState (IMG_HANDLE				hDevHandle,
 		}
 
 		/* Wait for the ukernel to complete processing. */
-		#if !defined(NO_HARDWARE)
 		if (PollForValueKM(&psDevInfo->psSGXHostCtl->ui32PowerStatus,
 							ui32CompleteStatus,
 							ui32CompleteStatus,
@@ -315,7 +312,6 @@ PVRSRV_ERROR SGXPrePowerState (IMG_HANDLE				hDevHandle,
 			SGXDumpDebugInfo(psDevInfo, IMG_FALSE);
 			PVR_DBG_BREAK;
 		}
-		#endif /* NO_HARDWARE */
 
 		#if defined(PDUMP)
 		PDUMPCOMMENT("TA/3D CCB Control - Wait for power event on uKernel.");
@@ -329,7 +325,7 @@ PVRSRV_ERROR SGXPrePowerState (IMG_HANDLE				hDevHandle,
 		#endif /* PDUMP */
 
 		/* Wait for the pending ukernel to host interrupts to come back. */
-		#if !defined(NO_HARDWARE) && defined(SUPPORT_LISR_MISR_SYNC)
+		#if defined(SUPPORT_LISR_MISR_SYNC)
 		if (PollForValueKM(&g_ui32HostIRQCountSample,
 							psDevInfo->psSGXHostCtl->ui32InterruptCount,
 							0xffffffff,
@@ -341,7 +337,7 @@ PVRSRV_ERROR SGXPrePowerState (IMG_HANDLE				hDevHandle,
 			SGXDumpDebugInfo(psDevInfo, IMG_FALSE);
 			PVR_DBG_BREAK;
 		}
-		#endif /* NO_HARDWARE && SUPPORT_LISR_MISR_SYNC*/
+		#endif /* SUPPORT_LISR_MISR_SYNC*/
 #if defined(SGX_FEATURE_MP)
 		ui32CoresEnabled = ((OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_MASTER_CORE) & EUR_CR_MASTER_CORE_ENABLE_MASK) >> EUR_CR_MASTER_CORE_ENABLE_SHIFT) + 1;
 #else

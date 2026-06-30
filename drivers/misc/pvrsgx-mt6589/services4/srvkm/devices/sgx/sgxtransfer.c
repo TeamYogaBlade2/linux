@@ -577,44 +577,6 @@ IMG_EXPORT PVRSRV_ERROR SGXSubmitTransferKM(IMG_HANDLE hDevHandle, PVRSRV_TRANSF
 		return eError;
 	}
 
-
-#if defined(NO_HARDWARE)
-	if ((psKick->ui32Flags & SGXMKIF_TQFLAGS_NOSYNCUPDATE) == 0)
-	{
-		/* Update sync objects pretending that we have done the job*/
-		for (loop = 0; loop < psKick->ui32NumSrcSync; loop++)
-		{
-			if (abSrcSyncEnable[loop])
-			{
-				psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->ahSrcSyncInfo[loop];
-				psSyncInfo->psSyncData->ui32ReadOpsComplete = psSyncInfo->psSyncData->ui32ReadOpsPending;
-			}
-		}
-
-		for (loop = 0; loop < psKick->ui32NumDstSync; loop++)
-		{
-			if (abDstSyncEnable[loop])
-			{
-				psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->ahDstSyncInfo[loop];
-				psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-			}
-		}
-
-		if (psKick->hTASyncInfo != IMG_NULL)
-		{
-			psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->hTASyncInfo;
-
-			psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-		}
-
-		if (psKick->h3DSyncInfo != IMG_NULL)
-		{
-			psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->h3DSyncInfo;
-
-			psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-		}
-	}
-#endif
 	PVR_TTRACE(PVRSRV_TRACE_GROUP_TRANSFER, PVRSRV_TRACE_CLASS_FUNCTION_EXIT,
 			TRANSFER_TOKEN_SUBMIT);
 	return eError;
@@ -869,39 +831,6 @@ IMG_EXPORT PVRSRV_ERROR SGXSubmit2DKM(IMG_HANDLE hDevHandle, PVRSRV_2D_SGX_KICK 
 			SyncRollBackWriteOp(psSyncInfo, SYNC_OP_CLASS_TQ_2D);
 		}
 	}
-
-
-
-
-#if defined(NO_HARDWARE)
-	/* Update sync objects pretending that we have done the job*/
-	for(i = 0; i < psKick->ui32NumSrcSync; i++)
-	{
-		psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->ahSrcSyncInfo[i];
-		psSyncInfo->psSyncData->ui32ReadOpsComplete = psSyncInfo->psSyncData->ui32ReadOpsPending;
-	}
-
-	if (psKick->hDstSyncInfo != IMG_NULL)
-	{
-		psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->hDstSyncInfo;
-
-		psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-	}
-
-	if (psKick->hTASyncInfo != IMG_NULL)
-	{
-		psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->hTASyncInfo;
-
-		psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-	}
-
-	if (psKick->h3DSyncInfo != IMG_NULL)
-	{
-		psSyncInfo = (PVRSRV_KERNEL_SYNC_INFO *)psKick->h3DSyncInfo;
-
-		psSyncInfo->psSyncData->ui32WriteOpsComplete = psSyncInfo->psSyncData->ui32WriteOpsPending;
-	}
-#endif
 
 	return eError;
 }

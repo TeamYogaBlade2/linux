@@ -98,9 +98,7 @@ IMG_VOID UnwrapSystemPowerChange(SYS_SPECIFIC_DATA *psSysSpecData)
 #if defined(SGX_DYNAMIC_TIMING_INFO)
 IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
 {
-#if !defined(NO_HARDWARE)
 	PVR_ASSERT(atomic_read(&gpsSysSpecificData->sSGXClocksEnabled) != 0);
-#endif
     psTimingInfo->ui32CoreClockSpeed = mt_gpufreq_cur_freq()*1000; // SYS_SGX_CLOCK_SPEED;
 	psTimingInfo->ui32HWRecoveryFreq = SYS_SGX_HWRECOVERY_TIMEOUT_FREQ;
 	psTimingInfo->ui32uKernelFreq = SYS_SGX_PDS_TIMER_FREQ;
@@ -111,7 +109,6 @@ IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
 
 PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 {
-#if !defined(NO_HARDWARE)
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
 
@@ -178,16 +175,12 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 
 	atomic_set(&psSysSpecData->sSGXClocksEnabled, 1);
 
-#else
-	PVR_UNREFERENCED_PARAMETER(psSysData);
-#endif
 	return PVRSRV_OK;
 }
 
 
 IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 {
-#if !defined(NO_HARDWARE)
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
 
@@ -224,10 +217,6 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 //    printk("DisableSGXClocks ... Reg[0x%x]=0x%x\n",0x37E,upmu_get_reg_value(0x37E));
 
 	atomic_set(&psSysSpecData->sSGXClocksEnabled, 0);
-
-#else
-	PVR_UNREFERENCED_PARAMETER(psSysData);
-#endif
 }
 
 /*

@@ -15,10 +15,6 @@
 #include "pvr_debug.h"
 #include "services.h"
 
-#if defined(NO_HARDWARE) && defined(__linux__) && defined(__KERNEL__)
-#include <asm/io.h>
-#endif
-
 #if defined (__cplusplus)
 extern "C" {
 #endif
@@ -241,60 +237,8 @@ static INLINE IMG_VOID SysDeinitialiseCommon(SYS_DATA *psSysData)
 #endif /* !defined(USE_CODE) */
 
 
-/*
- * SysReadHWReg and SysWriteHWReg differ from OSReadHWReg and OSWriteHWReg
- * in that they are always intended for use with real hardware, even on
- * NO_HARDWARE systems.
- */
-#if !(defined(NO_HARDWARE) && defined(__linux__) && defined(__KERNEL__))
 #define	SysReadHWReg(p, o) OSReadHWReg(p, o)
 #define SysWriteHWReg(p, o, v) OSWriteHWReg(p, o, v)
-#else	/* !(defined(NO_HARDWARE) && defined(__linux__)) */
-/*!
-******************************************************************************
-
- @Function	SysReadHWReg
-
- @Description
-
- register read function
-
- @input pvLinRegBaseAddr :	lin addr of register block base
-
- @input ui32Offset :
-
- @Return   register value
-
-******************************************************************************/
-static inline IMG_UINT32 SysReadHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset)
-{
-	return (IMG_UINT32) readl(pvLinRegBaseAddr + ui32Offset);
-}
-
-/*!
-******************************************************************************
-
- @Function	SysWriteHWReg
-
- @Description
-
- register write function
-
- @input pvLinRegBaseAddr :	lin addr of register block base
-
- @input ui32Offset :
-
- @input ui32Value :
-
- @Return   none
-
-******************************************************************************/
-/* TODO: use ioremap */
-static inline IMG_VOID SysWriteHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset, IMG_UINT32 ui32Value)
-{
-	writel(ui32Value, pvLinRegBaseAddr + ui32Offset);
-}
-#endif	/* !(defined(NO_HARDWARE) && defined(__linux__)) */
 
 #if defined(__cplusplus)
 }

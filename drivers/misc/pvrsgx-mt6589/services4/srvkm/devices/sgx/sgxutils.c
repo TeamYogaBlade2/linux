@@ -309,7 +309,6 @@ PVRSRV_ERROR SGXScheduleCCBCommand(PVRSRV_DEVICE_NODE	*psDeviceNode,
 		}
 
 		/* Wait for the invalidate to happen */
-		#if !defined(NO_HARDWARE)
 		if(PollForValueKM(&psSGXHostCtl->ui32InvalStatus,
 						  PVRSRV_USSE_EDM_BIF_INVAL_COMPLETE,
 						  PVRSRV_USSE_EDM_BIF_INVAL_COMPLETE,
@@ -320,7 +319,6 @@ PVRSRV_ERROR SGXScheduleCCBCommand(PVRSRV_DEVICE_NODE	*psDeviceNode,
 			PVR_DPF((PVR_DBG_ERROR,"SGXScheduleCCBCommand: Wait for uKernel to Invalidate BIF cache failed"));
 			PVR_DBG_BREAK;
 		}
-		#endif
 
 		#if defined(PDUMP)
 		/* Pdump the poll as well. */
@@ -585,11 +583,6 @@ PVRSRV_ERROR SGXScheduleCCBCommand(PVRSRV_DEVICE_NODE	*psDeviceNode,
 
 	OSMemoryBarrier();
 
-#if defined(NO_HARDWARE)
-	/* Increment read offset */
-	*psKernelCCB->pui32ReadOffset = (*psKernelCCB->pui32ReadOffset + 1) & 255;
-#endif
-
 	ui64KickCount++;
 Exit:
 	return eError;
@@ -821,7 +814,6 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 		}
 
 		/* Wait for the uKernel process the cleanup request */
-		#if !defined(NO_HARDWARE)
 		if(PollForValueKM(&psHostCtl->ui32CleanupStatus,
 						  PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE,
 						  PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE,
@@ -834,7 +826,6 @@ PVRSRV_ERROR SGXCleanupRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
 			SGXDumpDebugInfo(psDevInfo, IMG_FALSE);
 			PVR_DBG_BREAK;
 		}
-		#endif
 
 		#if defined(PDUMP)
 		/*

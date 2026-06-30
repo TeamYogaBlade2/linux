@@ -21,7 +21,7 @@ static SGX_DEVICE_MAP	gsSGXDeviceMap;
 static PVRSRV_DEVICE_NODE *gpsSGXDevNode;
 
 
-#if defined(NO_HARDWARE) || defined(SGX_OCP_REGS_ENABLED)
+#if defined(SGX_OCP_REGS_ENABLED)
 static IMG_CPU_VIRTADDR gsSGXRegsCPUVAddr;
 #endif
 
@@ -71,14 +71,9 @@ static INLINE PVRSRV_ERROR EnableSystemClocksWrap(SYS_DATA *psSysData)
 
 static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 {
-#if defined(NO_HARDWARE)
-	PVRSRV_ERROR eError;
-	IMG_CPU_PHYADDR sCpuPAddr;
-#else
 #if defined(PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO)
 	struct resource *dev_res;
 	int dev_irq;
-#endif
 #endif
 
 	PVR_UNREFERENCED_PARAMETER(psSysData);
@@ -86,36 +81,6 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 
 	gsSGXDeviceMap.ui32Flags = 0x0;
 
-#if defined(NO_HARDWARE)
-
-
-	gsSGXDeviceMap.ui32RegsSize = SYS_MTK_SGX_REGS_SIZE;
-
-	eError = OSBaseAllocContigMemory(gsSGXDeviceMap.ui32RegsSize,
-									 &gsSGXRegsCPUVAddr,
-									 &sCpuPAddr);
-	if(eError != PVRSRV_OK)
-	{
-		return eError;
-	}
-	gsSGXDeviceMap.sRegsCpuPBase = sCpuPAddr;
-	gsSGXDeviceMap.sRegsSysPBase = SysCpuPAddrToSysPAddr(gsSGXDeviceMap.sRegsCpuPBase);
-#if defined(__linux__)
-
-	gsSGXDeviceMap.pvRegsCpuVBase = gsSGXRegsCPUVAddr;
-#else
-
-	gsSGXDeviceMap.pvRegsCpuVBase = IMG_NULL;
-#endif
-
-	OSMemSet(gsSGXRegsCPUVAddr, 0, gsSGXDeviceMap.ui32RegsSize);
-
-
-
-
-	gsSGXDeviceMap.ui32IRQ = 0;
-
-#else
 #if defined(PVR_LINUX_DYNAMIC_SGX_RESOURCE_INFO)
 
 	dev_res = platform_get_resource(gpsPVRLDMDev, IORESOURCE_MEM, 0);
@@ -166,7 +131,6 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 	gsSGXDeviceMap.pvRegsCpuVBase = gsSGXRegsCPUVAddr;
 	gpvOCPRegsLinAddr = gsSGXRegsCPUVAddr;
 #endif
-#endif
 
 #if defined(PDUMP)
 	{
@@ -189,7 +153,6 @@ static IMG_CHAR *SysCreateVersionString(void)
 	SYS_DATA	*psSysData;
 	IMG_UINT32	ui32SGXRevision;
 	IMG_INT32	i32Count;
-#if !defined(NO_HARDWARE)
 	IMG_VOID	*pvRegsLinAddr;
 
 	pvRegsLinAddr = OSMapPhysToLin(gsSGXDeviceMap.sRegsCpuPBase,
@@ -203,9 +166,6 @@ static IMG_CHAR *SysCreateVersionString(void)
 
 	ui32SGXRevision = OSReadHWReg((IMG_PVOID)((IMG_PBYTE)pvRegsLinAddr),
 								  EUR_CR_CORE_REVISION);
-#else
-	ui32SGXRevision = 0;
-#endif
 
 	SysAcquireData(&psSysData);
 
@@ -219,12 +179,10 @@ static IMG_CHAR *SysCreateVersionString(void)
 							>> EUR_CR_CORE_REVISION_MAINTENANCE_SHIFT)
 						 );
 
-#if !defined(NO_HARDWARE)
 	OSUnMapPhysToLin(pvRegsLinAddr,
 					 SYS_MTK_SGX_REGS_SIZE,
 					 PVRSRV_HAP_UNCACHED|PVRSRV_HAP_KERNEL_ONLY,
 					 IMG_NULL);
-#endif
 
 	if(i32Count == -1)
 	{
@@ -574,13 +532,9 @@ PVRSRV_ERROR SysDeinitialise (SYS_DATA *psSysData)
 
 	SysDeinitialiseCommon(gpsSysData);
 
-#if defined(NO_HARDWARE) || defined(SGX_OCP_REGS_ENABLED)
+#if defined(SGX_OCP_REGS_ENABLED)
 	if(gsSGXRegsCPUVAddr != IMG_NULL)
 	{
-#if defined(NO_HARDWARE)
-
-		OSBaseFreeContigMemory(SYS_MTK_SGX_REGS_SIZE, gsSGXRegsCPUVAddr, gsSGXDeviceMap.sRegsCpuPBase);
-#else
 #if defined(SGX_OCP_REGS_ENABLED)
 		OSUnMapPhysToLin(gsSGXRegsCPUVAddr,
 		gsSGXDeviceMap.ui32RegsSize,
@@ -588,7 +542,6 @@ PVRSRV_ERROR SysDeinitialise (SYS_DATA *psSysData)
 												 IMG_NULL);
 
 		gpvOCPRegsLinAddr = IMG_NULL;
-#endif
 #endif
 		gsSGXRegsCPUVAddr = IMG_NULL;
 		gsSGXDeviceMap.pvRegsCpuVBase = gsSGXRegsCPUVAddr;
@@ -701,13 +654,7 @@ IMG_UINT32 SysGetInterruptSource(SYS_DATA			*psSysData,
 								 PVRSRV_DEVICE_NODE	*psDeviceNode)
 {
 	PVR_UNREFERENCED_PARAMETER(psSysData);
-#if defined(NO_HARDWARE)
-
-	return 0xFFFFFFFF;
-#else
-
 	return psDeviceNode->ui32SOCInterruptBit;
-#endif
 }
 
 
@@ -715,13 +662,11 @@ IMG_VOID SysClearInterrupts(SYS_DATA* psSysData, IMG_UINT32 ui32ClearBits)
 {
 	PVR_UNREFERENCED_PARAMETER(ui32ClearBits);
 	PVR_UNREFERENCED_PARAMETER(psSysData);
-#if !defined(NO_HARDWARE)
 #if defined(SGX_OCP_NO_INT_BYPASS)
 	OSWriteHWReg(gpvOCPRegsLinAddr, EUR_CR_OCP_IRQSTATUS_2, 0x1);
 #endif
 
 	OSReadHWReg(((PVRSRV_SGXDEV_INFO *)gpsSGXDevNode->pvDevice)->pvRegsBaseKM, EUR_CR_EVENT_HOST_CLEAR);
-#endif
 }
 
 #if defined(SGX_OCP_NO_INT_BYPASS)
