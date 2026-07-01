@@ -35,7 +35,7 @@ static const struct mtk_gate_regs larb_cg_regs = {
 
 static const struct mtk_gate vdec_clks[] = {
 	GATE_VDEC(CLK_VDEC0_VDE, "vdec0_vde", "vdec_sel", 0),
-	GATE_LARB(CLK_VDEC1_SMI, "vdec1_smi", "vdec_sel", 0),
+	GATE_LARB(CLK_VDEC1_SMI, "vdec1_smi", "smi_sel", 0), /* mt8135 */
 };
 
 static const struct mtk_clk_desc vdec_desc = {

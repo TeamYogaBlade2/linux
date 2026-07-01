@@ -37,25 +37,25 @@ static const struct mtk_gate_regs infra_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate infra_clks[] = {
-	GATE_INFRA(CLK_INFRA_DBGCLK, "infra_dbgclk", "axi_sel", 0), /* maybe */
-	GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "smi_sel", 1), /* maybe */
+	GATE_INFRA(CLK_INFRA_DBGCLK, "infra_dbgclk", "axi_sel", 0), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "smi_sel", 1), /* mt8135 */
 	GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "spi_sel", 2), /* maybe, is it infra_mfg_bus? */
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
 	GATE_MTK(CLK_INFRA_CEC, "infra_cec", "axi_sel", &infra_cg_regs, 6, &mtk_clk_gate_ops_setclr_inv), /* or devapc */
-	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* maybe */
-	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* or axi_sel, maybe */
+	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* mt8135 */
 	GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "axi_sel", 9), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD1HWMIXAXI, "infra_md1hwmixaxi", "axi_sel", 10), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD1AHB, "infra_md1ahb", "axi_sel", 11), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD2MCUAXI, "infra_md2mcuaxi", "axi_sel", 12), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD2HWMIXAXI, "infra_md2hwmixaxi", "axi_sel", 13), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD2AHB, "infra_md2ahb", "axi_sel", 14), /* maybe */
-	GATE_INFRA(CLK_INFRA_CPUM, "infra_cpum", "cpum_tck_in", 15), /* from MT8135 */
-	GATE_INFRA(CLK_INFRA_KP, "infra_kp", "axi_sel", 16), /* maybe */
-	GATE_INFRA(CLK_INFRA_CCIF0, "infra_ccif0", "axi_sel", 20), /* maybe */
-	GATE_INFRA(CLK_INFRA_CCIF1, "infra_ccif1", "axi_sel", 21), /* maybe */
-	GATE_INFRA(CLK_INFRA_PMICSPI, "infra_pmicspi", "pmicspi_sel", 22), /* maybe */
-	GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "axi_sel", 23), /* maybe */
+	GATE_INFRA(CLK_INFRA_CPUM, "infra_cpum", "cpum_tck_in", 15), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_KP, "infra_kp", "axi_sel", 16), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_CCIF0, "infra_ccif0", "axi_sel", 20), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_CCIF1, "infra_ccif1", "axi_sel", 21), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_PMICSPI, "infra_pmicspi", "pmicspi_sel", 22), /* mt8135 */
+	GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "axi_sel", 23), /* mt8135 */
 };
 
 static u16 infrasys_rst_ofs[] = { 0x30, 0x34, };
