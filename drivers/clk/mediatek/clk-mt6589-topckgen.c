@@ -10,9 +10,6 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
-/* HACK: reg starts from 0x10000100 to avoid overlap with the watchdog register area */
-#define BASE_SHIFT 0x0100
-
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 
 static const struct mtk_fixed_clk top_fixed_clks[] = {
@@ -325,15 +322,15 @@ static const char * const smi_mfg_as_parents[] = {
 	"hyd_sel",
 };
 
-#define CLK_CFG_0 (0x0140 - BASE_SHIFT)
-#define CLK_CFG_1 (0x0144 - BASE_SHIFT)
-#define CLK_CFG_2 (0x0148 - BASE_SHIFT)
-#define CLK_CFG_3 (0x014c - BASE_SHIFT)
-#define CLK_CFG_4 (0x0150 - BASE_SHIFT)
-#define CLK_CFG_5 (0x0154 - BASE_SHIFT)
-#define CLK_CFG_6 (0x0158 - BASE_SHIFT)
-#define CLK_CFG_7 (0x015c - BASE_SHIFT)
-#define CLK_CFG_8 (0x0164 - BASE_SHIFT)
+#define CLK_CFG_0 0x40
+#define CLK_CFG_1 0x44
+#define CLK_CFG_2 0x48
+#define CLK_CFG_3 0x4c
+#define CLK_CFG_4 0x50
+#define CLK_CFG_5 0x54
+#define CLK_CFG_6 0x58
+#define CLK_CFG_7 0x5c
+#define CLK_CFG_8 0x64
 
 static struct mtk_composite top_muxes[] = {
 	/* CLK_CFG_0 */
@@ -407,9 +404,9 @@ static struct mtk_composite top_muxes[] = {
 		CLK_CFG_8, 16, 2, 23),
 };
 
-#define TOPCK_PDN_SET	(0x0170 - BASE_SHIFT)
-#define TOPCK_PDN_CLR	(0x0174 - BASE_SHIFT)
-#define TOPCK_PDN_STA	(0x0178 - BASE_SHIFT)
+#define TOPCK_PDN_SET	0x70
+#define TOPCK_PDN_CLR	0x74
+#define TOPCK_PDN_STA	0x78
 
 static const struct mtk_gate_regs topck_cg_regs = {
 	.set_ofs = TOPCK_PDN_SET,
