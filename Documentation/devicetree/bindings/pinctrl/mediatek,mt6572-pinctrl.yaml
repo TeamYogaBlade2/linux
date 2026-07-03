@@ -1,0 +1,249 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/pinctrl/mediatek,mt6572-pinctrl.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6572 Pin Controller
+
+maintainers:
+  - Roman Vivchar <rva333@protonmail.com>
+
+description:
+  The MediaTek's MT6572 Pin controller is used to control SoC pins.
+
+properties:
+  compatible:
+    const: mediatek,mt6572-pinctrl
+
+  gpio-controller: true
+
+  '#gpio-cells':
+    description:
+      Number of cells in GPIO specifier. Since the generic GPIO binding is used,
+      the amount of cells must be specified as 2. See the below mentioned gpio
+      binding representation for description of particular cells.
+    const: 2
+
+  gpio-ranges:
+    description: GPIO valid number range.
+    maxItems: 1
+
+  reg:
+    items:
+      - description: pin controller base
+      - description: top IOCFG
+      - description: bottom IOCFG
+      - description: left IOCFG
+      - description: right IOCFG
+      - description: EINT base
+
+  reg-names:
+    items:
+      - const: base
+      - const: iocfg_t
+      - const: iocfg_b
+      - const: iocfg_l
+      - const: iocfg_r
+      - const: eint
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 2
+
+  interrupts:
+    description: Interrupt outputs to the system interrupt controller (sysirq).
+    minItems: 1
+    items:
+      - description: EINT interrupt
+      - description: EINT event_b interrupt
+
+# PIN CONFIGURATION NODES
+patternProperties:
+  '-pins$':
+    type: object
+    additionalProperties: false
+    patternProperties:
+      '^pins':
+        type: object
+        additionalProperties: false
+        description: |
+          A pinctrl node should contain at least one subnodes representing the
+          pinctrl groups available on the machine. Each subnode will list the
+          pins it needs, and how they should be configured, with regard to muxer
+          configuration, pullups, drive strength, input enable/disable and input
+          schmitt.
+          An example of using macro:
+          pincontroller {
+            /* GPIO0 set as multifunction GPIO0 */
+            gpio-pins {
+              pins {
+                pinmux = <PINMUX_GPIO0__FUNC_GPIO0>;
+              }
+            };
+            /* GPIO106 set as multifunction SDA0 */
+            i2c0-pins {
+              pins {
+                pinmux = <PINMUX_GPIO106__FUNC_SDA_0>;
+              }
+            };
+          };
+        $ref: pinmux-node.yaml
+
+        properties:
+          pinmux:
+            description:
+              Integer array, represents gpio pin number and mux setting.
+              Supported pin number and mux varies for different SoCs, and are
+              defined as macros in dt-bindings/pinctrl/<soc>-pinfunc.h directly.
+
+          drive-strength:
+            enum: [2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
+
+          bias-pull-down:
+            oneOf:
+              - type: boolean
+              - enum: [100, 101, 102, 103]
+                description: mt6572 pull down PUPD/R0/R1 type define value.
+            description:
+              For normal pull down type, it is not necessary to specify R1R0
+              values; When pull down type is PUPD/R0/R1, adding R1R0 defines
+              will set different resistance values.
+
+          bias-pull-up:
+            oneOf:
+              - type: boolean
+              - enum: [100, 101, 102, 103]
+                description: mt6572 pull up PUPD/R0/R1 type define value.
+            description:
+              For normal pull up type, it is not necessary to specify R1R0
+              values; When pull up type is PUPD/R0/R1, adding R1R0 defines will
+              set different resistance values.
+
+          bias-disable: true
+
+          output-high: true
+
+          output-low: true
+
+          input-enable: true
+
+          input-disable: true
+
+          input-schmitt-enable: true
+
+          input-schmitt-disable: true
+
+          mediatek,pull-up-adv:
+            description: |
+              Pull up settings for 2 pull resistors, R0 and R1. User can
+              configure those special pins. Valid arguments are described as
+              below:
+              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
+              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
+              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
+              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [0, 1, 2, 3]
+
+          mediatek,pull-down-adv:
+            description: |
+              Pull down settings for 2 pull resistors, R0 and R1. User can
+              configure those special pins. Valid arguments are described as
+              below:
+              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
+              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
+              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
+              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [0, 1, 2, 3]
+
+          mediatek,tdsel:
+            description:
+              An integer describing the steps for output level shifter duty
+              cycle when asserted (high pulse width adjustment). Valid arguments
+              are from 0 to 15.
+            $ref: /schemas/types.yaml#/definitions/uint32
+
+          mediatek,rdsel:
+            description:
+              An integer describing the steps for input level shifter duty cycle
+              when asserted (high pulse width adjustment). Valid arguments are
+              from 0 to 63.
+            $ref: /schemas/types.yaml#/definitions/uint32
+
+        required:
+          - pinmux
+
+allOf:
+  - $ref: pinctrl.yaml#
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - interrupt-controller
+  - '#interrupt-cells'
+  - gpio-controller
+  - '#gpio-cells'
+  - gpio-ranges
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/pinctrl/mediatek,mt6572-pinfunc.h>
+
+    soc {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        pinctrl@1000b000 {
+            compatible = "mediatek,mt6572-pinctrl";
+            reg = <0x10005000 0x1000>,
+                  <0x10208000 0x1000>,
+                  <0x10209000 0x1000>,
+                  <0x1020a000 0x1000>,
+                  <0x1020b000 0x1000>,
+                  <0x1000b000 0x1000>;
+            reg-names = "base", "iocfg_t", "iocfg_b",
+                        "iocfg_l", "iocfg_r", "eint";
+            interrupts = <GIC_SPI 76 IRQ_TYPE_LEVEL_HIGH>;
+            interrupt-controller;
+            interrupt-parent = <&gic>;
+            #interrupt-cells = <2>;
+            gpio-controller;
+            gpio-ranges = <&pio 0 0 154>;
+            #gpio-cells = <2>;
+
+            mmc0-pins {
+                pins-clk {
+                    pinmux = <PINMUX_GPIO44__FUNC_MC0_CK>;
+                    bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+                };
+
+                pins-cmd-dat {
+                        pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
+                                 <PINMUX_GPIO46__FUNC_MC0_DAT0>,
+                                 <PINMUX_GPIO47__FUNC_MC0_DAT1>,
+                                 <PINMUX_GPIO48__FUNC_MC0_DAT2>,
+                                 <PINMUX_GPIO49__FUNC_MC0_DAT3>,
+                                 <PINMUX_GPIO50__FUNC_MC0_DAT4>,
+                                 <PINMUX_GPIO51__FUNC_MC0_DAT5>,
+                                 <PINMUX_GPIO52__FUNC_MC0_DAT6>,
+                                 <PINMUX_GPIO53__FUNC_MC0_DAT7>;
+                        input-enable;
+                        bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+                };
+
+                pins-rst {
+                        pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
+                        bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+                };
+            };
+        };
+    };
