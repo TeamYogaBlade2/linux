@@ -102,13 +102,14 @@ static void mtk_pll_set_rate_regs(struct mtk_clk_pll *pll, u32 pcw,
 		int postdiv)
 {
 	u32 chg, val;
+	u32 mask = pll->data->pd_mask ?: POSTDIV_MASK;
 
 	/* disable tuner */
 	__mtk_pll_tuner_disable(pll);
 
 	/* set postdiv */
 	val = readl(pll->pd_addr);
-	val &= ~(POSTDIV_MASK << pll->data->pd_shift);
+	val &= ~(mask << pll->data->pd_shift);
 	val |= (ffs(postdiv) - 1) << pll->data->pd_shift;
 
 	/* postdiv and pcw need to set at the same time if on same register */
@@ -198,8 +199,9 @@ unsigned long mtk_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 postdiv;
 	u32 pcw;
+	u32 mask = pll->data->pd_mask ?: POSTDIV_MASK;
 
-	postdiv = (readl(pll->pd_addr) >> pll->data->pd_shift) & POSTDIV_MASK;
+	postdiv = (readl(pll->pd_addr) >> pll->data->pd_shift) & mask;
 	postdiv = 1 << postdiv;
 
 	pcw = readl(pll->pcw_addr) >> pll->data->pcw_shift;
