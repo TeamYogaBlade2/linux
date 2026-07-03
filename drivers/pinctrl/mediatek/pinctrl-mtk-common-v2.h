@@ -104,6 +104,7 @@ enum {
 	DRV_GRP2,
 	DRV_GRP3,
 	DRV_GRP4,
+	DRV_GRP5,
 	DRV_GRP_MAX,
 };
 
