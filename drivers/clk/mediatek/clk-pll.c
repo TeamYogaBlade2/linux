@@ -102,13 +102,14 @@ static void mtk_pll_set_rate_regs(struct mtk_clk_pll *pll, u32 pcw,
 		int postdiv)
 {
 	u32 chg, val;
+	u32 mask = pll->data->pd_mask ?: POSTDIV_MASK;
 
 	/* disable tuner */
 	__mtk_pll_tuner_disable(pll);
 
 	/* set postdiv */
 	val = readl(pll->pd_addr);
-	val &= ~(POSTDIV_MASK << pll->data->pd_shift);
+	val &= ~(mask << pll->data->pd_shift);
 	val |= (ffs(postdiv) - 1) << pll->data->pd_shift;
 
 	/* postdiv and pcw need to set at the same time if on same register */
@@ -198,8 +199,9 @@ unsigned long mtk_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 postdiv;
 	u32 pcw;
+	u32 mask = pll->data->pd_mask ?: POSTDIV_MASK;
 
-	postdiv = (readl(pll->pd_addr) >> pll->data->pd_shift) & POSTDIV_MASK;
+	postdiv = (readl(pll->pd_addr) >> pll->data->pd_shift) & mask;
 	postdiv = 1 << postdiv;
 
 	pcw = readl(pll->pcw_addr) >> pll->data->pcw_shift;
@@ -228,13 +230,15 @@ int mtk_pll_prepare(struct clk_hw *hw)
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 r;
 
-	r = readl(pll->pwr_addr) | CON0_PWR_ON;
-	writel(r, pll->pwr_addr);
-	udelay(1);
+	if (pll->pwr_addr) {
+		r = readl(pll->pwr_addr) | CON0_PWR_ON;
+		writel(r, pll->pwr_addr);
+		udelay(1);
 
-	r = readl(pll->pwr_addr) & ~CON0_ISO_EN;
-	writel(r, pll->pwr_addr);
-	udelay(1);
+		r = readl(pll->pwr_addr) & ~CON0_ISO_EN;
+		writel(r, pll->pwr_addr);
+		udelay(1);
+	}
 
 	r = readl(pll->en_addr) | BIT(pll->data->pll_en_bit);
 	writel(r, pll->en_addr);
@@ -278,11 +282,13 @@ void mtk_pll_unprepare(struct clk_hw *hw)
 	r = readl(pll->en_addr) & ~BIT(pll->data->pll_en_bit);
 	writel(r, pll->en_addr);
 
-	r = readl(pll->pwr_addr) | CON0_ISO_EN;
-	writel(r, pll->pwr_addr);
+	if (pll->pwr_addr) {
+		r = readl(pll->pwr_addr) | CON0_ISO_EN;
+		writel(r, pll->pwr_addr);
 
-	r = readl(pll->pwr_addr) & ~CON0_PWR_ON;
-	writel(r, pll->pwr_addr);
+		r = readl(pll->pwr_addr) & ~CON0_PWR_ON;
+		writel(r, pll->pwr_addr);
+	}
 }
 
 static int mtk_pll_prepare_setclr(struct clk_hw *hw)
@@ -333,7 +339,8 @@ struct clk_hw *mtk_clk_register_pll_ops(struct mtk_clk_pll *pll,
 	const char *parent_name = "clk26m";
 
 	pll->base_addr = base + data->reg;
-	pll->pwr_addr = base + data->pwr_reg;
+	if (data->pwr_reg)
+		pll->pwr_addr = base + data->pwr_reg;
 	pll->pd_addr = base + data->pd_reg;
 	pll->pcw_addr = base + data->pcw_reg;
 	if (data->pcw_chg_reg)

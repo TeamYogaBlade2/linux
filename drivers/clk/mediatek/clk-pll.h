@@ -30,6 +30,7 @@ struct mtk_pll_data {
 	u32 en_mask;
 	u32 fenc_sta_ofs;
 	u32 pd_reg;
+	u32 pd_mask; /* default POSTDIV_MASK if 0 */
 	u32 tuner_reg;
 	u32 tuner_en_reg;
 	u8 tuner_en_bit;
