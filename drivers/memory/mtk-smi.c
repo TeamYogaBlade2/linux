@@ -60,6 +60,10 @@
 #define SMI_LARB_OSTDL_PORT		0x200
 #define SMI_LARB_OSTDL_PORTx(id)	(SMI_LARB_OSTDL_PORT + (((id) & 0x1f) << 2))
 
+/* mt6589  */
+#define SMI_LARB_SHARE_EN		0x210
+#define SMI_LARB_ROUTE_SEL		0x220
+
 #define SMI_LARB_FIFO_STAT0      0x600
 
 /* Below are about mmu enable registers, they are different in SoCs */
@@ -260,6 +264,38 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 			writel_relaxed(0xffffffff,
 				       larb->base + offset);
 		}
+	}
+
+	return 0;
+}
+
+static int mtk_smi_larb_config_port_mt6589(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	int ret;
+
+	/* Execute the common Gen0 port configuration first */
+	ret = mtk_smi_larb_config_port_gen0(dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * MT6589 requires additional LARB-local settings:
+	 * - Disable share for all ports
+	 * - Route specific ports to EMI instead of MCI
+	 */
+	writel_relaxed(0x0, larb->base + SMI_LARB_SHARE_EN);
+
+	switch (larb->larbid) {
+	case 2:
+		writel_relaxed(0x1e, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
+	case 4:
+		writel_relaxed(0xffffffff, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
+	default:
+		writel_relaxed(0x0, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
 	}
 
 	return 0;
@@ -572,7 +608,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6589 = {
 	.port_in_larb =  { 0, 10, 17, 29, 44 ,56 },
-	.config_port = mtk_smi_larb_config_port_gen0,
+	.config_port = mtk_smi_larb_config_port_mt6589,
 	.flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
 };
 
