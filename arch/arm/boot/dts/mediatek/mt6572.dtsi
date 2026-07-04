@@ -225,6 +225,28 @@
 			status = "disabled";
 		};
 
+		mmc0: mmc@11120000 {
+			compatible = "mediatek,mt6572-mmc", "mediatek,mt8135-mmc";
+			reg = <0x11120000 0x1000>;
+			interrupts = <GIC_SPI 26 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&topckgen CLK_TOP_MSDC0>,
+				 <&topckgen CLK_TOP_AXI_SEL>,
+				 <&topckgen CLK_TOP_MSDC0_SEL>;
+			clock-names = "source", "hclk", "source_cg";
+			status = "disabled";
+		};
+
+		mmc1: mmc@11130000 {
+			compatible = "mediatek,mt6572-mmc", "mediatek,mt8135-mmc";
+			reg = <0x11130000 0x1000>;
+			interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&topckgen CLK_TOP_MSDC1>,
+				 <&topckgen CLK_TOP_AXI_SEL>,
+				 <&topckgen CLK_TOP_MSDC1_SEL>;
+			clock-names = "source", "hclk", "source_cg";
+			status = "disabled";
+		};
+
 		mfgcfg: syscon@13000000 {
 			compatible = "mediatek,mt6572-mfgcfg", "syscon";
 			reg = <0x13000000 0x1000>;
