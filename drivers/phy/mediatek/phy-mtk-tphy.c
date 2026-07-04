@@ -954,7 +954,7 @@ static void mt6589_u2_phy_recover(struct mtk_tphy *tphy,
 	/*
 	 * NOTE: Downstream performs ID pull-up only once during otg_int_init().
 	 * Forcing it again on every power-on is mainline-specific.
- 	 */
+	 */
 	mtk_phy_set_bits(com + U3P_U2PHYDTM1,
 			 P2C_FORCE_IDPULLUP | P2C_RG_IDPULLUP);
 
@@ -1194,7 +1194,7 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 		/*
 		 * NOTE: Applying host_force_mask (VBUS/AVALID/BVALID/IDPULLUP) is mainline-only.
 		 * Downstream MT6589 does not force these bits; the code was #if 0'd out.
-	 	 */
+		 */
 		if (force & P2C_FORCE_IDPULLUP)
 			tmp |= P2C_RG_IDPULLUP;
 	}
