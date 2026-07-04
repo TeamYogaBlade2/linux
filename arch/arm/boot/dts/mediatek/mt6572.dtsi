@@ -5,6 +5,7 @@
 
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/phy/phy.h>
 #include <dt-bindings/clock/mediatek,mt6572-clk.h>
 #include <dt-bindings/reset/mediatek,mt6572-resets.h>
 #include <dt-bindings/power/mediatek,mt6572-power-controller.h>
@@ -245,6 +246,37 @@
 		        #address-cells = <1>;
 		        #size-cells = <0>;
 		        status = "disabled";
+		};
+
+		usb: usb@11100000 {
+			compatible = "mediatek,mt6572-musb", "mediatek,mtk-musb";
+			reg = <0x11100000 0x1000>;
+			interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "mc";
+			phys = <&u2port0 PHY_TYPE_USB2>;
+			dr_mode = "otg";
+			clocks = <&topckgen CLK_TOP_USB>,
+				 <&topckgen CLK_TOP_USB>,
+				 <&apmixedsys CLK_APMIXED_USB48M>;
+			clock-names = "main", "mcu", "univpll";
+			status = "disabled";
+		};
+
+		u2phy0: t-phy@11110000 {
+		        compatible = "mediatek,mt6572-tphy",
+				     "mediatek,generic-tphy-v1";
+			reg = <0x11110000 0x0700>;
+			ranges;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			status = "disabled";
+
+			u2port0: usb-phy@11110800 {
+				reg = <0x11110800 0x0100>;
+				clocks = <&apmixedsys CLK_APMIXED_USB48M>;
+				clock-names = "ref";
+				#phy-cells = <1>;
+		        };
 		};
 
 		mmc0: mmc@11120000 {
