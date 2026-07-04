@@ -856,6 +856,8 @@ static const struct mtk_smi_common_plat mtk_smi_common_gen2 = {
 static const struct mtk_smi_common_plat mtk_smi_common_mt6589 = {
 	.type     = MTK_SMI_GEN0,
 	.init     = mtk_smi_common_mt6589_init,
+ 	/* LARB0→MMU0, LARB1→MMU1, LARB2→MMU0, LARB3→MMU1, LARB4→MMU1 */
+	.bus_sel  = 0x110,
 };
 
 static const struct mtk_smi_common_plat mtk_smi_common_mt6779 = {
@@ -1049,7 +1051,7 @@ static int __maybe_unused mtk_smi_common_resume(struct device *dev)
 	for (i = 0; i < SMI_COMMON_INIT_REGS_NR && init && init[i].offset; i++)
 		writel_relaxed(init[i].value, common->base + init[i].offset);
 
-	if (common->plat->type == MTK_SMI_GEN2)
+	if (common->plat->bus_sel)
 		writel(bus_sel, common->base + SMI_BUS_SEL);
 
 	return 0;
