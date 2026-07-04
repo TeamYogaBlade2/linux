@@ -162,6 +162,18 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
+		pwrap: pwrap@1000f000 {
+			compatible = "mediatek,mt6572-pwrap";
+			reg = <0x1000f000 0x1000>;
+			reg-names = "pwrap";
+			interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_HIGH>;
+			resets = <&watchdog MT6572_TOPRGU_PWRAP_SPI_CTL_RST>;
+			reset-names = "pwrap";
+			clocks = <&topckgen CLK_TOP_PMIC_SPI>,
+				 <&topckgen CLK_TOP_PMIC_26M>;
+			clock-names = "spi", "wrap";
+		};
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6572-sysirq", "mediatek,mt6577-sysirq";
 			reg = <0x10200100 0x1c>;
