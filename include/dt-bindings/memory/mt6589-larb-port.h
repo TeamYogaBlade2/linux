@@ -84,6 +84,9 @@
 #define MT6589_M4U_PORT_AAO			MT6589_M4U_ID_LARB4(9)
 
 /* larb5 */
+/* xxx: is it really larb? */
 #define MT6589_M4U_PORT_AUDIO			MT6589_M4U_ID_LARB5(0)
+
+#define MT6589_M4U_PORT_NR			54
 
 #endif
