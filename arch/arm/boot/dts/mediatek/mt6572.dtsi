@@ -5,6 +5,8 @@
 
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/mediatek,mt6572-clk.h>
+#include <dt-bindings/reset/mediatek,mt6572-resets.h>
 
 / {
 	#address-cells = <1>;
@@ -75,6 +77,19 @@
 		compatible = "simple-bus";
 		ranges;
 
+		topckgen: syscon@10000000 {
+			compatible = "mediatek,mt6572-topckgen", "syscon";
+			reg = <0x10000000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		infracfg_ao: syscon@10001000 {
+			compatible = "mediatek,mt6572-infracfg_ao", "syscon";
+			reg = <0x10001000 0x1000>;
+			#access-controller-cells = <0>;
+			#clock-cells = <1>;
+		};
+
 		watchdog: watchdog@10007000 {
 			compatible = "mediatek,mt6572-wdt", "mediatek,mt6589-wdt";
 			reg = <0x10007000 0x100>;
@@ -97,6 +112,12 @@
 			interrupt-controller;
 			#interrupt-cells = <3>;
 			interrupt-parent = <&gic>;
+		};
+
+		apmixedsys: apmixedsys@10205000 {
+			compatible = "mediatek,mt6572-apmixedsys", "syscon";
+			reg = <0x10205000 0x1000>;
+			#clock-cells = <1>;
 		};
 
 		gic: interrupt-controller@10211000 {
@@ -126,6 +147,12 @@
 			clocks = <&clk26m>;
 			clock-names = "baud";
 			status = "disabled";
+		};
+
+		mfgcfg: syscon@13000000 {
+			compatible = "mediatek,mt6572-mfgcfg", "syscon";
+			reg = <0x13000000 0x1000>;
+			#clock-cells = <1>;
 		};
 	};
 };
