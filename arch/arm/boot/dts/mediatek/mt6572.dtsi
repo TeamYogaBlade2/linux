@@ -8,6 +8,7 @@
 #include <dt-bindings/clock/mediatek,mt6572-clk.h>
 #include <dt-bindings/reset/mediatek,mt6572-resets.h>
 #include <dt-bindings/power/mediatek,mt6572-power-controller.h>
+#include <dt-bindings/pinctrl/mediatek,mt6572-pinfunc.h>
 
 / {
 	#address-cells = <1>;
@@ -89,6 +90,25 @@
 			reg = <0x10001000 0x1000>;
 			#access-controller-cells = <0>;
 			#clock-cells = <1>;
+		};
+
+		pio: pinctrl@10005000 {
+			compatible = "mediatek,mt6572-pinctrl";
+			reg = <0x10005000 0x1000>,
+			      <0x10208000 0x1000>,
+			      <0x10209000 0x1000>,
+			      <0x1020a000 0x1000>,
+			      <0x1020b000 0x1000>,
+			      <0x1000b000 0x1000>;
+			reg-names = "base", "iocfg_t", "iocfg_b",
+				    "iocfg_l", "iocfg_r", "eint";
+			interrupts = <GIC_SPI 76 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-controller;
+			interrupt-parent = <&gic>;
+			#interrupt-cells = <2>;
+			gpio-controller;
+			gpio-ranges = <&pio 0 0 154>;
+			#gpio-cells = <2>;
 		};
 
 		syscon@10006000 {
