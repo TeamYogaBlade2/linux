@@ -146,8 +146,8 @@ static struct mtk_iommu_v1_domain *to_mtk_domain(struct iommu_domain *dom)
 }
 
 static const int mt2701_m4u_in_larb[] = {
-	LARB0_PORT_OFFSET, LARB1_PORT_OFFSET,
-	LARB2_PORT_OFFSET, LARB3_PORT_OFFSET
+	MT2701_LARB0_PORT_OFFSET, MT2701_LARB1_PORT_OFFSET,
+	MT2701_LARB2_PORT_OFFSET, MT2701_LARB3_PORT_OFFSET
 };
 
 static inline int mt2701_m4u_to_larb(int id)
