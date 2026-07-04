@@ -560,7 +560,8 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	),
 	MTK_PIN(
 		48, "GPIO48",
-		MTK_EINT_FUNCTION(2, 34),
+		//MTK_EINT_FUNCTION(2, 34),
+		MTK_EINT_FUNCTION(2, 81), // fake
 		DRV_GRP1,
 		MTK_FUNCTION(0, "GPIO48"),
 		MTK_FUNCTION(1, "MD1_SIM2_SRST"),
