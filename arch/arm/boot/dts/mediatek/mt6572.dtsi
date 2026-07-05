@@ -7,6 +7,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mediatek,mt6572-clk.h>
 #include <dt-bindings/reset/mediatek,mt6572-resets.h>
+#include <dt-bindings/power/mediatek,mt6572-power-controller.h>
 
 / {
 	#address-cells = <1>;
@@ -90,6 +91,41 @@
 			#clock-cells = <1>;
 		};
 
+		syscon@10006000 {
+			compatible = "mediatek,mt6572-scpsys", "syscon", "simple-mfd";
+			reg = <0x10006000 0x1000>;
+
+			spm: power-controller {
+				compatible = "mediatek,mt6572-power-controller";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#power-domain-cells = <1>;
+				access-controllers = <&infracfg_ao>;
+
+				power-domain@MT6572_POWER_DOMAIN_MD1 {
+					reg = <MT6572_POWER_DOMAIN_MD1>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6572_POWER_DOMAIN_CONN {
+					reg = <MT6572_POWER_DOMAIN_CONN>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6572_POWER_DOMAIN_DIS {
+					reg = <MT6572_POWER_DOMAIN_DIS>;
+					#power-domain-cells = <0>;
+				};
+
+				power-domain@MT6572_POWER_DOMAIN_MFG {
+					reg = <MT6572_POWER_DOMAIN_MFG>;
+					#power-domain-cells = <0>;
+					clocks = <&topckgen CLK_TOP_MFG_MM>;
+					clock-names = "mfg";
+				};
+			};
+		};
+
 		watchdog: watchdog@10007000 {
 			compatible = "mediatek,mt6572-wdt", "mediatek,mt6589-wdt";
 			reg = <0x10007000 0x100>;
@@ -155,6 +191,7 @@
 			compatible = "mediatek,mt6572-mfgcfg", "syscon";
 			reg = <0x13000000 0x1000>;
 			#clock-cells = <1>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_MFG>;
 		};
 	};
 };
