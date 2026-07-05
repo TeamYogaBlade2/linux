@@ -25,11 +25,6 @@
 #endif
 #endif
 
-/* VGX: */
-#if defined(SUPPORT_VGX)
-#include "vgx_bridge.h"
-#endif
-
 /* SGX: */
 #if defined(SUPPORT_SGX)
 #include "sgx_bridge.h"

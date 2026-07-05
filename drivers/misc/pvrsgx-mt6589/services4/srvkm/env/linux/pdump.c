@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
-#if defined (SUPPORT_SGX) || defined (SUPPORT_VGX)
+#if defined (SUPPORT_SGX)
 #if defined (PDUMP)
 
 #include <asm/atomic.h>

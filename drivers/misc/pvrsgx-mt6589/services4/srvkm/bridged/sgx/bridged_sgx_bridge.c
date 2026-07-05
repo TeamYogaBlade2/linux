@@ -15,11 +15,6 @@
 #include "pvr_bridge_km.h"
 #include "sgx_bridge_km.h"
 #include "sgx_options.h"
-
-#if defined(SUPPORT_MSVDX)
-	#include "msvdx_bridge.h"
-#endif
-
 #include "bridged_pvr_bridge.h"
 #include "bridged_sgx_bridge.h"
 #include "sgxutils.h"
