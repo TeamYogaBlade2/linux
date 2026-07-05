@@ -183,6 +183,41 @@ static IMG_CHAR *SysCreateVersionString(void)
 }
 */
 
+static int sgx_devfreq_target(struct device *dev, unsigned long *freq, u32 flags)
+{
+	struct dev_pm_opp *opp;
+	int ret;
+
+	opp = devfreq_recommended_opp(dev, freq, flags);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp);
+
+	dev_pm_opp_put(opp);
+
+	ret = dev_pm_opp_set_rate(dev, *freq);
+	if (ret)
+		dev_err(dev, "failed to set OPP rate %lu Hz: %d\n", *freq, ret);
+
+	return ret;
+}
+
+static int sgx_devfreq_get_dev_status(struct device *dev,
+				      struct devfreq_dev_status *stat)
+{
+	SYS_DATA *psSysData;
+	SysAcquireData(&psSysData);
+
+	/* FIXME: dummy */
+	stat->busy_time = psSysData->busy_time;
+	stat->total_time = psSysData->total_time;
+	stat->current_frequency = clk_get_rate(psSysData->clk_core);
+
+	psSysData->busy_time = 0;
+	psSysData->total_time = 0;
+
+	return 0;
+}
+
 PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 {
 	IMG_UINT32			i;
@@ -269,6 +304,26 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 			gpsSysData->vdd_reg = NULL;
 		else
 			return dev_err_probe(&pdev->dev, PTR_ERR(gpsSysData->vdd_reg), "failed to get regulator\n");
+	}
+
+	eError = devm_pm_opp_of_add_table(&pdev->dev);
+	if (eError) {
+		dev_err(&pdev->dev, "failed to add OPP table: %d\n", eError);
+		return eError;
+	}
+
+	gpsSysData->devfreq_profile.target = sgx_devfreq_target;
+	gpsSysData->devfreq_profile.get_dev_status = sgx_devfreq_get_dev_status;
+	gpsSysData->devfreq_profile.initial_freq = clk_get_rate(gpsSysData->clk_core);
+	gpsSysData->devfreq_profile.polling_ms = 30;
+
+	gpsSysData->devfreq = devm_devfreq_add_device(&pdev->dev,
+						       &gpsSysData->devfreq_profile,
+						       "simple_ondemand",
+						       NULL);
+	if (IS_ERR(gpsSysData->devfreq)) {
+		dev_err(&pdev->dev, "failed to add devfreq device\n");
+		return PTR_ERR(gpsSysData->devfreq);
 	}
 
 	pm_runtime_enable(&pdev->dev);

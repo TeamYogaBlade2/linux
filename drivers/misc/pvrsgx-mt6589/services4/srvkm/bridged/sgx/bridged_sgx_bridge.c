@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
+#include "syscommon.h"
 #include <linux/stddef.h>
+#include <linux/devfreq.h>
+#include <linux/pm_opp.h>
 
 #include "img_defs.h"
 
@@ -3019,51 +3022,88 @@ SGXPDumpSaveMemBW(IMG_UINT32						ui32BridgeID,
 #endif /* PDUMP */
 
 
+typedef struct PVRSRV_BRIDGE_INPUT_TAG
+{
+    unsigned int freq;
+    unsigned int type;
+} PVRSRV_BRIDGE_INPUT;
+
+typedef struct PVRSRV_BRIDGE_PWSRC_INPUT_TAG
+{
+    unsigned int in;
+} PVRSRV_BRIDGE_PWSRC_INPUT;
+
+typedef struct PVRSRV_BRIDGE_PWSRC_RETURN_TAG
+{
+    int powersrc;
+} PVRSRV_BRIDGE_PWSRC_RETURN;
+
+extern struct platform_device *gpsPVRLDMDev;
+
 static IMG_INT
 SGXSetFreqInfoBW(IMG_UINT32 ui32BridgeID,
-                 PVRSRV_BRIDGE_INPUT *psDataIN,
-                 PVRSRV_BRIDGE_RETURN *psRetOUT,
-                 PVRSRV_PER_PROCESS_DATA *psPerProc)
+		 PVRSRV_BRIDGE_INPUT *psDataIN,
+		 PVRSRV_BRIDGE_RETURN *psRetOUT,
+		 PVRSRV_PER_PROCESS_DATA *psPerProc)
 {
-    unsigned int freqSet = psDataIN->freq;
-    unsigned int tbltype = psDataIN->type;
+	SYS_DATA *psSysData;
+	SysAcquireData(&psSysData);
+
+	unsigned long freq = psDataIN->freq * 1000; /* kHz -> Hz */
+	struct device *dev = &gpsPVRLDMDev->dev;
+	int ret;
 
 	PVRSRV_BRIDGE_ASSERT_CMD(ui32BridgeID, PVRSRV_BRIDGE_MTK_SET_FREQ_INFO);
 	PVR_UNREFERENCED_PARAMETER(psPerProc);
 
-	psRetOUT->eError = MTKSetFreqInfo(freqSet, tbltype);
-	if (psRetOUT->eError != PVRSRV_OK)
-	{
-	    return 1;
+	if (freq == 0) {
+		struct devfreq *df = gpsSysData->devfreq;
+		if (df) {
+			dev_pm_qos_update_request(&df->user_min_freq_req, 0);
+			dev_pm_qos_update_request(&df->user_max_freq_req, PM_QOS_MAX_FREQUENCY_DEFAULT_VALUE);
+			update_devfreq(df);
+		}
+		psRetOUT->eError = PVRSRV_OK;
+		return 0;
 	}
 
+	ret = dev_pm_opp_set_rate(dev, freq);
+	if (ret) {
+		dev_err(dev, "Failed to set OPP rate %lu Hz: %d\n", freq, ret);
+		psRetOUT->eError = PVRSRV_ERROR_UNABLE_TO_ENABLE_CLOCK;
+		return 1;
+	}
+
+	/*
+	 * optional, fix clock
+	 * struct devfreq *df = gpsSysData->devfreq;
+	 * if (df) {
+	 *     mutex_lock(&df->lock);
+	 *     df->min_freq = freq;
+	 *     df->max_freq = freq;
+	 *     mutex_unlock(&df->lock);
+	 *     devfreq_update_target(df);
+	 * }
+	 */
+
+	psRetOUT->eError = PVRSRV_OK;
 	return 0;
 }
 
 static IMG_INT
 SGXGetPowerSrcInfoBW(IMG_UINT32 ui32BridgeID,
-                 PVRSRV_BRIDGE_PWSRC_INPUT *psDataIN,
-                 PVRSRV_BRIDGE_PWSRC_RETURN *psRetOUT,
-                 PVRSRV_PER_PROCESS_DATA *psPerProc)
+		     PVRSRV_BRIDGE_PWSRC_INPUT *psDataIN,
+		     PVRSRV_BRIDGE_PWSRC_RETURN *psRetOUT,
+		     PVRSRV_PER_PROCESS_DATA *psPerProc)
 {
-    int PowerSrc;
-
+	/*
+	 * FIXME: dummy, required?
+	 */
 	PVRSRV_BRIDGE_ASSERT_CMD(ui32BridgeID, PVRSRV_BRIDGE_MTK_GET_POWER_INFO);
 	PVR_UNREFERENCED_PARAMETER(psDataIN);
 	PVR_UNREFERENCED_PARAMETER(psPerProc);
 
-	PowerSrc = get_gpu_power_src();
-
-	if ((PowerSrc == 0) || (PowerSrc == 1))
-	{
-	    psRetOUT->powersrc = PowerSrc;
-	}
-	else
-	{
-	    psRetOUT->powersrc = -1;
-	    return 1;
-	}
-
+	psRetOUT->powersrc = 0; /* VRF18_2 */
 	return 0;
 }
 
@@ -3087,41 +3127,41 @@ SGXInvalidateCPUCacheBW(IMG_UINT32 ui32BridgeID,
 IMG_VOID SetSGXDispatchTableEntry(IMG_VOID)
 {
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETCLIENTINFO, SGXGetClientInfoBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO, SGXReleaseClientInfoBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO, SGXGetInternalDevInfoBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_DOKICK, SGXDoKickBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETCLIENTINFO, (void *)SGXGetClientInfoBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO, (void *)SGXReleaseClientInfoBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO, (void *)SGXGetInternalDevInfoBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_DOKICK, (void *)SGXDoKickBW);
 	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETPHYSPAGEADDR, DummyBW);
 	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_READREGISTRYDWORD, DummyBW);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_2DQUERYBLTSCOMPLETE, SGX2DQueryBlitsCompleteBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_2DQUERYBLTSCOMPLETE, (void *)SGX2DQueryBlitsCompleteBW);
 
 #if defined(TRANSFER_QUEUE)
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER, SGXSubmitTransferBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SUBMITTRANSFER, (void *)SGXSubmitTransferBW);
 #endif
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETMISCINFO, SGXGetMiscInfoBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT	, SGXGetInfoForSrvinitBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_DEVINITPART2, SGXDevInitPart2BW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_GETMISCINFO, (void *)SGXGetMiscInfoBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGXINFO_FOR_SRVINIT	, (void *)SGXGetInfoForSrvinitBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_DEVINITPART2, (void *)SGXDevInitPart2BW);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_FINDSHAREDPBDESC, SGXFindSharedPBDescBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREFSHAREDPBDESC, SGXUnrefSharedPBDescBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_ADDSHAREDPBDESC, SGXAddSharedPBDescBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT, SGXRegisterHWRenderContextBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_FLUSH_HW_RENDER_TARGET, SGXFlushHWRenderTargetBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT, SGXUnregisterHWRenderContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_FINDSHAREDPBDESC, (void *)SGXFindSharedPBDescBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREFSHAREDPBDESC, (void *)SGXUnrefSharedPBDescBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_ADDSHAREDPBDESC, (void *)SGXAddSharedPBDescBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT, (void *)SGXRegisterHWRenderContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_FLUSH_HW_RENDER_TARGET, (void *)SGXFlushHWRenderTargetBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT, (void *)SGXUnregisterHWRenderContextBW);
 #if defined(SGX_FEATURE_2D_HARDWARE)
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SUBMIT2D, SGXSubmit2DBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_2D_CONTEXT, SGXRegisterHW2DContextBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_2D_CONTEXT, SGXUnregisterHW2DContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SUBMIT2D, (void *)SGXSubmit2DBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_2D_CONTEXT, (void *)SGXRegisterHW2DContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_2D_CONTEXT, (void *)SGXUnregisterHW2DContextBW);
 #endif
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT, SGXRegisterHWTransferContextBW);
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_TRANSFER_CONTEXT, SGXUnregisterHWTransferContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT, (void *)SGXRegisterHWTransferContextBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_TRANSFER_CONTEXT, (void *)SGXUnregisterHWTransferContextBW);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SCHEDULE_PROCESS_QUEUES, SGXScheduleProcessQueuesBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SCHEDULE_PROCESS_QUEUES, (void *)SGXScheduleProcessQueuesBW);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_READ_HWPERF_CB, SGXReadHWPerfCBBW);
-    SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY, SGXSetRenderContextPriorityBW);
-    SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SET_TRANSFER_CONTEXT_PRIORITY, SGXSetTransferContextPriorityBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_READ_HWPERF_CB, (void *)SGXReadHWPerfCBBW);
+    SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY, (void *)SGXSetRenderContextPriorityBW);
+    SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_SET_TRANSFER_CONTEXT_PRIORITY, (void *)SGXSetTransferContextPriorityBW);
 
 #if defined(PDUMP)
 	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_PDUMP_BUFFER_ARRAY, SGXPDumpBufferArrayBW);
@@ -3132,10 +3172,10 @@ IMG_VOID SetSGXDispatchTableEntry(IMG_VOID)
 	SetDispatchTableEntry(PVRSRV_BRIDGE_SGX_PDUMP_SAVEMEM, SGXPDumpSaveMemBW);
 #endif
 
-    SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_SET_FREQ_INFO, SGXSetFreqInfoBW);
-    SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_GET_POWER_INFO, SGXGetPowerSrcInfoBW);
+    SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_SET_FREQ_INFO, (void *)SGXSetFreqInfoBW);
+    SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_GET_POWER_INFO, (void *)SGXGetPowerSrcInfoBW);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_INVALIDATE_CPU_CACHE, SGXInvalidateCPUCacheBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_MTK_INVALIDATE_CPU_CACHE, (void *)SGXInvalidateCPUCacheBW);
 
 }
 /* PRQA L:END_SET_SGX */ /* end of setup overrides */

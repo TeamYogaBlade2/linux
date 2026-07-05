@@ -4,6 +4,7 @@
 #define _SYSCOMMON_H
 
 #include <linux/platform_device.h>
+#include <linux/devfreq.h>
 
 #include "sysconfig.h"      /* System specific system defines */
 #include "sysinfo.h"		/* globally accessible system info */
@@ -84,6 +85,12 @@ typedef struct _SYS_DATA_TAG_
 
 	struct reset_control *rstc;
 	struct regulator *vdd_reg;
+
+	struct devfreq *devfreq;
+	struct devfreq_dev_profile devfreq_profile;
+	unsigned long busy_time;
+	unsigned long total_time;
+	struct dev_pm_opp *curr_opp;
 } SYS_DATA;
 
 

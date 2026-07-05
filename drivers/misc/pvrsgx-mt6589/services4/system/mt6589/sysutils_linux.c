@@ -93,7 +93,7 @@ IMG_VOID UnwrapSystemPowerChange(SYS_SPECIFIC_DATA *psSysSpecData)
 IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
 {
 	PVR_ASSERT(atomic_read(&gpsSysSpecificData->sSGXClocksEnabled) != 0);
-    psTimingInfo->ui32CoreClockSpeed = mt_gpufreq_cur_freq()*1000; // SYS_SGX_CLOCK_SPEED;
+	psTimingInfo->ui32CoreClockSpeed = clk_get_rate(gpsSysData->clk_core);
 	psTimingInfo->ui32HWRecoveryFreq = SYS_SGX_HWRECOVERY_TIMEOUT_FREQ;
 	psTimingInfo->ui32uKernelFreq = SYS_SGX_PDS_TIMER_FREQ;
 	psTimingInfo->bEnableActivePM = IMG_TRUE;
@@ -106,11 +106,8 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 	int ret;
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
-
 	if (atomic_read(&psSysSpecData->sSGXClocksEnabled) != 0)
-	{
 		return PVRSRV_OK;
-	}
 
 	PVR_DPF((PVR_DBG_MESSAGE, "EnableSGXClocks: Enabling SGX Clocks"));
 
@@ -125,69 +122,60 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 		regulator_set_mode(psSysData->vdd_reg, REGULATOR_MODE_FAST);
 
 	ret = clk_prepare_enable(psSysData->clk_hyd);
-	if (ret) return ret;
-
+	if (ret)
+		return ret;
 
 	ret = clk_prepare_enable(psSysData->clk_core);
-	if (ret) {
-		clk_disable_unprepare(psSysData->clk_hyd);
-		return ret;
-	}
+	if (ret)
+		goto err_core;
 
 	ret = clk_prepare_enable(psSysData->clk_mem);
-	if (ret) {
-		clk_disable_unprepare(psSysData->clk_core);
-		clk_disable_unprepare(psSysData->clk_hyd);
-		return ret;
-	}
+	if (ret)
+		goto err_mem;
 
 	ret = clk_prepare_enable(psSysData->clk_sys);
-	if (ret) {
-		clk_disable_unprepare(psSysData->clk_mem);
-		clk_disable_unprepare(psSysData->clk_core);
-		clk_disable_unprepare(psSysData->clk_hyd);
-		return ret;
-	}
+	if (ret)
+		goto err_sys;
 
 	reset_control_assert(psSysData->rstc);
 	usleep_range(1, 2);
 	reset_control_deassert(psSysData->rstc);
 	usleep_range(1, 2);
 
- 	SysEnableSGXInterrupts(psSysData);
+	SysEnableSGXInterrupts(psSysData);
 
 	atomic_set(&psSysSpecData->sSGXClocksEnabled, 1);
-
 	return PVRSRV_OK;
-}
 
+err_sys:
+	clk_disable_unprepare(psSysData->clk_mem);
+err_mem:
+	clk_disable_unprepare(psSysData->clk_core);
+err_core:
+	clk_disable_unprepare(psSysData->clk_hyd);
+	pm_runtime_put_sync(&gpsPVRLDMDev->dev);
+	return ret;
+}
 
 IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 {
-	int res;
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
-
 	if (atomic_read(&psSysSpecData->sSGXClocksEnabled) == 0)
-	{
 		return;
-	}
-
-	reset_control_assert(psSysData->rstc);
 
 	PVR_DPF((PVR_DBG_MESSAGE, "DisableSGXClocks: Disabling SGX Clocks"));
 
 	SysDisableSGXInterrupts(psSysData);
+
+	reset_control_assert(psSysData->rstc);
 
 	clk_disable_unprepare(psSysData->clk_sys);
 	clk_disable_unprepare(psSysData->clk_mem);
 	clk_disable_unprepare(psSysData->clk_core);
 	clk_disable_unprepare(psSysData->clk_hyd);
 
-	res = pm_runtime_put_sync(&gpsPVRLDMDev->dev);
-	if (res < 0) {
-		PVR_DPF((PVR_DBG_ERROR, "DisableSGXClocks: pm_runtime_put_sync failed (%d)", -res));
-	}
+	pm_runtime_put_sync(&gpsPVRLDMDev->dev);
 
 	if (psSysData->vdd_reg)
 		regulator_set_mode(psSysData->vdd_reg, REGULATOR_MODE_NORMAL);
