@@ -52,3 +52,7 @@
 &uart0 {
 	status = "okay";
 };
+
+&gpu {
+	vdd-supply = <&mt6320_buck_vrf18_2>;
+};

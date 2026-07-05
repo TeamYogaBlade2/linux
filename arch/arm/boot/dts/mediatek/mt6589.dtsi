@@ -478,10 +478,13 @@
 			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&mfgsys CLK_MFG_G3D>,
 				 <&mfgsys CLK_MFG_MEM>,
-				 <&mfgsys CLK_MFG_AXI>;
-			clock-names = "core", "mem", "sys";
+				 <&mfgsys CLK_MFG_AXI>,
+				 <&mfgsys CLK_MFG_HYD>;
+			clock-names = "core", "mem", "sys", "hyd";
 			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
 			operating-points-v2 = <&gpu_opp_table>;
+			resets = <&mfgsys MT6589_MFG_G3D_RESET>;
+			reset-names = "g3d";
 		};
 
 		dispsys: syscon@14000000 {
