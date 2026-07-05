@@ -400,9 +400,6 @@ typedef struct _PVRSRV_CLIENT_MEM_INFO_
 	IMG_UINT32							dummy2;
 	#endif /* !defined(USE_CODE) */
 #endif /* defined(SUPPORT_MEMINFO_IDS) */
-#if defined(SUPPORT_ION)
-	IMG_SIZE_T							uiIonBufferSize;
-#endif /* defined(SUPPORT_ION) */
 
 	/*
 		ptr to next mem info
@@ -733,21 +730,6 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVMapDeviceMemory2(IMG_CONST PVRSRV_DEV_DATA	*psDe
 												 IMG_HANDLE					hDstDevMemHeap,
 												 PVRSRV_CLIENT_MEM_INFO		**ppsDstMemInfo);
 #endif /* defined(LINUX) */
-
-#if defined(SUPPORT_ION)
-PVRSRV_ERROR PVRSRVMapIonHandle(const PVRSRV_DEV_DATA *psDevData,
-								IMG_HANDLE hDevMemHeap,
-								IMG_UINT32 ui32NumFDs,
-								IMG_INT    *paiBufferFDs,
-								IMG_UINT32 ui32ChunkCount,
-								IMG_SIZE_T *pauiOffset,
-								IMG_SIZE_T *pauiSize,
-								IMG_UINT32 ui32Attribs,
-								PVRSRV_CLIENT_MEM_INFO **ppsMemInfo);
-
-PVRSRV_ERROR PVRSRVUnmapIonHandle(const PVRSRV_DEV_DATA *psDevData,
-								  PVRSRV_CLIENT_MEM_INFO *psMemInfo);
-#endif /* defined (SUPPORT_ION) */
 
 
 IMG_IMPORT

@@ -100,13 +100,6 @@ MODULE_PARM_DESC(gPVRDebugLevel, "Sets the level of debug output (default 0x7)")
 #define __devinitdata
 #endif
 
-#if defined(CONFIG_ION)
-#include <linux/ion.h>
-#include <linux/ion_drv.h>
-struct ion_client *gpsIONClient;
-EXPORT_SYMBOL(gpsIONClient);
-#endif /* defined(CONFIG_ION_MTK) */
-
 #if defined(SUPPORT_PVRSRV_DEVICE_CLASS)
 /* PRQA S 3207 2 */ /* ignore 'not used' warning */
 EXPORT_SYMBOL(PVRGetDisplayClassJTable);

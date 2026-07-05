@@ -89,14 +89,6 @@ pvrsrvkm-y := \
 	services4/system/mt6589/mtk_sysfreq.o \
 	services4/system/mtk_common/mtk_gpu_hal.o
 
-pvrsrvkm-$(CONFIG_ION_MTK) += \
-	services4/srvkm/env/linux/ion.o
-
-ifeq ($(SUPPORT_ION),1)
-pvrsrvkm-y += \
-	services4/srvkm/env/linux/ion.o
-endif
-
 mtklfb-y := \
 	services4/3rdparty/mtklfb/mtklfb_displayclass.o \
 	services4/3rdparty/mtklfb/mtklfb_linux.o \

@@ -418,13 +418,6 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVInit(PSYS_DATA psSysData)
 	g_ui32InitFlags |= INIT_DATA_ENABLE_PDUMPINIT;
 #endif
 
-#if defined(SUPPORT_ION)
-	eError = PVRSRVInitDeviceMem();
-	if (eError != PVRSRV_OK)
-		goto Error;
-	g_ui32InitFlags |= INIT_DATA_ENABLE_DEVMEM;
-#endif
-
 	PERFINIT();
 	return eError;
 
@@ -460,14 +453,6 @@ IMG_VOID IMG_CALLCONV PVRSRVDeInit(PSYS_DATA psSysData)
 	}
 
 	PERFDEINIT();
-
-
-#if defined(SUPPORT_ION)
-	if ((g_ui32InitFlags & INIT_DATA_ENABLE_DEVMEM) > 0)
-	{
-		PVRSRVDeInitDeviceMem();
-	}
-#endif
 
 #if defined(MEM_TRACK_INFO_DEBUG)
 	/* Free the list of memory operations */

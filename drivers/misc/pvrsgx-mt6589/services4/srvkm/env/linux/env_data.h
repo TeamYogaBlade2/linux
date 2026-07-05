@@ -42,10 +42,6 @@ typedef struct _ENV_DATA_TAG
 #else
 	struct tasklet_struct	sMISRTasklet;
 #endif
-#if defined (SUPPORT_ION)
-	IMG_HANDLE		hIonHeaps;
-	IMG_HANDLE		hIonDev;
-#endif
 } ENV_DATA;
 
 #endif /* _ENV_DATA_ */

@@ -48,9 +48,6 @@
 #include "pvr_sync.h"
 #endif
 
-#if defined (SUPPORT_ION)
-#include "ion.h"
-#endif
 #ifdef MTK_HAL_MM_STATISTIC
 #include "mtk_hal_mm.h"
 #endif
@@ -4387,17 +4384,6 @@ PVRSRV_ERROR PVROSFuncInit(IMG_VOID)
     }
 #endif
 
-#if defined (SUPPORT_ION)
-	{
-		PVRSRV_ERROR eError;
-
-		eError = IonInit();
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: IonInit failed", __FUNCTION__));
-		}
-	}
-#endif
     return PVRSRV_OK;
 }
 
@@ -4407,9 +4393,6 @@ PVRSRV_ERROR PVROSFuncInit(IMG_VOID)
  */
 IMG_VOID PVROSFuncDeInit(IMG_VOID)
 {
-#if defined (SUPPORT_ION)
-	IonDeinit();
-#endif
 #if defined(PVR_LINUX_TIMERS_USING_WORKQUEUES)
     if (psTimerWorkQueue != NULL)
     {
