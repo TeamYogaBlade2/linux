@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
 #include <linux/version.h>
-#include <linux/pfn_t.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/vmalloc.h>
@@ -725,7 +724,7 @@ DoMapToUser(LinuxMemArea *psLinuxMemArea,
 #if defined(PVR_MAKE_ALL_PFNS_SPECIAL)
 		    if (bMixedMap)
 		    {
-			result = vmf_insert_mixed(ps_vma, ulVMAPos, pfn_to_pfn_t(pfn));
+			result = vmf_insert_mixed(ps_vma, ulVMAPos, pfn);
 			if(result != 0)
 			{
 			    PVR_DPF((PVR_DBG_ERROR,"%s: Error - vmf_insert_mixed failed (%x)", __FUNCTION__, result));
