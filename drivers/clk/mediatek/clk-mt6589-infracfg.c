@@ -10,7 +10,12 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
-#define TOP_CKMUXSEL	0x0
+#define TOP_CKMUXSEL	0x0000
+#define INFRA_RST0	0x0030
+#define INFRA_RST1	0x0034
+#define INFRA_PDN_SET	0x0040
+#define INFRA_PDN_CLR	0x0044
+#define INFRA_PDN_STA	0x0048
 
 static const char * const infra_mux1_parents[] = {
 	"clk26m",
@@ -22,10 +27,6 @@ static const char * const infra_mux1_parents[] = {
 static const struct mtk_composite cpu_muxes[] = {
 	MUX(CLK_INFRA_MUX1, "infra_mux1_sel", infra_mux1_parents, TOP_CKMUXSEL, 2, 2),
 };
-
-#define INFRA_PDN_SET	0x0040
-#define INFRA_PDN_CLR	0x0044
-#define INFRA_PDN_STA	0x0048
 
 static const struct mtk_gate_regs infra_cg_regs = {
 	.set_ofs = INFRA_PDN_SET,
@@ -58,7 +59,7 @@ static const struct mtk_gate infra_clks[] = {
 	GATE_INFRA(CLK_INFRA_PMICWRAP, "infra_pmicwrap", "axi_sel", 23), /* mt8135 */
 };
 
-static u16 infrasys_rst_ofs[] = { 0x30, 0x34, };
+static u16 infrasys_rst_ofs[] = { INFRA_RST0, INFRA_RST1 };
 
 static const struct mtk_clk_rst_desc infra_clk_rst_desc = {
 	.version = MTK_RST_SIMPLE,
