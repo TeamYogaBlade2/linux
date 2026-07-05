@@ -56,12 +56,7 @@
 		pins_iddig {
 			pinmux = <MT6589_GPIO57__FUNC_IDDIG>;
 			bias-pull-up;
-		};
-
-		eint34_conflict {
-			pinmux = <MT6589_GPIO48__FUNC_GPIO48>;
 			input-enable;
-			bias-disable;
 		};
 
 		pins_drvvbus {
