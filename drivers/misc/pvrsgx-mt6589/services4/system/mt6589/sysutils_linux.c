@@ -136,12 +136,20 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 //    printk("EnableSGXClocks ... Reg[0x%x]=0x%x\n",0x37E,upmu_get_reg_value(0x37E));
 
 
-	ret = clk_prepare_enable(psSysData->clk_core);
+	ret = clk_prepare_enable(psSysData->clk_hyd);
 	if (ret) return ret;
+
+
+	ret = clk_prepare_enable(psSysData->clk_core);
+	if (ret) {
+		clk_disable_unprepare(psSysData->clk_hyd);
+		return ret;
+	}
 
 	ret = clk_prepare_enable(psSysData->clk_mem);
 	if (ret) {
 		clk_disable_unprepare(psSysData->clk_core);
+		clk_disable_unprepare(psSysData->clk_hyd);
 		return ret;
 	}
 
@@ -149,6 +157,7 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 	if (ret) {
 		clk_disable_unprepare(psSysData->clk_mem);
 		clk_disable_unprepare(psSysData->clk_core);
+		clk_disable_unprepare(psSysData->clk_hyd);
 		return ret;
 	}
 
@@ -215,6 +224,7 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 	clk_disable_unprepare(psSysData->clk_sys);
 	clk_disable_unprepare(psSysData->clk_mem);
 	clk_disable_unprepare(psSysData->clk_core);
+	clk_disable_unprepare(psSysData->clk_hyd);
 
     if (( g_pmic_cid != 0) && (get_gpu_power_src()==0) && (subsys_is_on(SYS_MFG)==0))
     {

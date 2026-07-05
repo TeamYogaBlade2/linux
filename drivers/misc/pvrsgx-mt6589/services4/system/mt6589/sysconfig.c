@@ -251,6 +251,10 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	if (IS_ERR(gpsSysData->clk_sys))
 		return PTR_ERR(gpsSysData->clk_sys);
 
+	gpsSysData->clk_hyd = devm_clk_get_optional(&pdev->dev, "hyd");
+	if (IS_ERR(gpsSysData->clk_hyd))
+		return PTR_ERR(gpsSysData->clk_hyd);
+
 	gpsSysSpecificData->ui32SrcClockDiv = 3;
 
 
