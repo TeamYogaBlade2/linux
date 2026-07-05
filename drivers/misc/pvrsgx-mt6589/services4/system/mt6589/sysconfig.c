@@ -187,6 +187,15 @@ static int sgx_devfreq_target(struct device *dev, unsigned long *freq, u32 flags
 {
 	struct dev_pm_opp *opp;
 	int ret;
+	SYS_DATA *psSysData;
+	SysAcquireData(&psSysData);
+
+	if (psSysData->clk_smi_mfg_as) {
+		if (*freq > 286000000)
+			clk_set_parent(psSysData->clk_smi_mfg_as, psSysData->clk_hyd);
+		// else
+		// 	clk_set_parent(psSysData->clk_smi_mfg_as, ...);
+	}
 
 	opp = devfreq_recommended_opp(dev, freq, flags);
 	if (IS_ERR(opp))
@@ -290,6 +299,10 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	gpsSysData->clk_hyd = devm_clk_get_optional(&pdev->dev, "hyd");
 	if (IS_ERR(gpsSysData->clk_hyd))
 		return PTR_ERR(gpsSysData->clk_hyd);
+
+	gpsSysData->clk_smi_mfg_as = devm_clk_get_optional(&pdev->dev, "smi_mfg_as");
+	if (IS_ERR(gpsSysData->clk_smi_mfg_as))
+		return PTR_ERR(gpsSysData->clk_smi_mfg_as);
 
 	gpsSysSpecificData->ui32SrcClockDiv = 3;
 
