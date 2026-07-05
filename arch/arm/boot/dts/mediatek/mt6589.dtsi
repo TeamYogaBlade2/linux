@@ -479,8 +479,9 @@
 			clocks = <&mfgsys CLK_MFG_G3D>,
 				 <&mfgsys CLK_MFG_MEM>,
 				 <&mfgsys CLK_MFG_AXI>,
-				 <&mfgsys CLK_MFG_HYD>;
-			clock-names = "core", "mem", "sys", "hyd";
+				 <&mfgsys CLK_MFG_HYD>,
+				 <&topckgen CLK_TOP_MUX_SMI_MFG_AS>;
+			clock-names = "core", "mem", "sys", "hyd", "smi_mfg_as";
 			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
 			operating-points-v2 = <&gpu_opp_table>;
 			resets = <&mfgsys MT6589_MFG_G3D_RESET>;
