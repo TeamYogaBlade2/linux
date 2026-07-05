@@ -78,10 +78,6 @@ typedef struct _SYS_SPECIFIC_DATA_TAG_
 	atomic_t	sNotifyLockCPU;
 	IMG_BOOL	bCallVDD2PostFunc;
 #endif
-#if defined(DEBUG) || defined(TIMING)
-	struct clk	*psGPT11_FCK;
-	struct clk	*psGPT11_ICK;
-#endif
 //#if defined(PVR_OMAP_USE_DM_TIMER_API)
 //	struct omap_dm_timer *psGPTimer;
 //#endif
