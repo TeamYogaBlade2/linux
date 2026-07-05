@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/reset.h>
+#include <linux/regulator/consumer.h>
+#include <linux/pm_runtime.h>
+
 #include "sysconfig.h"
 #include "services_headers.h"
 #include "kerneldisplay.h"
@@ -258,8 +262,19 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	gpsSysSpecificData->ui32SrcClockDiv = 3;
 
 
+	gpsSysData->rstc = devm_reset_control_get_exclusive(&pdev->dev, "g3d");
+	if (IS_ERR(gpsSysData->rstc))
+		return PTR_ERR(gpsSysData->rstc);
 
+	gpsSysData->vdd_reg = devm_regulator_get_optional(&pdev->dev, "vdd");
+	if (IS_ERR(gpsSysData->vdd_reg)) {
+		if (PTR_ERR(gpsSysData->vdd_reg) == -ENODEV)
+			gpsSysData->vdd_reg = NULL;
+		else
+			return dev_err_probe(&pdev->dev, PTR_ERR(gpsSysData->vdd_reg), "failed to get regulator\n");
+	}
 
+	pm_runtime_enable(&pdev->dev);
 
 	eError = SysLocateDevices(gpsSysData);
 	if (eError != PVRSRV_OK)

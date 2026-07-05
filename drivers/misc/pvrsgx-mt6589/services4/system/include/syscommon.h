@@ -81,6 +81,9 @@ typedef struct _SYS_DATA_TAG_
 	struct clk *clk_mem;
 	struct clk *clk_sys;
 	struct clk *clk_hyd;
+
+	struct reset_control *rstc;
+	struct regulator *vdd_reg;
 } SYS_DATA;
 
 

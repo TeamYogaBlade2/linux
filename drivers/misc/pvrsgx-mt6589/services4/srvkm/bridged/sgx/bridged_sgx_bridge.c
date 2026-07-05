@@ -26,8 +26,6 @@
 #include "buffer_manager.h"
 #include "pdump_km.h"
 
-#include "mtk_sysfreq.h"
-
 static IMG_INT
 SGXGetClientInfoBW(IMG_UINT32 ui32BridgeID,
 				   PVRSRV_BRIDGE_IN_GETCLIENTINFO *psGetClientInfoIN,

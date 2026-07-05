@@ -5,6 +5,9 @@
 #include <linux/err.h>
 #include <linux/hardirq.h>
 #include <linux/mutex.h>
+#include <linux/regulator/consumer.h>
+#include <linux/reset.h>
+#include <linux/delay.h>
 
 
 #include "sgxdefs.h"
@@ -28,10 +31,6 @@
 #if defined(LDM_PLATFORM) && !defined(PVR_DRI_DRM_NOT_PCI)
 extern struct platform_device *gpsPVRLDMDev;
 #endif
-
-extern unsigned int mt_gpufreq_cur_freq(void);
-extern int g_pmic_cid;
-extern void MtkSetKeepFreq(void);
 
 
 static PVRSRV_ERROR PowerLockWrap(SYS_SPECIFIC_DATA *psSysSpecData, IMG_BOOL bTryLock)
@@ -115,26 +114,15 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 
 	PVR_DPF((PVR_DBG_MESSAGE, "EnableSGXClocks: Enabling SGX Clocks"));
 
-#if defined(LDM_PLATFORM) && !defined(PVR_DRI_DRM_NOT_PCI) && defined(CONFIG_PM_RUNTIME)
-	{
-
-		int res = pm_runtime_get_sync(&gpsPVRLDMDev->dev);
-		if (res < 0)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "EnableSGXClocks: pm_runtime_get_sync failed (%d)", -res));
-			return PVRSRV_ERROR_UNABLE_TO_ENABLE_CLOCK;
-		}
+	ret = pm_runtime_get_sync(&gpsPVRLDMDev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(&gpsPVRLDMDev->dev);
+		PVR_DPF((PVR_DBG_ERROR, "EnableSGXClocks: pm_runtime_get_sync failed (%d)", -ret));
+		return PVRSRV_ERROR_UNABLE_TO_ENABLE_CLOCK;
 	}
-#endif
 
-    MtkSetKeepFreq();
-
-    if(( g_pmic_cid != 0) && (get_gpu_power_src()==0))
-    {
-        upmu_set_rg_vrf18_2_modeset(1); // force PWM mode
-    }
-//    printk("EnableSGXClocks ... Reg[0x%x]=0x%x\n",0x37E,upmu_get_reg_value(0x37E));
-
+	if (psSysData->vdd_reg)
+		regulator_set_mode(psSysData->vdd_reg, REGULATOR_MODE_FAST);
 
 	ret = clk_prepare_enable(psSysData->clk_hyd);
 	if (ret) return ret;
@@ -161,31 +149,10 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 		return ret;
 	}
 
-    //MFGReset
-    {
-        IMG_UINT32 val;
-        DRV_WriteReg32(0xF0001200, DRV_Reg32(0xF0001200)&~0x400);// disable MFG way_en
-        val = DRV_Reg32(SPM_MFG_PWR_CON);
-        val = (val & ~0x1) | 0x10;
-        DRV_WriteReg32(SPM_MFG_PWR_CON, val);// disable MFG clock and assert MFG reset
-        DRV_WriteReg32(SPM_MFG_PWR_CON, DRV_Reg32(SPM_MFG_PWR_CON) | 0x00000002);// enable MFG ISO
-        OSWaitus(1);
-        DRV_WriteReg32(SPM_MFG_PWR_CON, DRV_Reg32(SPM_MFG_PWR_CON) & 0xFFFFFFFD);// disable MFG ISO
-        DRV_WriteReg32(SPM_MFG_PWR_CON, DRV_Reg32(SPM_MFG_PWR_CON) & 0xFFFFFFEF);// enable MFG clock
-        DRV_WriteReg32(SPM_MFG_PWR_CON, DRV_Reg32(SPM_MFG_PWR_CON) | 0x00000001);// dis-assert MFG reset
-        OSWaitus(1);
-        DRV_WriteReg32(0xF020600C, 0x1);// reset SGX544
-        DRV_WriteReg32(0xF0206008, 0xf);// MFG clock on
-        OSWaitus(1);
-        DRV_WriteReg32(0xF0206004, 0xf);// MFG clock off
-        OSWaitus(1);
-        DRV_WriteReg32(0xF020600C, 0x0);// dis-assert reset SGX544
-        DRV_WriteReg32(0xF0206008, 0xf);// MFG clock on
-        OSWaitus(1);
-        DRV_WriteReg32(0xF0001200, (DRV_Reg32(0xF0001200)& ~0x400)| 0x400);// enable MFG way_en
-    }
-
-    mt_gpufreq_gpu_clock_ratio(GPU_DVFS_CLOCK_RATIO_ON);
+	reset_control_assert(psSysData->rstc);
+	usleep_range(1, 2);
+	reset_control_deassert(psSysData->rstc);
+	usleep_range(1, 2);
 
  	SysEnableSGXInterrupts(psSysData);
 
@@ -197,6 +164,7 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 
 IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 {
+	int res;
 	SYS_SPECIFIC_DATA *psSysSpecData = (SYS_SPECIFIC_DATA *) psSysData->pvSysSpecificData;
 
 
@@ -205,32 +173,24 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 		return;
 	}
 
+	reset_control_assert(psSysData->rstc);
+
 	PVR_DPF((PVR_DBG_MESSAGE, "DisableSGXClocks: Disabling SGX Clocks"));
 
 	SysDisableSGXInterrupts(psSysData);
-
-#if defined(LDM_PLATFORM) && !defined(PVR_DRI_DRM_NOT_PCI) && defined(CONFIG_PM_RUNTIME)
-	{
-		int res = pm_runtime_put_sync(&gpsPVRLDMDev->dev);
-		if (res < 0)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "DisableSGXClocks: pm_runtime_put_sync failed (%d)", -res));
-		}
-	}
-#endif
-
-	mt_gpufreq_gpu_clock_ratio(GPU_DVFS_CLOCK_RATIO_OFF);
 
 	clk_disable_unprepare(psSysData->clk_sys);
 	clk_disable_unprepare(psSysData->clk_mem);
 	clk_disable_unprepare(psSysData->clk_core);
 	clk_disable_unprepare(psSysData->clk_hyd);
 
-    if (( g_pmic_cid != 0) && (get_gpu_power_src()==0) && (subsys_is_on(SYS_MFG)==0))
-    {
-        upmu_set_rg_vrf18_2_modeset(0); // PFM mode
-    }
-//    printk("DisableSGXClocks ... Reg[0x%x]=0x%x\n",0x37E,upmu_get_reg_value(0x37E));
+	res = pm_runtime_put_sync(&gpsPVRLDMDev->dev);
+	if (res < 0) {
+		PVR_DPF((PVR_DBG_ERROR, "DisableSGXClocks: pm_runtime_put_sync failed (%d)", -res));
+	}
+
+	if (psSysData->vdd_reg)
+		regulator_set_mode(psSysData->vdd_reg, REGULATOR_MODE_NORMAL);
 
 	atomic_set(&psSysSpecData->sSGXClocksEnabled, 0);
 }
