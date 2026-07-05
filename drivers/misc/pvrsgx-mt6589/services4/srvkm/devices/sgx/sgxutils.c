@@ -102,7 +102,6 @@ IMG_VOID SGXTestActivePowerEvent (PVRSRV_DEVICE_NODE	*psDeviceNode,
 	PVRSRV_SGXDEV_INFO	*psDevInfo = psDeviceNode->pvDevice;
 	SGXMKIF_HOST_CTL	*psSGXHostCtl = psDevInfo->psSGXHostCtl;
 
-#if defined(SYS_SUPPORTS_SGX_IDLE_CALLBACK)
 	if (!psDevInfo->bSGXIdle &&
 		((psSGXHostCtl->ui32InterruptFlags & PVRSRV_USSE_EDM_INTERRUPT_IDLE) != 0))
 	{
@@ -115,7 +114,6 @@ IMG_VOID SGXTestActivePowerEvent (PVRSRV_DEVICE_NODE	*psDeviceNode,
 		psDevInfo->bSGXIdle = IMG_FALSE;
 		SysSGXIdleTransition(psDevInfo->bSGXIdle);
 	}
-#endif /* SYS_SUPPORTS_SGX_IDLE_CALLBACK */
 
 	/*
 	 * Quickly check (without lock) if there is an APM event we should handle.

@@ -892,14 +892,10 @@ PVRSRV_ERROR SysDevicePostPowerState(IMG_UINT32				ui32DeviceIndex,
 	return eError;
 }
 
-#if defined(SYS_SUPPORTS_SGX_IDLE_CALLBACK)
-
 IMG_VOID SysSGXIdleTransition(IMG_BOOL bSGXIdle)
 {
 	PVR_DPF((PVR_DBG_MESSAGE, "SysSGXIdleTransition switch to %u", bSGXIdle));
 }
-
-#endif
 
 PVRSRV_ERROR SysOEMFunction (	IMG_UINT32	ui32ID,
 								IMG_VOID	*pvIn,
