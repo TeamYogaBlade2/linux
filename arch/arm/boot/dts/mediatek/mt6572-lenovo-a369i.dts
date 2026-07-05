@@ -26,6 +26,7 @@
 			height = <800>;
 			stride = <(480 * 2)>;
 			format = "r5g6b5";
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
 		};
 	};
 
