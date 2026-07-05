@@ -3,39 +3,12 @@
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
-#include "mt6589-lenovo-b8000.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include "mt6589-lenovo-b8000.dtsi"
 
 / {
 	model = "Lenovo YOGA Tablet 10 (Wi-Fi)";
 	compatible = "lenovo,b8000-f", "mediatek,mt6589";
-
-	reg_1p8v: regulator-1p8v {
-		compatible = "regulator-fixed";
-		regulator-name = "fixed-1.8V";
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
-		regulator-boot-on;
-		regulator-always-on;
-	};
-
-	reg_3p3v: regulator-3p3v {
-		compatible = "regulator-fixed";
-		regulator-name = "fixed-3.3V";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		regulator-boot-on;
-		regulator-always-on;
-	};
-
-	reg_5v: regulator-5v {
-		compatible = "regulator-fixed";
-		regulator-name = "fixed-5V";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		regulator-boot-on;
-		regulator-always-on;
-	};
 };
 
 /* Internal storage */
@@ -48,8 +21,8 @@
 	bus-width = <8>;
 	max-frequency = <50000000>;
 //	cap-mmc-highspeed;
-	vmmc-supply = <&reg_3p3v>;
-	vqmmc-supply = <&reg_1p8v>;
+	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
 };
 
 /* SD Card */
@@ -65,6 +38,6 @@
 //	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
 // gpio182 is fake
 	cd-gpios = <&pio 182 GPIO_ACTIVE_LOW>;
-	vmmc-supply = <&reg_3p3v>;
-	vqmmc-supply = <&reg_3p3v>;
+	vmmc-supply = <&mt6320_ldo_vmch1>;
+	vqmmc-supply = <&mt6320_ldo_vmc1>;
 };
