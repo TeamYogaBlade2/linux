@@ -72,9 +72,6 @@
 #define MODULE
 #endif
 
-//MTK : for mtk hal api function
-#include "mtk_gpu_hal.h"
-
 /*
  * DRVNAME is the name we use to register our driver.
  * DEVNAME is the name we use to register actual device nodes.
@@ -839,7 +836,6 @@ static int __init PVRCore_Init(void)
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 	PVRSyncDeviceInit();
 #endif
-    MTKGpuHalInit();
 
 	return 0;
 

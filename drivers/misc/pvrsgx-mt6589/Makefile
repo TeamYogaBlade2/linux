@@ -85,8 +85,7 @@ pvrsrvkm-y := \
 	services4/srvkm/env/linux/mtk_debug.o \
 	services4/srvkm/env/linux/mtk_pp.o \
 	services4/srvkm/env/linux/mtk_hal_mm.o \
-	services4/srvkm/common/ttrace.o \
-	services4/system/mtk_common/mtk_gpu_hal.o
+	services4/srvkm/common/ttrace.o
 
 mtklfb-y := \
 	services4/3rdparty/mtklfb/mtklfb_displayclass.o \
