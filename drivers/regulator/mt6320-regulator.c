@@ -28,19 +28,19 @@
 
 /*
  * BUCK MODESET (BIT(8) in CON2):
- *   0 = Auto PFM mode  (light load, power saving)
- *   1 = Forced PWM mode (heavy load, stable voltage)
+ *   0 = Auto PFM/PWM mode (normal operation, light-load power saving)
+ *   1 = Forced PWM mode   (heavy load, fast response)
  *
- * Semantics are INVERTED relative to LDO LP_SEL:
- *   REGULATOR_MODE_NORMAL  → heavy load → Forced PWM → MODESET=1
- *   REGULATOR_MODE_STANDBY → light load → Auto PFM   → MODESET=0
+ * Follows the same convention as MT6397:
+ *   REGULATOR_MODE_FAST   → Forced PWM → MODESET=1
+ *   REGULATOR_MODE_NORMAL → Auto PFM   → MODESET=0
  *
  * This matches the downstream GPU driver usage:
- *   upmu_set_rg_vrf18_2_modeset(1)  // GPU active:   force PWM for stable voltage
- *   upmu_set_rg_vrf18_2_modeset(0)  // GPU idle:     return to PFM for power saving
+ *   upmu_set_rg_vrf18_2_modeset(1)  // GPU active: force PWM for stable voltage
+ *   upmu_set_rg_vrf18_2_modeset(0)  // GPU idle:   return to auto PFM
  */
-#define MT6320_BUCK_MODE_PWM	1  /* REGULATOR_MODE_NORMAL  */
-#define MT6320_BUCK_MODE_PFM	0  /* REGULATOR_MODE_STANDBY */
+#define MT6320_BUCK_MODE_AUTO		0  /* REGULATOR_MODE_NORMAL */
+#define MT6320_BUCK_MODE_FORCE_PWM	1  /* REGULATOR_MODE_FAST   */
 
 /*
  * MT6320 regulators' information
@@ -108,6 +108,7 @@ struct mt6320_regulator_info {
 		.vsel_mask = vosel_mask,				\
 		.enable_reg = enreg,					\
 		.enable_mask = BIT(0),					\
+		.of_map_mode = mt6320_map_mode,				\
 	},								\
 	.qi = BIT(13),							\
 	.vselon_reg = voselon,						\
@@ -319,6 +320,18 @@ static int mt6320_get_status(struct regulator_dev *rdev)
 	return (regval & info->qi) ? REGULATOR_STATUS_ON : REGULATOR_STATUS_OFF;
 }
 
+static unsigned int mt6320_map_mode(unsigned int mode)
+{
+	switch (mode) {
+	case MT6320_BUCK_MODE_AUTO:
+		return REGULATOR_MODE_NORMAL;
+	case MT6320_BUCK_MODE_FORCE_PWM:
+		return REGULATOR_MODE_FAST;
+	default:
+		return REGULATOR_MODE_INVALID;
+	}
+}
+
 static int mt6320_buck_set_mode(struct regulator_dev *rdev, unsigned int mode)
 {
 	int ret;
@@ -326,13 +339,13 @@ static int mt6320_buck_set_mode(struct regulator_dev *rdev, unsigned int mode)
 	struct mt6320_regulator_info *info = rdev_get_drvdata(rdev);
 
 	switch (mode) {
-	case REGULATOR_MODE_NORMAL:
-		/* Heavy load: force PWM mode (MODESET=1) */
-		val = MT6320_BUCK_MODE_PWM;
+	case REGULATOR_MODE_FAST:
+		/* Force PWM: heavy load, stable voltage (e.g. GPU active) */
+		val = MT6320_BUCK_MODE_FORCE_PWM;
 		break;
-	case REGULATOR_MODE_STANDBY:
-		/* Light load: auto PFM mode (MODESET=0) */
-		val = MT6320_BUCK_MODE_PFM;
+	case REGULATOR_MODE_NORMAL:
+		/* Auto PFM: light load, power saving */
+		val = MT6320_BUCK_MODE_AUTO;
 		break;
 	default:
 		return -EINVAL;
@@ -358,9 +371,14 @@ static unsigned int mt6320_buck_get_mode(struct regulator_dev *rdev)
 	val &= info->modeset_mask;
 	val >>= ffs(info->modeset_mask) - 1;
 
-	/* MODESET=1 → Forced PWM → NORMAL, MODESET=0 → Auto PFM → STANDBY */
-	return (val == MT6320_BUCK_MODE_PWM) ?
-		REGULATOR_MODE_NORMAL : REGULATOR_MODE_STANDBY;
+	switch (val) {
+	case MT6320_BUCK_MODE_FORCE_PWM:
+		return REGULATOR_MODE_FAST;
+	case MT6320_BUCK_MODE_AUTO:
+		return REGULATOR_MODE_NORMAL;
+	default:
+		return -EINVAL;
+	}
 }
 
 static int mt6320_ldo_set_mode(struct regulator_dev *rdev, unsigned int mode)
