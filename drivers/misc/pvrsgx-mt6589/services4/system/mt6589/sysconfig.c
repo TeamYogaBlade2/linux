@@ -214,15 +214,29 @@ static int sgx_devfreq_get_dev_status(struct device *dev,
 				      struct devfreq_dev_status *stat)
 {
 	SYS_DATA *psSysData;
+	unsigned long flags;
+	u64 now, period;
 	SysAcquireData(&psSysData);
 
-	/* FIXME: dummy */
-	stat->busy_time = psSysData->busy_time;
-	stat->total_time = psSysData->total_time;
+	spin_lock_irqsave(&psSysData->gpu_ratio_lock, flags);
+
+	now = ktime_get_ns();
+
+	if (psSysData->gpu_currently_busy) {
+		psSysData->gpu_accumulated_busy += (now - psSysData->gpu_busy_start);
+		psSysData->gpu_busy_start = now;
+	}
+
+	period = now - psSysData->gpu_last_poll;
+	stat->total_time = period;
+	stat->busy_time = psSysData->gpu_accumulated_busy;
 	stat->current_frequency = clk_get_rate(psSysData->clk_core);
 
-	psSysData->busy_time = 0;
-	psSysData->total_time = 0;
+	/* reset */
+	psSysData->gpu_accumulated_busy = 0;
+	psSysData->gpu_last_poll = now;
+
+	spin_unlock_irqrestore(&psSysData->gpu_ratio_lock, flags);
 
 	return 0;
 }
@@ -324,6 +338,11 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to add OPP table: %d\n", eError);
 		return eError;
 	}
+
+	gpsSysData->gpu_currently_busy = false;
+	gpsSysData->gpu_accumulated_busy = 0;
+	gpsSysData->gpu_last_poll = ktime_get_ns();
+	spin_lock_init(&gpsSysData->gpu_ratio_lock);
 
 	gpsSysData->devfreq_profile.target = sgx_devfreq_target;
 	gpsSysData->devfreq_profile.get_dev_status = sgx_devfreq_get_dev_status;
@@ -894,6 +913,27 @@ PVRSRV_ERROR SysDevicePostPowerState(IMG_UINT32				ui32DeviceIndex,
 
 IMG_VOID SysSGXIdleTransition(IMG_BOOL bSGXIdle)
 {
+	SYS_DATA *psSysData;
+	unsigned long flags;
+	u64 now = ktime_get_ns();
+	SysAcquireData(&psSysData);
+
+	spin_lock_irqsave(&psSysData->gpu_ratio_lock, flags);
+
+	if (bSGXIdle) {
+		if (psSysData->gpu_currently_busy) {
+			psSysData->gpu_accumulated_busy += (now - psSysData->gpu_busy_start);
+			psSysData->gpu_currently_busy = false;
+		}
+	} else {
+		if (!psSysData->gpu_currently_busy) {
+			psSysData->gpu_currently_busy = true;
+			psSysData->gpu_busy_start = now;
+		}
+	}
+
+	spin_unlock_irqrestore(&psSysData->gpu_ratio_lock, flags);
+
 	PVR_DPF((PVR_DBG_MESSAGE, "SysSGXIdleTransition switch to %u", bSGXIdle));
 }
 

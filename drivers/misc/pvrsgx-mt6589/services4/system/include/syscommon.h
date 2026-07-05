@@ -89,9 +89,12 @@ typedef struct _SYS_DATA_TAG_
 
 	struct devfreq *devfreq;
 	struct devfreq_dev_profile devfreq_profile;
-	unsigned long busy_time;
-	unsigned long total_time;
 	struct dev_pm_opp *curr_opp;
+	u64 gpu_busy_start;
+	u64 gpu_accumulated_busy;
+	u64 gpu_last_poll;
+	bool gpu_currently_busy;
+	spinlock_t gpu_ratio_lock;
 } SYS_DATA;
 
 

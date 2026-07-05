@@ -144,6 +144,16 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 
 	SysEnableSGXInterrupts(psSysData);
 
+	if (psSysData->devfreq) {
+		unsigned long flags;
+		spin_lock_irqsave(&psSysData->gpu_ratio_lock, flags);
+		psSysData->gpu_last_poll = ktime_get_ns();
+		psSysData->gpu_accumulated_busy = 0;
+		psSysData->gpu_currently_busy = false;
+		spin_unlock_irqrestore(&psSysData->gpu_ratio_lock, flags);
+		devfreq_resume_device(psSysData->devfreq);
+	}
+
 	atomic_set(&psSysSpecData->sSGXClocksEnabled, 1);
 	return PVRSRV_OK;
 
@@ -165,6 +175,9 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 		return;
 
 	PVR_DPF((PVR_DBG_MESSAGE, "DisableSGXClocks: Disabling SGX Clocks"));
+
+	if (psSysData->devfreq)
+		devfreq_suspend_device(psSysData->devfreq);
 
 	SysDisableSGXInterrupts(psSysData);
 
