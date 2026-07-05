@@ -16,12 +16,6 @@
 #include <drm/drmP.h>
 #endif
 
-#ifdef CONFIG_ARCH_OMAP5
-#ifdef CONFIG_DSSCOMP
-#include <../drivers/staging/omapdrm/omap_dmm_tiler.h>
-#endif
-#endif
-
 #include "services_headers.h"
 
 #include "pvrmmap.h"
@@ -1033,23 +1027,6 @@ PVRMMap(struct file* pFile, struct vm_area_struct* ps_vma)
             iRetVal = -EINVAL;
 	    goto unlock_and_return;
     }
-
-#ifdef CONFIG_ARCH_OMAP5
-    {
-	IMG_BOOL bModPageProt = IMG_FALSE;
-
-#ifdef CONFIG_DSSCOMP
-	bModPageProt |= is_tiler_addr(LinuxMemAreaToCpuPAddr(psOffsetStruct->psLinuxMemArea, 0).uiAddr);
-#endif /* CONFIG_DSSCOMP */
-
-	if (bModPageProt)
-	{
-		ps_vma->vm_page_prot = __pgprot_modify(ps_vma->vm_page_prot,
-					       L_PTE_MT_MASK,
-					       L_PTE_MT_DEV_SHARED);
-	}
-    }
-#endif /* CONFIG_ARCH_OMAP5 */
 
     /* Install open and close handlers for ref-counting */
     ps_vma->vm_ops = &MMapIOOps;

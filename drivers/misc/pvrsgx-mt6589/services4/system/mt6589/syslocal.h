@@ -58,9 +58,6 @@ typedef struct _SYS_SPECIFIC_DATA_TAG_
 	IMG_UINT32	ui32SysSpecificData;
 	PVRSRV_DEVICE_NODE *psSGXDevNode;
 	IMG_BOOL	bSGXInitComplete;
-//#if defined(PVR_OMAP_TIMER_BASE_IN_SYS_SPEC_DATA)
-//	IMG_CPU_PHYADDR	sTimerRegPhysBase;
-//#endif
 #if !defined(__linux__)
 	IMG_BOOL	bSGXClocksEnabled;
 #endif
@@ -78,9 +75,6 @@ typedef struct _SYS_SPECIFIC_DATA_TAG_
 	atomic_t	sNotifyLockCPU;
 	IMG_BOOL	bCallVDD2PostFunc;
 #endif
-//#if defined(PVR_OMAP_USE_DM_TIMER_API)
-//	struct omap_dm_timer *psGPTimer;
-//#endif
 #endif
 } SYS_SPECIFIC_DATA;
 

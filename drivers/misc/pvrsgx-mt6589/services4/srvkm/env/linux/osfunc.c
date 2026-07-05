@@ -3272,54 +3272,6 @@ PVRSRV_ERROR OSReleasePhysPageAddr(IMG_HANDLE hOSWrapMem)
     return PVRSRV_OK;
 }
 
-#if defined(CONFIG_TI_TILER) || defined(CONFIG_DRM_OMAP_DMM_TILER)
-
-static IMG_UINT32 CPUAddrToTilerPhy(IMG_UINT32 uiAddr)
-{
-	IMG_UINT32 ui32PhysAddr = 0;
-	pte_t *ptep, pte;
-	pgd_t *pgd;
-	pmd_t *pmd;
-	pud_t *pud;
-
-	pgd = pgd_offset(current->mm, uiAddr);
-	if (pgd_none(*pgd) || pgd_bad(*pgd))
-		goto err_out;
-
-	pud = pud_offset(pgd, uiAddr);
-	if (pud_none(*pud) || pud_bad(*pud))
-		goto err_out;
-
-	pmd = pmd_offset(pud, uiAddr);
-	if (pmd_none(*pmd) || pmd_bad(*pmd))
-		goto err_out;
-
-	ptep = pte_offset_map(pmd, uiAddr);
-	if (!ptep)
-		goto err_out;
-
-	pte = *ptep;
-	if (!pte_present(pte))
-		goto err_out;
-
-	ui32PhysAddr = (pte & PAGE_MASK) | (~PAGE_MASK & uiAddr);
-
-	/* If the physAddr is not in the TILER physical range
-	 * then we don't proceed.
-	 */
-	if (ui32PhysAddr < 0x60000000 && ui32PhysAddr > 0x7fffffff)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "CPUAddrToTilerPhy: Not in tiler range"));
-		ui32PhysAddr = 0;
-		goto err_out;
-	}
-
-err_out:
-	return ui32PhysAddr;
-}
-
-#endif /* defined(CONFIG_TI_TILER) && defined(CONFIG_DRM_OMAP_DMM_TILER) */
-
 /*!
 ******************************************************************************
 
@@ -3532,19 +3484,6 @@ PVRSRV_ERROR OSAcquirePhysPageAddr(IMG_VOID *pvCPUVAddr,
 	}
 	if (psInfo->ppsPages[i] == NULL)
 	{
-#if defined(CONFIG_TI_TILER) || defined(CONFIG_DRM_OMAP_DMM_TILER)
-		/* This could be tiler memory.*/
-		IMG_UINT32 ui32TilerAddr = CPUAddrToTilerPhy(uAddr);
-		if (ui32TilerAddr)
-		{
-			bHavePageStructs = IMG_TRUE;
-			psInfo->iNumPagesMapped++;
-			psInfo->psPhysAddr[i].uiAddr = ui32TilerAddr;
-			psSysPAddr[i].uiAddr = ui32TilerAddr;
-			continue;
-		}
-#endif /* defined(CONFIG_TI_TILER) || defined(CONFIG_DRM_OMAP_DMM_TILER) */
-
 	    bHaveNoPageStructs = IMG_TRUE;
 	}
 	else

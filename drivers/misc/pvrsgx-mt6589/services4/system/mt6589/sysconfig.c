@@ -188,9 +188,6 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	IMG_UINT32			i;
 	PVRSRV_ERROR 		eError;
 	PVRSRV_DEVICE_NODE	*psDeviceNode;
-//#if !defined(PVR_NO_OMAP_TIMER)
-//	IMG_CPU_PHYADDR		TimerRegPhysBase;
-//#endif
 #if !defined(SGX_DYNAMIC_TIMING_INFO)
 	SGX_TIMING_INFORMATION*	psTimingInfo;
 #endif
@@ -385,23 +382,8 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 
 	DisableSGXClocks(gpsSysData);
 
-//#if !defined(PVR_NO_OMAP_TIMER)
-//#if defined(PVR_OMAP_TIMER_BASE_IN_SYS_SPEC_DATA)
-//	TimerRegPhysBase = gsSysSpecificData.sTimerRegPhysBase;
-//#else
-//	TimerRegPhysBase.uiAddr = SYS_OMAP4430_GP11TIMER_REGS_SYS_PHYS_BASE;
-//#endif
 	gpsSysData->pvSOCTimerRegisterKM = IMG_NULL;
 	gpsSysData->hSOCTimerRegisterOSMemHandle = 0;
-//	if (TimerRegPhysBase.uiAddr != 0)
-//	{
-//		OSReservePhys(TimerRegPhysBase,
-//				  4,
-//				  PVRSRV_HAP_MULTI_PROCESS|PVRSRV_HAP_UNCACHED,
-//				  (IMG_VOID **)&gpsSysData->pvSOCTimerRegisterKM,
-//				  &gpsSysData->hSOCTimerRegisterOSMemHandle);
-//	}
-//#endif
 
 	return PVRSRV_OK;
 }
