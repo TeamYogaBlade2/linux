@@ -58,7 +58,89 @@
 	};
 };
 
+&mmc0 {
+	bus-width = <8>;
+	max-frequency = <200000000>;
+	mmc-ddr-1_8v;
+	mmc-hs200-1_8v;
+	cap-mmc-highspeed;
+	non-removable;
+	no-sd;
+	no-sdio;
+
+	vmmc-supply = <&mt6323_vemc3v3_reg>;
+	vqmmc-supply = <&mt6323_vio18_reg>;
+	pinctrl-0 = <&mmc0_pins_default>;
+	pinctrl-1 = <&mmc0_pins_uhs>;
+	pinctrl-names = "default", "state_uhs";
+
+	assigned-clocks = <&topckgen CLK_TOP_MSDC0_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D8>;
+
+	status = "okay";
+};
+
 &pio {
+	mmc0_pins_default: mmc0-default-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
+				 <PINMUX_GPIO46__FUNC_MC0_DAT0>,
+				 <PINMUX_GPIO47__FUNC_MC0_DAT1>,
+				 <PINMUX_GPIO48__FUNC_MC0_DAT2>,
+				 <PINMUX_GPIO49__FUNC_MC0_DAT3>,
+				 <PINMUX_GPIO50__FUNC_MC0_DAT4>,
+				 <PINMUX_GPIO51__FUNC_MC0_DAT5>,
+				 <PINMUX_GPIO52__FUNC_MC0_DAT6>,
+				 <PINMUX_GPIO53__FUNC_MC0_DAT7>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <6>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO44__FUNC_MC0_CK>;
+			drive-strength = <6>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-rst {
+			pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
+			drive-strength = <6>;
+			bias-pull-up;
+		};
+	};
+
+	mmc0_pins_uhs: mmc0-uhs-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
+				 <PINMUX_GPIO46__FUNC_MC0_DAT0>,
+				 <PINMUX_GPIO47__FUNC_MC0_DAT1>,
+				 <PINMUX_GPIO48__FUNC_MC0_DAT2>,
+				 <PINMUX_GPIO49__FUNC_MC0_DAT3>,
+				 <PINMUX_GPIO50__FUNC_MC0_DAT4>,
+				 <PINMUX_GPIO51__FUNC_MC0_DAT5>,
+				 <PINMUX_GPIO52__FUNC_MC0_DAT6>,
+				 <PINMUX_GPIO53__FUNC_MC0_DAT7>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <8>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO44__FUNC_MC0_CK>;
+			drive-strength = <8>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-rst {
+			pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
 	pmic_pins: pmic-pins {
 		pins-int {
 			pinmux = <PINMUX_GPIO7__FUNC_PMIC_EINT>;
