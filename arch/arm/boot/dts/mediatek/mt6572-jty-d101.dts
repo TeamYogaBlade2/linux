@@ -4,6 +4,7 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
 #include "mt6572.dtsi"
 #include "mt6323.dtsi"
 
@@ -80,6 +81,31 @@
 	status = "okay";
 };
 
+&mmc1 {
+	bus-width = <4>;
+	max-frequency = <200000000>;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	sd-uhs-ddr50;
+	cap-sd-highspeed;
+	no-mmc;
+	no-sdio;
+
+	vmmc-supply = <&mt6323_vmch_reg>;
+	vqmmc-supply = <&mt6323_vmc_reg>;
+	pinctrl-0 = <&mmc1_pins_cd>, <&mmc1_pins_default>;
+	pinctrl-1 = <&mmc1_pins_cd>, <&mmc1_pins_uhs>;
+	pinctrl-names = "default", "state_uhs";
+	cd-gpios = <&pio 86 GPIO_ACTIVE_LOW>;
+
+	assigned-clocks = <&topckgen CLK_TOP_MSDC1_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D10>;
+
+	status = "okay";
+};
+
 &pio {
 	mmc0_pins_default: mmc0-default-pins {
 		pins-cmd-dat {
@@ -138,6 +164,55 @@
 			pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
 			drive-strength = <8>;
 			bias-pull-up;
+		};
+	};
+
+	mmc1_pins_default: mmc1-default-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO92__FUNC_MC1_CMD>,
+				 <PINMUX_GPIO93__FUNC_MC1_DAT0>,
+				 <PINMUX_GPIO94__FUNC_MC1_DAT1>,
+				 <PINMUX_GPIO95__FUNC_MC1_DAT2>,
+				 <PINMUX_GPIO96__FUNC_MC1_DAT3>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <20>;
+			bias-pull-up;
+			mediatek,tdsel = <5>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO91__FUNC_MC1_CK>;
+			drive-strength = <20>;
+			bias-pull-down;
+		};
+	};
+
+	mmc1_pins_uhs: mmc1-uhs-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO92__FUNC_MC1_CMD>,
+				 <PINMUX_GPIO93__FUNC_MC1_DAT0>,
+				 <PINMUX_GPIO94__FUNC_MC1_DAT1>,
+				 <PINMUX_GPIO95__FUNC_MC1_DAT2>,
+				 <PINMUX_GPIO96__FUNC_MC1_DAT3>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <24>;
+			bias-pull-up;
+			mediatek,tdsel = <0>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO91__FUNC_MC1_CK>;
+			drive-strength = <24>;
+			bias-pull-down;
+		};
+	};
+
+	mmc1_pins_cd: mmc1-cd-pins {
+		pins-cd {
+			/* GPIO86 is always input */
+			pinmux = <PINMUX_GPIO86__FUNC_MC1_INS>;
 		};
 	};
 
