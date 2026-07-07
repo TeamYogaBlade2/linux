@@ -13,6 +13,7 @@
 #define MFG_CG_CON	0x0000
 #define MFG_CG_SET	0x0004
 #define MFG_CG_CLR	0x0008
+#define MFG_RESET	0x000c
 
 static const struct mtk_gate_regs mfg_cg_regs = {
 	.set_ofs = MFG_CG_SET,
@@ -30,9 +31,18 @@ static const struct mtk_gate mfg_clks[] = {
 	GATE_MFG(CLK_MFG_HYD, "mfg_hyd", "hyd_sel", 3),
 };
 
+static u16 mfg_rst_ofs[] = { MFG_RESET };
+
+static const struct mtk_clk_rst_desc mfg_clk_rst_desc = {
+	.version = MTK_RST_SIMPLE,
+	.rst_bank_ofs = mfg_rst_ofs,
+	.rst_bank_nr = ARRAY_SIZE(mfg_rst_ofs),
+};
+
 static const struct mtk_clk_desc mfg_desc = {
 	.clks = mfg_clks,
 	.num_clks = ARRAY_SIZE(mfg_clks),
+	.rst_desc = &mfg_clk_rst_desc,
 };
 
 static const struct of_device_id of_match_clk_mt6589_mfg[] = {
