@@ -57,6 +57,18 @@
 	};
 };
 
+&pio {
+	uart0_pins: uart0-pins {
+		pins-bus {
+			pinmux = <PINMUX_GPIO103__FUNC_URXD1>,
+				 <PINMUX_GPIO104__FUNC_UTXD1>;
+		};
+	};
+};
+
 &uart0 {
+	pinctrl-0 = <&uart0_pins>;
+	pinctrl-names = "default";
+
 	status = "okay";
 };
