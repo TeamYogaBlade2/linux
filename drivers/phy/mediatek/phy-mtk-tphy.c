@@ -304,15 +304,6 @@ struct mtk_phy_pdata {
 	bool avoid_rx_sen_degradation;
 	bool sw_pll_48m_to_26m;
 	bool sw_efuse_supported;
-	/* disable DP/DM 100k pull-down */
-	bool disable_dpdm_100k;
-	/*
-	 * Clear PUPD_BIST_EN (U3P_USBPHYACR3 bit12) after PMIC charger
-	 * detection to release D+/D- from BIST mode and allow normal
-	 * USB operation. Required on smartphone SoCs that delegate VBUS
-	 * and charger detection to an external PMIC.
-	 */
-	bool disable_pupd_bist;
 	/* MT6589 specific wordarounds */
 	bool need_mt6589_workaround;
 	/* RG_USB20_SQTH override (0 = default 2) */
@@ -887,30 +878,11 @@ static void u2_phy_instance_init(struct mtk_tphy *tphy,
 	/* DP/DM BC1.1 path Disable */
 	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
 
-	/* Disable DP/DM 100K resistors */
-	/*
-	 * NOTE: MT6589 downstream has DP/DM 100k disable code commented out.
-	 * Enabling this in mainline may be unnecessary.
-	 */
-	if (tphy->pdata->disable_dpdm_100k) {
-		mtk_phy_clear_bits(com + U3P_U2PHYACR4,
-				   P2C_RG_USB20_DP_100K_EN |
-				   P2C_RG_USB20_DM_100K_EN);
-	}
-
-	/* PUPD_BIST_EN clear */
-	/*
-	 * NOTE: MT6589 downstream only clears PUPD_BIST in usb_phy_recover(),
-	 * not during init. This init-time clear is mainline-specific.
-	 */
-	if (tphy->pdata->disable_pupd_bist)
-		mtk_phy_clear_bits(com + U3P_USBPHYACR3, PA3_RG_USB20_PUPD_BIST_EN);
-
 	/* SQTH override */
 	if (tphy->pdata->sqth_val) {
 		/* NOTE: MT6589 downstream does not override SQTH. This is a mainline addition. */
-		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH,
-				     tphy->pdata->sqth_val);
+		//mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH,
+		//		     tphy->pdata->sqth_val);
 	} else {
 		/* NOTE: Even the default SQTH=2 is not explicitly set downstream. */
 		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH, 2);
@@ -950,14 +922,6 @@ static void mt6589_u2_phy_recover(struct mtk_tphy *tphy,
 	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
 	mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
 
-	/* Force ID pull-up (required for OTG detection on MT6589) */
-	/*
-	 * NOTE: Downstream performs ID pull-up only once during otg_int_init().
-	 * Forcing it again on every power-on is mainline-specific.
-	 */
-	mtk_phy_set_bits(com + U3P_U2PHYDTM1,
-			 P2C_FORCE_IDPULLUP | P2C_RG_IDPULLUP);
-
 	udelay(800);
 }
 
@@ -971,38 +935,10 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 	if (tphy->pdata->need_mt6589_workaround)
 		mt6589_u2_phy_recover(tphy, instance);
 
-	/* OTG Enable */
-	mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
-
-	mtk_phy_set_bits(com + U3P_U2PHYDTM1, P2C_RG_VBUSVALID | P2C_RG_AVALID);
-
-	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_SESSEND);
-
 	if (tphy->pdata->avoid_rx_sen_degradation && index) {
 		mtk_phy_set_bits(com + U3D_U2PHYDCR0, P2C_RG_SIF_U2PLL_FORCE_ON);
 
 		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
-	}
-
-	/* Force device mode bits during power on */
-	if (tphy->pdata->device_force_mask) {
-		/*
-		 * NOTE: MT6589 downstream does not apply device force mask in PHY power-on.
-		 * VBUS/AVALID/SESSEND/IDPULLUP are managed by the MUSB core instead.
-		 */
-		u32 tmp = readl(com + U3P_U2PHYDTM1);
-		tmp |= tphy->pdata->device_force_mask;
-		if (tphy->pdata->device_force_mask & P2C_FORCE_VBUSVALID)
-			tmp |= P2C_RG_VBUSVALID;
-		if (tphy->pdata->device_force_mask & P2C_FORCE_AVALID)
-			tmp |= P2C_RG_AVALID;
-		if (tphy->pdata->device_force_mask & P2C_FORCE_BVALID)
-			tmp |= P2C_RG_BVALID;
-		if (tphy->pdata->device_force_mask & P2C_FORCE_SESSEND)
-			tmp |= P2C_RG_SESSEND;
-		if (tphy->pdata->device_force_mask & P2C_FORCE_IDDIG)
-			tmp |= P2C_RG_IDDIG;
-		writel(tmp, com + U3P_U2PHYDTM1);
 	}
 
 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
@@ -1058,33 +994,10 @@ static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
 	void __iomem *com = u2_banks->com;
 	u32 index = instance->index;
 
-	/* OTG Disable */
-	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
-
-	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_VBUSVALID | P2C_RG_AVALID);
-
-	mtk_phy_set_bits(com + U3P_U2PHYDTM1, P2C_RG_SESSEND);
-
 	if (tphy->pdata->avoid_rx_sen_degradation && index) {
 		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
 
 		mtk_phy_clear_bits(com + U3D_U2PHYDCR0, P2C_RG_SIF_U2PLL_FORCE_ON);
-	}
-
-	/* Clear all force bits */
-	/*
-	 * NOTE: MT6589 downstream never explicitly clears these force bits in power-off.
-	 * The savecurrent sequence does not touch them either. This cleanup is mainline-only.
-	 */
-	if (tphy->pdata->device_force_mask || tphy->pdata->host_force_mask) {
-		u32 tmp = readl(com + U3P_U2PHYDTM1);
-		tmp &= ~(P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
-			 P2C_FORCE_BVALID | P2C_FORCE_SESSEND |
-			 P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP);
-		/* Also clear corresponding normal bits */
-		tmp &= ~(P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID |
-			 P2C_RG_SESSEND | P2C_RG_IDDIG | P2C_RG_IDPULLUP);
-		writel(tmp, com + U3P_U2PHYDTM1);
 	}
 
 	if (tphy->pdata->need_mt6589_workaround)
@@ -1107,101 +1020,11 @@ static void u2_phy_instance_exit(struct mtk_tphy *tphy,
 	}
 }
 
-/*
- * NOTE: This entire forced idle -> host transition sequence is specific to mainline.
- * In the MT6589 downstream kernel, equivalent code (musb_id_pin_work) is completely
- * disabled with #if 0 because the SoC has no internal VBUS sensing.
- * If host mode issues occur, this function should be disabled.
- */
-static void mt6589_u2_phy_host_transition(struct mtk_tphy *tphy,
-					  struct mtk_phy_instance *instance)
-{
-	struct u2phy_banks *u2_banks = &instance->u2_banks;
-	void __iomem *com = u2_banks->com;
-	u32 tmp;
-
-	/* Step 1: force idle state (SESSEND=1, clear VBUS/AVALID/BVALID/IDDIG) */
-	tmp = readl(com + U3P_U2PHYDTM1);
-	tmp |= P2C_RG_SESSEND;
-	tmp &= ~(P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID | P2C_RG_IDDIG);
-	tmp |= (P2C_FORCE_VBUSVALID | P2C_FORCE_SESSEND | P2C_FORCE_BVALID |
-		P2C_FORCE_AVALID | P2C_FORCE_IDDIG);
-	writel(tmp, com + U3P_U2PHYDTM1);
-
-	mdelay(5);
-
-	/* Step 2: force host mode (SESSEND=0, set VBUS/AVALID/BVALID) */
-	tmp &= ~P2C_RG_SESSEND;
-	tmp |= (P2C_RG_VBUSVALID | P2C_RG_AVALID | P2C_RG_BVALID);
-	writel(tmp, com + U3P_U2PHYDTM1);
-}
-
 static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 				     struct mtk_phy_instance *instance,
 				     enum phy_mode mode)
 {
-	struct u2phy_banks *u2_banks = &instance->u2_banks;
-	u32 tmp;
-
-	tmp = readl(u2_banks->com + U3P_U2PHYDTM1);
-	switch (mode) {
-	case PHY_MODE_USB_DEVICE:
-		tmp |= P2C_FORCE_IDDIG | P2C_RG_IDDIG;
-		break;
-	case PHY_MODE_USB_HOST:
-		tmp |= P2C_FORCE_IDDIG;
-		tmp &= ~P2C_RG_IDDIG;
-		break;
-	case PHY_MODE_USB_OTG:
-		tmp &= ~(P2C_FORCE_IDDIG | P2C_RG_IDDIG);
-		break;
-	default:
-		return;
-	}
-
-	/* Apply dynamic force bits for host/device mode */
-	if (tphy->pdata->device_force_mask || tphy->pdata->host_force_mask) {
-		u32 force = 0;
-
-		switch (mode) {
-		case PHY_MODE_USB_DEVICE:
-			force = tphy->pdata->device_force_mask;
-			break;
-		case PHY_MODE_USB_HOST:
-			force = tphy->pdata->host_force_mask;
-			break;
-		default:
-			break;
-		}
-
-		/* update only force-related bits in tmp */
-		tmp &= ~(P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
-			 P2C_FORCE_BVALID | P2C_FORCE_SESSEND |
-			 P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP);
-		tmp |= force;
-
-		/* also set the corresponding normal bits */
-		if (force & P2C_FORCE_VBUSVALID)
-			tmp |= P2C_RG_VBUSVALID;
-		if (force & P2C_FORCE_AVALID)
-			tmp |= P2C_RG_AVALID;
-		if (force & P2C_FORCE_BVALID)
-			tmp |= P2C_RG_BVALID;
-		if (force & P2C_FORCE_SESSEND)
-			tmp |= P2C_RG_SESSEND;
-		if (force & P2C_FORCE_IDDIG)
-			tmp |= P2C_RG_IDDIG;
-		/*
-		 * NOTE: Applying host_force_mask (VBUS/AVALID/BVALID/IDPULLUP) is mainline-only.
-		 * Downstream MT6589 does not force these bits; the code was #if 0'd out.
-		 */
-		if (force & P2C_FORCE_IDPULLUP)
-			tmp |= P2C_RG_IDPULLUP;
-	}
-	writel(tmp, u2_banks->com + U3P_U2PHYDTM1);
-
-	if (tphy->pdata->need_mt6589_workaround && mode == PHY_MODE_USB_HOST)
-		mt6589_u2_phy_host_transition(tphy, instance);
+	return;
 }
 
 static void pcie_phy_instance_init(struct mtk_tphy *tphy,
@@ -1798,10 +1621,8 @@ static const struct mtk_phy_pdata tphy_v3_pdata = {
 };
 
 static const struct mtk_phy_pdata mt6589_pdata = {
-	.slew_ref_clock_mhz = 26,
-	.slew_rate_coefficient = 28,
-	.disable_pupd_bist = true,
-	.disable_dpdm_100k = true,
+	.slew_ref_clock_mhz = 48,
+	.slew_rate_coefficient = 22,
 	.need_mt6589_workaround = true,
 	.sqth_val = 2,
 	.device_force_mask = P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
@@ -1845,7 +1666,7 @@ static int mtk_tphy_probe(struct platform_device *pdev)
 	struct phy_provider *provider;
 	struct resource *sif_res, *fm_res;
 	struct mtk_tphy *tphy;
-	struct resource res,;
+	struct resource res;
 	int port, ret;
 
 	tphy = devm_kzalloc(dev, sizeof(*tphy), GFP_KERNEL);
