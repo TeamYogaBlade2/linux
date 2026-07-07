@@ -1642,7 +1642,6 @@ static const struct mtk_phy_pdata mt6589_pdata = {
 	.slew_ref_clock_mhz = 48,
 	.slew_rate_coefficient = 22,
 	.need_mt6589_workaround = true,
-	.sqth_val = 2,
 	.version = MTK_PHY_V1,
 };
 
