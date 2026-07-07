@@ -932,6 +932,13 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
 	void __iomem *com = u2_banks->com;
 	u32 index = instance->index;
 
+	/* OTG Enable */
+	mtk_phy_set_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
+
+	mtk_phy_set_bits(com + U3P_U2PHYDTM1, P2C_RG_VBUSVALID | P2C_RG_AVALID);
+
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_SESSEND);
+
 	if (tphy->pdata->need_mt6589_workaround)
 		mt6589_u2_phy_recover(tphy, instance);
 
@@ -994,6 +1001,13 @@ static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
 	void __iomem *com = u2_banks->com;
 	u32 index = instance->index;
 
+	/* OTG Disable */
+	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_OTG_VBUSCMP_EN);
+
+	mtk_phy_clear_bits(com + U3P_U2PHYDTM1, P2C_RG_VBUSVALID | P2C_RG_AVALID);
+
+	mtk_phy_set_bits(com + U3P_U2PHYDTM1, P2C_RG_SESSEND);
+
 	if (tphy->pdata->avoid_rx_sen_degradation && index) {
 		mtk_phy_clear_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
 
@@ -1024,7 +1038,25 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 				     struct mtk_phy_instance *instance,
 				     enum phy_mode mode)
 {
-	return;
+	struct u2phy_banks *u2_banks = &instance->u2_banks;
+	u32 tmp;
+
+	tmp = readl(u2_banks->com + U3P_U2PHYDTM1);
+	switch (mode) {
+	case PHY_MODE_USB_DEVICE:
+		tmp |= P2C_FORCE_IDDIG | P2C_RG_IDDIG;
+		break;
+	case PHY_MODE_USB_HOST:
+		tmp |= P2C_FORCE_IDDIG;
+		tmp &= ~P2C_RG_IDDIG;
+		break;
+	case PHY_MODE_USB_OTG:
+		tmp &= ~(P2C_FORCE_IDDIG | P2C_RG_IDDIG);
+		break;
+	default:
+		return;
+	}
+	writel(tmp, u2_banks->com + U3P_U2PHYDTM1);
 }
 
 static void pcie_phy_instance_init(struct mtk_tphy *tphy,
