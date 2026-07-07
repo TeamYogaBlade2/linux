@@ -98,7 +98,7 @@ config PINCTRL_MT2701
 	select PINCTRL_MTK
 
 config PINCTRL_MT6589
-	bool "MediaTek MT6589 pin control"
+	tristate "MediaTek MT6589 pin control"
 	depends on MACH_MT6589 || COMPILE_TEST
 	depends on OF
 	default MACH_MT6589

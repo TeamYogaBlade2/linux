@@ -10,6 +10,8 @@
 
 #include <dt-bindings/clock/mt6589-clk.h>
 
+#define PERI_RST0	0x0000
+#define PERI_RST1	0x0004
 #define PERI_PDN0_SET	0x0008
 #define PERI_PDN0_CLR	0x0010
 #define PERI_PDN0_STA	0x0018
@@ -92,7 +94,7 @@ static const struct mtk_composite peri_muxes[] = {
 		0x040c, 3, 1),
 };
 
-static u16 pericfg_rst_ofs[] = { 0x0, 0x4, };
+static u16 pericfg_rst_ofs[] = { PERI_RST0, PERI_RST1 };
 
 static const struct mtk_clk_rst_desc peri_clk_rst_desc = {
 	.version = MTK_RST_SIMPLE,
