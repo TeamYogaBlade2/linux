@@ -493,9 +493,8 @@
 			interrupt-names = "mc";
 			phys = <&usb_port0 PHY_TYPE_USB2>;
 			dr_mode = "otg";
-			/* FIXME: clocks */
 			clocks = <&pericfg CLK_PERI0_USB0>,
-				 <&clk26m>,
+				 <&pericfg CLK_PERI0_USB0>,
 				 <&topckgen CLK_TOP_UNIVPLL_D26>;
 			clock-names = "main", "mcu", "univpll";
 			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
