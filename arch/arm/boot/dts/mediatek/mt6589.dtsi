@@ -503,26 +503,6 @@
 			status = "disabled";
 		};
 
-		/* USB 1.1 - MUSBFSH*/
-		/*
-		usb1: usb@11210000 {
-			compatible = "mediatek,mt6589-musb",
-				     "mediatek,mtk-musb";
-			reg = <0x11210000 0x1000>;
-			interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_LOW>;
-			interrupt-names = "mc";
-			phys = <&usb_port1 PHY_TYPE_USB2>;
-			dr_mode = "otg";
-			clocks = <&pericfg CLK_PERI0_USB1>,
-				 <&clk26m>,
-				 <&topckgen CLK_TOP_UNIVPLL_D26>;
-			clock-names = "main", "mcu", "univpll";
-			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
-			reset-names = "hrst";
-			status = "disabled";
-		};
-		*/
-
 		u2phy0: t-phy@11220000 {
 			compatible = "mediatek,mt6589-tphy";
 			reg = <0x11220000 0x0800>,
@@ -535,6 +515,7 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
+			/* USB 2.0 */
 			usb_port0: usb-phy@11220800 {
 				reg = <0x11220800 0x0100>;
 				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
@@ -543,7 +524,7 @@
 				status = "okay";
 			};
 
-			/*
+			/* USB 1.1 */
 			usb_port1: usb-phy@11220900 {
 				reg = <0x11220900 0x0100>;
 				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
@@ -551,7 +532,6 @@
 				#phy-cells = <1>;
 				status = "disabled";
 			};
-			*/
 		};
 
 		mmc0: mmc@11230000 {
