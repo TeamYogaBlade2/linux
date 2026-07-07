@@ -306,12 +306,6 @@ struct mtk_phy_pdata {
 	bool sw_efuse_supported;
 	/* MT6589 specific wordarounds */
 	bool need_mt6589_workaround;
-	/* RG_USB20_SQTH override (0 = default 2) */
-	u8 sqth_val;
-	/* Force bits for device mode */
-	u32 device_force_mask;
-	/* Force bits for host mode */
-	u32 host_force_mask;
 	u8 slew_ref_clock_mhz;
 	u8 slew_rate_coefficient;
 	enum mtk_phy_version version;
@@ -878,15 +872,7 @@ static void u2_phy_instance_init(struct mtk_tphy *tphy,
 	/* DP/DM BC1.1 path Disable */
 	mtk_phy_clear_bits(com + U3P_USBPHYACR6, PA6_RG_U2_BC11_SW_EN);
 
-	/* SQTH override */
-	if (tphy->pdata->sqth_val) {
-		/* NOTE: MT6589 downstream does not override SQTH. This is a mainline addition. */
-		//mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH,
-		//		     tphy->pdata->sqth_val);
-	} else {
-		/* NOTE: Even the default SQTH=2 is not explicitly set downstream. */
-		mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH, 2);
-	}
+	mtk_phy_update_field(com + U3P_USBPHYACR6, PA6_RG_U2_SQTH, 2);
 
 	/* Workaround only for mt8195, HW fix it for others (V3) */
 	u2_phy_pll_26m_set(tphy, instance);
@@ -1657,11 +1643,6 @@ static const struct mtk_phy_pdata mt6589_pdata = {
 	.slew_rate_coefficient = 22,
 	.need_mt6589_workaround = true,
 	.sqth_val = 2,
-	.device_force_mask = P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
-			     P2C_FORCE_SESSEND | P2C_FORCE_IDPULLUP,
-	.host_force_mask = P2C_FORCE_IDDIG | P2C_FORCE_IDPULLUP |
-			   P2C_FORCE_VBUSVALID | P2C_FORCE_AVALID |
-			   P2C_FORCE_BVALID,
 	.version = MTK_PHY_V1,
 };
 
