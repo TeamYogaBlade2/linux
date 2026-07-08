@@ -325,6 +325,7 @@ struct mtk_thermal_data {
 	u32 apmixed_buffer_ctl_reg;
 	u32 apmixed_buffer_ctl_mask;
 	u32 apmixed_buffer_ctl_set;
+	int (*extract_efuse)(struct mtk_thermal *mt, u32 *buf);
 };
 
 struct mtk_thermal {
@@ -467,233 +468,6 @@ static const int mt8365_mux_values[MT8365_NUM_SENSORS] = { 0, 1, 2 };
 static const int mt8365_tc_offset[MT8365_NUM_CONTROLLER] = { 0 };
 
 static const int mt8365_vts_index[MT8365_NUM_SENSORS] = { VTS1, VTS2, VTS3 };
-
-/*
- * The MT8173 thermal controller has four banks. Each bank can read up to
- * four temperature sensors simultaneously. The MT8173 has a total of 5
- * temperature sensors. We use each bank to measure a certain area of the
- * SoC. Since TS2 is located centrally in the SoC it is influenced by multiple
- * areas, hence is used in different banks.
- *
- * The thermal core only gets the maximum temperature of all banks, so
- * the bank concept wouldn't be necessary here. However, the SVS (Smart
- * Voltage Scaling) unit makes its decisions based on the same bank
- * data, and this indeed needs the temperatures of the individual banks
- * for making better decisions.
- */
-static const struct mtk_thermal_data mt8173_thermal_data = {
-	.auxadc_channel = MT8173_TEMP_AUXADC_CHANNEL,
-	.num_banks = MT8173_NUM_ZONES,
-	.num_sensors = MT8173_NUM_SENSORS,
-	.vts_index = mt8173_vts_index,
-	.cali_val = MT8173_CALIBRATION,
-	.num_controller = MT8173_NUM_CONTROLLER,
-	.controller_offset = mt8173_tc_offset,
-	.need_switch_bank = true,
-	.bank_data = {
-		{
-			.num_sensors = 2,
-			.sensors = mt8173_bank_data[0],
-		}, {
-			.num_sensors = 2,
-			.sensors = mt8173_bank_data[1],
-		}, {
-			.num_sensors = 3,
-			.sensors = mt8173_bank_data[2],
-		}, {
-			.num_sensors = 1,
-			.sensors = mt8173_bank_data[3],
-		},
-	},
-	.msr = mt8173_msr,
-	.adcpnp = mt8173_adcpnp,
-	.sensor_mux_values = mt8173_mux_values,
-	.version = MTK_THERMAL_V1,
-};
-
-/*
- * The MT2701 thermal controller has one bank, which can read up to
- * three temperature sensors simultaneously. The MT2701 has a total of 3
- * temperature sensors.
- *
- * The thermal core only gets the maximum temperature of this one bank,
- * so the bank concept wouldn't be necessary here. However, the SVS (Smart
- * Voltage Scaling) unit makes its decisions based on the same bank
- * data.
- */
-static const struct mtk_thermal_data mt2701_thermal_data = {
-	.auxadc_channel = MT2701_TEMP_AUXADC_CHANNEL,
-	.num_banks = 1,
-	.num_sensors = MT2701_NUM_SENSORS,
-	.vts_index = mt2701_vts_index,
-	.cali_val = MT2701_CALIBRATION,
-	.num_controller = MT2701_NUM_CONTROLLER,
-	.controller_offset = mt2701_tc_offset,
-	.need_switch_bank = true,
-	.bank_data = {
-		{
-			.num_sensors = 3,
-			.sensors = mt2701_bank_data,
-		},
-	},
-	.msr = mt2701_msr,
-	.adcpnp = mt2701_adcpnp,
-	.sensor_mux_values = mt2701_mux_values,
-	.version = MTK_THERMAL_V1,
-};
-
-/*
- * The MT8365 thermal controller has one bank, which can read up to
- * four temperature sensors simultaneously. The MT8365 has a total of 3
- * temperature sensors.
- *
- * The thermal core only gets the maximum temperature of this one bank,
- * so the bank concept wouldn't be necessary here. However, the SVS (Smart
- * Voltage Scaling) unit makes its decisions based on the same bank
- * data.
- */
-static const struct mtk_thermal_data mt8365_thermal_data = {
-	.auxadc_channel = MT8365_TEMP_AUXADC_CHANNEL,
-	.num_banks = MT8365_NUM_BANKS,
-	.num_sensors = MT8365_NUM_SENSORS,
-	.vts_index = mt8365_vts_index,
-	.cali_val = MT8365_CALIBRATION,
-	.num_controller = MT8365_NUM_CONTROLLER,
-	.controller_offset = mt8365_tc_offset,
-	.need_switch_bank = false,
-	.bank_data = {
-		{
-			.num_sensors = MT8365_NUM_SENSORS,
-			.sensors = mt8365_bank_data
-		},
-	},
-	.msr = mt8365_msr,
-	.adcpnp = mt8365_adcpnp,
-	.sensor_mux_values = mt8365_mux_values,
-	.version = MTK_THERMAL_V1,
-	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON0,
-	.apmixed_buffer_ctl_mask = (u32) ~GENMASK(29, 28),
-	.apmixed_buffer_ctl_set = 0,
-};
-
-/*
- * The MT2712 thermal controller has one bank, which can read up to
- * four temperature sensors simultaneously. The MT2712 has a total of 4
- * temperature sensors.
- *
- * The thermal core only gets the maximum temperature of this one bank,
- * so the bank concept wouldn't be necessary here. However, the SVS (Smart
- * Voltage Scaling) unit makes its decisions based on the same bank
- * data.
- */
-static const struct mtk_thermal_data mt2712_thermal_data = {
-	.auxadc_channel = MT2712_TEMP_AUXADC_CHANNEL,
-	.num_banks = 1,
-	.num_sensors = MT2712_NUM_SENSORS,
-	.vts_index = mt2712_vts_index,
-	.cali_val = MT2712_CALIBRATION,
-	.num_controller = MT2712_NUM_CONTROLLER,
-	.controller_offset = mt2712_tc_offset,
-	.need_switch_bank = true,
-	.bank_data = {
-		{
-			.num_sensors = 4,
-			.sensors = mt2712_bank_data,
-		},
-	},
-	.msr = mt2712_msr,
-	.adcpnp = mt2712_adcpnp,
-	.sensor_mux_values = mt2712_mux_values,
-	.version = MTK_THERMAL_V1,
-};
-
-/*
- * MT7622 have only one sensing point which uses AUXADC Channel 11 for raw data
- * access.
- */
-static const struct mtk_thermal_data mt7622_thermal_data = {
-	.auxadc_channel = MT7622_TEMP_AUXADC_CHANNEL,
-	.num_banks = MT7622_NUM_ZONES,
-	.num_sensors = MT7622_NUM_SENSORS,
-	.vts_index = mt7622_vts_index,
-	.cali_val = MT7622_CALIBRATION,
-	.num_controller = MT7622_NUM_CONTROLLER,
-	.controller_offset = mt7622_tc_offset,
-	.need_switch_bank = true,
-	.bank_data = {
-		{
-			.num_sensors = 1,
-			.sensors = mt7622_bank_data,
-		},
-	},
-	.msr = mt7622_msr,
-	.adcpnp = mt7622_adcpnp,
-	.sensor_mux_values = mt7622_mux_values,
-	.version = MTK_THERMAL_V2,
-	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON1,
-	.apmixed_buffer_ctl_mask = GENMASK(31, 6) | BIT(3),
-	.apmixed_buffer_ctl_set = BIT(0),
-};
-
-/*
- * The MT8183 thermal controller has one bank for the current SW framework.
- * The MT8183 has a total of 6 temperature sensors.
- * There are two thermal controller to control the six sensor.
- * The first one bind 2 sensor, and the other bind 4 sensors.
- * The thermal core only gets the maximum temperature of all sensor, so
- * the bank concept wouldn't be necessary here. However, the SVS (Smart
- * Voltage Scaling) unit makes its decisions based on the same bank
- * data, and this indeed needs the temperatures of the individual banks
- * for making better decisions.
- */
-static const struct mtk_thermal_data mt8183_thermal_data = {
-	.auxadc_channel = MT8183_TEMP_AUXADC_CHANNEL,
-	.num_banks = MT8183_NUM_ZONES,
-	.num_sensors = MT8183_NUM_SENSORS,
-	.vts_index = mt8183_vts_index,
-	.cali_val = MT8183_CALIBRATION,
-	.num_controller = MT8183_NUM_CONTROLLER,
-	.controller_offset = mt8183_tc_offset,
-	.need_switch_bank = false,
-	.bank_data = {
-		{
-			.num_sensors = 6,
-			.sensors = mt8183_bank_data,
-		},
-	},
-
-	.msr = mt8183_msr,
-	.adcpnp = mt8183_adcpnp,
-	.sensor_mux_values = mt8183_mux_values,
-	.version = MTK_THERMAL_V1,
-};
-
-/*
- * MT7986 uses AUXADC Channel 11 for raw data access.
- */
-static const struct mtk_thermal_data mt7986_thermal_data = {
-	.auxadc_channel = MT7986_TEMP_AUXADC_CHANNEL,
-	.num_banks = MT7986_NUM_ZONES,
-	.num_sensors = MT7986_NUM_SENSORS,
-	.vts_index = mt7986_vts_index,
-	.cali_val = MT7986_CALIBRATION,
-	.num_controller = MT7986_NUM_CONTROLLER,
-	.controller_offset = mt7986_tc_offset,
-	.need_switch_bank = true,
-	.bank_data = {
-		{
-			.num_sensors = 1,
-			.sensors = mt7986_bank_data,
-		},
-	},
-	.msr = mt7986_msr,
-	.adcpnp = mt7986_adcpnp,
-	.sensor_mux_values = mt7986_mux_values,
-	.version = MTK_THERMAL_V3,
-	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON1,
-	.apmixed_buffer_ctl_mask = GENMASK(31, 6) | BIT(3),
-	.apmixed_buffer_ctl_set = BIT(0),
-};
 
 static bool mtk_thermal_temp_is_valid(int temp)
 {
@@ -1098,21 +872,7 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 		goto out;
 	}
 
-	switch (mt->conf->version) {
-	case MTK_THERMAL_V1:
-		ret = mtk_thermal_extract_efuse_v1(mt, buf);
-		break;
-	case MTK_THERMAL_V2:
-		ret = mtk_thermal_extract_efuse_v2(mt, buf);
-		break;
-	case MTK_THERMAL_V3:
-		ret = mtk_thermal_extract_efuse_v3(mt, buf);
-		break;
-	default:
-		ret = -EINVAL;
-		break;
-	}
-
+	ret = mt->conf->extract_efuse(mt, buf);
 	if (ret) {
 		dev_info(dev, "Device not calibrated, using default calibration values\n");
 		ret = 0;
@@ -1123,6 +883,240 @@ out:
 
 	return ret;
 }
+
+/*
+ * The MT8173 thermal controller has four banks. Each bank can read up to
+ * four temperature sensors simultaneously. The MT8173 has a total of 5
+ * temperature sensors. We use each bank to measure a certain area of the
+ * SoC. Since TS2 is located centrally in the SoC it is influenced by multiple
+ * areas, hence is used in different banks.
+ *
+ * The thermal core only gets the maximum temperature of all banks, so
+ * the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data, and this indeed needs the temperatures of the individual banks
+ * for making better decisions.
+ */
+static const struct mtk_thermal_data mt8173_thermal_data = {
+	.auxadc_channel = MT8173_TEMP_AUXADC_CHANNEL,
+	.num_banks = MT8173_NUM_ZONES,
+	.num_sensors = MT8173_NUM_SENSORS,
+	.vts_index = mt8173_vts_index,
+	.cali_val = MT8173_CALIBRATION,
+	.num_controller = MT8173_NUM_CONTROLLER,
+	.controller_offset = mt8173_tc_offset,
+	.need_switch_bank = true,
+	.bank_data = {
+		{
+			.num_sensors = 2,
+			.sensors = mt8173_bank_data[0],
+		}, {
+			.num_sensors = 2,
+			.sensors = mt8173_bank_data[1],
+		}, {
+			.num_sensors = 3,
+			.sensors = mt8173_bank_data[2],
+		}, {
+			.num_sensors = 1,
+			.sensors = mt8173_bank_data[3],
+		},
+	},
+	.msr = mt8173_msr,
+	.adcpnp = mt8173_adcpnp,
+	.sensor_mux_values = mt8173_mux_values,
+	.version = MTK_THERMAL_V1,
+	.extract_efuse = mtk_thermal_extract_efuse_v1,
+};
+
+/*
+ * The MT2701 thermal controller has one bank, which can read up to
+ * three temperature sensors simultaneously. The MT2701 has a total of 3
+ * temperature sensors.
+ *
+ * The thermal core only gets the maximum temperature of this one bank,
+ * so the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data.
+ */
+static const struct mtk_thermal_data mt2701_thermal_data = {
+	.auxadc_channel = MT2701_TEMP_AUXADC_CHANNEL,
+	.num_banks = 1,
+	.num_sensors = MT2701_NUM_SENSORS,
+	.vts_index = mt2701_vts_index,
+	.cali_val = MT2701_CALIBRATION,
+	.num_controller = MT2701_NUM_CONTROLLER,
+	.controller_offset = mt2701_tc_offset,
+	.need_switch_bank = true,
+	.bank_data = {
+		{
+			.num_sensors = 3,
+			.sensors = mt2701_bank_data,
+		},
+	},
+	.msr = mt2701_msr,
+	.adcpnp = mt2701_adcpnp,
+	.sensor_mux_values = mt2701_mux_values,
+	.version = MTK_THERMAL_V1,
+	.extract_efuse = mtk_thermal_extract_efuse_v1,
+};
+
+/*
+ * The MT8365 thermal controller has one bank, which can read up to
+ * four temperature sensors simultaneously. The MT8365 has a total of 3
+ * temperature sensors.
+ *
+ * The thermal core only gets the maximum temperature of this one bank,
+ * so the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data.
+ */
+static const struct mtk_thermal_data mt8365_thermal_data = {
+	.auxadc_channel = MT8365_TEMP_AUXADC_CHANNEL,
+	.num_banks = MT8365_NUM_BANKS,
+	.num_sensors = MT8365_NUM_SENSORS,
+	.vts_index = mt8365_vts_index,
+	.cali_val = MT8365_CALIBRATION,
+	.num_controller = MT8365_NUM_CONTROLLER,
+	.controller_offset = mt8365_tc_offset,
+	.need_switch_bank = false,
+	.bank_data = {
+		{
+			.num_sensors = MT8365_NUM_SENSORS,
+			.sensors = mt8365_bank_data
+		},
+	},
+	.msr = mt8365_msr,
+	.adcpnp = mt8365_adcpnp,
+	.sensor_mux_values = mt8365_mux_values,
+	.version = MTK_THERMAL_V1,
+	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON0,
+	.apmixed_buffer_ctl_mask = (u32) ~GENMASK(29, 28),
+	.apmixed_buffer_ctl_set = 0,
+	.extract_efuse = mtk_thermal_extract_efuse_v1,
+};
+
+/*
+ * The MT2712 thermal controller has one bank, which can read up to
+ * four temperature sensors simultaneously. The MT2712 has a total of 4
+ * temperature sensors.
+ *
+ * The thermal core only gets the maximum temperature of this one bank,
+ * so the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data.
+ */
+static const struct mtk_thermal_data mt2712_thermal_data = {
+	.auxadc_channel = MT2712_TEMP_AUXADC_CHANNEL,
+	.num_banks = 1,
+	.num_sensors = MT2712_NUM_SENSORS,
+	.vts_index = mt2712_vts_index,
+	.cali_val = MT2712_CALIBRATION,
+	.num_controller = MT2712_NUM_CONTROLLER,
+	.controller_offset = mt2712_tc_offset,
+	.need_switch_bank = true,
+	.bank_data = {
+		{
+			.num_sensors = 4,
+			.sensors = mt2712_bank_data,
+		},
+	},
+	.msr = mt2712_msr,
+	.adcpnp = mt2712_adcpnp,
+	.sensor_mux_values = mt2712_mux_values,
+	.version = MTK_THERMAL_V1,
+	.extract_efuse = mtk_thermal_extract_efuse_v1,
+};
+
+/*
+ * MT7622 have only one sensing point which uses AUXADC Channel 11 for raw data
+ * access.
+ */
+static const struct mtk_thermal_data mt7622_thermal_data = {
+	.auxadc_channel = MT7622_TEMP_AUXADC_CHANNEL,
+	.num_banks = MT7622_NUM_ZONES,
+	.num_sensors = MT7622_NUM_SENSORS,
+	.vts_index = mt7622_vts_index,
+	.cali_val = MT7622_CALIBRATION,
+	.num_controller = MT7622_NUM_CONTROLLER,
+	.controller_offset = mt7622_tc_offset,
+	.need_switch_bank = true,
+	.bank_data = {
+		{
+			.num_sensors = 1,
+			.sensors = mt7622_bank_data,
+		},
+	},
+	.msr = mt7622_msr,
+	.adcpnp = mt7622_adcpnp,
+	.sensor_mux_values = mt7622_mux_values,
+	.version = MTK_THERMAL_V2,
+	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON1,
+	.apmixed_buffer_ctl_mask = GENMASK(31, 6) | BIT(3),
+	.apmixed_buffer_ctl_set = BIT(0),
+	.extract_efuse = mtk_thermal_extract_efuse_v2,
+};
+
+/*
+ * The MT8183 thermal controller has one bank for the current SW framework.
+ * The MT8183 has a total of 6 temperature sensors.
+ * There are two thermal controller to control the six sensor.
+ * The first one bind 2 sensor, and the other bind 4 sensors.
+ * The thermal core only gets the maximum temperature of all sensor, so
+ * the bank concept wouldn't be necessary here. However, the SVS (Smart
+ * Voltage Scaling) unit makes its decisions based on the same bank
+ * data, and this indeed needs the temperatures of the individual banks
+ * for making better decisions.
+ */
+static const struct mtk_thermal_data mt8183_thermal_data = {
+	.auxadc_channel = MT8183_TEMP_AUXADC_CHANNEL,
+	.num_banks = MT8183_NUM_ZONES,
+	.num_sensors = MT8183_NUM_SENSORS,
+	.vts_index = mt8183_vts_index,
+	.cali_val = MT8183_CALIBRATION,
+	.num_controller = MT8183_NUM_CONTROLLER,
+	.controller_offset = mt8183_tc_offset,
+	.need_switch_bank = false,
+	.bank_data = {
+		{
+			.num_sensors = 6,
+			.sensors = mt8183_bank_data,
+		},
+	},
+
+	.msr = mt8183_msr,
+	.adcpnp = mt8183_adcpnp,
+	.sensor_mux_values = mt8183_mux_values,
+	.version = MTK_THERMAL_V1,
+	.extract_efuse = mtk_thermal_extract_efuse_v1,
+};
+
+/*
+ * MT7986 uses AUXADC Channel 11 for raw data access.
+ */
+static const struct mtk_thermal_data mt7986_thermal_data = {
+	.auxadc_channel = MT7986_TEMP_AUXADC_CHANNEL,
+	.num_banks = MT7986_NUM_ZONES,
+	.num_sensors = MT7986_NUM_SENSORS,
+	.vts_index = mt7986_vts_index,
+	.cali_val = MT7986_CALIBRATION,
+	.num_controller = MT7986_NUM_CONTROLLER,
+	.controller_offset = mt7986_tc_offset,
+	.need_switch_bank = true,
+	.bank_data = {
+		{
+			.num_sensors = 1,
+			.sensors = mt7986_bank_data,
+		},
+	},
+	.msr = mt7986_msr,
+	.adcpnp = mt7986_adcpnp,
+	.sensor_mux_values = mt7986_mux_values,
+	.version = MTK_THERMAL_V3,
+	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON1,
+	.apmixed_buffer_ctl_mask = GENMASK(31, 6) | BIT(3),
+	.apmixed_buffer_ctl_set = BIT(0),
+	.extract_efuse = mtk_thermal_extract_efuse_v3,
+};
 
 static const struct of_device_id mtk_thermal_of_match[] = {
 	{
