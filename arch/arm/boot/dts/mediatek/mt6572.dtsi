@@ -163,6 +163,17 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
+		efuse: efuse@10009000 {
+			compatible = "mediatek,mt6572-efuse", "mediatek,efuse";
+			reg = <0x10009000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			socinfo-data1@180 {
+				reg = <0x180 0x4>;
+			};
+		};
+
 		pwrap: pwrap@1000f000 {
 			compatible = "mediatek,mt6572-pwrap";
 			reg = <0x1000f000 0x1000>;
