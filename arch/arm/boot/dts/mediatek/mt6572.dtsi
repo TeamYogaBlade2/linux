@@ -283,6 +283,14 @@
 			interrupt-parent = <&gic>;
 		};
 
+		auxadc: auxadc@11003000 {
+			compatible = "mediatek,mt6572-auxadc", "mediatek,mt8173-auxadc";
+			reg = <0x11003000 0x1000>;
+			clocks = <&topckgen CLK_TOP_AUXADC>;
+			clock-names = "main";
+			#io-channel-cells = <1>;
+		};
+
 		fhctl: clock-controller@11004000 {
 			compatible = "mediatek,mt6572-fhctl";
 			reg = <0x11004000 0x100>;
