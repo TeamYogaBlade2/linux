@@ -59,6 +59,14 @@
 	};
 };
 
+&cpu0 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
 &mmc0 {
 	bus-width = <8>;
 	max-frequency = <200000000>;
