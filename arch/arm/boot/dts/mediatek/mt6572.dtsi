@@ -236,6 +236,10 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
+			thermal_calibration: calib@174 {
+				reg = <0x174 0x8>;
+			};
+
 			socinfo-data1@180 {
 				reg = <0x180 0x4>;
 			};
@@ -337,6 +341,19 @@
 		        #address-cells = <1>;
 		        #size-cells = <0>;
 		        status = "disabled";
+		};
+
+		thermal: thermal@1100d000 {
+			#thermal-sensor-cells = <1>;
+			compatible = "mediatek,mt6572-thermal";
+			reg = <0x1100d000 0x1000>;
+			interrupts = <GIC_SPI 25 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&topckgen CLK_TOP_THERMAL>, <&topckgen CLK_TOP_AUXADC>;
+			clock-names = "therm", "auxadc";
+			mediatek,auxadc = <&auxadc>;
+			mediatek,apmixedsys = <&apmixedsys>;
+			nvmem-cells = <&thermal_calibration>;
+			nvmem-cell-names = "calibration-data";
 		};
 
 		usb: usb@11100000 {
