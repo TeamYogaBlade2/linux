@@ -16,15 +16,73 @@
 	#size-cells = <1>;
 	interrupt-parent = <&sysirq>;
 
+
+	/*
+	 * MT6572M has 3 fused,
+	 * MT6572A has 2 fused,
+	 * MT6572W has 0 or 1 fused.
+	 *
+	 * Therefore, we use BIT(0) | BIT(1) | BIT(2) | BIT(3) for all
+	 * supported frequencies,
+	 * BIT(0) | BIT(1) | BIT(2) for 1209 MHz,
+	 * and BIT(0) | BIT(1) for 1300 and 1404 MHz
+	 */
+	cpu_opp_table: opp-table-cpu {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		/* MT6572M, MT6572A, MT6572W */
+		opp-598000000 {
+			opp-hz = /bits/ 64 <598000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0xf>;
+		};
+
+		opp-806000000 {
+			opp-hz = /bits/ 64 <806000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0xf>;
+		};
+
+		opp-1001000000 {
+			opp-hz = /bits/ 64 <1001000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0xf>;
+		};
+
+		/* MT6572A, MT6572W */
+		opp-1209000000 {
+			opp-hz = /bits/ 64 <1209000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0x7>;
+		};
+
+		/* MT6572W */
+		opp-1300000000 {
+			opp-hz = /bits/ 64 <1300000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0x3>;
+		};
+
+		opp-1404000000 {
+			opp-hz = /bits/ 64 <1404000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0x3>;
+		};
+	};
+
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
 		enable-method = "mediatek,mt6589-smp";
 
-		cpu@0 {
+		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
+			clocks = <&infracfg_ao CLK_INFRA_CPUSEL>,
+				 <&topckgen CLK_TOP_MAINPLL_D2>;
+			clock-names = "cpu", "intermediate";
 			i-cache-size = <32768>;
 			i-cache-line-size = <64>;
 			i-cache-sets = <256>;
@@ -32,11 +90,17 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
+			operating-points-v2 = <&cpu_opp_table>;
 		};
-		cpu@1 {
+		cpu1: cpu@1 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x1>;
+			clocks = <&infracfg_ao CLK_INFRA_CPUSEL>,
+				 <&topckgen CLK_TOP_MAINPLL_D2>;
+			clock-names = "cpu", "intermediate";
 			i-cache-size = <32768>;
 			i-cache-line-size = <64>;
 			i-cache-sets = <256>;
@@ -44,6 +108,9 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
+			operating-points-v2 = <&cpu_opp_table>;
 		};
 
 		l2: l2-cache {
@@ -171,6 +238,11 @@
 
 			socinfo-data1@180 {
 				reg = <0x180 0x4>;
+			};
+
+			cpu_speedbin: cpu-speedbin@180 {
+				reg = <0x180 0x4>;
+				bits = <8 2>;
 			};
 		};
 
