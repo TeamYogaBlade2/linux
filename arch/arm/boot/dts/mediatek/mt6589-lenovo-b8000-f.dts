@@ -57,6 +57,14 @@
 			input-enable;
 		};
 
+		pins_eint34_conflict {
+			pinmux = <MT6589_GPIO48__FUNC_GPIO48>;
+			bias-pull-up;
+			input-enable;
+			input-schmitt-enable;
+		};
+
+
 		pins_drvvbus {
 			pinmux = <MT6589_GPIO130__FUNC_USB_DRVVBUS>;
 		};
