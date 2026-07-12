@@ -5,6 +5,7 @@
 
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 #include "mt6572.dtsi"
 #include "mt6323.dtsi"
 
@@ -62,6 +63,18 @@
 	proc-supply = <&mt6323_vproc_reg>;
 };
 
+&keyboard {
+	pinctrl-0 = <&keypad_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	debounce-delay-ms = <32>;
+	keypad,num-rows = <1>;
+	keypad,num-columns = <3>;
+	linux,keymap = <MATRIX_KEY(0, 1, KEY_VOLUMEUP)
+			MATRIX_KEY(0, 2, KEY_VOLUMEDOWN)>;
+};
+
 &mmc0 {
 	bus-width = <8>;
 	max-frequency = <200000000>;
@@ -109,6 +122,13 @@
 };
 
 &pio {
+	keypad_pins: keypad-pins {
+		pins-keypad {
+			pinmux = <PINMUX_GPIO108__FUNC_KCOL1>,
+				 <PINMUX_GPIO109__FUNC_KCOL2>;
+		};
+	};
+
 	mmc0_pins_default: mmc0-default-pins {
 		pins-cmd-dat {
 			pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
