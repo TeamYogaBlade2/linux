@@ -198,6 +198,15 @@
 			#clock-cells = <1>;
 		};
 
+		keyboard: keyboard@10002000 {
+			compatible = "mediatek,mt6572-keypad", "mediatek,mt6779-keypad";
+			reg = <0x10002000 0x1000>;
+			interrupts = <GIC_SPI 89 IRQ_TYPE_EDGE_FALLING>;
+			clocks = <&clk26m>;
+			clock-names = "kpd";
+			status = "disabled";
+		};
+
 		pio: pinctrl@10005000 {
 			compatible = "mediatek,mt6572-pinctrl";
 			reg = <0x10005000 0x1000>,
