@@ -541,7 +541,6 @@
 
 &pio {
 	mmc0_pins_default: mmc0default {
-/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
 				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
@@ -560,7 +559,7 @@
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			bias-pull-down;
 		};
-*/
+
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
 			bias-pull-up;
@@ -568,7 +567,6 @@
 	};
 
 	mmc0_pins_uhs: mmc0 {
-/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
 				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
@@ -581,16 +579,16 @@
 				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
 			input-enable;
 			drive-strength = <2>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			mediatek,pull-up-adv = <1>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			drive-strength = <2>;
 			bias-pull-down;
-			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
+			mediatek,pull-down-adv = <0>;
 		};
-*/
+
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
 			bias-pull-up;
@@ -605,24 +603,21 @@
 				 <MT6589_GPIO186__FUNC_MSDC1_DAT3>,
 				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
 			input-enable;
-			//drive-strength = <4>;
+			drive-strength = <4>;
 			bias-pull-up;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
-			bias-disable;
-			//drive-strength = <4>;
-			drive-strength = <8>;
+			bias-pull-down;
+			drive-strength = <4>;
 		};
 
-/* 182:00001001
 		pins-wp {
 			pinmux = <MT6589_GPIO182__FUNC_MSDC1_SDWPI>;
 			input-enable;
-			bias-disable;
+			bias-pull-up;
 		};
-*/
 
 		pins-insert {
 			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
@@ -631,7 +626,6 @@
 	};
 
 	mmc1_pins_uhs: mmc1 {
-/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO180__FUNC_MSDC1_DAT0>,
 				 <MT6589_GPIO181__FUNC_MSDC1_DAT1>,
@@ -640,17 +634,13 @@
 				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
 			input-enable;
 			drive-strength = <4>;
+			bias-pull-up;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
 			drive-strength = <4>;
-		};
-*/
-		/* dummy */
-		pins-insert {
-			pinmux = <MT6589_GPIO171__FUNC_MSDC1_INSI>;
-			bias-pull-up;
+			bias-pull-down;
 		};
 	};
 

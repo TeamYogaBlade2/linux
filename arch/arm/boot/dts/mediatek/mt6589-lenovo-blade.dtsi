@@ -59,12 +59,21 @@
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc0_pins_default>;
 	pinctrl-1 = <&mmc0_pins_uhs>;
-	non-removable;
-	bus-width = <8>;
-	max-frequency = <50000000>;
-//	cap-mmc-highspeed;
 	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
 	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
+
+	non-removable;
+	no-sd;
+	no-sdio;
+	bus-width = <8>;
+
+	max-frequency = <200000000>;
+	cap-mmc-highspeed;
+	mmc-hs200-1_8v;
+	mmc-ddr-1_8v;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC0>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
 };
 
 /* SD Card */
@@ -73,11 +82,47 @@
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc1_pins_default>;
 	pinctrl-1 = <&mmc1_pins_uhs>;
-	bus-width = <4>;
-//	max-frequency = <50000000>;
-	max-frequency = <400000>;
-//	cap-sd-highspeed;
-	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
 	vmmc-supply = <&mt6320_ldo_vmch1>;
 	vqmmc-supply = <&mt6320_ldo_vmc1>;
+
+	bus-width = <4>;
+	no-mmc;
+	no-sdio;
+	/* TODO: recheck */
+	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
+
+	max-frequency = <200000000>;
+	cap-sd-highspeed;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC1>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+};
+
+/* SDIO */
+&mmc3 {
+	status = "disabled";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc3_pins_default>;
+	pinctrl-1 = <&mmc3_pins_uhs>;
+	/* FIXME: always 1.8V? */
+	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
+
+	bus-width = <4>;
+	cap-sdio-irq;
+	non-removable;
+	no-mmc;
+	no-sd;
+
+	max-frequency = <200000000>;
+	cap-sd-highspeed;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC3>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
 };
