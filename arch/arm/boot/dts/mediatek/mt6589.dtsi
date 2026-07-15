@@ -552,17 +552,17 @@
 				 <MT6589_GPIO0__FUNC_MSDC0_DAT7>,
 				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
 			input-enable;
-			bias-pull-up;
+			mediatek,pull-up-adv = <3>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
-			bias-pull-down;
+			mediatek,pull-down-adv = <2>;
 		};
 
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
-			bias-pull-up;
+			mediatek,pull-up-adv = <2>;
 		};
 	};
 
@@ -579,14 +579,12 @@
 				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
 			input-enable;
 			drive-strength = <2>;
-			mediatek,pull-up-adv = <1>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
 			drive-strength = <2>;
 			bias-pull-down;
-			mediatek,pull-down-adv = <0>;
 		};
 
 		pins-rst {
@@ -634,13 +632,11 @@
 				 <MT6589_GPIO183__FUNC_MSDC1_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO184__FUNC_MSDC1_CLK>;
 			drive-strength = <4>;
-			bias-pull-down;
 		};
 	};
 
@@ -699,13 +695,12 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up;
-			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
+			mediatek,pull-up-adv = <2>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
-			bias-pull-down;
+			mediatek,pull-up-adv = <2>;
 			drive-strength = <4>;
 		};
 	};
@@ -719,15 +714,11 @@
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
 			drive-strength = <4>;
-			bias-pull-up;
-			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
 			drive-strength = <4>;
-			bias-pull-down;
-			mediatek,pull-up-adv = <MTK_PUPD_SET_R1R0_10>;
 		};
 	};
 
@@ -743,12 +734,12 @@
 				 <MT6589_GPIO136__FUNC_MSDC4_DAT7>,
 				 <MT6589_GPIO141__FUNC_MSDC4_CMD>;
 			input-enable;
-			bias-pull-up;
+			mediatek,pull-up-adv = <2>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
-			bias-pull-down;
+			mediatek,pull-down-adv = <2>;
 		};
 
 		pins-rst {
@@ -770,14 +761,12 @@
 				 <MT6589_GPIO141__FUNC_MSDC4_CMD>;
 			input-enable;
 			drive-strength = <2>;
-			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO139__FUNC_MSDC4_CLK>;
 			drive-strength = <2>;
 			bias-pull-down;
-			mediatek,pull-down-adv = <MTK_PUPD_SET_R1R0_01>;
 		};
 
 		pins-rst {
