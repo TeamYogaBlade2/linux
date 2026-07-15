@@ -59,12 +59,11 @@
 
 #define VOID_REG	0x0
 
-#define MT8135_PLL_FMAX		(2000 * MHZ)
 #define CON0_MT6589_RST_BAR	BIT(27)
 
 #define PLL(_id, _name, _reg, _pwr_reg, _en_mask, _flags, _pcwbits,	\
 			_pd_reg, _pd_shift, _pcw_reg, _pcw_shift,	\
-			_ops) {						\
+			_ops, _fmax) {					\
 		.id = _id,						\
 		.name = _name,						\
 		.reg = _reg,						\
@@ -72,7 +71,7 @@
 		.en_mask = _en_mask,					\
 		.flags = _flags,					\
 		.rst_bar_mask = CON0_MT6589_RST_BAR,			\
-		.fmax = MT8135_PLL_FMAX,				\
+		.fmax = _fmax,						\
 		.pcwbits = _pcwbits,					\
 		.pd_reg = _pd_reg,					\
 		.pd_mask = 0x3,						\
@@ -131,21 +130,21 @@ static const struct clk_ops mt6589_fixed_lc_pll_ops = {
 
 static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_ARMPLL, "armpll", ARMPLL_CON0, ARMPLL_PWR_CON0, 0x80000001,
-		PLL_AO, 21, ARMPLL_CON1, 24, ARMPLL_CON1, 0, NULL),
+		PLL_AO, 21, ARMPLL_CON1, 24, ARMPLL_CON1, 0, NULL, 1508 * MHZ),
 	PLL(CLK_APMIXED_MAINPLL, "mainpll", MAINPLL_CON0, MAINPLL_PWR_CON0, 0xf0000001,
-		HAVE_RST_BAR, 21, MAINPLL_CON0, 6, MAINPLL_CON1, 0, NULL),
+		HAVE_RST_BAR, 21, MAINPLL_CON0, 6, MAINPLL_CON1, 0, NULL, 1768 * MHZ),
 	PLL(CLK_APMIXED_UNIVPLL, "univpll", UNIVPLL_CON0, VOID_REG, 0xf3000001,
-		HAVE_RST_BAR, 7, UNIVPLL_CON0, 6, UNIVPLL_CON0, 8, &mt6589_fixed_lc_pll_ops),
+		HAVE_RST_BAR, 7, UNIVPLL_CON0, 6, UNIVPLL_CON0, 8, &mt6589_fixed_lc_pll_ops, 1248 * MHZ),
 	PLL(CLK_APMIXED_MMPLL, "mmpll", MMPLL_CON0, VOID_REG, 0xf0000001,
-		HAVE_RST_BAR, 7, MMPLL_CON0, 6, MMPLL_CON0, 8, &mt6589_fixed_lc_pll_ops),
+		HAVE_RST_BAR, 7, MMPLL_CON0, 6, MMPLL_CON0, 8, &mt6589_fixed_lc_pll_ops, 1690 * MHZ),
 	PLL(CLK_APMIXED_ISPPLL, "isppll", ISPPLL_CON0, VOID_REG, 0x80000001,
-		0, 7, ISPPLL_CON0, 6, ISPPLL_CON0, 8, &mt6589_lc_pll_ops),
+		0, 7, ISPPLL_CON0, 6, ISPPLL_CON0, 8, &mt6589_lc_pll_ops, 1664 * MHZ),
 	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", MSDCPLL_CON0, MSDCPLL_PWR_CON0, 0x80000001,
-		0, 21, MSDCPLL_CON0, 6, MSDCPLL_CON1, 0, NULL),
+		0, 21, MSDCPLL_CON0, 6, MSDCPLL_CON1, 0, NULL, 1664 * MHZ),
 	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  TVDPLL_CON0, TVDPLL_PWR_CON0, 0x80000001,
-		0, 21, TVDPLL_CON0, 6, TVDPLL_CON1, 0, NULL),
+		0, 21, TVDPLL_CON0, 6, TVDPLL_CON1, 0, NULL, 2376UL * MHZ),
 	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", LVDSPLL_CON0, LVDSPLL_PWR_CON0, 0x80000001,
-		0, 21, LVDSPLL_CON0, 6, LVDSPLL_CON1, 0, NULL),
+		0, 21, LVDSPLL_CON0, 6, LVDSPLL_CON1, 0, NULL, 1440 * MHZ),
 };
 
 static const struct mtk_clk_desc apmixed_desc = {
