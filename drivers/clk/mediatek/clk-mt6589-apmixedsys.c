@@ -147,9 +147,40 @@ static const struct mtk_pll_data plls[] = {
 		0, 21, LVDSPLL_CON0, 6, LVDSPLL_CON1, 0, NULL, 1440 * MHZ),
 };
 
+/* TODO: convert to gate */
+static const struct mtk_fixed_factor pll_divs[] = {
+	FACTOR(CLK_APMIXED_MAINPLL_806M, "mainpll_806m", "mainpll", 1, 2),
+	FACTOR(CLK_APMIXED_MAINPLL_537P3M, "mainpll_537p3m", "mainpll", 1, 3),
+	FACTOR(CLK_APMIXED_MAINPLL_322P4M, "mainpll_322p4m", "mainpll", 1, 5),
+	FACTOR(CLK_APMIXED_MAINPLL_230P3M, "mainpll_230p3m", "mainpll", 1, 7),
+
+	FACTOR(CLK_APMIXED_UNIVPLL_624M, "univpll_624m", "univpll", 1, 2),
+	FACTOR(CLK_APMIXED_UNIVPLL_416M, "univpll_416m", "univpll", 1, 3),
+	FACTOR(CLK_APMIXED_UNIVPLL_249P6M, "univpll_249p6m", "univpll", 1, 5),
+	FACTOR(CLK_APMIXED_UNIVPLL_178P3M, "univpll_178p3m", "univpll", 1, 7),
+	FACTOR(CLK_APMIXED_UNIVPLL_48M, "univpll_48m", "univpll", 1, 26),
+	FACTOR(CLK_APMIXED_UNIVPLL_USB_48M, "univpll_usb_48m", "univpll", 1, 26),
+
+	FACTOR(CLK_APMIXED_MMPLL_D2, "mmpll_d2", "mmpll", 1, 2),
+	FACTOR(CLK_APMIXED_MMPLL_D3, "mmpll_d3", "mmpll", 1, 3),
+	FACTOR(CLK_APMIXED_MMPLL_D5, "mmpll_d5", "mmpll", 1, 5),
+	FACTOR(CLK_APMIXED_MMPLL_D7, "mmpll_d7", "mmpll", 1, 7),
+
+	FACTOR(CLK_APMIXED_ISPPLL_208M, "isppll_208m", "isppll", 1, 8),
+
+	FACTOR(CLK_APMIXED_MSDCPLL_208M, "msdcpll_208m", "msdcpll", 1, 8),
+
+	FACTOR(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m", "tvdpll_148p5m", 1, 16),
+
+	FACTOR(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m", "lvdspll", 1, 8),
+};
+
 static const struct mtk_clk_desc apmixed_desc = {
 	.plls = plls,
 	.num_plls = ARRAY_SIZE(plls),
+	.factor_clks = pll_divs,
+	.num_factor_clks = ARRAY_SIZE(pll_divs),
+
 };
 
 static const struct of_device_id of_match_clk_mt6589_apmixed[] = {
