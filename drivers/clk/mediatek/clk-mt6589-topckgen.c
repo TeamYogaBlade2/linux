@@ -20,18 +20,16 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_CLKPH_MCK, "clkph_mck", "clk_null", 1, 1),
 	FACTOR(CLK_TOP_CPUM_TCK_IN, "cpum_tck_in", "clk_null", 1, 1),
 
-	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2), // mainpll_806m ?
-
-	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "syspll_ck", 1, 2),
-	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "syspll_ck", 1, 3),
-	FACTOR(CLK_TOP_SYSPLL_D3P5, "syspll_d3p5", "syspll_ck", 2, 7),
-	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "syspll_ck", 1, 4),
-	FACTOR(CLK_TOP_SYSPLL_D5, "syspll_d5", "syspll_ck", 1, 5),
-	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "syspll_ck", 1, 6),
-	FACTOR(CLK_TOP_SYSPLL_D8, "syspll_d8", "syspll_ck", 1, 8),
-	FACTOR(CLK_TOP_SYSPLL_D10, "syspll_d10", "syspll_ck", 1, 10),
-	FACTOR(CLK_TOP_SYSPLL_D16, "syspll_d16", "syspll_ck", 1, 16),
-	FACTOR(CLK_TOP_SYSPLL_D24, "syspll_d24", "syspll_ck", 1, 24),
+	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "mainpll_806m", 1, 2),
+	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "mainpll_806m", 1, 3),
+	FACTOR(CLK_TOP_SYSPLL_D3P5, "syspll_d3p5", "mainpll_806m", 2, 7),
+	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "mainpll_806m", 1, 4),
+	FACTOR(CLK_TOP_SYSPLL_D5, "syspll_d5", "mainpll_806m", 1, 5),
+	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "mainpll_806m", 1, 6),
+	FACTOR(CLK_TOP_SYSPLL_D8, "syspll_d8", "mainpll_806m", 1, 8),
+	FACTOR(CLK_TOP_SYSPLL_D10, "syspll_d10", "mainpll_806m", 1, 10),
+	FACTOR(CLK_TOP_SYSPLL_D16, "syspll_d16", "mainpll_806m", 1, 16),
+	FACTOR(CLK_TOP_SYSPLL_D24, "syspll_d24", "mainpll_806m", 1, 24),
 
 	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2), // univpll_624m ?
 	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3), // univpll_416m ?
