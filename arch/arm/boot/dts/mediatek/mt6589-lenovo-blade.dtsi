@@ -31,12 +31,69 @@
 	};
 };
 
+&pio {
+	ts_pins: touchscreen-default {
+		pin-int {
+			pinmux = <MT6589_GPIO124__FUNC_EINT5>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pin-reset {
+			pinmux = <MT6589_GPIO140__FUNC_GPIO140>;
+			output-low;
+		};
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1_pins>;
+	clock-frequency = <400000>;
+
+	/* Synaptics ClearPad 7300 */
+	touchscreen@38 {
+		compatible = "syna,rmi4-i2c";
+		reg = <0x38>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_pins>;
+
+		interrupts = <5 IRQ_TYPE_EDGE_FALLING>;
+		interrupt-parent = <&pio>;
+
+		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
+
+		/* TODO: order */
+		vdd-supply = <&mt6320_ldo_vgp4>;
+		vio-supply = <&mt6320_ldo_vgp6>;
+
+		syna,startup-delay-ms = <10>;
+		syna,reset-delay-ms = <50>;
+
+		rmi4-f01@1 {
+			reg = <0x1>;
+		};
+
+		rmi4-f11@11 {
+			reg = <0x11>;
+			syna,sensor-type = <1>;
+		};
+
+		rmi4-f34@34 {
+			reg = <0x34>;
+		};
+	};
+};
+
 &i2c3 {
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c3_pins>;
-	/* TODO */
-//	clock-frequency = <100000>;
+	clock-frequency = <100000>;
 
 	accelerometer@11 {
 		compatible = "bosch,bma255";
@@ -51,4 +108,78 @@
 
 &uart0 {
 	status = "okay";
+};
+
+/* Internal storage */
+&mmc0 {
+	status = "okay";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc0_pins_default>;
+	pinctrl-1 = <&mmc0_pins_uhs>;
+	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
+
+	non-removable;
+	no-sd;
+	no-sdio;
+	bus-width = <8>;
+
+	max-frequency = <200000000>;
+	cap-mmc-highspeed;
+	mmc-hs200-1_8v;
+	mmc-ddr-1_8v;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC0>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+};
+
+/* SD Card */
+&mmc1 {
+	status = "okay";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc1_pins_default>;
+	pinctrl-1 = <&mmc1_pins_uhs>;
+	vmmc-supply = <&mt6320_ldo_vmch1>;
+	vqmmc-supply = <&mt6320_ldo_vmc1>;
+
+	bus-width = <4>;
+	no-mmc;
+	no-sdio;
+	/* TODO: recheck */
+	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
+
+	max-frequency = <200000000>;
+	cap-sd-highspeed;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC1>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+};
+
+/* SDIO */
+&mmc3 {
+	status = "disabled";
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mmc3_pins_default>;
+	pinctrl-1 = <&mmc3_pins_uhs>;
+	/* FIXME: always 1.8V? */
+	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
+
+	bus-width = <4>;
+	cap-sdio-irq;
+	non-removable;
+	no-mmc;
+	no-sd;
+
+	max-frequency = <200000000>;
+	cap-sd-highspeed;
+	sd-uhs-sdr104;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
+
+	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC3>;
+	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
 };
