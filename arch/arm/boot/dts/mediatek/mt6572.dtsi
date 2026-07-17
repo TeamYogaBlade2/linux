@@ -8,15 +8,21 @@
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/thermal/thermal.h>
 #include <dt-bindings/clock/mediatek,mt6572-clk.h>
+#include <dt-bindings/gce/mediatek,mt6572-gce.h>
 #include <dt-bindings/reset/mediatek,mt6572-resets.h>
 #include <dt-bindings/power/mediatek,mt6572-power-controller.h>
 #include <dt-bindings/pinctrl/mediatek,mt6572-pinfunc.h>
+#include <dt-bindings/memory/mediatek,mt6572-memory-port.h>
 
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
 	interrupt-parent = <&sysirq>;
 
+	aliases {
+		ovl0 = &ovl;
+		rdma0 = &rdma0;
+	};
 
 	/*
 	 * MT6572M has 3 fused,
@@ -297,6 +303,15 @@
 			};
 		};
 
+		smi_common: smi@1000e000 {
+			compatible = "mediatek,mt6572-smi-common";
+			reg = <0x1000e000 0x1000>, <0x14011000 0x1000>;
+			clocks = <&mmsys CLK_MM_SMI_COMMON>,
+				 <&mmsys CLK_MM_SMI_COMMON>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+		};
+
 		pwrap: pwrap@1000f000 {
 			compatible = "mediatek,mt6572-pwrap";
 			reg = <0x1000f000 0x1000>;
@@ -309,12 +324,33 @@
 			clock-names = "spi", "wrap";
 		};
 
+		mipi_tx0: dsi-phy@10011000 {
+			compatible = "mediatek,mt6572-mipi-tx",
+				     "mediatek,mt2701-mipi-tx";
+			reg = <0x10011000 0x90>;
+			clocks = <&clk26m>;
+			clock-output-names = "mipi_tx0_pll";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6572-sysirq", "mediatek,mt6577-sysirq";
 			reg = <0x10200100 0x1c>;
 			interrupt-controller;
 			#interrupt-cells = <3>;
 			interrupt-parent = <&gic>;
+		};
+
+		iommu: iommu@10203000 {
+			compatible = "mediatek,mt6572-m4u";
+			reg = <0x10203000 0x1000>;
+			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_SMI_COMMON>;
+			clock-names = "bclk";
+			#iommu-cells = <1>;
+			mediatek,larbs = <&larb0>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
 		};
 
 		apmixedsys: apmixedsys@10205000 {
@@ -488,6 +524,204 @@
 			reg = <0x13000000 0x1000>;
 			#clock-cells = <1>;
 			power-domains = <&spm MT6572_POWER_DOMAIN_MFG>;
+		};
+
+		mmsys: syscon@14000000 {
+			compatible = "mediatek,mt6572-mmsys", "syscon";
+			reg = <0x14000000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			mboxes = <&gce 0 CMDQ_THR_PRIO_HIGHEST>,
+				 <&gce 1 CMDQ_THR_PRIO_HIGHEST>;
+			mediatek,gce-client-reg = <&gce SUBSYS_14XXXXXX 0 0x1000>;
+
+			port {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				mmsys_out: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&ovl_in>;
+				};
+			};
+		};
+
+		ovl: ovl@14007000 {
+			compatible = "mediatek,mt6572-disp-ovl";
+			reg = <0x14007000 0x1000>;
+			interrupts = <GIC_SPI 103 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_DISP_OVL>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			iommus = <&iommu M4U_PORT_DISP_OVL>;
+			mediatek,gce-client-reg = <&gce SUBSYS_14XXXXXX 0x7000 0x1000>;
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					ovl_in: endpoint {
+						remote-endpoint = <&mmsys_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					ovl_out: endpoint {
+						remote-endpoint = <&rdma0_in>;
+					};
+				};
+			};
+		};
+
+		rdma0: rdma@14008000 {
+			compatible = "mediatek,mt6572-disp-rdma";
+			reg = <0x14008000 0x1000>;
+			interrupts = <GIC_SPI 100 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_DISP_RDMA>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			resets = <&mmsys MT6572_MM_RST_B_DISP_RDMA>;
+			iommus = <&iommu M4U_PORT_DISP_RDMA>;
+			mediatek,gce-client-reg = <&gce SUBSYS_14XXXXXX 0x8000 0x1000>;
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					rdma0_in: endpoint {
+						remote-endpoint = <&ovl_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					rdma0_out: endpoint {
+						remote-endpoint = <&color_in>;
+					};
+				};
+			};
+		};
+
+		bls: pwm@1400a000 {
+			compatible = "mediatek,mt2701-disp-pwm";
+			reg = <0x1400a000 0x1000>;
+			clocks = <&mmsys CLK_MM_DISP_MDP_BLS_26M>,
+				 <&mmsys CLK_MM_DISP_BLS>;
+			clock-names = "main", "mm";
+			#pwm-cells = <2>;
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					bls_in: endpoint {
+						remote-endpoint = <&color_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					bls_out: endpoint {
+						remote-endpoint = <&dsi_in>;
+					};
+				};
+			};
+		};
+
+		color: color@1400b000 {
+			compatible = "mediatek,mt6572-disp-color",  "mediatek,mt2701-disp-color";
+			reg = <0x1400b000 0x1000>;
+			interrupts = <GIC_SPI 102 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_DISP_COLOR>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			mediatek,gce-client-reg = <&gce SUBSYS_14XXXXXX 0xb000 0x1000>;
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					color_in: endpoint {
+						remote-endpoint = <&rdma0_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					color_out: endpoint {
+						remote-endpoint = <&bls_in>;
+					};
+				};
+			};
+		};
+
+		dsi: dsi@1400c000 {
+			compatible = "mediatek,mt6572-dsi";
+			reg = <0x1400c000 0x1000>;
+			interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_DSI_ENGINE>,
+				 <&mmsys CLK_MM_DSI_DIGITAL>,
+				 <&mipi_tx0>;
+			clock-names = "engine", "digital", "hs";
+			resets = <&mmsys MT6572_MM_RST_B_DSI>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			phys = <&mipi_tx0>;
+			phy-names = "dphy";
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					dsi_in: endpoint {
+						remote-endpoint = <&bls_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					dsi_out: endpoint { };
+				};
+			};
+		};
+
+		mutex: mutex@1400e000 {
+			compatible = "mediatek,mt6572-disp-mutex";
+			reg = <0x1400e000 0x1000>;
+			interrupts = <GIC_SPI 92 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_MUTEX_SLOW_CLOCK>;
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
+			mediatek,gce-client-reg = <&gce SUBSYS_14XXXXXX 0xe000 0x1000>;
+			mediatek,gce-events = <CMDQ_EVENT_MUTEX0>;
+		};
+
+		gce: mailbox@1400f000 {
+			compatible = "mediatek,mt6572-gce";
+			reg = <0x1400f000 0x1000>;
+			interrupts = <GIC_SPI 108 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&mmsys CLK_MM_CMDQ>, <&mmsys CLK_MM_SMI_CMDQ>;
+			clock-names = "gce", "smi";
+			#mbox-cells = <2>;
+		};
+
+		larb0: larb@14010000 {
+			compatible = "mediatek,mt6572-smi-larb";
+			reg = <0x14010000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <0>;
+			clocks = <&mmsys CLK_MM_SMI_LARB0>,
+				 <&mmsys CLK_MM_SMI_LARB0>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
 		};
 	};
 };
