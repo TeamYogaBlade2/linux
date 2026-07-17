@@ -13,17 +13,19 @@ maintainers:
 description: |
   The hardware block diagram please check bindings/iommu/mediatek,iommu.yaml
 
-  MediaTek SMI have two generations of HW architecture, here is the list
+  MediaTek SMI have three generations of HW architecture, here is the list
   which generation the SoCs use:
+  generation 0: mt6572
   generation 1: mt2701 and mt7623.
   generation 2: mt2712, mt6779, mt8167, mt8173, mt8183, mt8186, mt8188, mt8192 and mt8195.
 
-  There's slight differences between the two SMI, for generation 2, the
+  There's slight differences between the three SMI, for generation 2, the
   register which control the iommu port is at each larb's register base. But
   for generation 1, the register is at smi ao base(smi always on register
   base). Besides that, the smi async clock should be prepared and enabled for
   SMI generation 1 to transform the smi clock into emi clock domain, but that is
-  not needed for SMI generation 2.
+  not needed for SMI generation 2. Generation 0 combines first generation security
+  setup and generation 2 outstanding support.
 
 properties:
   compatible:
@@ -31,6 +33,7 @@ properties:
       - enum:
           - mediatek,mt2701-smi-common
           - mediatek,mt2712-smi-common
+          - mediatek,mt6572-smi-common
           - mediatek,mt6779-smi-common
           - mediatek,mt6795-smi-common
           - mediatek,mt6893-smi-common
