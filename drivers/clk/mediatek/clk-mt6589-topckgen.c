@@ -8,7 +8,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 

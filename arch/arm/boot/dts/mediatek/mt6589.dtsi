@@ -7,7 +7,7 @@
 
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/reset/mt6589-resets.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>

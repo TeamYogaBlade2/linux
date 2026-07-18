@@ -17,7 +17,7 @@
 #include "clk-gate.h"
 #include "clk-mtk.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 #define AP_PLL_CON0	0x0000
 #define AP_PLL_CON1	0x0004
