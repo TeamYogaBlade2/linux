@@ -124,6 +124,13 @@ config COMMON_CLK_MT2712_VENCSYS
 	help
 	  This driver supports MediaTek MT2712 vencsys clocks.
 
+config COMMON_CLK_MT6397
+	tristate "Clock driver for MediaTek MT6397 PMIC"
+	depends on ARCH_MEDIATEK || MFD_MT6397 || COMPILE_TEST
+	select COMMON_CLK_MEDIATEK
+	help
+	  This enables driver for clocks on the MediaTek MT6397 PMIC.
+
 config COMMON_CLK_MT6589
 	tristate "Main clock drivers for MediaTek MT6589"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
