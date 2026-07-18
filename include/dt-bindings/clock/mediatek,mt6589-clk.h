@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /*
  * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
+
+#ifndef _DT_BINDINGS_CLK_MEDIATEK_MT6589_CLK_H
+#define _DT_BINDINGS_CLK_MEDIATEK_MT6589_CLK_H
 
 /* APMIXEDSYS */
 #define CLK_APMIXED_ARMPLL	0
@@ -294,3 +297,5 @@
 
 /* VENC */
 #define CLK_VENC_VEN		0
+
+#endif
