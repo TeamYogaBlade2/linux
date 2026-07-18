@@ -129,8 +129,8 @@ config COMMON_CLK_MT6589
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	select COMMON_CLK_MEDIATEK
 	help
-	  This enables drivers for main clocks (topckgen, pericfg,
-	  infracfg) on the MediaTek MT6589 SoC.
+	  This enables drivers for main clocks (apmixedsys, topckgen,
+	  pericfg, infracfg) on the MediaTek MT6589 SoC.
 
 config COMMON_CLK_MT6589_AUDSYS
 	tristate "Clock driver for MediaTek MT6589 audsys"
