@@ -74,6 +74,10 @@ properties:
               - enum:
                   - mediatek,mt6366-rtc
               - const: mediatek,mt6358-rtc
+          - items:
+              - enum:
+                  - mediatek,mt6320-rtc
+              - const: mediatek,mt6397-rtc
 
       start-year: true
 
@@ -218,7 +222,12 @@ properties:
 
     properties:
       compatible:
-        const: mediatek,mt6323-pwrc
+        oneOf:
+          - const: mediatek,mt6323-pwrc
+          - items:
+              - enum:
+                  - mediatek,mt6320-pwrc
+              - const: mediatek,mt6323-pwrc
 
       '#power-domain-cells':
         const: 0
