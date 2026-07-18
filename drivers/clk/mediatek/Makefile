@@ -3,7 +3,6 @@ obj-$(CONFIG_COMMON_CLK_MEDIATEK) += clk-mtk.o clk-pll.o clk-gate.o clk-apmixed.
 obj-$(CONFIG_COMMON_CLK_MEDIATEK_FHCTL) += clk-fhctl.o clk-pllfh.o
 
 obj-$(CONFIG_COMMON_CLK_MT6320) += clk-mt6320.o
-obj-$(CONFIG_COMMON_CLK_MT6397) += clk-mt6397.o
 obj-$(CONFIG_COMMON_CLK_MT6589) += clk-mt6589-apmixedsys.o clk-mt6589-infracfg.o clk-mt6589-pericfg.o clk-mt6589-topckgen.o
 obj-$(CONFIG_COMMON_CLK_MT6589_AUDSYS) += clk-mt6589-aud.o
 obj-$(CONFIG_COMMON_CLK_MT6589_DISPSYS) += clk-mt6589-disp.o
