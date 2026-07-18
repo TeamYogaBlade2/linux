@@ -7,89 +7,167 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/platform_device.h>
 #include <linux/mfd/mt6397/core.h>
 #include <linux/mfd/mt6397/registers.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <dt-bindings/clock/mediatek,mt6397-clk.h>
 
-struct mt6397_clkpdn {
-	struct clk_hw hw;
-	struct regmap *regmap;
-	u32 enable_reg;
-	u32 enable_mask;
-	u32 div_reg;
-	u32 div_mask;
-	u32 div_base;
-	u32 div_factor;
-	u32 mux_reg;
-	u32 mux_mask;
+#include "clk-mtk.h"
+#include "clk-gate.h"
+
+static const struct mtk_gate_regs top_ckpdn_regs = {
+	.sta_ofs = MT6397_TOP_CKPDN,
+};
+static const struct mtk_gate_regs top_ckpdn2_regs = {
+	.sta_ofs = MT6397_TOP_CKPDN2,
+};
+static const struct mtk_gate_regs top_ckpdn3_regs = {
+	.sta_ofs = MT6397_TOP_CKPDN3,
+};
+static const struct mtk_gate_regs wrp_ckpdn_regs = {
+	.sta_ofs = MT6397_WRP_CKPDN,
 };
 
-#define to_mt6397_clkpdn(_hw) container_of(_hw, struct mt6397_clkpdn, hw)
+#define GATE_TOP(_id, _name, _parent, _shift) \
+	GATE_MTK(_id, _name, _parent, &top_ckpdn_regs, _shift, &mtk_clk_gate_ops_no_setclr)
 
-static int mt6397_clkpdn_prepare(struct clk_hw *hw)
+#define GATE_TOP2(_id, _name, _parent, _shift) \
+	GATE_MTK(_id, _name, _parent, &top_ckpdn2_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+
+#define GATE_TOP3(_id, _name, _parent, _shift) \
+	GATE_MTK(_id, _name, _parent, &top_ckpdn3_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+
+#define GATE_WRP(_id, _name, _parent, _shift) \
+	GATE_MTK(_id, _name, _parent, &wrp_ckpdn_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+
+static const struct mtk_fixed_clk mt6397_fixed_clks[] = {
+	FIXED_CLK(MT6397_CLK_AUD26M, "aud26m", NULL, 26000000),
+	FIXED_CLK(MT6397_CLK_SMPS24M, "smps24m", NULL, 24000000),
+	FIXED_CLK(MT6397_CLK_PMU75K, "pmu75k", NULL, 75000),
+	FIXED_CLK(MT6397_CLK_PMU12M, "pmu12m", NULL, 12000000),
+	FIXED_CLK(MT6397_CLK_FG32K, "fg32k", NULL, 32000),
+	FIXED_CLK(MT6397_CLK_RTC32K, "rtc32k", NULL, 32000),
+	FIXED_CLK(MT6397_CLK_CHR1M, "chr1m", NULL, 1000000),
+};
+
+static const struct mtk_fixed_factor mt6397_factors[] = {
+	FACTOR(MT6397_CLK_AUD13M, "aud13m", "aud26m", 1, 2),
+	FACTOR(MT6397_CLK_AUD26M_DIV64, "aud26m_div64", "aud26m", 1, 64),
+	FACTOR(MT6397_CLK_SMPS12M, "smps12m", "smps24m", 1, 2),
+	FACTOR(MT6397_CLK_SMPS6M, "smps6m", "smps24m", 1, 4),
+	FACTOR(MT6397_CLK_SMPS3M, "smps3m", "smps24m", 1, 8),
+	FACTOR(MT6397_CLK_SMPS2M, "smps2m", "smps24m", 1, 12),
+	FACTOR(MT6397_CLK_SMPS1M, "smps1m", "smps24m", 1, 24),
+};
+
+static const struct mtk_gate mt6397_gates[] = {
+	GATE_TOP(MT6397_TOPCKPDN_AUD_26M, "top-aud26m", "aud26m", 0),
+	GATE_TOP(MT6397_TOPCKPDN_AUD_13M, "top-aud13m", "aud13m", 1),
+	GATE_TOP(MT6397_TOPCKPDN_SPK_CK, "top-spk", "smps1m", 2),
+	GATE_TOP(MT6397_TOPCKPDN_PWMOC_CK, "top-pwmoc", "smps2m", 3),
+	GATE_TOP(MT6397_TOPCKPDN_EFUSE_CK, "top-efuse", "pmu75k", 4),
+	GATE_TOP(MT6397_TOPCKPDN_FGADC_CK, "top-fgadc", "fg32k", 5),
+	GATE_TOP(MT6397_TOPCKPDN_BST_DRV_1M_CK,"top-bstdrv1m", "smps1m", 7),
+	GATE_TOP(MT6397_TOPCKPDN_SMPS_CK_DIV2, "top-smpsdiv2", "smps12m", 11),
+	GATE_TOP(MT6397_TOPCKPDN_SMPS_CK_DIV, "top-smpsdiv", "smps24m", 12),
+	GATE_TOP(MT6397_TOPCKPDN_STRUP_6M, "top-strup6m", "smps6m", 15),
+
+	GATE_TOP2(MT6397_TOPCKPDN2_RTC32K_1V8, "top2-rtc32k1v8", "rtc32k", 0),
+	GATE_TOP2(MT6397_TOPCKPDN2_STRUP_75K_CK, "top2-starup75k", "pmu75k", 2),
+	GATE_TOP2(MT6397_TOPCKPDN2_RTC_32K_CK, "top2-rtc32k", "rtc32k", 3),
+	GATE_TOP2(MT6397_TOPCKPDN2_PCHR_32K_CK, "top2-pchr32k", "rtc32k", 4),
+	GATE_TOP2(MT6397_TOPCKPDN2_LDOSTB_1M_CK, "top2-ldostb1m", "smps1m", 5),
+	GATE_TOP2(MT6397_TOPCKPDN2_INTRP_CK, "top2-intr", "pmu75k", 6),
+	GATE_TOP2(MT6397_TOPCKPDN2_DRV_32K_CK, "top2-drv32k", "smps1m", 7),
+	GATE_TOP2(MT6397_TOPCKPDN2_CHR1M_CK, "top2-chr1m", "chr1m", 8),
+	GATE_TOP2(MT6397_TOPCKPDN2_BUCK_CK, "top2-buck", "pmu12m", 9),
+	GATE_TOP2(MT6397_TOPCKPDN2_BUCK_ANA_CK, "top2-buckana", "smps2m", 10),
+	GATE_TOP2(MT6397_TOPCKPDN2_BUCK32K, "top2-buck32k", "rtc32k", 11),
+	GATE_TOP2(MT6397_TOPCKPDN2_BUCK_1M_CK, "top2-buck1m", "smps1m", 12),
+	GATE_TOP2(MT6397_TOPCKPDN2_STRUP_32K_CK, "top2-starup32k", "rtc32k", 13),
+	GATE_TOP2(MT6397_TOPCKPDN2_RTC_75K_CK, "top2-rtc75k", "pmu75k", 14),
+	GATE_TOP2(MT6397_TOPCKPDN2_RSV_15, "top2-rsv", "smps24m",15),
+
+	GATE_TOP3(MT6397_TOPCKPDN3_AUXADC_DIV_CK, "top3-auxadcdiv", "pmu12m", 0),
+	GATE_TOP3(MT6397_TOPCKPDN3_RTC_75K_DIV4_CK, "top3-rtc75kdiv4", "pmu75k", 1),
+
+	GATE_WRP(MT6397_WRPCKPDN_32K, "wrap-32k", "rtc32k", 6),
+};
+
+struct mt6397_clk_composite {
+	struct clk_hw		hw;
+	struct regmap		*regmap;
+	u32			enable_reg;
+	u32			enable_shift;
+	u32			div_reg;
+	u32			div_shift;
+	u32			div_width;
+	u32			div_base;
+	u32			div_factor;
+	u32			mux_reg;
+	u32			mux_shift;
+	u32			mux_width;
+};
+
+#define to_mt6397_composite(_hw) \
+	container_of(_hw, struct mt6397_clk_composite, hw)
+
+static int mt6397_composite_enable(struct clk_hw *hw)
 {
-	struct mt6397_clkpdn *pdn = to_mt6397_clkpdn(hw);
-
-	return regmap_update_bits(pdn->regmap, pdn->enable_reg,
-		pdn->enable_mask, ~pdn->enable_mask);
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
+	return regmap_clear_bits(c->regmap, c->enable_reg,
+				 BIT(c->enable_shift));
 }
 
-static void mt6397_clkpdn_unprepare(struct clk_hw *hw)
+static void mt6397_composite_disable(struct clk_hw *hw)
 {
-	struct mt6397_clkpdn *pdn = to_mt6397_clkpdn(hw);
-
-	regmap_update_bits(pdn->regmap, pdn->enable_reg,
-		pdn->enable_mask, pdn->enable_mask);
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
+	regmap_set_bits(c->regmap, c->enable_reg, BIT(c->enable_shift));
 }
 
-static int mt6397_clkpdn_is_prepared(struct clk_hw *hw)
+static int mt6397_composite_is_enabled(struct clk_hw *hw)
 {
-	struct mt6397_clkpdn *pdn = to_mt6397_clkpdn(hw);
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
 	u32 val;
-
-	regmap_read(pdn->regmap, pdn->enable_reg, &val);
-
-	return (val & pdn->enable_mask) == 0;
+	regmap_read(c->regmap, c->enable_reg, &val);
+	return !(val & BIT(c->enable_shift));
 }
 
-static unsigned long mt6397_clk_recalc_rate(struct clk_hw *hw,
-						  unsigned long parent_rate)
+static unsigned long mt6397_composite_recalc_rate(struct clk_hw *hw,
+						 unsigned long parent_rate)
 {
-	struct mt6397_clkpdn *pdn = to_mt6397_clkpdn(hw);
-	u32 div, val;
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
+	u32 val, div;
 
-	if (pdn->div_reg == 0) {
-		div = 1;
-	} else {
-		regmap_read(pdn->regmap, pdn->div_reg, &val);
-		val &= pdn->div_mask;
-		val >>= ffs(pdn->div_mask) - 1;
+	if (c->div_width == 0)
+		return parent_rate;
 
-		if (val)
-			div = (1 << val) * pdn->div_base * pdn->div_factor;
-		else
-			div = pdn->div_base;
-	}
+	regmap_read(c->regmap, c->div_reg, &val);
+	val >>= c->div_shift;
+	val &= GENMASK(c->div_width - 1, 0);
+
+	if (val)
+		div = (1 << val) * c->div_base * c->div_factor;
+	else
+		div = c->div_base;
 
 	return parent_rate / div;
 }
 
-static u8 mt6397_clk_get_parent(struct clk_hw *hw)
+static u8 mt6397_composite_get_parent(struct clk_hw *hw)
 {
-	struct mt6397_clkpdn *clk = to_mt6397_clkpdn(hw);
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
 	int num_parents = clk_hw_get_num_parents(hw);
 	u32 val;
 
 	if (num_parents == 1)
 		return 0;
 
-	regmap_read(clk->regmap, clk->mux_reg, &val);
-	val &= clk->mux_mask;
+	regmap_read(c->regmap, c->mux_reg, &val);
+	val >>= c->mux_shift;
+	val &= GENMASK(c->mux_width - 1, 0);
 
 	if (val >= num_parents)
 		return -EINVAL;
@@ -97,208 +175,131 @@ static u8 mt6397_clk_get_parent(struct clk_hw *hw)
 	return val;
 }
 
-static int mt6397_clk_set_parent(struct clk_hw *hw, u8 index)
+static int mt6397_composite_set_parent(struct clk_hw *hw, u8 index)
 {
-	struct mt6397_clkpdn *clk = to_mt6397_clkpdn(hw);
-	u32 idx;
+	struct mt6397_clk_composite *c = to_mt6397_composite(hw);
+	u32 mask = GENMASK(c->mux_width - 1, 0);
 
-	idx = index;
-	idx <<= ffs(clk->mux_mask) - 1;
-
-	return regmap_update_bits(clk->regmap, clk->mux_reg, clk->mux_mask,
-			idx);
+	return regmap_update_bits(c->regmap, c->mux_reg,
+				 mask << c->mux_shift,
+				 index << c->mux_shift);
 }
 
-static const struct clk_ops mt6397_clkpdn_ops = {
-	.prepare = mt6397_clkpdn_prepare,
-	.unprepare = mt6397_clkpdn_unprepare,
-	.is_prepared = mt6397_clkpdn_is_prepared,
+static const struct clk_ops mt6397_composite_ops = {
+	.enable		= mt6397_composite_enable,
+	.disable	= mt6397_composite_disable,
+	.is_enabled	= mt6397_composite_is_enabled,
+	.recalc_rate	= mt6397_composite_recalc_rate,
+	.get_parent	= mt6397_composite_get_parent,
+	.set_parent	= mt6397_composite_set_parent,
+	.determine_rate	= __clk_mux_determine_rate_closest,
 };
 
-static const struct clk_ops mt6397_clkcomposite_ops = {
-	.prepare = mt6397_clkpdn_prepare,
-	.unprepare = mt6397_clkpdn_unprepare,
-	.is_prepared = mt6397_clkpdn_is_prepared,
-	.recalc_rate = mt6397_clk_recalc_rate,
-	.get_parent = mt6397_clk_get_parent,
-	.set_parent = mt6397_clk_set_parent,
+struct mt6397_comp_desc {
+	int id;
+	const char *name;
+	const char * const *parent_names;
+	int num_parents;
+	u32 enable_reg;
+	u32 enable_shift;
+	u32 div_reg;
+	u32 div_shift;
+	u32 div_width;
+	u32 div_base;
+	u32 div_factor;
+	u32 mux_reg;
+	u32 mux_shift;
+	u32 mux_width;
 };
 
-enum {
-	AUD26M,	AUD26M_DIV64, AUD13M,
-	SMPS24M, SMPS12M, SMPS6M, SMPS3M, SMPS2M, SMPS1M,
-	PMU75K, PMU12M,
-	FG32K,
-	RTC32K,
-	CHR1M,
+#define COMP_GATE_DIV(_id, _name, _parent, _reg, _shift,		\
+		 _div_reg, _div_shift, _div_width,			\
+		 _div_base, _div_factor)				\
+	{								\
+		.id = _id, .name = _name,				\
+		.parent_names = (const char * const []){ _parent },	\
+		.num_parents = 1,					\
+		.enable_reg = _reg, .enable_shift = _shift,		\
+		.div_reg = _div_reg, .div_shift = _div_shift,		\
+		.div_width = _div_width, .div_base = _div_base,		\
+		.div_factor = _div_factor,				\
+	}
+
+#define COMP_MUX(_id, _name, _parents, _num_p, _reg, _shift,		\
+		 _mux_reg, _mux_shift, _mux_width)			\
+	{								\
+		.id = _id, .name = _name,				\
+		.parent_names = _parents,				\
+		.num_parents = _num_p,					\
+		.enable_reg = _reg, .enable_shift = _shift,		\
+		.mux_reg = _mux_reg, .mux_shift = _mux_shift,		\
+		.mux_width = _mux_width,				\
+	}
+
+static const char * const accdet_parents[] = {
+	"rtc32k", "pmu12m", "top-accdet", "aud26m",
+};
+static const char * const fgadc_ana_parents[] = {
+	"rtc32k", "aud26m_div64",
+};
+static const char * const fgmtr_parents[] = {
+	"rtc32k", "aud26m",
 };
 
-static const char *clk_names[] = {
-	[AUD26M] = "aud26m",
-	[AUD26M_DIV64] = "aud26m_div64",
-	[AUD13M] = "aud13m",
-	[SMPS24M] = "smps24m",
-	[SMPS12M] = "smps12m",
-	[SMPS6M] = "smps6m",
-	[SMPS3M] = "smps3m",
-	[SMPS2M] = "smps2m",
-	[SMPS1M] = "smps1m",
-	[PMU75K] = "pmu75k",
-	[PMU12M] = "pmu12m",
-	[FG32K] = "fg32k",
-	[RTC32K] = "rtc32k",
-	[CHR1M] = "chr1m",
-};
+static const struct mt6397_comp_desc mt6397_composites[] = {
+	COMP_MUX(MT6397_TOPCKPDN_FGADC_ANA_CK, "top-fgadc-ana",
+		 fgadc_ana_parents, ARRAY_SIZE(fgadc_ana_parents),
+		 MT6397_TOP_CKPDN, 6,
+		 MT6397_TOP_CKCON1, 12, 1),
 
-static const char *mt6397_accdet_parents[] = {
-	"rtc32k",
-	"pmu12m",
-	"top-accdet",
-	"aud26m",
-};
+	COMP_GATE_DIV(MT6397_TOPCKPDN_RTC_MCLK, "top-rtc-mclk",
+		      "smps24m", MT6397_TOP_CKPDN, 8,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
 
-static const char *mt6397_fgadc_ana_parents[] = {
-	"rtc32k",
-	"aud26m_div64",
-};
+	COMP_GATE_DIV(MT6397_TOPCKPDN_SPK_PWM_DIV, "top-spkpwm",
+		      "smps1m", MT6397_TOP_CKPDN, 9,
+		      MT6397_TOP_CKCON2, 3, 2, 1, 8),
 
-static const char *mt6397_fgmtr_parents[] = {
-	"rtc32k",
-	"aud26m",
-};
+	COMP_GATE_DIV(MT6397_TOPCKPDN_SPK_DIV, "top-spkdiv",
+		      "smps1m", MT6397_TOP_CKPDN, 10,
+		      MT6397_TOP_CKCON2, 5, 2, 1, 1),
 
-#define GATES(id, _name, _reg, _mask, _parent_names)	\
-[id] = {						\
-	.hw.init = &(struct clk_init_data){		\
-		.name = #_name,				\
-		.ops = &mt6397_clkpdn_ops,		\
-		.flags = CLK_IGNORE_UNUSED,		\
-		.parent_names = _parent_names,		\
-		.num_parents = 1,			\
-	},						\
-	.enable_reg = _reg,				\
-	.enable_mask = _mask,				\
-}
+	COMP_GATE_DIV(MT6397_TOPCKPDN_AUXADC_CK, "top-auxadc",
+		      "pmu12m", MT6397_TOP_CKPDN, 13,
+		      MT6397_TOP_CKCON2, 0, 2, 6, 1),
 
-#define COMPOSITE(id, _name, _reg, _mask, _parent_names, _num_parents,	\
-	_div_reg, _div_mask, _base, _factor, _mux_reg, _mux_mask)	\
-[id] = {								\
-	.hw.init = &(struct clk_init_data){				\
-		.name = #_name,						\
-		.ops = &mt6397_clkcomposite_ops,			\
-		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE,	\
-		.parent_names = _parent_names,				\
-		.num_parents = _num_parents,				\
-	},								\
-	.enable_reg = _reg,						\
-	.enable_mask = _mask,						\
-	.div_reg = _div_reg,						\
-	.div_mask = _div_mask,						\
-	.div_base = _base,						\
-	.div_factor = _factor,						\
-	.mux_reg = _mux_reg,						\
-	.mux_mask = _mux_mask,						\
-}
+	COMP_MUX(MT6397_TOPCKPDN_ACCDET_CK, "top-accdet",
+		 accdet_parents, ARRAY_SIZE(accdet_parents),
+		 MT6397_TOP_CKPDN, 14,
+		 MT6397_TOP_CKCON1, 13, 2),
 
-static struct mt6397_clkpdn mt6397_clks[MT6397_CLK_MAX] = {
-	GATES(MT6397_TOPCKPDN_AUD_26M, "top-aud26m",
-		MT6397_TOP_CKPDN, BIT(0), &clk_names[AUD26M]),
-	GATES(MT6397_TOPCKPDN_AUD_13M, "top-aud13m",
-		MT6397_TOP_CKPDN, BIT(1), &clk_names[AUD13M]),
-	GATES(MT6397_TOPCKPDN_SPK_CK, "top-spk",
-		MT6397_TOP_CKPDN, BIT(2), &clk_names[SMPS1M]),
-	GATES(MT6397_TOPCKPDN_PWMOC_CK, "top-pwmoc",
-		MT6397_TOP_CKPDN, BIT(3), &clk_names[SMPS2M]),
-	GATES(MT6397_TOPCKPDN_EFUSE_CK, "top-efuse",
-		MT6397_TOP_CKPDN, BIT(4), &clk_names[PMU75K]),
-	GATES(MT6397_TOPCKPDN_FGADC_CK, "top-fgadc",
-		MT6397_TOP_CKPDN, BIT(5), &clk_names[FG32K]),
-	COMPOSITE(MT6397_TOPCKPDN_FGADC_ANA_CK, "top-fgadc-ana",
-		MT6397_TOP_CKPDN, BIT(6), mt6397_fgadc_ana_parents, 2,
-		0, 0, 0, 0, MT6397_TOP_CKCON1, BIT(12)),
-	GATES(MT6397_TOPCKPDN_BST_DRV_1M_CK, "top-bstdrv1m",
-		MT6397_TOP_CKPDN, BIT(7), &clk_names[SMPS1M]),
-	COMPOSITE(MT6397_TOPCKPDN_RTC_MCLK, "top-rtc-mclk",
-		MT6397_TOP_CKPDN, BIT(8), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_TOPCKPDN_SPK_PWM_DIV, "top-spkpwm",
-		MT6397_TOP_CKPDN, BIT(9), &clk_names[SMPS1M], 1,
-		MT6397_TOP_CKCON2, 0x0018, 1, 8, 0, 0),
-	COMPOSITE(MT6397_TOPCKPDN_SPK_DIV, "top-spkdiv",
-		MT6397_TOP_CKPDN, BIT(10), &clk_names[SMPS1M], 1,
-		MT6397_TOP_CKCON2, 0x0060, 1, 1, 0, 0),
-	GATES(MT6397_TOPCKPDN_SMPS_CK_DIV2, "top-smpsdiv2",
-		MT6397_TOP_CKPDN, BIT(11), &clk_names[SMPS12M]),
-	GATES(MT6397_TOPCKPDN_SMPS_CK_DIV, "top-smpsdiv",
-		MT6397_TOP_CKPDN, BIT(12), &clk_names[SMPS24M]),
-	COMPOSITE(MT6397_TOPCKPDN_AUXADC_CK, "top-auxadc",
-		MT6397_TOP_CKPDN, BIT(13), &clk_names[PMU12M], 1,
-		MT6397_TOP_CKCON2, 0x0003, 6, 1, 0, 0),
-	COMPOSITE(MT6397_TOPCKPDN_ACCDET_CK, "top-accdet",
-		MT6397_TOP_CKPDN, BIT(14), mt6397_accdet_parents, 4,
-		0, 0, 0, 0, MT6397_TOP_CKCON1, 0x6000),
-	GATES(MT6397_TOPCKPDN_STRUP_6M, "top-strup6m",
-		MT6397_TOP_CKPDN, BIT(15), &clk_names[SMPS6M]),
-	GATES(MT6397_TOPCKPDN2_RTC32K_1V8, "top2-rtc32k1v8",
-		MT6397_TOP_CKPDN2, BIT(0), &clk_names[RTC32K]),
-	COMPOSITE(MT6397_TOPCKPDN2_FQMTR, "top2-fqmtr",
-		MT6397_TOP_CKPDN2, BIT(1), mt6397_fgmtr_parents, 2,
-		0, 0, 0, 0, MT6397_TOP_CKCON1, BIT(15)),
-	GATES(MT6397_TOPCKPDN2_STRUP_75K_CK, "top2-starup75k",
-		MT6397_TOP_CKPDN2, BIT(2), &clk_names[PMU75K]),
-	GATES(MT6397_TOPCKPDN2_RTC_32K_CK, "top2-rtc32k",
-		MT6397_TOP_CKPDN2, BIT(3), &clk_names[RTC32K]),
-	GATES(MT6397_TOPCKPDN2_PCHR_32K_CK, "top2-pchr32k",
-		MT6397_TOP_CKPDN2, BIT(4), &clk_names[RTC32K]),
-	GATES(MT6397_TOPCKPDN2_LDOSTB_1M_CK, "top2-ldostb1m",
-		MT6397_TOP_CKPDN2, BIT(5), &clk_names[SMPS1M]),
-	GATES(MT6397_TOPCKPDN2_INTRP_CK, "top2-intr",
-		MT6397_TOP_CKPDN2, BIT(6), &clk_names[PMU75K]),
-	GATES(MT6397_TOPCKPDN2_DRV_32K_CK, "top2-drv32k",
-		MT6397_TOP_CKPDN2, BIT(7), &clk_names[SMPS1M]),
-	GATES(MT6397_TOPCKPDN2_CHR1M_CK, "top2-chr1m",
-		MT6397_TOP_CKPDN2, BIT(8), &clk_names[CHR1M]),
-	GATES(MT6397_TOPCKPDN2_BUCK_CK, "top2-buck",
-		MT6397_TOP_CKPDN2, BIT(9), &clk_names[PMU12M]),
-	GATES(MT6397_TOPCKPDN2_BUCK_ANA_CK, "top2-buckana",
-		MT6397_TOP_CKPDN2, BIT(10), &clk_names[SMPS2M]),
-	GATES(MT6397_TOPCKPDN2_BUCK32K, "top2-buck32k",
-		MT6397_TOP_CKPDN2, BIT(11), &clk_names[RTC32K]),
-	GATES(MT6397_TOPCKPDN2_BUCK_1M_CK, "top2-buck1m",
-		MT6397_TOP_CKPDN2, BIT(12), &clk_names[SMPS1M]),
-	GATES(MT6397_TOPCKPDN2_STRUP_32K_CK, "top2-starup32k",
-		MT6397_TOP_CKPDN2, BIT(13), &clk_names[RTC32K]),
-	GATES(MT6397_TOPCKPDN2_RTC_75K_CK, "top2-rtc75k",
-		MT6397_TOP_CKPDN2, BIT(14), &clk_names[PMU75K]),
-	GATES(MT6397_TOPCKPDN2_RSV_15, "top2-rsv",
-		MT6397_TOP_CKPDN2, BIT(15), &clk_names[SMPS24M]),
-	GATES(MT6397_TOPCKPDN3_AUXADC_DIV_CK, "top3-auxadcdiv",
-		MT6397_TOP_CKPDN3, BIT(0), &clk_names[PMU12M]),
-	GATES(MT6397_TOPCKPDN3_RTC_75K_DIV4_CK, "top3-rtc75kdiv4",
-		MT6397_TOP_CKPDN3, BIT(1), &clk_names[PMU75K]),
-	COMPOSITE(MT6397_WRPCKPDN_I2C0, "wrap-i2c0",
-		MT6397_WRP_CKPDN, BIT(0), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_WRPCKPDN_I2C1, "wrap-i2c1",
-		MT6397_WRP_CKPDN, BIT(1), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_WRPCKPDN_I2C2, "wrap-i2c2",
-		MT6397_WRP_CKPDN, BIT(2), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_WRPCKPDN_PWM, "wrap-pwm",
-		MT6397_WRP_CKPDN, BIT(3), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_WRPCKPDN_KP, "wrap-kp",
-		MT6397_WRP_CKPDN, BIT(4), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	COMPOSITE(MT6397_WRPCKPDN_EINT, "wrap-eint",
-		MT6397_WRP_CKPDN, BIT(5), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
-	GATES(MT6397_WRPCKPDN_32K, "wrap-32k",
-		MT6397_WRP_CKPDN, BIT(6), &clk_names[RTC32K]),
-	COMPOSITE(MT6397_WRPCKPDN_WRP, "wrap-wrp",
-		MT6397_WRP_CKPDN, BIT(7), &clk_names[SMPS24M], 1,
-		MT6397_TOP_CKCON2, 0xC000, 1, 1, 0, 0),
+	COMP_MUX(MT6397_TOPCKPDN2_FQMTR, "top2-fqmtr",
+		 fgmtr_parents, ARRAY_SIZE(fgmtr_parents),
+		 MT6397_TOP_CKPDN2, 1,
+		 MT6397_TOP_CKCON1, 15, 1),
+
+	/* WRAP clocks (gate + divider only) */
+	COMP_GATE_DIV(MT6397_WRPCKPDN_I2C0, "wrap-i2c0",
+		      "smps24m", MT6397_WRP_CKPDN, 0,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_I2C1, "wrap-i2c1",
+		      "smps24m", MT6397_WRP_CKPDN, 1,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_I2C2, "wrap-i2c2",
+		      "smps24m", MT6397_WRP_CKPDN, 2,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_PWM, "wrap-pwm",
+		      "smps24m", MT6397_WRP_CKPDN, 3,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_KP, "wrap-kp",
+		      "smps24m", MT6397_WRP_CKPDN, 4,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_EINT, "wrap-eint",
+		      "smps24m", MT6397_WRP_CKPDN, 5,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
+	COMP_GATE_DIV(MT6397_WRPCKPDN_WRP, "wrap-wrp",
+		      "smps24m", MT6397_WRP_CKPDN, 7,
+		      MT6397_TOP_CKCON2, 14, 2, 1, 1),
 };
 
 static const struct of_device_id mt6397_clk_match_table[] = {
@@ -311,86 +312,106 @@ static int mt6397_clk_probe(struct platform_device *pdev)
 {
 	int i, ret;
 	struct device *dev = &pdev->dev;
-	struct clk **clk;
-	size_t num_clks;
 	struct mt6397_chip *mt6397 = dev_get_drvdata(pdev->dev.parent);
-	struct clk_onecell_data *onecell;
+	struct clk_hw_onecell_data *clk_data;
 
-	num_clks = ARRAY_SIZE(mt6397_clks);
-	clk = devm_kzalloc(dev, sizeof(struct clk *) * num_clks, GFP_KERNEL);
-	if (!clk)
+	clk_data = mtk_alloc_clk_data(MT6397_CLK_MAX);
+	if (!clk_data)
 		return -ENOMEM;
 
-	onecell = devm_kzalloc(dev, sizeof(*onecell), GFP_KERNEL);
-	if (!onecell)
-		return -ENOMEM;
+	ret = mtk_clk_register_fixed_clks(mt6397_fixed_clks,
+					  ARRAY_SIZE(mt6397_fixed_clks),
+					  clk_data);
+	if (ret)
+		goto free_data;
 
-	clk[MT6397_CLK_AUD26M] = clk_register_fixed_rate(&pdev->dev,
-			"aud26m", NULL, 0, 26000000);
+	ret = mtk_clk_register_factors(mt6397_factors,
+				       ARRAY_SIZE(mt6397_factors),
+				       clk_data);
+	if (ret)
+		goto unreg_fixed;
 
-	clk[MT6397_CLK_AUD13M] = clk_register_fixed_factor(&pdev->dev,
-			"aud13m", "aud26m", CLK_SET_RATE_PARENT, 1, 2);
+	ret = mtk_clk_register_gates(dev, dev->of_node,
+				     mt6397_gates,
+				     ARRAY_SIZE(mt6397_gates),
+				     clk_data);
+	if (ret)
+		goto unreg_factors;
 
-	clk[MT6397_CLK_AUD26M_DIV64] = clk_register_fixed_factor(&pdev->dev,
-			"aud26m_div64", "aud26m", CLK_SET_RATE_PARENT, 1, 64);
+	for (i = 0; i < ARRAY_SIZE(mt6397_composites); i++) {
+		const struct mt6397_comp_desc *d = &mt6397_composites[i];
+		struct mt6397_clk_composite *c;
+		struct clk_init_data init = {};
 
-	clk[MT6397_CLK_SMPS24M] = clk_register_fixed_rate(&pdev->dev,
-			"smps24m", NULL, 0, 24000000);
+		c = devm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
+		if (!c) {
+			ret = -ENOMEM;
+			goto unreg_composites;
+		}
 
-	clk[MT6397_CLK_SMPS12M] = clk_register_fixed_factor(&pdev->dev,
-			"smps12m", "smps24m", CLK_SET_RATE_PARENT, 1, 2);
+		init.name = d->name;
+		init.ops = &mt6397_composite_ops;
+		init.parent_names = d->parent_names;
+		init.num_parents = d->num_parents;
+		init.flags = CLK_IGNORE_UNUSED;
 
-	clk[MT6397_CLK_SMPS6M] = clk_register_fixed_factor(&pdev->dev,
-			"smps6m", "smps24m", CLK_SET_RATE_PARENT, 1, 4);
+		c->regmap = mt6397->regmap;
+		c->enable_reg = d->enable_reg;
+		c->enable_shift = d->enable_shift;
+		c->div_reg = d->div_reg;
+		c->div_shift = d->div_shift;
+		c->div_width = d->div_width;
+		c->div_base = d->div_base;
+		c->div_factor = d->div_factor;
+		c->mux_reg = d->mux_reg;
+		c->mux_shift = d->mux_shift;
+		c->mux_width = d->mux_width;
+		c->hw.init = &init;
 
-	clk[MT6397_CLK_SMPS3M] = clk_register_fixed_factor(&pdev->dev,
-			"smps3m", "smps24m", CLK_SET_RATE_PARENT, 1, 8);
-
-	clk[MT6397_CLK_SMPS2M] = clk_register_fixed_factor(&pdev->dev,
-			"smps2m", "smps24m", CLK_SET_RATE_PARENT, 1, 12);
-
-	clk[MT6397_CLK_SMPS1M] = clk_register_fixed_factor(&pdev->dev,
-			"smps1m", "smps24m", CLK_SET_RATE_PARENT, 1, 24);
-
-	clk[MT6397_CLK_PMU75K] = clk_register_fixed_rate(&pdev->dev,
-			"pmu75k", NULL, 0, 75000);
-
-	clk[MT6397_CLK_PMU12M] = clk_register_fixed_rate(&pdev->dev,
-			"pmu12m", NULL, 0, 12000000);
-
-	clk[MT6397_CLK_FG32K] = clk_register_fixed_rate(&pdev->dev,
-			"fg32k", NULL, 0, 32000);
-
-	clk[MT6397_CLK_RTC32K] = clk_register_fixed_rate(&pdev->dev,
-			"rtc32k", NULL, 0, 32000);
-
-	clk[MT6397_CLK_CHR1M] = clk_register_fixed_rate(&pdev->dev,
-			"chr1m", NULL, 0, 1000000);
-
-	for (i = MT6397_TOPCKPDN_AUD_26M; i < num_clks; i++) {
-		mt6397_clks[i].regmap = mt6397->regmap;
-		clk[i] = devm_clk_register(dev, &mt6397_clks[i].hw);
-		if (IS_ERR(clk))
-			return PTR_ERR(clk);
+		ret = clk_hw_register(dev, &c->hw);
+		if (ret) {
+			dev_err(dev, "failed to register composite %s\n", d->name);
+			goto unreg_composites;
+		}
+		clk_data->hws[d->id] = &c->hw;
 	}
 
-	onecell->clk_num = num_clks;
-	onecell->clks = clk;
-	ret = of_clk_add_provider(dev->of_node,
-				  of_clk_src_onecell_get, onecell);
+	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, clk_data);
 	if (ret) {
-		dev_err(dev, "unable to add clk provider\n");
-		return ret;
+		dev_err(dev, "failed to add clock provider\n");
+		goto unreg_composites;
 	}
 
+	platform_set_drvdata(pdev, clk_data);
 	return 0;
+
+unreg_composites:
+	while (--i >= 0)
+		clk_hw_unregister(clk_data->hws[mt6397_composites[i].id]);
+	mtk_clk_unregister_gates(mt6397_gates, ARRAY_SIZE(mt6397_gates), clk_data);
+unreg_factors:
+	mtk_clk_unregister_factors(mt6397_factors, ARRAY_SIZE(mt6397_factors), clk_data);
+unreg_fixed:
+	mtk_clk_unregister_fixed_clks(mt6397_fixed_clks, ARRAY_SIZE(mt6397_fixed_clks), clk_data);
+free_data:
+	mtk_free_clk_data(clk_data);
+	return ret;
 }
 
 static void mt6397_clk_remove(struct platform_device *pdev)
 {
+	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
+	int i;
+
 	of_clk_del_provider(pdev->dev.of_node);
 
-	return;
+	for (i = ARRAY_SIZE(mt6397_composites) - 1; i >= 0; i--)
+		clk_hw_unregister(clk_data->hws[mt6397_composites[i].id]);
+
+	mtk_clk_unregister_gates(mt6397_gates, ARRAY_SIZE(mt6397_gates), clk_data);
+	mtk_clk_unregister_factors(mt6397_factors, ARRAY_SIZE(mt6397_factors), clk_data);
+	mtk_clk_unregister_fixed_clks(mt6397_fixed_clks, ARRAY_SIZE(mt6397_fixed_clks), clk_data);
+	mtk_free_clk_data(clk_data);
 }
 
 static struct platform_driver mt6397_clk_driver = {
@@ -401,10 +422,8 @@ static struct platform_driver mt6397_clk_driver = {
 		.of_match_table = mt6397_clk_match_table,
 	},
 };
-
 module_platform_driver(mt6397_clk_driver);
 
-MODULE_AUTHOR("Flora Fu <flora.fu@mediatek.com>");
+MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("Clock Driver for MediaTek MT6397 PMIC");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:mt6397-clock");
