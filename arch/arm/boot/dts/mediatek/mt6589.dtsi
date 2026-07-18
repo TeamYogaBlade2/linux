@@ -212,9 +212,8 @@
 			      <0x11000300 0x80>;
 			interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C0>,
-				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
-			clock-names = "main", "pmic", "dma";
+			clock-names = "main", "dma";
 			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
@@ -227,9 +226,8 @@
 			      <0x11000380 0x80>;
 			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C1>,
-				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
-			clock-names = "main", "pmic", "dma";
+			clock-names = "main", "dma";
 			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
@@ -242,9 +240,8 @@
 			      <0x11000400 0x80>;
 			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C2>,
-				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
-			clock-names = "main", "pmic", "dma";
+			clock-names = "main", "dma";
 			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
@@ -257,9 +254,8 @@
 			      <0x11000480 0x80>;
 			interrupts = <GIC_SPI 47 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&pericfg CLK_PERI0_I2C3>,
-				 <&clk26m>,
 				 <&pericfg CLK_PERI0_APDMA>;
-			clock-names = "main", "pmic", "dma";
+			clock-names = "main", "dma";
 			clock-div = <16>;
 			status = "disabled";
 			#address-cells = <1>;
