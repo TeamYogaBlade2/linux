@@ -22,11 +22,14 @@
 		};
 
 		power-controller {
-			compatible = "mediatek,mt6323-pwrc";
+			compatible = "mediatek,mt6320-pwrc",
+				     "mediatek,mt6323-pwrc";
+			#power-domain-cells = <0>;
 		};
 
 		rtc {
-			compatible = "mediatek,mt6320-rtc";
+			compatible = "mediatek,mt6320-rtc",
+				     "mediatek,mt6397-rtc";
 		};
 
 		mt6320keys: keys {
