@@ -245,6 +245,8 @@ struct bq24190_dev_info {
 	u8				ss_reg;
 	u8				watchdog;
 	const struct bq24190_chip_info	*info;
+	unsigned int			poll_interval;	/* ms, 0 = IRQ mode */
+	struct delayed_work		poll_work;
 };
 
 struct bq24190_chip_info {
@@ -1840,6 +1842,27 @@ static void bq24190_check_status(struct bq24190_dev_info *bdi)
 	dev_dbg(bdi->dev, "ss_reg: 0x%02x, f_reg: 0x%02x\n", ss_reg, f_reg);
 }
 
+static void bq24190_poll_work(struct work_struct *work)
+{
+	struct bq24190_dev_info *bdi =
+		container_of(work, struct bq24190_dev_info, poll_work.work);
+	int error;
+
+	error = pm_runtime_resume_and_get(bdi->dev);
+	if (error < 0) {
+		dev_warn(bdi->dev, "poll: pm_runtime_get failed: %d\n", error);
+		goto reschedule;
+	}
+
+	bq24190_check_status(bdi);
+	pm_runtime_put_autosuspend(bdi->dev);
+
+reschedule:
+	if (bdi->poll_interval > 0)
+		schedule_delayed_work(&bdi->poll_work,
+				      msecs_to_jiffies(bdi->poll_interval));
+}
+
 static irqreturn_t bq24190_irq_handler_thread(int irq, void *data)
 {
 	struct bq24190_dev_info *bdi = data;
@@ -2088,6 +2111,7 @@ static int bq24190_probe(struct i2c_client *client)
 	bdi->charge_type = POWER_SUPPLY_CHARGE_TYPE_FAST;
 	bdi->f_reg = 0;
 	bdi->ss_reg = BQ24190_REG_SS_VBUS_STAT_MASK; /* impossible state */
+	bdi->poll_interval = 0; /* interrupt mode */
 
 	ret = devm_delayed_work_autocancel(dev, &bdi->input_current_limit_work,
 					   bq24190_input_current_limit_work);
@@ -2166,20 +2190,35 @@ static int bq24190_probe(struct i2c_client *client)
 
 	bdi->initialized = true;
 
-	ret = devm_request_threaded_irq(dev, client->irq, NULL,
-			bq24190_irq_handler_thread,
-			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-			"bq24190-charger", bdi);
-	if (ret < 0) {
-		dev_err(dev, "Can't set up irq handler\n");
-		goto out_charger;
+	if (client->irq <= 0) {
+		if (device_property_read_u32(dev, "poll-interval",
+					     &bdi->poll_interval) == 0 &&
+		    bdi->poll_interval > 0) {
+			dev_info(dev, "using polling mode, interval %u ms\n",
+				 bdi->poll_interval);
+			INIT_DELAYED_WORK(&bdi->poll_work, bq24190_poll_work);
+			schedule_delayed_work(&bdi->poll_work,
+					      msecs_to_jiffies(bdi->poll_interval));
+		} else {
+			dev_err(dev, "No IRQ and no poll-interval specified\n");
+			ret = -EINVAL;
+			goto out_charger;
+		}
+	} else {
+		ret = devm_request_threaded_irq(dev, client->irq, NULL,
+					bq24190_irq_handler_thread,
+					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+					"bq24190-charger", bdi);
+		if (ret < 0) {
+			dev_err(dev, "Can't set up irq handler\n");
+			goto out_charger;
+		}
+		enable_irq_wake(client->irq);
 	}
 
 	ret = bq24190_register_vbus_regulator(bdi);
 	if (ret < 0)
 		goto out_charger;
-
-	enable_irq_wake(client->irq);
 
 	pm_runtime_put_autosuspend(dev);
 
@@ -2202,6 +2241,8 @@ static void bq24190_remove(struct i2c_client *client)
 	struct bq24190_dev_info *bdi = i2c_get_clientdata(client);
 	int error;
 
+	cancel_delayed_work_sync(&bdi->poll_work);
+
 	error = pm_runtime_resume_and_get(bdi->dev);
 	if (error < 0)
 		dev_warn(bdi->dev, "pm_runtime_get failed: %i\n", error);
@@ -2222,6 +2263,10 @@ static void bq24190_shutdown(struct i2c_client *client)
 
 	/* Turn off 5V boost regulator on shutdown */
 	bdi->info->set_otg_vbus(bdi, false);
+
+	/* Ensure poll work is not rescheduled */
+	bdi->poll_interval = 0;
+	cancel_delayed_work_sync(&bdi->poll_work);
 }
 
 static __maybe_unused int bq24190_runtime_suspend(struct device *dev)
@@ -2292,6 +2337,10 @@ static __maybe_unused int bq24190_pm_resume(struct device *dev)
 	if (error >= 0) {
 		pm_runtime_put_autosuspend(bdi->dev);
 	}
+
+	if (bdi->poll_interval > 0)
+		schedule_delayed_work(&bdi->poll_work,
+				      msecs_to_jiffies(bdi->poll_interval));
 
 	/* Things may have changed while suspended so alert upper layer */
 	power_supply_changed(bdi->charger);
