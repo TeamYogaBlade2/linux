@@ -267,9 +267,6 @@
 			reg = <0x11011000 0x1000>,
 			      <0x11000500 0x80>;
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&pericfg CLK_PERI0_I2C4>,
-				 <&clk26m>,
-				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
 			mediatek,have-pmic;
@@ -283,9 +280,6 @@
 			reg = <0x11012000 0x1000>,
 			      <0x11000580 0x80>;
 			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&pericfg CLK_PERI0_I2C5>,
-				 <&clk26m>,
-				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
 			mediatek,have-pmic;
@@ -299,9 +293,6 @@
 			reg = <0x11013000 0x1000>,
 			      <0x11000600 0x80>;
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&pericfg CLK_PERI1_I2C6>,
-				 <&clk26m>,
-				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <16>;
 			mediatek,have-pmic;

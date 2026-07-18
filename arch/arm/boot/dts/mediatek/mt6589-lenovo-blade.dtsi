@@ -6,8 +6,8 @@
 /dts-v1/;
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
-
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+#include <dt-bindings/clock/mediatek,mt6320-clk.h>
 
 / {
 	chosen {
@@ -144,6 +144,9 @@
 
 &i2c4 {
 	status = "okay";
+	clocks = <&pericfg CLK_PERI0_I2C4>,
+		 <&mt6320clock MT6320_WRPCKPDN_I2C0>,
+		 <&pericfg CLK_PERI0_APDMA>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c4_pins>;
 	clock-frequency = <100000>;
@@ -154,8 +157,17 @@
 	};
 };
 
+&i2c5 {
+	clocks = <&pericfg CLK_PERI0_I2C5>,
+		 <&mt6320clock MT6320_WRPCKPDN_I2C1>,
+		 <&pericfg CLK_PERI0_APDMA>;
+};
+
 &i2c6 {
 	status = "okay";
+	clocks = <&pericfg CLK_PERI1_I2C6>,
+		 <&mt6320clock MT6320_WRPCKPDN_I2C2>,
+		 <&pericfg CLK_PERI0_APDMA>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c6_pins>;
 	clock-frequency = <100000>;
