@@ -7,6 +7,8 @@
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
 
+#include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+
 / {
 	chosen {
 		/* DEBUG: testing clock drivers */
@@ -32,6 +34,25 @@
 };
 
 &pio {
+	usb_pins: usb-pins {
+		pins_iddig {
+			pinmux = <MT6589_GPIO57__FUNC_GPIO57>;
+			bias-pull-up;
+			input-enable;
+		};
+
+		pins_eint34_conflict {
+			pinmux = <MT6589_GPIO48__FUNC_GPIO48>;
+			bias-pull-up;
+			input-enable;
+			input-schmitt-enable;
+		};
+
+		pins_drvvbus {
+			pinmux = <MT6589_GPIO130__FUNC_USB_DRVVBUS>;
+		};
+	};
+
 	ts_pins: touchscreen-default {
 		pin-int {
 			pinmux = <MT6589_GPIO124__FUNC_EINT5>;
@@ -43,6 +64,21 @@
 			pinmux = <MT6589_GPIO140__FUNC_GPIO140>;
 			output-low;
 		};
+	};
+};
+
+&usb0 {
+	status = "okay";
+	usb-role-switch;
+	vusb-supply = <&mt6320_ldo_vusb>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&usb_pins>;
+
+	connector {
+		compatible = "gpio-usb-b-connector", "usb-b-connector";
+		type = "micro";
+		id-gpios = <&pio 57 GPIO_ACTIVE_LOW>;
+		vbus-supply = <&usb_otg_vbus>;
 	};
 };
 
@@ -103,6 +139,32 @@
 	magnetometer@13 {
 		compatible = "bosch,bmm150";
 		reg = <0x13>;
+	};
+};
+
+&i2c4 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4_pins>;
+	clock-frequency = <100000>;
+
+	bq27541: fuel-gauge@55 {
+		compatible = "ti,bq27541";
+		reg = <0x55>;
+	};
+};
+
+&i2c6 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c6_pins>;
+	clock-frequency = <100000>;
+
+	charger@6b {
+		compatible = "ti,bq24196";
+		reg = <0x6b>;
+		poll-interval = <10000>;
+		usb_otg_vbus: usb-otg-vbus { };
 	};
 };
 
