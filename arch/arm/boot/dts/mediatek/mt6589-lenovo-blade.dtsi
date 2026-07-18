@@ -148,7 +148,7 @@
 		 <&mt6320clock MT6320_WRPCKPDN_I2C0>,
 		 <&pericfg CLK_PERI0_APDMA>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&i2c4_pins>;
+	pinctrl-0 = <&mt6320_i2c0_pins>;
 	clock-frequency = <100000>;
 
 	bq27541: fuel-gauge@55 {
@@ -161,6 +161,8 @@
 	clocks = <&pericfg CLK_PERI0_I2C5>,
 		 <&mt6320clock MT6320_WRPCKPDN_I2C1>,
 		 <&pericfg CLK_PERI0_APDMA>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mt6320_i2c1_pins>;
 };
 
 &i2c6 {
@@ -169,7 +171,7 @@
 		 <&mt6320clock MT6320_WRPCKPDN_I2C2>,
 		 <&pericfg CLK_PERI0_APDMA>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&i2c6_pins>;
+	pinctrl-0 = <&mt6320_i2c2_pins>;
 	clock-frequency = <100000>;
 
 	charger@6b {

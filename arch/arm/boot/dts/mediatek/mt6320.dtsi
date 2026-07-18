@@ -295,24 +295,24 @@
 };
 
 &pio6320 {
-	i2c4_pins: i2c4_pins-default {
-		pin-i2c4 {
+	mt6320_i2c0_pins: i2c0_pins-default {
+		pin-i2c0{
 			pinmux = <MT6320_GPIO35__FUNC_SCL0>,
 				 <MT6320_GPIO36__FUNC_SDA0>;
 			bias-pull-up;
 		};
 	};
 
-	i2c5_pins: i2c5-default {
-		pin-i2c5 {
+	mt6320_i2c1_pins: i2c1-default {
+		pin-i2c1 {
 			pinmux = <MT6320_GPIO37__FUNC_SCL1>,
 				 <MT6320_GPIO38__FUNC_SDA1>;
 			bias-pull-up;
 		};
 	};
 
-	i2c6_pins: i2c6-default {
-		pin-i2c6 {
+	mt6320_i2c2_pins: i2c2-default {
+		pin-i2c2 {
 			pinmux = <MT6320_GPIO39__FUNC_SCL2>,
 				 <MT6320_GPIO40__FUNC_SDA2>;
 			bias-pull-up;
