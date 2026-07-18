@@ -192,7 +192,7 @@
 	mmc-ddr-1_8v;
 
 	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC0>;
-	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+	assigned-clock-parents = <&clk26m>;
 };
 
 /* SD Card */
@@ -217,7 +217,7 @@
 	sd-uhs-ddr50;
 
 	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC1>;
-	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+	assigned-clock-parents = <&clk26m>;
 };
 
 /* SDIO */
@@ -243,5 +243,5 @@
 	sd-uhs-ddr50;
 
 	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC3>;
-	assigned-clock-parents = <&apmixedsys CLK_APMIXED_MSDCPLL_208M>;
+	assigned-clock-parents = <&clk26m>;
 };
