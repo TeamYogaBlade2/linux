@@ -2120,11 +2120,6 @@ static int bq24190_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, bdi);
 
-	if (client->irq <= 0) {
-		dev_err(dev, "Can't get irq info\n");
-		return -EINVAL;
-	}
-
 	bdi->edev = devm_extcon_dev_allocate(dev, bq24190_usb_extcon_cable);
 	if (IS_ERR(bdi->edev))
 		return PTR_ERR(bdi->edev);
