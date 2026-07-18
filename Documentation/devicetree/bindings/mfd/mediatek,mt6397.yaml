@@ -140,7 +140,9 @@ properties:
 
     properties:
       compatible:
-        const: mediatek,mt6397-clk
+        enum:
+          - mediatek,mt6320-clk
+          - mediatek,mt6397-clk
 
       '#clock-cells':
         const: 1
