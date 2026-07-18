@@ -27,14 +27,52 @@ static const struct mtk_gate_regs wrp_ckpdn_regs = {
 	.sta_ofs = MT6320_WRP_CKPDN,
 };
 
+struct mt6320_gate {
+	struct clk_hw		hw;
+	struct regmap		*regmap;
+	const struct mtk_gate	*gate;
+};
+
+#define to_mt6320_gate(_hw) container_of(_hw, struct mt6320_gate, hw)
+
+static int mt6320_gate_prepare(struct clk_hw *hw)
+{
+	struct mt6320_gate *cg = to_mt6320_gate(hw);
+	regmap_clear_bits(cg->regmap, cg->gate->regs->sta_ofs,
+			  BIT(cg->gate->shift));
+	return 0;
+}
+
+static void mt6320_gate_unprepare(struct clk_hw *hw)
+{
+	struct mt6320_gate *cg = to_mt6320_gate(hw);
+	regmap_set_bits(cg->regmap, cg->gate->regs->sta_ofs,
+			BIT(cg->gate->shift));
+}
+
+static int mt6320_gate_is_prepared(struct clk_hw *hw)
+{
+	struct mt6320_gate *cg = to_mt6320_gate(hw);
+	u32 val;
+
+	regmap_read(cg->regmap, cg->gate->regs->sta_ofs, &val);
+	return (val & BIT(cg->gate->shift)) == 0;
+}
+
+static const struct clk_ops mt6320_gate_ops = {
+	.prepare	= mt6320_gate_prepare,
+	.unprepare	= mt6320_gate_unprepare,
+	.is_prepared	= mt6320_gate_is_prepared,
+};
+
 #define GATE_TOP(_id, _name, _parent, _shift) \
-	GATE_MTK(_id, _name, _parent, &top_ckpdn_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+	GATE_MTK(_id, _name, _parent, &top_ckpdn_regs, _shift, &mt6320_gate_ops)
 
 #define GATE_TOP2(_id, _name, _parent, _shift) \
-	GATE_MTK(_id, _name, _parent, &top_ckpdn2_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+	GATE_MTK(_id, _name, _parent, &top_ckpdn2_regs, _shift, &mt6320_gate_ops)
 
 #define GATE_WRP(_id, _name, _parent, _shift) \
-	GATE_MTK(_id, _name, _parent, &wrp_ckpdn_regs, _shift, &mtk_clk_gate_ops_no_setclr)
+	GATE_MTK(_id, _name, _parent, &wrp_ckpdn_regs, _shift, &mt6320_gate_ops)
 
 static const struct mtk_fixed_clk mt6320_fixed_clks[] = {
 	FIXED_CLK(MT6320_CLK_AUD26M, "aud26m", NULL, 26000000),
@@ -105,20 +143,20 @@ struct mt6320_clk_composite {
 #define to_mt6320_composite(_hw) \
 	container_of(_hw, struct mt6320_clk_composite, hw)
 
-static int mt6320_composite_enable(struct clk_hw *hw)
+static int mt6320_composite_prepare(struct clk_hw *hw)
 {
 	struct mt6320_clk_composite *c = to_mt6320_composite(hw);
 	return regmap_clear_bits(c->regmap, c->enable_reg,
 				 BIT(c->enable_shift));
 }
 
-static void mt6320_composite_disable(struct clk_hw *hw)
+static void mt6320_composite_unprepare(struct clk_hw *hw)
 {
 	struct mt6320_clk_composite *c = to_mt6320_composite(hw);
 	regmap_set_bits(c->regmap, c->enable_reg, BIT(c->enable_shift));
 }
 
-static int mt6320_composite_is_enabled(struct clk_hw *hw)
+static int mt6320_composite_is_prepared(struct clk_hw *hw)
 {
 	struct mt6320_clk_composite *c = to_mt6320_composite(hw);
 	u32 val;
@@ -127,7 +165,7 @@ static int mt6320_composite_is_enabled(struct clk_hw *hw)
 }
 
 static unsigned long mt6320_composite_recalc_rate(struct clk_hw *hw,
-						 unsigned long parent_rate)
+						  unsigned long parent_rate)
 {
 	struct mt6320_clk_composite *c = to_mt6320_composite(hw);
 	u32 val, div;
@@ -172,14 +210,14 @@ static int mt6320_composite_set_parent(struct clk_hw *hw, u8 index)
 	u32 mask = GENMASK(c->mux_width - 1, 0);
 
 	return regmap_update_bits(c->regmap, c->mux_reg,
-				 mask << c->mux_shift,
-				 index << c->mux_shift);
+				  mask << c->mux_shift,
+				  index << c->mux_shift);
 }
 
 static const struct clk_ops mt6320_composite_ops = {
-	.enable		= mt6320_composite_enable,
-	.disable	= mt6320_composite_disable,
-	.is_enabled	= mt6320_composite_is_enabled,
+	.prepare	= mt6320_composite_prepare,
+	.unprepare	= mt6320_composite_unprepare,
+	.is_prepared	= mt6320_composite_is_prepared,
 	.recalc_rate	= mt6320_composite_recalc_rate,
 	.get_parent	= mt6320_composite_get_parent,
 	.set_parent	= mt6320_composite_set_parent,
@@ -201,6 +239,7 @@ struct mt6320_comp_desc {
 	u32 mux_reg;
 	u32 mux_shift;
 	u32 mux_width;
+	unsigned long flags;
 };
 
 #define COMP_GATE_DIV(_id, _name, _parent, _reg, _shift,		\
@@ -214,6 +253,7 @@ struct mt6320_comp_desc {
 		.div_reg = _div_reg, .div_shift = _div_shift,		\
 		.div_width = _div_width, .div_base = _div_base,		\
 		.div_factor = _div_factor,				\
+		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE,	\
 	}
 
 #define COMP_MUX(_id, _name, _parents, _num_p, _reg, _shift,		\
@@ -225,6 +265,7 @@ struct mt6320_comp_desc {
 		.enable_reg = _reg, .enable_shift = _shift,		\
 		.mux_reg = _mux_reg, .mux_shift = _mux_shift,		\
 		.mux_width = _mux_width,				\
+		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE,	\
 	}
 
 static const char * const accdet_parents[] = {
@@ -314,37 +355,69 @@ static int mt6320_clk_probe(struct platform_device *pdev)
 					  ARRAY_SIZE(mt6320_fixed_clks),
 					  clk_data);
 	if (ret)
-		goto free_data;
+		goto err_free_data;
 
 	ret = mtk_clk_register_factors(mt6320_factors,
 				       ARRAY_SIZE(mt6320_factors),
 				       clk_data);
 	if (ret)
-		goto unreg_fixed;
+		goto err_unreg_fixed;
 
-	ret = mtk_clk_register_gates(dev, dev->of_node,
-				     mt6320_gates,
-				     ARRAY_SIZE(mt6320_gates),
-				     clk_data);
-	if (ret)
-		goto unreg_factors;
+	for (i = 0; i < ARRAY_SIZE(mt6320_gates); i++) {
+		const struct mtk_gate *gate = &mt6320_gates[i];
+		struct mt6320_gate *cg;
+		struct clk_init_data init = {};
+
+		if (!IS_ERR_OR_NULL(clk_data->hws[gate->id])) {
+			dev_warn(dev, "Duplicate gate ID %d\n", gate->id);
+			continue;
+		}
+
+		cg = devm_kzalloc(dev, sizeof(*cg), GFP_KERNEL);
+		if (!cg) {
+			ret = -ENOMEM;
+			goto err_unreg_factors;
+		}
+
+		init.name = gate->name;
+		init.ops = gate->ops;
+		init.flags = gate->flags | CLK_IGNORE_UNUSED;
+		init.parent_names = gate->parent_name ? &gate->parent_name : NULL;
+		init.num_parents = gate->parent_name ? 1 : 0;
+
+		cg->regmap = mt6320->regmap;
+		cg->gate = gate;
+		cg->hw.init = &init;
+
+		ret = clk_hw_register(dev, &cg->hw);
+		if (ret) {
+			dev_err(dev, "Failed to register gate %s\n", gate->name);
+			goto err_unreg_factors;
+		}
+		clk_data->hws[gate->id] = &cg->hw;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(mt6320_composites); i++) {
 		const struct mt6320_comp_desc *d = &mt6320_composites[i];
 		struct mt6320_clk_composite *c;
 		struct clk_init_data init = {};
 
+		if (!IS_ERR_OR_NULL(clk_data->hws[d->id])) {
+			dev_warn(dev, "Duplicate composite ID %d\n", d->id);
+			continue;
+		}
+
 		c = devm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
 		if (!c) {
 			ret = -ENOMEM;
-			goto unreg_composites;
+			goto err_unreg_composites;
 		}
 
 		init.name = d->name;
 		init.ops = &mt6320_composite_ops;
 		init.parent_names = d->parent_names;
 		init.num_parents = d->num_parents;
-		init.flags = CLK_IGNORE_UNUSED;
+		init.flags = d->flags;
 
 		c->regmap = mt6320->regmap;
 		c->enable_reg = d->enable_reg;
@@ -361,30 +434,37 @@ static int mt6320_clk_probe(struct platform_device *pdev)
 
 		ret = clk_hw_register(dev, &c->hw);
 		if (ret) {
-			dev_err(dev, "failed to register composite %s\n", d->name);
-			goto unreg_composites;
+			dev_err(dev, "Failed to register composite %s\n", d->name);
+			goto err_unreg_composites;
 		}
 		clk_data->hws[d->id] = &c->hw;
 	}
 
 	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, clk_data);
 	if (ret) {
-		dev_err(dev, "failed to add clock provider\n");
-		goto unreg_composites;
+		dev_err(dev, "Failed to add clock provider\n");
+		goto err_unreg_composites;
 	}
 
 	platform_set_drvdata(pdev, clk_data);
 	return 0;
 
-unreg_composites:
-	while (--i >= 0)
-		clk_hw_unregister(clk_data->hws[mt6320_composites[i].id]);
-	mtk_clk_unregister_gates(mt6320_gates, ARRAY_SIZE(mt6320_gates), clk_data);
-unreg_factors:
+err_unreg_composites:
+	for (i = ARRAY_SIZE(mt6320_composites) - 1; i >= 0; i--) {
+		struct clk_hw *hw = clk_data->hws[mt6320_composites[i].id];
+		if (!IS_ERR_OR_NULL(hw))
+			clk_hw_unregister(hw);
+	}
+	for (i = ARRAY_SIZE(mt6320_gates) - 1; i >= 0; i--) {
+		struct clk_hw *hw = clk_data->hws[mt6320_gates[i].id];
+		if (!IS_ERR_OR_NULL(hw))
+			clk_hw_unregister(hw);
+	}
+err_unreg_factors:
 	mtk_clk_unregister_factors(mt6320_factors, ARRAY_SIZE(mt6320_factors), clk_data);
-unreg_fixed:
+err_unreg_fixed:
 	mtk_clk_unregister_fixed_clks(mt6320_fixed_clks, ARRAY_SIZE(mt6320_fixed_clks), clk_data);
-free_data:
+err_free_data:
 	mtk_free_clk_data(clk_data);
 	return ret;
 }
@@ -396,21 +476,20 @@ static void mt6320_clk_remove(struct platform_device *pdev)
 
 	of_clk_del_provider(pdev->dev.of_node);
 
-	for (i = ARRAY_SIZE(mt6320_composites) - 1; i >= 0; i--)
-		clk_hw_unregister(clk_data->hws[mt6320_composites[i].id]);
-
-	mtk_clk_unregister_gates(mt6320_gates, ARRAY_SIZE(mt6320_gates), clk_data);
-	mtk_clk_unregister_factors(mt6320_factors, ARRAY_SIZE(mt6320_factors), clk_data);
-	mtk_clk_unregister_fixed_clks(mt6320_fixed_clks, ARRAY_SIZE(mt6320_fixed_clks), clk_data);
+	for (i = 0; i < clk_data->num; i++) {
+		struct clk_hw *hw = clk_data->hws[i];
+		if (!IS_ERR_OR_NULL(hw))
+			clk_hw_unregister(hw);
+	}
 	mtk_free_clk_data(clk_data);
 }
 
 static struct platform_driver mt6320_clk_driver = {
-	.probe = mt6320_clk_probe,
-	.remove = mt6320_clk_remove,
+	.probe	= mt6320_clk_probe,
+	.remove	= mt6320_clk_remove,
 	.driver = {
-		.name = "mt6320-clk",
-		.of_match_table = mt6320_clk_match_table,
+		.name		= "mt6320-clk",
+		.of_match_table	= mt6320_clk_match_table,
 	},
 };
 module_platform_driver(mt6320_clk_driver);
