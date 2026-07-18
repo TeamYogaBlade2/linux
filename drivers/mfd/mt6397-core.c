@@ -146,7 +146,7 @@ static const struct mfd_cell mt6320_devs[] = {
 		.of_compatible = "mediatek,mt6320-rtc",
 	}, {
 		.name = "mt6320-regulator",
-		.of_compatible = "mediatek,mt6320-regulator"
+		.of_compatible = "mediatek,mt6320-regulator",
 	}, {
 		.name = "mt6320-clk",
 		.of_compatible = "mediatek,mt6320-clk",
@@ -162,7 +162,7 @@ static const struct mfd_cell mt6320_devs[] = {
 		.name = "mt6320-pwrc",
 		.num_resources = ARRAY_SIZE(mt6323_pwrc_resources),
 		.resources = mt6323_pwrc_resources,
-		.of_compatible = "mediatek,mt6320-pwrc"
+		.of_compatible = "mediatek,mt6320-pwrc",
 	},
 };
 
