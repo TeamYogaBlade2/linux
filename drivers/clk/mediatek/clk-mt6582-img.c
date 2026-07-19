@@ -10,7 +10,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6582-clk.h>
+#include <dt-bindings/clock/mediatek,mt6582-clk.h>
 
 static const struct mtk_gate_regs img_cg_regs = {
 	.set_ofs = 0x0004,

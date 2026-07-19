@@ -12,7 +12,7 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 
-#include <dt-bindings/clock/mt6582-clk.h>
+#include <dt-bindings/clock/mediatek,mt6582-clk.h>
 
 static DEFINE_SPINLOCK(mt6582_top_clk_lock);
 

@@ -11,8 +11,8 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6582-clk.h>
-#include <dt-bindings/reset/mt6582-resets.h>
+#include <dt-bindings/clock/mediatek,mt6582-clk.h>
+#include <dt-bindings/reset/mediatek,mt6582-resets.h>
 
 static const struct mtk_gate_regs mfg_cg_regs = {
 	.sta_ofs = 0x0,

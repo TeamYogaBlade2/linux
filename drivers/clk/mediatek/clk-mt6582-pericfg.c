@@ -4,8 +4,8 @@
  * Author: Burst_Caster <swer15l23@gmail.com>
  */
 
-#include <dt-bindings/clock/mt6582-clk.h>
-#include <dt-bindings/reset/mt6582-resets.h>
+#include <dt-bindings/clock/mediatek,mt6582-clk.h>
+#include <dt-bindings/reset/mediatek,mt6582-resets.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include "clk-cpumux.h"
