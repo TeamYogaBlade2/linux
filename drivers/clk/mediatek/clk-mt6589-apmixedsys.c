@@ -163,10 +163,10 @@ static const struct mtk_fixed_factor pll_divs[] = {
 	FACTOR(CLK_APMIXED_UNIVPLL_48M, "univpll_48m", "univpll", 1, 26),
 	FACTOR(CLK_APMIXED_UNIVPLL_USB_48M, "univpll_usb_48m", "univpll", 1, 26),
 
-	FACTOR(CLK_APMIXED_MMPLL_DIV2, "mmpll_div2", "mmpll", 1, 2),
-	FACTOR(CLK_APMIXED_MMPLL_DIV3, "mmpll_div3", "mmpll", 1, 3),
-	FACTOR(CLK_APMIXED_MMPLL_DIV5, "mmpll_div5", "mmpll", 1, 5),
-	FACTOR(CLK_APMIXED_MMPLL_DIV7, "mmpll_div7", "mmpll", 1, 7),
+	FACTOR(CLK_APMIXED_MMPLL_D2, "mmpll_d2", "mmpll", 1, 2),
+	FACTOR(CLK_APMIXED_MMPLL_D3, "mmpll_d3", "mmpll", 1, 3),
+	FACTOR(CLK_APMIXED_MMPLL_D5, "mmpll_d5", "mmpll", 1, 5),
+	FACTOR(CLK_APMIXED_MMPLL_D7, "mmpll_d7", "mmpll", 1, 7),
 
 	FACTOR(CLK_APMIXED_ISPPLL_208M, "isppll_208m", "isppll", 1, 8),
 
