@@ -149,7 +149,7 @@ static const struct mtk_pll_data plls[] = {
 
 /* TODO: convert to gate */
 static const struct mtk_fixed_factor pll_divs[] = {
-	FACTOR(CLK_APMIXED_ARMPLL_1300M, "armpll_1300m", "mainpll", 1, 1),
+	FACTOR(CLK_APMIXED_ARMPLL_1300M, "armpll_1300m", "armpll", 1, 1),
 
 	FACTOR(CLK_APMIXED_MAINPLL_806M, "mainpll_806m", "mainpll", 1, 2),
 	FACTOR(CLK_APMIXED_MAINPLL_537P3M, "mainpll_537p3m", "mainpll", 1, 3),
