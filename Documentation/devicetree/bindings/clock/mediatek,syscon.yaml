@@ -28,6 +28,7 @@ properties:
               - mediatek,mt2712-mfgcfg
               - mediatek,mt2712-vdecsys
               - mediatek,mt2712-vencsys
+              - mediatek,mt6582-imgsys
               - mediatek,mt6735-imgsys
               - mediatek,mt6735-mfgcfg
               - mediatek,mt6735-vdecsys
@@ -73,6 +74,10 @@ properties:
           - const: syscon
       - items:
           - const: mediatek,mt7623-vdecsys
+          - const: mediatek,mt2701-vdecsys
+          - const: syscon
+      - items:
+          - const: mediatek,mt6582-vdecsys
           - const: mediatek,mt2701-vdecsys
           - const: syscon
 
