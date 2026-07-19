@@ -124,6 +124,29 @@ config COMMON_CLK_MT2712_VENCSYS
 	help
 	  This driver supports MediaTek MT2712 vencsys clocks.
 
+config COMMON_CLK_MT6582
+	tristate "Clock driver for MediaTek MT6582"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	select COMMON_CLK_MEDIATEK
+	help
+	  This enables drivers for clocks and resets provided
+	  by apmixedsys, topckgen, infracfg and pericfg on the
+	  MediaTek MT6582 SoC.
+
+config COMMON_CLK_MT6582_IMGSYS
+	tristate "Clock driver for MediaTek MT6582 imgsys"
+	depends on COMMON_CLK_MT6582
+	help
+	  This enables a driver for clocks provided by imgsys
+	  on the MediaTek MT6582 SoC.
+
+config COMMON_CLK_MT6582_MFGCFG
+	tristate "Clock driver for MediaTek MT6582 mfgcfg"
+	depends on COMMON_CLK_MT6582
+	help
+	  This enables a driver for clocks and resets provided
+	  by mfgcfg on the MediaTek MT6582 SoC.
+
 config COMMON_CLK_MT6735
 	tristate "Main clock drivers for MediaTek MT6735"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
