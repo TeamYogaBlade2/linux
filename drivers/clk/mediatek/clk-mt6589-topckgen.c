@@ -31,23 +31,22 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_SYSPLL_D16, "syspll_d16", "mainpll_806m", 1, 16),
 	FACTOR(CLK_TOP_SYSPLL_D24, "syspll_d24", "mainpll_806m", 1, 24),
 
-	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2), // univpll_624m ?
-	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3), // univpll_416m ?
-	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5), // univpll_249p6m ?
-	FACTOR(CLK_TOP_UNIVPLL_D7, "univpll_d7", "univpll", 1, 7), // univpll_178p3m ?
-	FACTOR(CLK_TOP_UNIVPLL_D10, "univpll_d10", "univpll", 1, 10),
-	FACTOR(CLK_TOP_UNIVPLL_D26, "univpll_d26", "univpll", 1, 26), // univpll_48m ?
+	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll_416m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll_249p6m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D7, "univpll_d7", "univpll_178p3m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D10, "univpll_d10", "univpll_249p6m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL_D26, "univpll_d26", "univpll_48m", 1, 1),
 
-	FACTOR(CLK_TOP_UNIVPLL1_D2, "univpll1_d2", "univpll_d2", 1, 2),
-	FACTOR(CLK_TOP_UNIVPLL1_D4, "univpll1_d4", "univpll_d2", 1, 4),
-	FACTOR(CLK_TOP_UNIVPLL1_D6, "univpll1_d6", "univpll_d2", 1, 6),
-	FACTOR(CLK_TOP_UNIVPLL1_D8, "univpll1_d8", "univpll_d2", 1, 8),
-	FACTOR(CLK_TOP_UNIVPLL1_D10, "univpll1_d10", "univpll_d2", 1, 10),
+	FACTOR(CLK_TOP_UNIVPLL1_D2, "univpll1_d2", "univpll_624m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL1_D4, "univpll1_d4", "univpll_624m", 1, 4),
+	FACTOR(CLK_TOP_UNIVPLL1_D6, "univpll1_d6", "univpll_624m", 1, 6),
+	FACTOR(CLK_TOP_UNIVPLL1_D8, "univpll1_d8", "univpll_624m", 1, 8),
+	FACTOR(CLK_TOP_UNIVPLL1_D10, "univpll1_d10", "univpll_624m", 1, 10),
 
-	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_d3", 1, 2),
-	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_d3", 1, 4),
-	FACTOR(CLK_TOP_UNIVPLL2_D6, "univpll2_d6", "univpll_d3", 1, 6),
-	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_d3", 1, 8),
+	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_416m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_416m", 1, 4),
+	FACTOR(CLK_TOP_UNIVPLL2_D6, "univpll2_d6", "univpll_416m", 1, 6),
+	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_416m", 1, 8),
 
 	FACTOR(CLK_TOP_MMPLL_D4, "mmpll_d4", "mmpll_d2", 1, 2),
 	FACTOR(CLK_TOP_MMPLL_D6, "mmpll_d6", "mmpll_d3", 1, 2),
