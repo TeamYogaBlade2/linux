@@ -22,16 +22,6 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		stdout-path = "serial0:921600n8";
-
-		framebuffer: framebuffer@bf400000 {
-			compatible = "simple-framebuffer";
-			memory-region = <&framebuffer_reserved>;
-			width = <1024>;
-			height = <600>;
-			stride = <(1024 * 2)>;
-			format = "r5g6b5";
-			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
-		};
 	};
 
 	memory@80000000 {
@@ -66,6 +56,17 @@
 		min-microvolt = <1200000>;
 		max-microvolt = <2800000>;
 	};
+
+	panel_vcc: regulator-panel {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vcc";
+		gpio = <&pio 135 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <200000>;
+		regulator-boot-on;
+		pinctrl-0 = <&panel_vcc_pins>;
+		pinctrl-names = "default";
+	};
 };
 
 &cpu0 {
@@ -74,6 +75,35 @@
 
 &cpu1 {
 	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "wsvgalnl,ek79007";
+		reg = <0>;
+		vcc-supply = <&panel_vcc>;
+		iovcc-supply = <&mt6323_vgp1_reg>;
+
+		pinctrl-0 = <&panel_pins>;
+		pinctrl-names = "default";
+
+		enable-gpios = <&pio 56 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 59 GPIO_ACTIVE_HIGH>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
 };
 
 &keyboard {
@@ -261,6 +291,25 @@
 		pins-cd {
 			/* GPIO86 is always input */
 			pinmux = <PINMUX_GPIO86__FUNC_MC1_INS>;
+		};
+	};
+
+	panel_pins: panel-pins {
+		pins-enable {
+			pinmux = <PINMUX_GPIO56__FUNC_GPIO56>;
+			bias-disable;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO59__FUNC_GPIO59>;
+			bias-disable;
+		};
+	};
+
+	panel_vcc_pins: panel-vcc-pins {
+		pins-vcc {
+			pinmux = <PINMUX_GPIO135__FUNC_GPIO135>;
+			bias-disable;
 		};
 	};
 
