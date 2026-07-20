@@ -65,7 +65,7 @@
 
 		pin-reset {
 			pinmux = <MT6589_GPIO140__FUNC_GPIO140>;
-			output-low;
+			output-high;
 		};
 	};
 };
@@ -89,7 +89,7 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0_pins>;
-	clock-frequency = <400000>;
+	// clock-frequency = <400000>;
 
 	/* Synaptics ClearPad 7300 */
 	touchscreen@38 {
@@ -106,10 +106,10 @@
 
 		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
 
-		vdd-supply = <&mt6320_ldo_vgp6>;
-		vio-supply = <&mt6320_ldo_vgp4>;
+		vdd-supply = <&mt6320_ldo_vgp4>;
+		vio-supply = <&mt6320_ldo_vgp6>;
 
-		syna,startup-delay-ms = <10>;
+		syna,startup-delay-ms = <100>;
 		syna,reset-delay-ms = <50>;
 
 		rmi4-f01@1 {
