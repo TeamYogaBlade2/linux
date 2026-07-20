@@ -4,15 +4,18 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/input/input.h>
+
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
+
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 #include <dt-bindings/clock/mediatek,mt6320-clk.h>
 
 / {
 	chosen {
 		/* DEBUG: testing clock drivers */
-		bootargs = "clk_ignore_unused";
+		bootargs = "clk_ignore_unused regulator_ignore_unused";
 	};
 
 	memory {
@@ -200,10 +203,12 @@
 	no-sdio;
 	bus-width = <8>;
 
-	max-frequency = <200000000>;
-	cap-mmc-highspeed;
-	mmc-hs200-1_8v;
-	mmc-ddr-1_8v;
+	max-frequency = <5000000>;
+
+	// max-frequency = <200000000>;
+	// cap-mmc-highspeed;
+	// mmc-hs200-1_8v;
+	// mmc-ddr-1_8v;
 };
 
 /* SD Card */
