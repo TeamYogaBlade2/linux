@@ -221,7 +221,6 @@ static const struct clk_ops mt6320_composite_ops = {
 	.recalc_rate	= mt6320_composite_recalc_rate,
 	.get_parent	= mt6320_composite_get_parent,
 	.set_parent	= mt6320_composite_set_parent,
-	.determine_rate	= __clk_mux_determine_rate_closest,
 };
 
 struct mt6320_comp_desc {
@@ -440,7 +439,7 @@ static int mt6320_clk_probe(struct platform_device *pdev)
 		clk_data->hws[d->id] = &c->hw;
 	}
 
-	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, clk_data);
+	ret = of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get, clk_data);
 	if (ret) {
 		dev_err(dev, "Failed to add clock provider\n");
 		goto err_unreg_composites;
@@ -476,11 +475,21 @@ static void mt6320_clk_remove(struct platform_device *pdev)
 
 	of_clk_del_provider(pdev->dev.of_node);
 
-	for (i = 0; i < clk_data->num; i++) {
-		struct clk_hw *hw = clk_data->hws[i];
+	for (i = ARRAY_SIZE(mt6320_composites) - 1; i >= 0; i--) {
+		struct clk_hw *hw = clk_data->hws[mt6320_composites[i].id];
 		if (!IS_ERR_OR_NULL(hw))
 			clk_hw_unregister(hw);
 	}
+
+	for (i = ARRAY_SIZE(mt6320_gates) - 1; i >= 0; i--) {
+		struct clk_hw *hw = clk_data->hws[mt6320_gates[i].id];
+		if (!IS_ERR_OR_NULL(hw))
+			clk_hw_unregister(hw);
+	}
+
+	mtk_clk_unregister_factors(mt6320_factors, ARRAY_SIZE(mt6320_factors), clk_data);
+	mtk_clk_unregister_fixed_clks(mt6320_fixed_clks, ARRAY_SIZE(mt6320_fixed_clks), clk_data);
+
 	mtk_free_clk_data(clk_data);
 }
 
