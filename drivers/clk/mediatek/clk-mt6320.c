@@ -221,6 +221,7 @@ static const struct clk_ops mt6320_composite_ops = {
 	.recalc_rate	= mt6320_composite_recalc_rate,
 	.get_parent	= mt6320_composite_get_parent,
 	.set_parent	= mt6320_composite_set_parent,
+	.determine_rate	= __clk_mux_determine_rate_closest,
 };
 
 struct mt6320_comp_desc {
