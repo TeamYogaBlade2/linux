@@ -368,6 +368,11 @@ static int pwm_mediatek_write_waveform(struct pwm_chip *chip,
 		if (pc->soc->pwm_ck_26m_sel_reg)
 			writel(0, pc->regs + pc->soc->pwm_ck_26m_sel_reg);
 
+		pwm_mediatek_writel(pc, pwm->hwpwm, PWMHDUR, 0);
+		pwm_mediatek_writel(pc, pwm->hwpwm, PWMLDUR, 0);
+		pwm_mediatek_writel(pc, pwm->hwpwm, PWMGDUR, 0);
+		pwm_mediatek_writel(pc, pwm->hwpwm, PWMWAVENUM, 0);
+
 		/* Set BIT(3) to disable clock division */
 		if (pc->soc->clksel_fixup)
 			con_val |= PWMCON_CLKSEL;
