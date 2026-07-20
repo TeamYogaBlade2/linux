@@ -415,6 +415,19 @@
 			status = "disabled";
 		};
 
+		pwm: pwm@11008000 {
+			compatible = "mediatek,mt6572-pwm", "mediatek,mt7623-pwm";
+			reg = <0x11008000 0x1000>;
+			#pwm-cells = <2>;
+			clocks = <&topckgen CLK_TOP_PWM>, <&topckgen CLK_TOP_PWM>,
+				 <&topckgen CLK_TOP_PWM>, <&topckgen CLK_TOP_PWM>,
+				 <&topckgen CLK_TOP_PWM>, <&topckgen CLK_TOP_PWM>,
+				 <&topckgen CLK_TOP_PWM>;
+			clock-names = "top", "main", "pwm1", "pwm2", "pwm3", "pwm4",
+				      "pwm5";
+			status = "disabled";
+		};
+
 		i2c0: i2c@11009000 {
 			compatible = "mediatek,mt6572-i2c";
 			reg = <0x11009000 0x70>,
