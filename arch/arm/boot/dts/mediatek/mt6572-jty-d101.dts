@@ -50,6 +50,19 @@
 		};
 	};
 
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 0 31250>;
+
+		power-supply = <&mt6323_vsys_reg>;
+		pinctrl-0 = <&backlight_pins>;
+		pinctrl-names = "default";
+
+		brightness-levels = <0 1023>;
+		num-interpolated-steps = <1023>;
+		default-brightness-level = <1023>;
+	};
+
 	haptic {
 		compatible = "regulator-haptic";
 		haptic-supply = <&mt6323_vibr_reg>;
@@ -89,6 +102,8 @@
 		pinctrl-names = "default";
 
 		reset-gpios = <&pio 59 GPIO_ACTIVE_HIGH>;
+
+		backlight = <&backlight>;
 
 		port {
 			panel_in: endpoint {
@@ -178,6 +193,12 @@
 };
 
 &pio {
+	backlight_pins: backlight-pins {
+		pins-pwm {
+			pinmux = <PINMUX_GPIO128__FUNC_PWM1>;
+		};
+	};
+
 	keypad_pins: keypad-pins {
 		pins-keypad {
 			pinmux = <PINMUX_GPIO110__FUNC_KROW0>,
@@ -324,6 +345,10 @@
 	pinctrl-names = "default";
 
 	interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+&pwm {
+	status = "okay";
 };
 
 &u2phy0 {
