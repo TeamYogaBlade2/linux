@@ -324,6 +324,16 @@
 			};
 		};
 
+		keyboard: keyboard@10015000 {
+			compatible = "mediatek,mt6589-keypad",
+				     "mediatek,mt6779-keypad";
+			reg = <0x10015000 0x1000>;
+			interrupts = <GIC_SPI 129 IRQ_TYPE_EDGE_FALLING>;
+			clocks = <&infracfg CLK_INFRA_KP>;
+			clock-names = "kpd";
+			status = "disabled";
+		};
+
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
