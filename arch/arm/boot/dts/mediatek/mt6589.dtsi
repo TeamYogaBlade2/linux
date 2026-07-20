@@ -737,21 +737,23 @@
 				 <MT6589_GPIO0__FUNC_MSDC0_DAT7>,
 				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
 			input-enable;
-			mediatek,pull-up-adv = <1>;
+			drive-strength = <6>;
+			// bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
-			mediatek,pull-down-adv = <3>;
+			drive-strength = <6>;
+			mediatek,pull-up-adv = <2>;
 		};
 */
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
+			bias-pull-up;
 		};
 	};
 
 	mmc0_pins_uhs: mmc0 {
-/*
 		pins-cmd-dat {
 			pinmux = <MT6589_GPIO10__FUNC_MSDC0_DAT0>,
 				 <MT6589_GPIO9__FUNC_MSDC0_DAT1>,
@@ -764,18 +766,17 @@
 				 <MT6589_GPIO5__FUNC_MSDC0_CMD>;
 			input-enable;
 			drive-strength = <6>;
-			mediatek,pull-up-adv = <1>;
+			// bias-pull-up;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO6__FUNC_MSDC0_CLK>;
-			drive-strength = <4>;
-			mediatek,pull-down-adv = <1>;
+			drive-strength = <6>;
+			mediatek,pull-up-adv = <2>;
 		};
-*/
+
 		pins-rst {
 			pinmux = <MT6589_GPIO4__FUNC_MSDC0_RSTB>;
-			bias-pull-up;
 		};
 	};
 
