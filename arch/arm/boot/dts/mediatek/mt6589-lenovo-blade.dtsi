@@ -88,7 +88,7 @@
 &i2c0 {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&i2c1_pins>;
+	pinctrl-0 = <&i2c0_pins>;
 	clock-frequency = <400000>;
 
 	/* Synaptics ClearPad 7300 */
