@@ -209,6 +209,125 @@
 	// cap-mmc-highspeed;
 	// mmc-hs200-1_8v;
 	// mmc-ddr-1_8v;
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			partition@1e0000 {
+				label = "MBR";
+				reg = <0x00000000 0x001e0000 0x00000000 0x00080000>;
+			};
+
+			partition@260000 {
+				label = "EBR1";
+				reg = <0x00000000 0x00260000 0x00000000 0x00080000>;
+			};
+
+			partition@2e0000 {
+				label = "__NODL_PMT";
+				reg = <0x00000000 0x002e0000 0x00000000 0x00400000>;
+			};
+
+			partition@6e0000 {
+				label = "__NODL_PRO_INFO";
+				reg = <0x00000000 0x006e0000 0x00000000 0x00300000>;
+			};
+
+			partition@9e0000 {
+				label = "__NODL_NVRAM";
+				reg = <0x00000000 0x009e0000 0x00000000 0x00500000>;
+			};
+
+			partition@ee0000 {
+				label = "__NODL_PROTECT_F";
+				reg = <0x00000000 0x00ee0000 0x00000000 0x00a00000>;
+			};
+
+			partition@18e0000 {
+				label = "__NODL_PROTECT_S";
+				reg = <0x00000000 0x018e0000 0x00000000 0x00a00000>;
+			};
+
+			partition@22e0000 {
+				label = "__NODL_SECCFG";
+				reg = <0x00000000 0x022e0000 0x00000000 0x00020000>;
+			};
+
+			partition@2300000 {
+				label = "UBOOT";
+				reg = <0x00000000 0x02300000 0x00000000 0x00060000>;
+			};
+
+			partition@2360000 {
+				label = "BOOTIMG";
+				reg = <0x00000000 0x02360000 0x00000000 0x00600000>;
+			};
+
+			partition@2960000 {
+				label = "RECOVERY";
+				reg = <0x00000000 0x02960000 0x00000000 0x00600000>;
+			};
+
+			partition@2f60000 {
+				label = "SEC_RO";
+				reg = <0x00000000 0x02f60000 0x00000000 0x00600000>;
+			};
+
+			partition@3560000 {
+				label = "__NODL_MISC";
+				reg = <0x00000000 0x03560000 0x00000000 0x00080000>;
+			};
+
+			partition@35e0000 {
+				label = "LOGO";
+				reg = <0x00000000 0x035e0000 0x00000000 0x00300000>;
+			};
+
+			partition@38e0000 {
+				label = "EBR2";
+				reg = <0x00000000 0x038e0000 0x00000000 0x00080000>;
+			};
+
+			partition@3960000 {
+				label = "__NODL_EXPDB";
+				reg = <0x00000000 0x03960000 0x00000000 0x00a00000>;
+			};
+
+			partition@4360000 {
+				label = "FAC";
+				reg = <0x00000000 0x04360000 0x00000000 0x0c800000>;
+			};
+
+			partition@10b60000 {
+				label = "ANDROID";
+				reg = <0x00000000 0x10b60000 0x00000000 0x40000000>;
+			};
+
+			partition@50b60000 {
+				label = "CACHE";
+				reg = <0x00000000 0x50b60000 0x00000000 0x07e00000>;
+			};
+
+			partition@58960000 {
+				label = "USRDATA";
+				reg = <0x00000000 0x58960000 0x00000003 0x49fa0000>;
+			};
+
+			partition@3a2900000 {
+				label = "__NODL_BMTPOOL";
+				reg = <0x00000003 0xa2900000 0x00000000 0x01500000>;
+			};
+		};
+	};
 };
 
 /* SD Card */
