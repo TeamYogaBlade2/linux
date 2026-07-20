@@ -106,9 +106,8 @@
 
 		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
 
-		/* TODO: order */
-		vdd-supply = <&mt6320_ldo_vgp4>;
-		vio-supply = <&mt6320_ldo_vgp6>;
+		vdd-supply = <&mt6320_ldo_vgp6>;
+		vio-supply = <&mt6320_ldo_vgp4>;
 
 		syna,startup-delay-ms = <10>;
 		syna,reset-delay-ms = <50>;
