@@ -259,3 +259,12 @@
 	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC3>;
 	assigned-clock-parents = <&clk26m>;
 };
+
+&keyboard {
+	status = "okay";
+	linux,keymap = <MATRIX_KEY(0, 0, KEY_VOLUMEUP)
+			MATRIX_KEY(0, 2, KEY_VOLUMEDOWN)>;
+	keypad,num-rows = <1>;
+	keypad,num-columns = <3>;
+	debounce-delay-ms = <32>;
+};
