@@ -92,6 +92,26 @@
 		compatible = "simple-bus";
 		ranges;
 
+		/*
+		 * 0x08000000  CHIP_ID   0x8a006583  Main(0x6583) / Sub(0x8a00)
+		 * 0x08000004  CHIP_VER  0x0000ca00  HW ID(0xca00) / SW ID(0x0000)
+		 */
+		chipid@08000000 {
+			compatible = "mediatek,mt6589-efuse",
+				     "mediatek,mt6572-efuse";
+			reg = <0x08000000 0xc>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			chip-id@0 {
+				reg = <0x0 0x4>;
+			};
+
+			chip-ver@ {
+				reg = <0x4 0x4>;
+			};
+		};
+
 		wdt: watchdog@10000000 {
 			compatible = "mediatek,mt6589-wdt";
 			reg = <0x10000000 0x44>;
@@ -185,6 +205,122 @@
 					clock-names = "vdec";
 					#power-domain-cells = <0>;
 				};
+			};
+		};
+
+		efuse: efuse@10009000 {
+			compatible = "mediatek,mt6589-efuse",
+				     "mediatek,mt6572-efuse";
+			reg = <0x10009000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			cell@20 {
+				reg = <0x20 0x4>;
+			};
+
+			cell@30 {
+				reg = <0x30 0x4>;
+			};
+
+			cell@38 {
+				reg = <0x38 0x4>;
+			};
+
+			/* ptp_level */
+			cell@40 {
+				reg = <0x40 0x4>;
+			};
+
+			cell@44 {
+				reg = <0x44 0x4>;
+			};
+
+			cell@48 {
+				reg = <0x48 0x4>;
+			};
+
+			/*
+			 * Secure boot flag
+			 *   bit[1]  sbc_enabled  Secure Boot Check
+			 *   bit[2]  daa_enabled  Device Authentication Auth
+			 *   bit[3]  sla_enabled  Secure Lock Auth
+			 */
+			sbc_enabled: sbc@60 {
+				reg = <0x60 0x4>;
+				bits = <1 1>;
+			};
+
+			daa_enabled: daa@60 {
+				reg = <0x60 0x4>;
+				bits = <2 1>;
+			};
+
+			sla_enabled: sla@60 {
+				reg = <0x60 0x4>;
+				bits = <3 1>;
+			};
+
+			/*
+			 * 3G disable flag
+			 *   bit[24] dis_3g  3G disable
+			 */
+			dis_3g: dis-3g@100,24 {
+				reg = <0x100 0x4>;
+				bits = <24 1>;
+			};
+
+			cell@104 {
+				reg = <0x104 0x4>;
+			};
+
+			cell@108 {
+				reg = <0x108 0x4>;
+			};
+
+			cell@120 {
+				reg = <0x120 0x4>;
+			};
+
+			cell@130 {
+				reg = <0x130 0x4>;
+			};
+
+			cell@140 {
+				reg = <0x140 0x4>;
+			};
+
+			cell@144 {
+				reg = <0x144 0x4>;
+			};
+
+			cell@170 {
+				reg = <0x170 0x4>;
+			};
+
+			/* thermal_calibration ? */
+			cell@174 {
+				reg = <0x174 0x8>;
+			};
+
+			/* gpu_speedbin ? */
+			cell@178 {
+				reg = <0x178 0x4>;
+				// bits = <27 1>;
+			};
+
+			cell@17c {
+				reg = <0x17c 0x4>;
+			};
+
+			/* cpu_speedbin ? */
+			cell@180 {
+				reg = <0x180 0x4>;
+				// bits = <8 2>;
+			};
+
+			cell@184 {
+				reg = <0x184 0x4>;
 			};
 		};
 
