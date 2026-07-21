@@ -21,16 +21,6 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		stdout-path = "serial0:921600n8";
-
-		framebuffer: framebuffer@9fa00000 {
-			compatible = "simple-framebuffer";
-			memory-region = <&framebuffer_reserved>;
-			width = <480>;
-			height = <800>;
-			stride = <(480 * 2)>;
-			format = "r5g6b5";
-			power-domains = <&spm MT6572_POWER_DOMAIN_DIS>;
-		};
 	};
 
 	memory@80000000 {
@@ -61,6 +51,33 @@
 
 &cpu1 {
 	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&dsi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        status = "okay";
+
+        panel@0 {
+                compatible = "djn,otm8018b";
+                reg = <0>;
+                vcc-supply = <&mt6323_vgp1_reg>;
+
+                pinctrl-names = "default";
+                pinctrl-0 = <&panel_pins>;
+
+                reset-gpios = <&pio 59 GPIO_ACTIVE_HIGH>;
+
+                port {
+                        panel_in: endpoint {
+                                remote-endpoint = <&dsi_out>;
+                        };
+                };
+        };
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
 };
 
 &keyboard {
@@ -237,6 +254,16 @@
 			input-enable;
 		};
 	};
+
+	panel_pins: panel-pins {
+		pins-enable {
+			pinmux = <PINMUX_GPIO56__FUNC_GPIO56>;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO59__FUNC_GPIO59>;
+		};
+        };
 
 	uart0_pins: uart0-pins {
 		pins-bus {
