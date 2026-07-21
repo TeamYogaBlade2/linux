@@ -6,6 +6,7 @@
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
 #include "mt6572.dtsi"
 #include "mt6323.dtsi"
 
@@ -125,6 +126,18 @@
 	assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D10>;
 
 	status = "okay";
+};
+
+&mt6323_leds {
+	status = "okay";
+
+	led@0 {
+		reg = <0>;
+		function = LED_FUNCTION_TORCH;
+		color = <LED_COLOR_ID_WHITE>;
+		default-state = "off";
+		linux,default-trigger = "torch";
+	};
 };
 
 &pio {
