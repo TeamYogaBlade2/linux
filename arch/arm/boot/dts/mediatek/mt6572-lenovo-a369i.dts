@@ -80,6 +80,17 @@
 	remote-endpoint = <&panel_in>;
 };
 
+&gpu {
+	assigned-clocks = <&topckgen CLK_TOP_MFG_SEL>,
+			  <&topckgen CLK_TOP_MFG_PRE_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MFG_PRE_500M>,
+				 <&topckgen CLK_TOP_MFG_SEL>;
+
+	operating-points-v2 = <&gpu_opp_table>;
+
+	status = "okay";
+};
+
 &keyboard {
 	pinctrl-0 = <&keypad_pins>;
 	pinctrl-names = "default";
