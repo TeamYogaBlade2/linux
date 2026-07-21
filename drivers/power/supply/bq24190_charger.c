@@ -2169,10 +2169,8 @@ static int bq24190_probe(struct i2c_client *client)
 			bq24190_irq_handler_thread,
 			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			"bq24190-charger", bdi);
-	if (ret < 0) {
-		dev_err(dev, "Can't set up irq handler\n");
+	if (ret < 0)
 		goto out_charger;
-	}
 
 	ret = bq24190_register_vbus_regulator(bdi);
 	if (ret < 0)

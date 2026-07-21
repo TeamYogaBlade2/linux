@@ -583,8 +583,7 @@ static int rt9471_register_interrupts(struct rt9471_chip *chip)
 		ret = devm_request_threaded_irq(dev, virq, NULL, curr->handler,
 						IRQF_ONESHOT, curr->name, chip);
 		if (ret)
-			return dev_err_probe(dev, ret, "Failed to register IRQ (%s)\n",
-					     curr->name);
+			return ret;
 	}
 
 	return 0;
