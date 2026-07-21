@@ -860,32 +860,6 @@ void hci_cmd_sync_cancel_entry(struct hci_dev *hdev,
 }
 EXPORT_SYMBOL(hci_cmd_sync_cancel_entry);
 
-/* Dequeue one HCI command entry:
- *
- * - Lookup and cancel first entry that matches.
- */
-bool hci_cmd_sync_dequeue_once(struct hci_dev *hdev,
-			       hci_cmd_sync_work_func_t func,
-			       void *data, hci_cmd_sync_work_destroy_t destroy)
-{
-	struct hci_cmd_sync_work_entry *entry;
-
-	mutex_lock(&hdev->cmd_sync_work_lock);
-
-	entry = _hci_cmd_sync_lookup_entry(hdev, func, data, destroy);
-	if (!entry) {
-		mutex_unlock(&hdev->cmd_sync_work_lock);
-		return false;
-	}
-
-	_hci_cmd_sync_cancel_entry(hdev, entry, -ECANCELED);
-
-	mutex_unlock(&hdev->cmd_sync_work_lock);
-
-	return true;
-}
-EXPORT_SYMBOL(hci_cmd_sync_dequeue_once);
-
 /* Dequeue HCI command entry:
  *
  * - Lookup and cancel any entry that matches by function callback or data or
@@ -929,12 +903,16 @@ int hci_update_eir_sync(struct hci_dev *hdev)
 
 	memset(&cp, 0, sizeof(cp));
 
+	hci_dev_lock(hdev);
 	eir_create(hdev, cp.data);
 
-	if (memcmp(cp.data, hdev->eir, sizeof(cp.data)) == 0)
+	if (memcmp(cp.data, hdev->eir, sizeof(cp.data)) == 0) {
+		hci_dev_unlock(hdev);
 		return 0;
+	}
 
 	memcpy(hdev->eir, cp.data, sizeof(cp.data));
+	hci_dev_unlock(hdev);
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_EIR, sizeof(cp), &cp,
 				     HCI_CMD_TIMEOUT);
@@ -966,6 +944,7 @@ int hci_update_class_sync(struct hci_dev *hdev)
 	if (hci_dev_test_flag(hdev, HCI_SERVICE_CACHE))
 		return 0;
 
+	hci_dev_lock(hdev);
 	cod[0] = hdev->minor_class;
 	cod[1] = hdev->major_class;
 	cod[2] = get_service_classes(hdev);
@@ -973,8 +952,12 @@ int hci_update_class_sync(struct hci_dev *hdev)
 	if (hci_dev_test_flag(hdev, HCI_LIMITED_DISCOVERABLE))
 		cod[1] |= 0x20;
 
-	if (memcmp(cod, hdev->dev_class, 3) == 0)
+	if (memcmp(cod, hdev->dev_class, 3) == 0) {
+		hci_dev_unlock(hdev);
 		return 0;
+	}
+
+	hci_dev_unlock(hdev);
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_CLASS_OF_DEV,
 				     sizeof(cod), cod, HCI_CMD_TIMEOUT);
@@ -3708,17 +3691,19 @@ static const struct hci_init_stage hci_init0[] = {
 
 int hci_reset_sync(struct hci_dev *hdev)
 {
-	int err;
-
 	set_bit(HCI_RESET, &hdev->flags);
 
-	err = __hci_cmd_sync_status(hdev, HCI_OP_RESET, 0, NULL,
-				    HCI_CMD_TIMEOUT);
-	if (err)
-		return err;
-
-	return 0;
+	return __hci_cmd_sync_status(hdev, HCI_OP_RESET, 0, NULL,
+				     HCI_CMD_TIMEOUT);
 }
+
+/* Send a raw HCI reset for use by vendor drivers */
+int __hci_reset_sync(struct hci_dev *hdev)
+{
+	return __hci_cmd_sync_status(hdev, HCI_OP_RESET, 0, NULL,
+				     HCI_INIT_TIMEOUT);
+}
+EXPORT_SYMBOL(__hci_reset_sync);
 
 static int hci_init0_sync(struct hci_dev *hdev)
 {
