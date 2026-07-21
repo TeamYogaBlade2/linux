@@ -102,6 +102,10 @@
 	remote-endpoint = <&panel_in>;
 };
 
+&gpu {
+	status = "okay";
+};
+
 &keyboard {
 	pinctrl-0 = <&keypad_pins>;
 	pinctrl-names = "default";
