@@ -20,6 +20,85 @@
 	compatible = "mediatek,mt6589";
 	interrupt-parent = <&sysirq>;
 
+	cpu_opp_table: opp-table-cpu {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		/*
+		 *   bit 0 : free mode
+		 *   bit 1 : max 1.5GHz
+		 *   bit 2 : max 1.4GHz
+		 *   bit 3 : max 1.3GHz
+		 *   bit 4 : max 1.2GHz
+		 *   bit 5 : max 1.2GHz (fallback)
+		 *   bit 6 : max 1.0GHz (特殊ビン)
+		 *   bit 7 : max 1.2GHz (fallback)
+		 */
+
+		opp-497250000 {
+			opp-hz = /bits/ 64 <497250000>;
+			opp-microvolt = <950000>;
+			opp-supported-hw = <0xff>; /* bits 0-7 */
+		};
+
+		opp-754000000 {
+			opp-hz = /bits/ 64 <754000000>;
+			opp-microvolt = <1050000>;
+			opp-supported-hw = <0xff>;
+		};
+
+		opp-988000000-1150 {
+			opp-hz = /bits/ 64 <988000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0xbf>; /* bits 0-5,7 */
+		};
+
+		opp-988000000-1200 {
+			opp-hz = /bits/ 64 <988000000>;
+			opp-microvolt = <1200000>;
+			opp-supported-hw = <0x40>; /* bit 6 */
+		};
+
+		opp-1209000000 {
+			opp-hz = /bits/ 64 <1209000000>;
+			opp-microvolt = <1200000>;
+			opp-supported-hw = <0xbf>;
+		};
+
+		opp-1300000000 {
+			opp-hz = /bits/ 64 <1300000000>;
+			opp-microvolt = <1250000>;
+			opp-supported-hw = <0x0f>; /* bits 0-3 */
+		};
+
+		opp-1404000000 {
+			opp-hz = /bits/ 64 <1404000000>;
+			opp-microvolt = <1250000>;
+			opp-supported-hw = <0x07>; /* bits 0-2 */
+		};
+
+		opp-1508000000 {
+			opp-hz = /bits/ 64 <1508000000>;
+			opp-microvolt = <1250000>;
+			opp-supported-hw = <0x03>; /* bits 0-1 */
+		};
+
+		/*
+		 * TODO: check devinfo[10][6:4] (ptp-free@120)
+		 */
+		// opp-1599000000 {
+		// 	opp-hz = /bits/ 64 <1599000000>;
+		// 	opp-microvolt = <1250000>;
+		// 	opp-supported-hw = <0x01>; /* bit 0 */
+		// };
+
+		// opp-1703000000 {
+		// 	opp-hz = /bits/ 64 <1703000000>;
+		// 	opp-microvolt = <1250000>;
+		// 	opp-supported-hw = <0x01>; /* bit 0 */
+		// };
+	};
+
 	cpus: cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -37,6 +116,10 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+
+			operating-points-v2 = <&cpu_opp_table>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
 		};
 		cpu@1 {
 			device_type = "cpu";
@@ -50,6 +133,10 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+
+			operating-points-v2 = <&cpu_opp_table>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
 		};
 		cpu@2 {
 			device_type = "cpu";
@@ -63,6 +150,10 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+
+			operating-points-v2 = <&cpu_opp_table>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
 		};
 		cpu@3 {
 			device_type = "cpu";
@@ -76,6 +167,10 @@
 			d-cache-line-size = <64>;
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
+
+			operating-points-v2 = <&cpu_opp_table>;
+			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cell-names = "speed_grade";
 		};
 
 		l2: l2-cache {
