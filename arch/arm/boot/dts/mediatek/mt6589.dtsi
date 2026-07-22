@@ -267,7 +267,23 @@
 				reg = <0x38 0x4>;
 			};
 
-			/* ptp_level */
+			/*
+			 * bit[2:0]  chip_grade
+			 *
+			 * bit[27:24]  core_count_flag
+			 *   0x0   : 4 cores
+			 *   others: 2 cores
+			 */
+			chip_grade: chip-grade@40 {
+				reg = <0x40 0x4>;
+				bits = <0 3>;
+			};
+
+			core_count_flag: core-count@40 {
+				reg = <0x40 0x4>;
+				bits = <24 4>;
+			};
+
 			cell@40 {
 				reg = <0x40 0x4>;
 			};
@@ -301,21 +317,18 @@
 				bits = <3 1>;
 			};
 
-			/*
-			 * 3G disable flag
-			 *   bit[24] dis_3g  3G disable
-			 */
-			dis_3g: dis-3g@100,24 {
+			thermal_cal_data: thermal-cal@100 {
+				reg = <0x100 0xc>;
+			};
+
+			dis_3g: dis-3g@100 {
 				reg = <0x100 0x4>;
-				bits = <24 1>;
+				bits = <25 1>;
 			};
 
-			cell@104 {
-				reg = <0x104 0x4>;
-			};
-
-			cell@108 {
-				reg = <0x108 0x4>;
+			ptp_free_grade: ptp-free@120 {
+				reg = <0x120 0x4>;
+				bits = <4 3>;
 			};
 
 			cell@120 {
@@ -326,37 +339,52 @@
 				reg = <0x130 0x4>;
 			};
 
-			cell@140 {
+			usb_serial_lo: usb-serial-lo@140 {
 				reg = <0x140 0x4>;
 			};
 
-			cell@144 {
+			usb_serial_hi: usb-serial-hi@144 {
 				reg = <0x144 0x4>;
+			};
+
+			/*
+			 * bit[15:13]  RG_USB20_TERM_VREF_SEL offset (3bit)
+			 * bit[12:10]  RG_USB20_CLKREF_REF offset (3bit)
+			 * bit[9:7]    RG_USB20_VRT_VREF_SEL offset (3bit)
+			 */
+			usb_term_vref: usb-term-vref@170 {
+				reg = <0x170 0x2>;
+				bits = <7 3>;
+			};
+
+			usb_clkref: usb-clkref@170 {
+				reg = <0x170 0x2>;
+				bits = <10 3>;
+			};
+
+			usb_vrt_vref: usb-vrt-vref@170 {
+				reg = <0x170 0x2>;
+				bits = <13 3>;
 			};
 
 			cell@170 {
 				reg = <0x170 0x4>;
 			};
 
-			/* thermal_calibration ? */
 			cell@174 {
-				reg = <0x174 0x8>;
+				reg = <0x174 0x4>;
 			};
 
-			/* gpu_speedbin ? */
 			cell@178 {
 				reg = <0x178 0x4>;
-				// bits = <27 1>;
 			};
 
 			cell@17c {
 				reg = <0x17c 0x4>;
 			};
 
-			/* cpu_speedbin ? */
 			cell@180 {
 				reg = <0x180 0x4>;
-				// bits = <8 2>;
 			};
 
 			cell@184 {
