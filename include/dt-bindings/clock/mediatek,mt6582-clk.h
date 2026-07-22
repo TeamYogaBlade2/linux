@@ -111,7 +111,7 @@
 /* DDRPHY */
 
 #define CLK_DDRPHY_VENCPLL			1
-#define CLK_DDRPHY_NR				2
+#define CLK_DDRPHY_NR_CLK			2
 
 
 /* INFRACFG */
