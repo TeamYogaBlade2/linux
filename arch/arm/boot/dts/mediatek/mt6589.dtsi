@@ -104,7 +104,7 @@
 		#size-cells = <0>;
 		enable-method = "mediatek,mt6589-smp";
 
-		cpu@0 {
+		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
@@ -117,11 +117,14 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
+			clocks = <&infracfg CLK_INFRA_MUX1>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
-			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
 		};
-		cpu@1 {
+		cpu1: cpu@1 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x1>;
@@ -135,10 +138,10 @@
 			next-level-cache = <&l2>;
 
 			operating-points-v2 = <&cpu_opp_table>;
-			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
 		};
-		cpu@2 {
+		cpu2: cpu@2 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x2>;
@@ -152,10 +155,10 @@
 			next-level-cache = <&l2>;
 
 			operating-points-v2 = <&cpu_opp_table>;
-			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
 		};
-		cpu@3 {
+		cpu3: cpu@3 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x3>;
@@ -169,7 +172,7 @@
 			next-level-cache = <&l2>;
 
 			operating-points-v2 = <&cpu_opp_table>;
-			nvmem-cells = <&cpu_speedbin>;
+			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
 		};
 
