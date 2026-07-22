@@ -118,7 +118,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -137,6 +137,9 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
+			clocks = <&infracfg CLK_INFRA_MUX1>,
+				 <&clk26m>;
+			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
@@ -154,6 +157,9 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
+			clocks = <&infracfg CLK_INFRA_MUX1>,
+				 <&clk26m>;
+			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
@@ -171,6 +177,9 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
+			clocks = <&infracfg CLK_INFRA_MUX1>,
+				 <&clk26m>;
+			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
 			nvmem-cell-names = "speed_grade";
