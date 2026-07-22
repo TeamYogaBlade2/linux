@@ -36,6 +36,26 @@
 	};
 };
 
+&cpu0 {
+	proc-supply = <&mt6320_buck_vproc>;
+	sram-supply = <&mt6320_buck_vsram>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6320_buck_vproc>;
+	sram-supply = <&mt6320_buck_vsram>;
+};
+
+&cpu2 {
+	proc-supply = <&mt6320_buck_vproc>;
+	sram-supply = <&mt6320_buck_vsram>;
+};
+
+&cpu3 {
+	proc-supply = <&mt6320_buck_vproc>;
+	sram-supply = <&mt6320_buck_vsram>;
+};
+
 &pio {
 	usb_pins: usb-pins {
 		pins_iddig {
@@ -68,6 +88,16 @@
 			output-high;
 		};
 	};
+};
+
+&mt6320_ldo_vgp4 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6320_ldo_vgp6 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
 };
 
 &usb0 {
