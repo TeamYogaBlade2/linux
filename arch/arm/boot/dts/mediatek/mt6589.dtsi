@@ -24,15 +24,18 @@
 		compatible = "operating-points-v2";
 		opp-shared;
 
-		/*
-		 *   bit 0 : free mode
-		 *   bit 1 : max 1.5GHz
-		 *   bit 2 : max 1.4GHz
-		 *   bit 3 : max 1.3GHz
-		 *   bit 4 : max 1.2GHz
-		 *   bit 5 : max 1.2GHz (fallback)
-		 *   bit 6 : max 1.0GHz (特殊ビン)
-		 *   bit 7 : max 1.2GHz (fallback)
+		/* 
+		 * CONFIG_MTK_FORCE_CPU_89T : 1.5 GHz : PTP 3
+		 * bit 0 : free mode : ptp_free_grade
+		 * bit 1 : 1.5 GHz : PTP 3 : mt6589_freqs_e1_2
+		 * bit 2 : 1.4 GHz : PTP 2 : mt6589_freqs_e1_3
+		 * bit 3 : 1.3 GHz : PTP 1 : mt6589_freqs_e1_4
+		 * bit 4 : 1.2 GHz : PTP 0 : mt6589_freqs_e1
+		 * bit 5 : 1.1 GHz : PTP 8 : mt6589_freqs_e1 (fallback)
+		 * bit 6 : 1.0 GHz : PTP 9 : mt6589_freqs_e1_5
+		 * bit 7 : 1.0 GHz : PTP 10: mt6589_freqs_e1 (fallback)
+		 * ----- : ------- : PTP 4 : mt6589_freqs_e1_1
+		 * ----- : ------- : PTP 5 : mt6589_freqs_e1_0
 		 */
 
 		opp-497250000 {
