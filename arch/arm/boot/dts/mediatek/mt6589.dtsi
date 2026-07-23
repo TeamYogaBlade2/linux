@@ -449,7 +449,7 @@
 
 			dis_3g: dis-3g@100 {
 				reg = <0x100 0x4>;
-				bits = <25 1>;
+				bits = <24 1>;
 			};
 
 			ptp_free_grade: ptp-free@120 {
@@ -499,6 +499,70 @@
 
 			cell@174 {
 				reg = <0x174 0x4>;
+			};
+
+			ptp_od_data: ptp-od@178 {
+				reg = <0x178 0x10>;
+			};
+
+			ptp_initen: ptp-initen@178 {
+				reg = <0x178 0x4>;
+				bits = <0 1>;
+			};
+
+			ptp_monen: ptp-monen@178 {
+				reg = <0x178 0x4>;
+				bits = <1 1>;
+			};
+
+			ptp_mdes: ptp-mdes@178 {
+				reg = <0x178 0x4>;
+				bits = <8 8>;
+			};
+
+			ptp_bdes: ptp-bdes@178 {
+				reg = <0x178 0x4>;
+				bits = <16 8>;
+			};
+
+			ptp_dcmdet: ptp-dcmdet@178 {
+				reg = <0x178 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_dcconfig: ptp-dcconfig@17c {
+				reg = <0x17c 0x4>;
+				bits = <0 24>;
+			};
+
+			ptp_dcbdet: ptp-dcbdet@17c {
+				reg = <0x17c 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_ageconfig: ptp-ageconfig@180 {
+				reg = <0x180 0x4>;
+				bits = <0 24>;
+			};
+
+			ptp_agem: ptp-agem@180 {
+				reg = <0x180 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_dvtfixed: ptp-dvtfixed@184 {
+				reg = <0x184 0x4>;
+				bits = <8 8>;
+			};
+
+			ptp_mtdes: ptp-mtdes@184 {
+				reg = <0x184 0x4>;
+				bits = <16 8>;
+			};
+
+			ptp_vco: ptp-vco@184 {
+				reg = <0x184 0x4>;
+				bits = <24 8>;
 			};
 
 			cell@178 {
