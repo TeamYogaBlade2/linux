@@ -14,6 +14,11 @@
 		interrupt-controller;
 		#interrupt-cells = <2>;
 
+		mt6323_accdet: accdet {
+			compatible = "mediatek,mt6323-accdet";
+			status = "disabled";
+		};
+
 		mt6323_adc: adc {
 			compatible = "mediatek,mt6323-auxadc";
 			#io-channel-cells = <1>;
