@@ -59,6 +59,12 @@ properties:
       - const: mediatek,mt8173-efuse
         deprecated: true
 
+      - const: mediatek,mt6572-efuse
+      - items:
+          - enum:
+              - mediatek,mt6589-efuse
+          - const: mediatek,mt6572-efuse
+
   reg:
     maxItems: 1
 

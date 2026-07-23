@@ -8,7 +8,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 #define AUDIO_TOP_CON0	0x0000
 

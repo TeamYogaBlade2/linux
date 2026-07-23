@@ -8,7 +8,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 #define VDEC_CKEN_SET	0x0000
 #define VDEC_CKEN_CLR	0x0004

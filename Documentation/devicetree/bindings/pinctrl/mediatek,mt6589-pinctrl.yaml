@@ -113,21 +113,27 @@ patternProperties:
 
           mediatek,pull-up-adv:
             description: |
-              Pull up settings for R0. User can configure those special pins.
-              Valid arguments are described as below:
-              0: R0 disabled.
-              1: R0 enabled.
+              Pull up settings for 2 pull resistors, R0 and R1. User can
+              configure those special pins. Valid arguments are described as
+              below:
+              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
+              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
+              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
+              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
             $ref: /schemas/types.yaml#/definitions/uint32
-            enum: [0, 1]
+            enum: [0, 1, 2, 3]
 
           mediatek,pull-down-adv:
             description: |
-              Pull down settings for R0. User can configure those special pins.
-              Valid arguments are described as below:
-              0: R0 disabled.
-              1: R0 enabled.
+              Pull down settings for 2 pull resistors, R0 and R1. User can
+              configure those special pins. Valid arguments are described as
+              below:
+              0: (R1, R0) = (0, 0) which means R1 disabled and R0 disabled.
+              1: (R1, R0) = (0, 1) which means R1 disabled and R0 enabled.
+              2: (R1, R0) = (1, 0) which means R1 enabled and R0 disabled.
+              3: (R1, R0) = (1, 1) which means R1 enabled and R0 enabled.
             $ref: /schemas/types.yaml#/definitions/uint32
-            enum: [0, 1]
+            enum: [0, 1, 2, 3]
 
         required:
           - pinmux
