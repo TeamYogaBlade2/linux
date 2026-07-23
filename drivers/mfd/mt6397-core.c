@@ -174,6 +174,9 @@ static const struct mfd_cell mt6320_devs[] = {
 
 static const struct mfd_cell mt6323_devs[] = {
 	{
+		.name = "mt6323-accdet",
+		.of_compatible = "mediatek,mt6323-accdet",
+	}, {
 		.name = "mt6323-auxadc",
 		.of_compatible = "mediatek,mt6323-auxadc",
 	}, {
