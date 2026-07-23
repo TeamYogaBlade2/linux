@@ -8,7 +8,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 #define PERI_RST0	0x0000
 #define PERI_RST1	0x0004
@@ -60,10 +60,10 @@ static const struct mtk_gate peri_clks[] = {
 	GATE_PERI0(CLK_PERI0_MDHIF, "peri_mdhif", "axi_sel", 19), /* mt8135 */
 	GATE_PERI0(CLK_PERI0_NLI, "peri_nli", "axi_sel", 20), /* mt8135 */
 	GATE_PERI0(CLK_PERI0_IRDA, "peri_irda", "irda_sel", 21),
-	GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "peri_uart0_sel", 22),
-	GATE_PERI0(CLK_PERI0_UART1, "peri_uart1", "peri_uart1_sel", 23),
-	GATE_PERI0(CLK_PERI0_UART2, "peri_uart2", "peri_uart2_sel", 24),
-	GATE_PERI0(CLK_PERI0_UART3, "peri_uart3", "peri_uart3_sel", 25),
+	GATE_PERI0(CLK_PERI0_UART0, "peri_uart0", "axi_sel", 22), /* mt2701 */
+	GATE_PERI0(CLK_PERI0_UART1, "peri_uart1", "axi_sel", 23), /* mt2701 */
+	GATE_PERI0(CLK_PERI0_UART2, "peri_uart2", "axi_sel", 24), /* mt2701 */
+	GATE_PERI0(CLK_PERI0_UART3, "peri_uart3", "axi_sel", 25), /* mt2701 */
 	GATE_PERI0(CLK_PERI0_I2C0, "peri_i2c0", "axi_sel", 26), /* mt8135 */
 	GATE_PERI0(CLK_PERI0_I2C1, "peri_i2c1", "axi_sel", 27), /* mt8135 */
 	GATE_PERI0(CLK_PERI0_I2C2, "peri_i2c2", "axi_sel", 28), /* mt8135 */

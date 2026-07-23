@@ -504,6 +504,14 @@ static const struct mtk_pin_field_calc mt6589_pin_r1_range[] = {
 	PIN_FIELD_CALC(226, 231, 0, 0x02e0, 0x10, 2, 1, 16, 0),
 };
 
+static const struct mtk_pin_field_calc mt6589_pin_pupd_range[] = {
+	PIN_FIELD_CALC(0, 3, 0, 0x0400, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(5, 10, 0, 0x0400, 0x10, 5, 1, 16, 0),
+	PIN_FIELD_CALC(130, 131, 1, 0x0480, 0x10, 2, 1, 16, 0),
+	PIN_FIELD_CALC(134, 141, 1, 0x0480, 0x10, 6, 1, 16, 0),
+	PIN_FIELD_CALC(226, 231, 0, 0x04e0, 0x10, 2, 1, 16, 0),
+};
+
 static const struct mtk_pin_field_calc mt6589_pin_ies_range[] = {
 	PIN_FIELD_CALC(0, 113, 0, 0x0100, 0x10, 0, 1, 16, 0),
 	PIN_FIELD_CALC(114, 169, 1, 0x0170, 0x10, 2, 1, 16, 0),
@@ -523,12 +531,15 @@ static const struct mtk_pin_field_calc mt6589_pin_pullen_range[] = {
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_pullsel_range[] = {
-	PIN_FIELD_CALC(0, 43, 0, 0x0400, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(4, 4, 0, 0x0400, 0x10, 4, 1, 16, 0),
+	PIN_FIELD_CALC(11, 43, 0, 0x0400, 0x10, 11, 1, 16, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0990, 0x0, 8, 1, 16, 0),
 	PIN_FIELD_CALC(47, 49, 0, 0x09b0, 0x0, 8, 1, 16, 0),
 	PIN_FIELD_CALC(50, 113, 0, 0x0430, 0x10, 2, 1, 16, 0),
-	PIN_FIELD_CALC(114, 169, 1, 0x0470, 0x10, 2, 1, 16, 0),
-	PIN_FIELD_CALC(170, 231, 0, 0x04a0, 0x10, 10, 1, 16, 0),
+	PIN_FIELD_CALC(114, 129, 1, 0x0470, 0x10, 2, 1, 16, 0),
+	PIN_FIELD_CALC(132, 133, 1, 0x0480, 0x10, 4, 1, 16, 0),
+	PIN_FIELD_CALC(142, 169, 1, 0x0480, 0x10, 14, 1, 16, 0),
+	PIN_FIELD_CALC(170, 225, 0, 0x04a0, 0x10, 10, 1, 16, 0),
 };
 
 static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
@@ -541,6 +552,7 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_DRV] = MTK_RANGE(mt6589_pin_drv_range),
 	[PINCTRL_PIN_REG_R0] = MTK_RANGE(mt6589_pin_r0_range),
 	[PINCTRL_PIN_REG_R1] = MTK_RANGE(mt6589_pin_r1_range),
+	[PINCTRL_PIN_REG_PUPD] = MTK_RANGE(mt6589_pin_pupd_range),
 	[PINCTRL_PIN_REG_IES] = MTK_RANGE(mt6589_pin_ies_range),
 	[PINCTRL_PIN_REG_PULLEN] = MTK_RANGE(mt6589_pin_pullen_range),
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),

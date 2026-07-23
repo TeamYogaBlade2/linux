@@ -8,7 +8,7 @@
 #include "clk-mtk.h"
 #include "clk-gate.h"
 
-#include <dt-bindings/clock/mt6589-clk.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 static DEFINE_SPINLOCK(mt6589_clk_lock);
 
@@ -20,66 +20,43 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_CLKPH_MCK, "clkph_mck", "clk_null", 1, 1),
 	FACTOR(CLK_TOP_CPUM_TCK_IN, "cpum_tck_in", "clk_null", 1, 1),
 
-	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 2), // mainpll_806m
-	FACTOR(CLK_TOP_MAINPLL_D3, "mainpll_d3", "mainpll", 1, 3), // mainpll_537p3m
-	FACTOR(CLK_TOP_MAINPLL_D5, "mainpll_d5", "mainpll", 1, 5), // mainpll_322p4m
-	FACTOR(CLK_TOP_MAINPLL_D7, "mainpll_d7", "mainpll", 1, 7), // mainpll_230p3m
+	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "mainpll_806m", 1, 2),
+	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "mainpll_806m", 1, 3),
+	FACTOR(CLK_TOP_SYSPLL_D3P5, "syspll_d3p5", "mainpll_806m", 2, 7),
+	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "mainpll_806m", 1, 4),
+	FACTOR(CLK_TOP_SYSPLL_D5, "syspll_d5", "mainpll_806m", 1, 5),
+	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "mainpll_806m", 1, 6),
+	FACTOR(CLK_TOP_SYSPLL_D8, "syspll_d8", "mainpll_806m", 1, 8),
+	FACTOR(CLK_TOP_SYSPLL_D10, "syspll_d10", "mainpll_806m", 1, 10),
+	FACTOR(CLK_TOP_SYSPLL_D16, "syspll_d16", "mainpll_806m", 1, 16),
+	FACTOR(CLK_TOP_SYSPLL_D24, "syspll_d24", "mainpll_806m", 1, 24),
 
-	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "syspll_ck", 1, 2),
-	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "syspll_ck", 1, 3),
-	FACTOR(CLK_TOP_SYSPLL_D3P5, "syspll_d3p5", "syspll_ck", 2, 7),
-	FACTOR(CLK_TOP_SYSPLL_D4, "syspll_d4", "syspll_ck", 1, 4),
-	FACTOR(CLK_TOP_SYSPLL_D5, "syspll_d5", "syspll_ck", 1, 5),
-	FACTOR(CLK_TOP_SYSPLL_D6, "syspll_d6", "syspll_ck", 1, 6),
-	FACTOR(CLK_TOP_SYSPLL_D8, "syspll_d8", "syspll_ck", 1, 8),
-	FACTOR(CLK_TOP_SYSPLL_D10, "syspll_d10", "syspll_ck", 1, 10),
-	FACTOR(CLK_TOP_SYSPLL_D16, "syspll_d16", "syspll_ck", 1, 16),
-	FACTOR(CLK_TOP_SYSPLL_D24, "syspll_d24", "syspll_ck", 1, 24),
+	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll_416m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll_249p6m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D7, "univpll_d7", "univpll_178p3m", 1, 1),
+	FACTOR(CLK_TOP_UNIVPLL_D10, "univpll_d10", "univpll_249p6m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL_D26, "univpll_d26", "univpll_48m", 1, 1),
 
-	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2), // univpll_624m
-	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3), // univpll_416m
-	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5), // univpll_249p6m
-	FACTOR(CLK_TOP_UNIVPLL_D7, "univpll_d7", "univpll", 1, 7), // univpll_178p3m
-	FACTOR(CLK_TOP_UNIVPLL_D10, "univpll_d10", "univpll", 1, 10),
-	FACTOR(CLK_TOP_UNIVPLL_D26, "univpll_d26", "univpll", 1, 26), // univpll_48m
+	FACTOR(CLK_TOP_UNIVPLL1_D2, "univpll1_d2", "univpll_624m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL1_D4, "univpll1_d4", "univpll_624m", 1, 4),
+	FACTOR(CLK_TOP_UNIVPLL1_D6, "univpll1_d6", "univpll_624m", 1, 6),
+	FACTOR(CLK_TOP_UNIVPLL1_D8, "univpll1_d8", "univpll_624m", 1, 8),
+	FACTOR(CLK_TOP_UNIVPLL1_D10, "univpll1_d10", "univpll_624m", 1, 10),
 
-	FACTOR(CLK_TOP_UNIVPLL1_D2, "univpll1_d2", "univpll_d2", 1, 2),
-	FACTOR(CLK_TOP_UNIVPLL1_D4, "univpll1_d4", "univpll_d2", 1, 4),
-	FACTOR(CLK_TOP_UNIVPLL1_D6, "univpll1_d6", "univpll_d2", 1, 6),
-	FACTOR(CLK_TOP_UNIVPLL1_D8, "univpll1_d8", "univpll_d2", 1, 8),
-	FACTOR(CLK_TOP_UNIVPLL1_D10, "univpll1_d10", "univpll_d10", 1, 10),
+	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_416m", 1, 2),
+	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_416m", 1, 4),
+	FACTOR(CLK_TOP_UNIVPLL2_D6, "univpll2_d6", "univpll_416m", 1, 6),
+	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_416m", 1, 8),
 
-	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_d3", 1, 2),
-	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_d3", 1, 4),
-	FACTOR(CLK_TOP_UNIVPLL2_D6, "univpll2_d6", "univpll_d3", 1, 6),
-	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_d3", 1, 8), // unconfirmed
-
-	FACTOR(CLK_TOP_MMPLL_D3, "mmpll_d3", "mmpll", 1, 3),
-	FACTOR(CLK_TOP_MMPLL_D4, "mmpll_d4", "mmpll", 1, 4),
-	FACTOR(CLK_TOP_MMPLL_D5, "mmpll_d5", "mmpll", 1, 5),
-	FACTOR(CLK_TOP_MMPLL_D6, "mmpll_d6", "mmpll", 1, 6),
-	FACTOR(CLK_TOP_MMPLL_D7, "mmpll_d7", "mmpll", 1, 7),
+	FACTOR(CLK_TOP_MMPLL_D4, "mmpll_d4", "mmpll_d2", 1, 2),
+	FACTOR(CLK_TOP_MMPLL_D6, "mmpll_d6", "mmpll_d3", 1, 2),
 
 	FACTOR(CLK_TOP_LVDSPLL, "lvdspll_ck", "lvdspll", 1, 1),
-	FACTOR(CLK_TOP_LVDSPLL_D2, "lvdspll_d2", "lvdspll", 1, 2), // lvdspll_180m
+	FACTOR(CLK_TOP_LVDSPLL_D2, "lvdspll_d2", "lvdspll", 1, 2), // lvdspll_180m ?
 	FACTOR(CLK_TOP_LVDSPLL_D4, "lvdspll_d4", "lvdspll", 1, 4),
 	FACTOR(CLK_TOP_LVDSPLL_D8, "lvdspll_d8", "lvdspll", 1, 8),
 
-	FACTOR(CLK_TOP_LVDSTX_CLKDIG_CT, "lvdstx_clkdig_cts", "lvdspll", 1, 1),
-
-	FACTOR(CLK_TOP_TVHDMI_H, "tvhdmi_h_ck", "tvdpll", 1, 1),
-
-	FACTOR(CLK_TOP_HDMITX_CLKDIG_D2, "hdmitx_clkdig_d2", "hdmitx_clkdig_cts", 1, 2),
-	FACTOR(CLK_TOP_HDMITX_CLKDIG_D3, "hdmitx_clkdig_d3", "hdmitx_clkdig_cts", 1, 3),
-
-	FACTOR(CLK_TOP_TVHDMI_D2, "tvhdmi_d2", "tvhdmi_h_ck", 1, 2),
-	FACTOR(CLK_TOP_TVHDMI_D4, "tvhdmi_d4", "tvhdmi_h_ck", 1, 4),
-
 	FACTOR(CLK_TOP_MEMPLL_MCK_D4, "mempll_mck_d4", "clkph_mck", 1, 4),
-
-	FACTOR(CLK_TOP_AD_ISP_208M_CK, "ad_isp_208m_ck", "isppll", 1, 8), // ?
-
-	FACTOR(CLK_TOP_AD_MSDC_H208M_CK, "ad_msdc_h208m_ck", "msdcpll", 1, 8), // ?
 };
 
 static const char * const axi_parents[] = {
@@ -127,7 +104,7 @@ static const char * const cam_parents[] = {
 	"syspll_d4",
 	"syspll_d6",
 	"syspll_d8",
-	"ad_isp_208m_ck",
+	"isppll_208m",
 	"univpll_d5",
 	"univpll2_d2",
 	"univpll_d7",
@@ -162,7 +139,7 @@ static const char * const msdc1_parents[] = {
 	"syspll_d5",
 	"univpll1_d4",
 	"univpll2_d4",
-	"ad_msdc_h208m_ck",
+	"msdcpll_208m",
 };
 
 static const char * const msdc2_parents[] = {
@@ -171,7 +148,7 @@ static const char * const msdc2_parents[] = {
 	"syspll_d5",
 	"univpll1_d4",
 	"univpll2_d4",
-	"ad_msdc_h208m_ck",
+	"msdcpll_208m",
 };
 
 static const char * const msdc3_parents[] = {
@@ -180,7 +157,7 @@ static const char * const msdc3_parents[] = {
 	"syspll_d5",
 	"univpll1_d4",
 	"univpll2_d4",
-	"ad_msdc_h208m_ck",
+	"msdcpll_208m",
 };
 
 static const char * const msdc4_parents[] = {
@@ -189,7 +166,7 @@ static const char * const msdc4_parents[] = {
 	"syspll_d5",
 	"univpll1_d4",
 	"univpll2_d4",
-	"ad_msdc_h208m_ck",
+	"msdcpll_208m",
 };
 
 static const char * const usb20_parents[] = {
@@ -247,7 +224,7 @@ static const char * const camtg_parents[] = {
 	"univpll1_d6",
 	"syspll_d16",
 	"syspll_d8",
-	"ad_isp_208m_ck",
+	"isppll_208m",
 };
 
 static const char * const fd_parents[] = {
@@ -312,7 +289,7 @@ static const char * const msdc0_parents[] = {
 	"syspll_d5",
 	"univpll1_d4",
 	"univpll2_d4",
-	"ad_msdc_h208m_ck",
+	"msdcpll_208m",
 };
 
 static const char * const smi_mfg_as_parents[] = {
