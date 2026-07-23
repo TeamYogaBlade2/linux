@@ -36,6 +36,9 @@
 		 * bit 7 : 1.0 GHz : PTP 10: mt6589_freqs_e1 (fallback)
 		 * ----- : ------- : PTP 4 : mt6589_freqs_e1_1
 		 * ----- : ------- : PTP 5 : mt6589_freqs_e1_0
+		 ** preloader
+		 * 6, 7  : 806 MHz 
+		 * other : 1001MHz
 		 */
 
 		opp-497250000 {
