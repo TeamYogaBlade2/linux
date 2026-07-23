@@ -546,6 +546,26 @@
 			#clock-cells = <1>;
 		};
 
+		pwm: pwm@1100b000 {
+			compatible = "mediatek,mt6589-pwm",
+				     "mediatek,mt6795-pwm";
+			reg = <0x1100b000 0x1000>;
+			#pwm-cells = <2>;
+			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_PWM>,
+				 <&pericfg CLK_PERI0_PWM>,
+				 <&pericfg CLK_PERI0_PWM1>,
+				 <&pericfg CLK_PERI0_PWM2>,
+				 <&pericfg CLK_PERI0_PWM3>,
+				 <&pericfg CLK_PERI0_PWM4>,
+				 <&pericfg CLK_PERI0_PWM5>,
+				 <&pericfg CLK_PERI0_PWM6>,
+				 <&pericfg CLK_PERI0_PWM7>;
+			clock-names = "top", "main", "pwm1", "pwm2", "pwm3",
+				      "pwm4", "pwm5", "pwm6", "pwm7";
+			status = "disabled";
+		};
+
 		i2c0: i2c@1100d000 {
 			compatible = "mediatek,mt6589-i2c";
 			reg = <0x1100d000 0x1000>,
