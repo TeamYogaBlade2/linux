@@ -78,6 +78,26 @@
 		startup-delay-us = <200000>;
 		regulator-boot-on;
 	};
+
+        speaker_amplifier: audio-amplifier {
+                compatible = "simple-audio-amplifier";
+                pinctrl-names = "default";
+                pinctrl-0 = <&speaker_amplifier_pins>;
+                enable-gpios = <&pio 134 GPIO_ACTIVE_HIGH>;
+                sound-name-prefix = "Speaker Amp";
+        };
+
+	sound {
+		compatible = "mediatek,mt6572-mt6323-sound";
+		aux-devs = <&speaker_amplifier>;
+		audio-routing = "Speaker Amp INL", "HP Driver",
+				"Speaker Amp INR", "HP Driver",
+				"Speaker", "Speaker Amp OUTL",
+				"Speaker", "Speaker Amp OUTR";
+
+		mediatek,platform = <&afe>;
+		mediatek,accdet = <&mt6323_accdet>;
+	};
 };
 
 &cpu0 {
@@ -180,6 +200,18 @@
 	status = "okay";
 };
 
+&mt6323_accdet {
+	interrupts = <&pio 7 IRQ_TYPE_EDGE_BOTH>, <&pmic 18 IRQ_TYPE_LEVEL_HIGH>;
+	interrupt-names = "eint", "pmic";
+
+	debounce-delay-ms = <256>;
+
+	pinctrl-0 = <&jack_pins>;
+	pinctrl-names = "default";
+
+	status = "okay";
+};
+
 &mt6323_leds {
 	status = "okay";
 
@@ -196,6 +228,12 @@
 	backlight_pins: backlight-pins {
 		pins-pwm {
 			pinmux = <PINMUX_GPIO128__FUNC_PWM1>;
+		};
+	};
+
+	jack_pins: jack-pins {
+		pins-int {
+			pinmux = <PINMUX_GPIO142__FUNC_EINT7>;
 		};
 	};
 
@@ -329,6 +367,12 @@
 		pins-int {
 			pinmux = <PINMUX_GPIO7__FUNC_PMIC_EINT>;
 			input-enable;
+		};
+	};
+
+	speaker_amplifier_pins: speaker-amplifier-pins {
+		pins-enable {
+			pinmux = <PINMUX_GPIO134__FUNC_GPIO134>;
 		};
 	};
 
