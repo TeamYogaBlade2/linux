@@ -63,9 +63,6 @@
 		audio-routing = "Speaker", "Speaker Driver",
 				"Earpiece", "Earpiece Driver";
 		mediatek,accdet = <&mt6323_accdet>;
-
-		pinctrl-0 = <&jack_pins>;
-		pinctrl-names = "default";
 	};
 };
 
@@ -176,11 +173,12 @@
 };
 
 &mt6323_accdet {
-	interrupts = <&pio 2 IRQ_TYPE_EDGE_BOTH>, <&pmic 18 IRQ_TYPE_LEVEL_HIGH>;
+	pinctrl-0 = <&jack_pins>;
+	pinctrl-names = "default";
+
+	interrupts-extended = <&pio 2 IRQ_TYPE_EDGE_BOTH>,
+			      <&pmic 18 IRQ_TYPE_LEVEL_HIGH>;
 	interrupt-names = "eint", "pmic";
-
-	debounce-delay-ms = <256>;
-
 	status = "okay";
 };
 
@@ -194,6 +192,7 @@
 	jack_pins: jack-pins {
 		pins-int {
 			pinmux = <PINMUX_GPIO136__FUNC_EINT2>;
+			input-debounce = <32000>;
 		};
 	};
 
