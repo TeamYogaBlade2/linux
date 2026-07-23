@@ -383,6 +383,7 @@ ENDPROC(__create_page_tables)
 ENTRY(secondary_startup_arm)
  THUMB(	badr	r9, 1f		)	@ Kernel is entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
+ENDPROC(secondary_startup_arm)
  THUMB(	.thumb			)	@ switch to Thumb now.
  THUMB(1:			)
 ENTRY(secondary_startup)
@@ -429,7 +430,6 @@ ARM_BE8(eor	r4, r4, r5)			@ without using a temp reg.
 						@ (return control reg)
 	ret	r12
 ENDPROC(secondary_startup)
-ENDPROC(secondary_startup_arm)
 
 ENTRY(__secondary_switched)
 #if defined(CONFIG_VMAP_STACK) && !defined(CONFIG_ARM_LPAE)
