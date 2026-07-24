@@ -27,7 +27,6 @@ static DEFINE_SPINLOCK(mt6582_top_clk_lock);
 
 
 static const struct mtk_fixed_factor top_fixed_divs[] = {
-    	FACTOR(CLK_TOP_SYSPLL, "syspll_ck", "mainpll", 1, 1),
 	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "mainpll", 1, 2),
 	FACTOR(CLK_TOP_SYSPLL_D3, "syspll_d3", "mainpll", 1, 3),
 	FACTOR(CLK_TOP_SYSPLL_D5, "syspll_d5", "mainpll", 1, 5),
@@ -43,8 +42,6 @@ static const struct mtk_fixed_factor top_fixed_divs[] = {
 	FACTOR(CLK_TOP_SYSPLL3_D4, "syspll3_d4", "syspll_ck", 1, 16),
 	FACTOR(CLK_TOP_SYSPLL4_D2, "syspll4_d2", "syspll_d5", 1, 2),
 
-	FACTOR(CLK_TOP_UNIVPLL, "univpll_ck", "univpll", 1, 1),
-
 	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2),
 	FACTOR(CLK_TOP_UNIVPLL_D3, "univpll_d3", "univpll", 1, 3),
 	FACTOR(CLK_TOP_UNIVPLL_D5, "univpll_d5", "univpll", 1, 5),
@@ -59,20 +56,14 @@ static const struct mtk_fixed_factor top_fixed_divs[] = {
 	FACTOR(CLK_TOP_UNIVPLL3_D2, "univpll3_d2", "univpll_ck", 1, 8),
 	FACTOR(CLK_TOP_UNIVPLL3_D4, "univpll3_d4", "univpll_ck", 1, 16),
 
-
-	FACTOR(CLK_TOP_MSDCPLL, "msdcpll_ck", "msdcpll", 1, 1),
 	FACTOR(CLK_TOP_MSDCPLL_D2, "msdcpll_d2", "msdcpll", 1, 2),
 
-	FACTOR(CLK_TOP_MMPLL, "mmpll_ck", "mmpll", 1, 1),
 	FACTOR(CLK_TOP_MMPLL_D2, "mmpll_d2", "mmpll", 1, 2),
 
 	FACTOR(CLK_TOP_DMPLL, "dmpll_ck", "dmpll", 1, 2),
 	FACTOR(CLK_TOP_DMPLL_D2, "dmpll_d2", "dmpll_ck", 1, 2),
 	FACTOR(CLK_TOP_DMPLL_D4, "dmpll_d4", "dmpll_ck", 1, 4),
 	FACTOR(CLK_TOP_DMPLL_X2, "dmpll_x2", "dmpll", 2, 1),
-
-	FACTOR(CLK_TOP_VENCPLL, "vencpll_ck", "vencpll", 1, 1),
-
 	
 };
 
@@ -135,7 +126,7 @@ static const char * const mfg_parents[] = {
 	"clk26m",
 	"mmpll_ck",
 	"dmpll_x2",
-	"msdcpll_ck",
+	"msdcpll",
 	"clk26m",
 	"syspll_d3",
 	"univpll_d3"
@@ -265,7 +256,7 @@ static const struct mtk_mux top_muxes[] = {
 		0x0060, 24, 3, 31, 0),
 	/* CLK_CFG_3 */
 	TOP_MUX_GATE(CLK_TOP_MSDC30_1_SEL, "msdc30_1_sel", msdc30_1_parents,
-		0x0070, 0, 3, 7, CLK_IS_CRITICAL),
+		0x0070, 0, 3, 7, 0),
 	TOP_MUX_GATE(CLK_TOP_MSDC30_2_SEL, "msdc30_2_sel", msdc30_2_parents,
 		0x0070, 8, 3, 15, 0),
 	TOP_MUX_GATE(CLK_TOP_AUDIO_SEL, "audio_sel", audio_parents,

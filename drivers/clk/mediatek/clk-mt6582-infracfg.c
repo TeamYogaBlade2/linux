@@ -32,7 +32,7 @@ static const char * const cpu_parents[] = {
 	"clk26m",
 	"armpll",
 	"mainpll",
-	"mmpll"
+	"univpll"
 };
 
 
@@ -44,20 +44,20 @@ static const struct mtk_composite cpu_muxes[] = {
    
 static const struct mtk_gate infra_gates[] = {
 	GATE_ICG(CLK_INFRA_DBG, "dbgclk", "axi_sel", 0),
-	GATE_ICG(CLK_INFRA_SMI, "smi_ck", "mm_sel", 1),
-	GATE_ICG(CLK_INFRA_AUDIO, "audio_ck", "clk26m", 5),
-	GATE_ICG(CLK_INFRA_EFUSE, "efuse_ck", "clk26m", 6),
-	GATE_ICG(CLK_INFRA_L2C_SRAM, "l2c_sram_ck", "mm_sel", 7),
-	GATE_ICG(CLK_INFRA_M4U, "m4u_ck", "mem_sel", 8),
+	GATE_ICG(CLK_INFRA_SMI, "smi", "mm_sel", 1),
+	GATE_ICG(CLK_INFRA_AUDIO, "audio", "clk26m", 5),
+	GATE_ICG(CLK_INFRA_EFUSE, "efuse", "clk26m", 6),
+	GATE_ICG(CLK_INFRA_L2C_SRAM, "l2c_sram", "mm_sel", 7),
+	GATE_ICG(CLK_INFRA_M4U, "m4u", "mem_sel", 8),
 	GATE_ICG(CLK_INFRA_MD1_CR4_AXI, "cr4_axi", "axi_sel", 9),
 	GATE_ICG(CLK_INFRA_MD1_HWMIX_AXI, "hwmix_axi", "axi_sel", 10),
 	GATE_ICG(CLK_INFRA_MD1_AHB, "md1_ahb", "axi_sel", 11),
 	GATE_ICG(CLK_INFRA_CONNMCU, "connsys_bus", "univ_d3", 12),
-	GATE_ICG(CLK_INFRA_TRNG, "trng_ck", "axi_sel", 13),
-	GATE_ICG(CLK_INFRA_CPUM, "cpum_ck", "mem_sel", 15),
-	GATE_ICG(CLK_INFRA_KP, "kp_ck", "axi_sel", 16),
-	GATE_ICG(CLK_INFRA_CCIF0_AP_CTRL, "ccif0_ck", "axi_sel", 20),
-	GATE_ICG(CLK_INFRA_PMICWRAP, "pmicwrap_ck", "clk26m", 23),
+	GATE_ICG(CLK_INFRA_TRNG, "trng", "axi_sel", 13),
+	GATE_ICG(CLK_INFRA_CPUM, "cpum", "mem_sel", 15),
+	GATE_ICG(CLK_INFRA_KP, "kp", "axi_sel", 16),
+	GATE_ICG(CLK_INFRA_CCIF0_AP_CTRL, "ccif0", "axi_sel", 20),
+	GATE_ICG(CLK_INFRA_PMICWRAP, "pmicwrap", "clk26m", 23),
 };     
 
 

@@ -10,79 +10,71 @@
 /* TOPCKGEN */
 
 /*fixed factor*/
-#define CLK_TOP_SYSPLL				1
-#define CLK_TOP_SYSPLL_D2			2
-#define CLK_TOP_SYSPLL_D3			3
-#define CLK_TOP_SYSPLL_D5			4
-#define CLK_TOP_SYSPLL_D7			5
+#define CLK_TOP_SYSPLL_D2			1
+#define CLK_TOP_SYSPLL_D3			2
+#define CLK_TOP_SYSPLL_D5			3
+#define CLK_TOP_SYSPLL_D7			4
 
-#define CLK_TOP_SYSPLL1_D2			6
-#define CLK_TOP_SYSPLL1_D4			7
-#define CLK_TOP_SYSPLL1_D8			8
-#define CLK_TOP_SYSPLL1_D16			9
+#define CLK_TOP_SYSPLL1_D2			5
+#define CLK_TOP_SYSPLL1_D4			6
+#define CLK_TOP_SYSPLL1_D8			7
+#define CLK_TOP_SYSPLL1_D16			8
+#define CLK_TOP_SYSPLL2_D2			9
+#define CLK_TOP_SYSPLL2_D4			10
+#define CLK_TOP_SYSPLL2_D8			11
 
-#define CLK_TOP_SYSPLL2_D2			10
-#define CLK_TOP_SYSPLL2_D4			11
-#define CLK_TOP_SYSPLL2_D8			12
+#define CLK_TOP_SYSPLL3_D2			12
+#define CLK_TOP_SYSPLL3_D4			13
+#define CLK_TOP_SYSPLL4_D2			14
 
-#define CLK_TOP_SYSPLL3_D2			13
-#define CLK_TOP_SYSPLL3_D4			14
-#define CLK_TOP_SYSPLL4_D2			15
+#define CLK_TOP_UNIVPLL_D2			15
+#define CLK_TOP_UNIVPLL_D3			16
+#define CLK_TOP_UNIVPLL_D5			17
+#define CLK_TOP_UNIVPLL_D7			18
 
-#define CLK_TOP_UNIVPLL				16
-#define CLK_TOP_UNIVPLL_D2			17
-#define CLK_TOP_UNIVPLL_D3			18
-#define CLK_TOP_UNIVPLL_D5			19
-#define CLK_TOP_UNIVPLL_D7			20
+#define CLK_TOP_UNIVPLL1_D2			19
+#define CLK_TOP_UNIVPLL1_D4			20
+#define CLK_TOP_UNIVPLL1_D8			21
 
+#define CLK_TOP_UNIVPLL2_D2			22
+#define CLK_TOP_UNIVPLL2_D4			23
+#define CLK_TOP_UNIVPLL2_D8			24
+#define CLK_TOP_UNIVPLL2_D16			25
+#define CLK_TOP_UNIVPLL2_D32			26
 
-#define CLK_TOP_UNIVPLL1_D2			21
-#define CLK_TOP_UNIVPLL1_D4			22
-#define CLK_TOP_UNIVPLL1_D8			23
+#define CLK_TOP_UNIVPLL3_D2			27
+#define CLK_TOP_UNIVPLL3_D4			28
 
-#define CLK_TOP_UNIVPLL2_D2			24
-#define CLK_TOP_UNIVPLL2_D4			25
-#define CLK_TOP_UNIVPLL2_D8			26
-#define CLK_TOP_UNIVPLL2_D16			27
-#define CLK_TOP_UNIVPLL2_D32			28
+#define CLK_TOP_MSDCPLL_D2			29
 
-#define CLK_TOP_UNIVPLL3_D2			29
-#define CLK_TOP_UNIVPLL3_D4			30
+#define CLK_TOP_MMPLL_D2			30
 
-#define CLK_TOP_MSDCPLL				31
-#define CLK_TOP_MSDCPLL_D2			32
-
-#define CLK_TOP_MMPLL				33
-#define CLK_TOP_MMPLL_D2			34
-
-#define CLK_TOP_DMPLL				35
-#define CLK_TOP_DMPLL_D2			36
-#define CLK_TOP_DMPLL_D4			37
-#define CLK_TOP_DMPLL_X2			38
-
-#define CLK_TOP_VENCPLL			    	39
+#define CLK_TOP_DMPLL				31
+#define CLK_TOP_DMPLL_D2			32
+#define CLK_TOP_DMPLL_D4			33
+#define CLK_TOP_DMPLL_X2			34
 
 /*muxes*/
-#define CLK_TOP_AXI_SEL				40
-#define CLK_TOP_MEM_SEL				41
-#define CLK_TOP_DDRPHYCFG_SEL			42
-#define CLK_TOP_MM_SEL				43
-#define CLK_TOP_PWM_SEL				44
-#define CLK_TOP_VDEC_SEL			45
-#define CLK_TOP_MFG_SEL				46
-#define CLK_TOP_CAMTG_SEL			47
-#define CLK_TOP_UART_SEL			48
-#define CLK_TOP_SPI_SEL			    	49
-#define CLK_TOP_USB20_SEL			50
-#define CLK_TOP_MSDC30_0_SEL	    		51
-#define CLK_TOP_MSDC30_1_SEL			52
-#define CLK_TOP_MSDC30_2_SEL			53
-#define CLK_TOP_AUDIO_SEL			54
-#define CLK_TOP_AUD_INTBUS_SEL			55
-#define CLK_TOP_PMICSPI_SEL			56
-#define CLK_TOP_SCP_SEL				57
+#define CLK_TOP_AXI_SEL				35
+#define CLK_TOP_MEM_SEL				36
+#define CLK_TOP_DDRPHYCFG_SEL			37
+#define CLK_TOP_MM_SEL				38
+#define CLK_TOP_PWM_SEL				39
+#define CLK_TOP_VDEC_SEL			40
+#define CLK_TOP_MFG_SEL				41
+#define CLK_TOP_CAMTG_SEL			42
+#define CLK_TOP_UART_SEL			43
+#define CLK_TOP_SPI_SEL			    	44
+#define CLK_TOP_USB20_SEL			45
+#define CLK_TOP_MSDC30_0_SEL	    		46
+#define CLK_TOP_MSDC30_1_SEL			47
+#define CLK_TOP_MSDC30_2_SEL			48
+#define CLK_TOP_AUDIO_SEL			49
+#define CLK_TOP_AUD_INTBUS_SEL			50
+#define CLK_TOP_PMICSPI_SEL			51
+#define CLK_TOP_SCP_SEL				52
 
-#define CLK_TOP_NR_CLK			    	58
+#define CLK_TOP_NR_CLK			    	53
 
 
 /* APMIXEDSYS */
@@ -93,19 +85,11 @@
 #define CLK_APMIXED_MMPLL			4
 #define CLK_APMIXED_MSDCPLL			5
 
-#define CLK_APMIXED_MAIN_D2         		6
-#define CLK_APMIXED_MAIN_D3         		7
-#define CLK_APMIXED_MAIN_D5         		8
-#define CLK_APMIXED_MAIN_D7         		9
-#define CLK_APMIXED_UNIV_D2         		10
-#define CLK_APMIXED_UNIV_D3         		11
-#define CLK_APMIXED_UNIV_D5         		12
-#define CLK_APMIXED_UNIV_D7         		13
-#define CLK_APMIXED_UNIV48M         		14
-#define CLK_APMIXED_USB48M          		15
+#define CLK_APMIXED_UNIV48M         		6
+#define CLK_APMIXED_USB48M          		7
 
 
-#define CLK_APMIXED_NR_CLK			16
+#define CLK_APMIXED_NR_CLK			8
 
 
 /* DDRPHY */
