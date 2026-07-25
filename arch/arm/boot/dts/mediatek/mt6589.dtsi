@@ -906,7 +906,7 @@
 			dr_mode = "otg";
 			clocks = <&pericfg CLK_PERI0_USB0>,
 				 <&pericfg CLK_PERI0_USB0>,
-				 <&topckgen CLK_APMIXED_UNIVPLL_USB_48M>;
+				 <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 			clock-names = "main", "mcu", "univpll";
 			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
 			reset-names = "hrst";
@@ -928,7 +928,7 @@
 			/* USB 2.0 */
 			usb_port0: usb-phy@11220800 {
 				reg = <0x11220800 0x0100>;
-				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+				clocks = <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "okay";
@@ -937,7 +937,7 @@
 			/* USB 1.1 */
 			usb_port1: usb-phy@11220900 {
 				reg = <0x11220900 0x0100>;
-				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+				clocks = <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "disabled";
