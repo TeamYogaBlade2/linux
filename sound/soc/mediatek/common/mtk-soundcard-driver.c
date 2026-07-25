@@ -229,6 +229,10 @@ int mtk_soundcard_common_probe(struct platform_device *pdev)
 			return ret;
 	}
 
+	ret = snd_soc_of_parse_aux_devs(card, "aux-devs");
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "failed to parse aux-devs\n");
+
 	soc_card_data = devm_kzalloc(&pdev->dev, sizeof(*soc_card_data), GFP_KERNEL);
 	if (!soc_card_data)
 		return -ENOMEM;
