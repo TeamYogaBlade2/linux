@@ -38,8 +38,8 @@ static const struct mtk_fixed_factor top_fixed_divs[] = {
 	FACTOR(CLK_TOP_SYSPLL2_D2, "syspll2_d2", "syspll_d3", 1, 2),
 	FACTOR(CLK_TOP_SYSPLL2_D4, "syspll2_d4", "syspll_d3", 1, 4),
 	FACTOR(CLK_TOP_SYSPLL2_D8, "syspll2_d8", "syspll_d3", 1, 8),
-	FACTOR(CLK_TOP_SYSPLL3_D2, "syspll3_d2", "syspll_ck", 1, 8),
-	FACTOR(CLK_TOP_SYSPLL3_D4, "syspll3_d4", "syspll_ck", 1, 16),
+	FACTOR(CLK_TOP_SYSPLL3_D2, "syspll3_d2", "mainpll", 1, 8),
+	FACTOR(CLK_TOP_SYSPLL3_D4, "syspll3_d4", "mainpll", 1, 16),
 	FACTOR(CLK_TOP_SYSPLL4_D2, "syspll4_d2", "syspll_d5", 1, 2),
 
 	FACTOR(CLK_TOP_UNIVPLL_D2, "univpll_d2", "univpll", 1, 2),
@@ -53,8 +53,8 @@ static const struct mtk_fixed_factor top_fixed_divs[] = {
 	FACTOR(CLK_TOP_UNIVPLL2_D2, "univpll2_d2", "univpll_d3", 1, 2),
 	FACTOR(CLK_TOP_UNIVPLL2_D4, "univpll2_d4", "univpll_d3", 1, 4),
 	FACTOR(CLK_TOP_UNIVPLL2_D8, "univpll2_d8", "univpll_d3", 1, 8),
-	FACTOR(CLK_TOP_UNIVPLL3_D2, "univpll3_d2", "univpll_ck", 1, 8),
-	FACTOR(CLK_TOP_UNIVPLL3_D4, "univpll3_d4", "univpll_ck", 1, 16),
+	FACTOR(CLK_TOP_UNIVPLL3_D2, "univpll3_d2", "univpll", 1, 8),
+	FACTOR(CLK_TOP_UNIVPLL3_D4, "univpll3_d4", "univpll", 1, 16),
 
 	FACTOR(CLK_TOP_MSDCPLL_D2, "msdcpll_d2", "msdcpll", 1, 2),
 
@@ -93,7 +93,7 @@ static const char * const ddrphycfg_parents[] = {
 
 static const char * const mm_parents[] = {
 	"clk26m",
-	"vencpll_ck",
+	"vencpll",
 	"syspll1_d2",
 	"syspll_d5",
 	"syspll1_d4",
@@ -124,7 +124,7 @@ static const char * const vdec_parents[] = {
 
 static const char * const mfg_parents[] = {
 	"clk26m",
-	"mmpll_ck",
+	"mmpll",
 	"dmpll_x2",
 	"msdcpll",
 	"clk26m",
