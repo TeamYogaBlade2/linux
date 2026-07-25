@@ -905,8 +905,8 @@
 			phys = <&usb_port0 PHY_TYPE_USB2>;
 			dr_mode = "otg";
 			clocks = <&pericfg CLK_PERI0_USB0>,
-				 <&pericfg CLK_PERI0_USB0>, /* univpll_usb_48m ? */
-				 <&topckgen CLK_TOP_UNIVPLL_D26>;
+				 <&pericfg CLK_PERI0_USB0>,
+				 <&topckgen CLK_APMIXED_UNIVPLL_USB_48M>;
 			clock-names = "main", "mcu", "univpll";
 			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
 			reset-names = "hrst";
