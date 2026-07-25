@@ -4,7 +4,11 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
 #include "mt6572.dtsi"
+#include "mt6323.dtsi"
 
 / {
 	model = "JTY D101";
@@ -18,15 +22,6 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		stdout-path = "serial0:921600n8";
-
-		framebuffer: framebuffer@bf400000 {
-			compatible = "simple-framebuffer";
-			memory-region = <&framebuffer_reserved>;
-			width = <1024>;
-			height = <600>;
-			stride = <(1024 * 2)>;
-			format = "r5g6b5";
-		};
 	};
 
 	memory@80000000 {
@@ -54,8 +49,363 @@
 			no-map;
 		};
 	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 0 31250>;
+
+		power-supply = <&mt6323_vsys_reg>;
+		pinctrl-0 = <&backlight_pins>;
+		pinctrl-names = "default";
+
+		brightness-levels = <0 1023>;
+		num-interpolated-steps = <1023>;
+		default-brightness-level = <1023>;
+	};
+
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6323_vibr_reg>;
+		min-microvolt = <1200000>;
+		max-microvolt = <2800000>;
+	};
+
+	panel_vcc: regulator-panel {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vcc";
+		gpio = <&pio 135 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <200000>;
+		regulator-boot-on;
+	};
+
+        speaker_amplifier: audio-amplifier {
+                compatible = "simple-audio-amplifier";
+                pinctrl-names = "default";
+                pinctrl-0 = <&speaker_amplifier_pins>;
+                enable-gpios = <&pio 134 GPIO_ACTIVE_HIGH>;
+                sound-name-prefix = "Speaker Amp";
+        };
+
+	sound {
+		compatible = "mediatek,mt6572-mt6323-sound";
+		aux-devs = <&speaker_amplifier>;
+		audio-routing = "Speaker Amp INL", "HP Driver",
+				"Speaker Amp INR", "HP Driver",
+				"Speaker", "Speaker Amp OUTL",
+				"Speaker", "Speaker Amp OUTR";
+
+		mediatek,platform = <&afe>;
+		mediatek,accdet = <&mt6323_accdet>;
+	};
+};
+
+&cpu0 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&cpu1 {
+	proc-supply = <&mt6323_vproc_reg>;
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "wsvgalnl,ek79007";
+		reg = <0>;
+		vcc-supply = <&panel_vcc>;
+
+		pinctrl-0 = <&panel_pins>;
+		pinctrl-names = "default";
+
+		reset-gpios = <&pio 59 GPIO_ACTIVE_HIGH>;
+
+		backlight = <&backlight>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
+};
+
+&gpu {
+	status = "okay";
+};
+
+&keyboard {
+	pinctrl-0 = <&keypad_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	debounce-delay-ms = <32>;
+	keypad,num-rows = <2>;
+	keypad,num-columns = <1>;
+	linux,keymap = <MATRIX_KEY(0, 0, KEY_VOLUMEUP)
+			MATRIX_KEY(1, 0, KEY_VOLUMEDOWN)>;
+};
+
+&mmc0 {
+	bus-width = <8>;
+	max-frequency = <200000000>;
+	mmc-ddr-1_8v;
+	mmc-hs200-1_8v;
+	cap-mmc-highspeed;
+	non-removable;
+	no-sd;
+	no-sdio;
+
+	vmmc-supply = <&mt6323_vemc3v3_reg>;
+	vqmmc-supply = <&mt6323_vio18_reg>;
+	pinctrl-0 = <&mmc0_pins_default>;
+	pinctrl-1 = <&mmc0_pins_uhs>;
+	pinctrl-names = "default", "state_uhs";
+
+	assigned-clocks = <&topckgen CLK_TOP_MSDC0_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D8>;
+
+	status = "okay";
+};
+
+&mmc1 {
+	bus-width = <4>;
+	max-frequency = <200000000>;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	sd-uhs-ddr50;
+	cap-sd-highspeed;
+	no-mmc;
+	no-sdio;
+
+	vmmc-supply = <&mt6323_vmch_reg>;
+	vqmmc-supply = <&mt6323_vmc_reg>;
+	pinctrl-0 = <&mmc1_pins_cd>, <&mmc1_pins_default>;
+	pinctrl-1 = <&mmc1_pins_cd>, <&mmc1_pins_uhs>;
+	pinctrl-names = "default", "state_uhs";
+	cd-gpios = <&pio 86 GPIO_ACTIVE_LOW>;
+
+	assigned-clocks = <&topckgen CLK_TOP_MSDC1_SEL>;
+	assigned-clock-parents = <&topckgen CLK_TOP_MAINPLL_D10>;
+
+	status = "okay";
+};
+
+&mt6323_accdet {
+	interrupts = <&pio 7 IRQ_TYPE_EDGE_BOTH>, <&pmic 18 IRQ_TYPE_LEVEL_HIGH>;
+	interrupt-names = "eint", "pmic";
+
+	debounce-delay-ms = <256>;
+
+	pinctrl-0 = <&jack_pins>;
+	pinctrl-names = "default";
+
+	status = "okay";
+};
+
+&mt6323_leds {
+	status = "okay";
+
+	led@0 {
+		reg = <0>;
+		function = LED_FUNCTION_TORCH;
+		color = <LED_COLOR_ID_WHITE>;
+		default-state = "off";
+		linux,default-trigger = "torch";
+	};
+};
+
+&pio {
+	backlight_pins: backlight-pins {
+		pins-pwm {
+			pinmux = <PINMUX_GPIO128__FUNC_PWM1>;
+		};
+	};
+
+	jack_pins: jack-pins {
+		pins-int {
+			pinmux = <PINMUX_GPIO142__FUNC_EINT7>;
+		};
+	};
+
+	keypad_pins: keypad-pins {
+		pins-keypad {
+			pinmux = <PINMUX_GPIO110__FUNC_KROW0>,
+				 <PINMUX_GPIO111__FUNC_KROW1>;
+		};
+	};
+
+	mmc0_pins_default: mmc0-default-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
+				 <PINMUX_GPIO46__FUNC_MC0_DAT0>,
+				 <PINMUX_GPIO47__FUNC_MC0_DAT1>,
+				 <PINMUX_GPIO48__FUNC_MC0_DAT2>,
+				 <PINMUX_GPIO49__FUNC_MC0_DAT3>,
+				 <PINMUX_GPIO50__FUNC_MC0_DAT4>,
+				 <PINMUX_GPIO51__FUNC_MC0_DAT5>,
+				 <PINMUX_GPIO52__FUNC_MC0_DAT6>,
+				 <PINMUX_GPIO53__FUNC_MC0_DAT7>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <6>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO44__FUNC_MC0_CK>;
+			drive-strength = <6>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-rst {
+			pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
+			drive-strength = <6>;
+			bias-pull-up;
+		};
+	};
+
+	mmc0_pins_uhs: mmc0-uhs-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO45__FUNC_MC0_CMD>,
+				 <PINMUX_GPIO46__FUNC_MC0_DAT0>,
+				 <PINMUX_GPIO47__FUNC_MC0_DAT1>,
+				 <PINMUX_GPIO48__FUNC_MC0_DAT2>,
+				 <PINMUX_GPIO49__FUNC_MC0_DAT3>,
+				 <PINMUX_GPIO50__FUNC_MC0_DAT4>,
+				 <PINMUX_GPIO51__FUNC_MC0_DAT5>,
+				 <PINMUX_GPIO52__FUNC_MC0_DAT6>,
+				 <PINMUX_GPIO53__FUNC_MC0_DAT7>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <8>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO44__FUNC_MC0_CK>;
+			drive-strength = <8>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-rst {
+			pinmux = <PINMUX_GPIO54__FUNC_MC0_RSTB>;
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
+	mmc1_pins_default: mmc1-default-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO92__FUNC_MC1_CMD>,
+				 <PINMUX_GPIO93__FUNC_MC1_DAT0>,
+				 <PINMUX_GPIO94__FUNC_MC1_DAT1>,
+				 <PINMUX_GPIO95__FUNC_MC1_DAT2>,
+				 <PINMUX_GPIO96__FUNC_MC1_DAT3>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <20>;
+			bias-pull-up;
+			mediatek,tdsel = <5>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO91__FUNC_MC1_CK>;
+			drive-strength = <20>;
+			bias-pull-down;
+		};
+	};
+
+	mmc1_pins_uhs: mmc1-uhs-pins {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO92__FUNC_MC1_CMD>,
+				 <PINMUX_GPIO93__FUNC_MC1_DAT0>,
+				 <PINMUX_GPIO94__FUNC_MC1_DAT1>,
+				 <PINMUX_GPIO95__FUNC_MC1_DAT2>,
+				 <PINMUX_GPIO96__FUNC_MC1_DAT3>;
+			input-enable;
+			input-schmitt-enable;
+			drive-strength = <24>;
+			bias-pull-up;
+			mediatek,tdsel = <0>;
+		};
+
+		pins-clk {
+			pinmux = <PINMUX_GPIO91__FUNC_MC1_CK>;
+			drive-strength = <24>;
+			bias-pull-down;
+		};
+	};
+
+	mmc1_pins_cd: mmc1-cd-pins {
+		pins-cd {
+			/* GPIO86 is always input */
+			pinmux = <PINMUX_GPIO86__FUNC_MC1_INS>;
+		};
+	};
+
+	panel_pins: panel-pins {
+		pins-enable {
+			pinmux = <PINMUX_GPIO56__FUNC_GPIO56>;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO59__FUNC_GPIO59>;
+		};
+        };
+
+	pmic_pins: pmic-pins {
+		pins-int {
+			pinmux = <PINMUX_GPIO7__FUNC_PMIC_EINT>;
+			input-enable;
+		};
+	};
+
+	speaker_amplifier_pins: speaker-amplifier-pins {
+		pins-enable {
+			pinmux = <PINMUX_GPIO134__FUNC_GPIO134>;
+		};
+	};
+
+	uart0_pins: uart0-pins {
+		pins-bus {
+			pinmux = <PINMUX_GPIO103__FUNC_URXD1>,
+				 <PINMUX_GPIO104__FUNC_UTXD1>;
+		};
+	};
+};
+
+&pmic {
+	pinctrl-0 = <&pmic_pins>;
+	pinctrl-names = "default";
+
+	interrupts = <16 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+&pwm {
+	status = "okay";
+};
+
+&u2phy0 {
+	status = "okay";
 };
 
 &uart0 {
+	pinctrl-0 = <&uart0_pins>;
+	pinctrl-names = "default";
+
+	status = "okay";
+};
+
+&usb {
 	status = "okay";
 };

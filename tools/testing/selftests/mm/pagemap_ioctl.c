@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <malloc.h>
 #include <linux/types.h>
+#include <linux/mman.h>
 #include <linux/memfd.h>
 #include <linux/userfaultfd.h>
 #include <linux/fs.h>
@@ -1051,6 +1052,103 @@ static void test_simple(void)
 	ksft_test_result(i == TEST_ITERATIONS, "Test %s\n", __func__);
 }
 
+/*
+ * A range that was populated and then MADV_DONTNEED'd is genuine pte_none
+ * with no uffd-wp marker. Such a pte must read the same regardless of which
+ * PAGEMAP_SCAN path serves the request: both the PAGE_IS_WRITTEN fast path and
+ * the generic path (reached e.g. via category_anyof_mask) must report every
+ * page written.
+ */
+/*
+ * Populate @mem (optionally collapsing it into a THP first), drop it with
+ * MADV_DONTNEED, then check PAGEMAP_SCAN reports the whole range written via
+ * both the fast and generic query paths. A dropped THP leaves a pmd_none hole
+ * with no page table, exercising pagemap_scan_pte_hole(); a base-page range
+ * leaves pte_none entries.
+ */
+static void unpopulated_written_test(const char *name, char *mem, long size,
+				     bool use_thp)
+{
+	long npages = size / page_size, fast = 0, slow = 0, ret;
+	struct page_region regions[16];
+	int i;
+
+	wp_init(mem, size);
+
+	/* Populate, optionally collapse to a THP, then drop it. */
+	memset(mem, 1, size);
+	if (use_thp &&
+	    (madvise(mem, size, MADV_COLLAPSE) ||
+	     !check_huge_anon(mem, size / hpage_size, hpage_size))) {
+		ksft_test_result_skip("%s could not form a THP\n", name);
+		goto out;
+	}
+	if (madvise(mem, size, MADV_DONTNEED)) {
+		ksft_test_result_fail("%s MADV_DONTNEED failed\n", name);
+		goto out;
+	}
+
+	/* Fast path: category_mask == return_mask == PAGE_IS_WRITTEN. */
+	ret = pagemap_ioctl(mem, size, regions, ARRAY_SIZE(regions), 0, 0,
+			    PAGE_IS_WRITTEN, 0, 0, PAGE_IS_WRITTEN);
+	for (i = 0; ret > 0 && i < ret; i++)
+		fast += LEN(regions[i]);
+
+	/* Generic path: same query expressed via category_anyof_mask. */
+	ret = pagemap_ioctl(mem, size, regions, ARRAY_SIZE(regions), 0, 0,
+			    0, PAGE_IS_WRITTEN, 0, PAGE_IS_WRITTEN);
+	for (i = 0; ret > 0 && i < ret; i++)
+		slow += LEN(regions[i]);
+
+	ksft_test_result(fast == npages && slow == npages,
+			 "%s unpopulated range reported written by both paths (%ld, %ld of %ld)\n",
+			 name, fast, slow, npages);
+out:
+	wp_free(mem, size);
+}
+
+static void unpopulated_scan_test(void)
+{
+	long mem_size = 16 * page_size;
+	char *mem;
+
+	mem = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
+		   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED) {
+		ksft_test_result_skip("%s mmap failed\n", __func__);
+		return;
+	}
+
+	unpopulated_written_test(__func__, mem, mem_size, false);
+	munmap(mem, mem_size);
+}
+
+/*
+ * Same as unpopulated_scan_test(), but the range is a THP: a full-PMD
+ * MADV_DONTNEED leaves a pmd_none hole with no page table.
+ */
+static void unpopulated_thp_scan_test(void)
+{
+	char *area, *mem;
+
+	if (!hpage_size) {
+		ksft_test_result_skip("%s THP not supported\n", __func__);
+		return;
+	}
+
+	/* Over-allocate so a PMD-aligned, THP-sized range fits inside. */
+	area = mmap(NULL, 2 * hpage_size, PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (area == MAP_FAILED) {
+		ksft_test_result_skip("%s mmap failed\n", __func__);
+		return;
+	}
+	mem = (char *)(((unsigned long)area + hpage_size - 1) & ~(hpage_size - 1));
+
+	unpopulated_written_test(__func__, mem, hpage_size, true);
+	munmap(area, 2 * hpage_size);
+}
+
 int sanity_tests(void)
 {
 	unsigned long long mem_size, vec_size;
@@ -1559,7 +1657,7 @@ int main(int __attribute__((unused)) argc, char *argv[])
 	if (!hugetlb_setup_default(4))
 		ksft_print_msg("HugeTLB test will be skipped\n");
 
-	ksft_set_plan(117);
+	ksft_set_plan(119);
 
 	page_size = getpagesize();
 	hpage_size = read_pmd_pagesize();
@@ -1736,6 +1834,10 @@ int main(int __attribute__((unused)) argc, char *argv[])
 
 	/* 17. ZEROPFN tests */
 	zeropfn_tests();
+
+	/* 18. Unpopulated pte scan-path consistency */
+	unpopulated_scan_test();
+	unpopulated_thp_scan_test();
 
 	close(pagemap_fd);
 	ksft_finished();

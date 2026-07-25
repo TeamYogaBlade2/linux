@@ -43,6 +43,7 @@ static const struct mtk_drive_desc mtk_drive[] = {
 	[DRV_GRP2] = { 2, 8, 2, 1 },
 	[DRV_GRP3] = { 2, 8, 2, 2 },
 	[DRV_GRP4] = { 2, 16, 2, 1 },
+	[DRV_GRP5] = { 4, 32, 4, 1 },
 };
 
 static void mtk_w32(struct mtk_pinctrl *pctl, u8 i, u32 reg, u32 val)
@@ -236,14 +237,23 @@ EXPORT_SYMBOL_GPL(mtk_hw_get_value);
 static int mtk_xt_find_eint_num(struct mtk_pinctrl *hw, unsigned long eint_n)
 {
 	const struct mtk_pin_desc *desc;
-	int i = 0;
+	int i, err, value;
 
 	desc = (const struct mtk_pin_desc *)hw->soc->pins;
 
-	while (i < hw->soc->npins) {
+	/* If there's a pin muxed to this EINT, use it */
+	for (i = 0; i < hw->soc->npins; i++) {
+		if (desc[i].eint.eint_n == eint_n) {
+			err = mtk_hw_get_value(hw, &desc[i],
+			                       PINCTRL_PIN_REG_MODE, &value);
+			if (!err && value == desc[i].eint.eint_m)
+				return desc[i].number;
+		}
+	}
+
+	for (i = 0; i < hw->soc->npins; i++) {
 		if (desc[i].eint.eint_n == eint_n)
 			return desc[i].number;
-		i++;
 	}
 
 	return EINT_NA;

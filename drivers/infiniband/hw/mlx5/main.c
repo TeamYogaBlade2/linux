@@ -969,7 +969,6 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 	if (err)
 		return err;
 
-	memset(props, 0, sizeof(*props));
 	err = mlx5_query_system_image_guid(ibdev,
 					   &props->sys_image_guid);
 	if (err)
@@ -5501,13 +5500,13 @@ static int __init mlx5_ib_init(void)
 {
 	int ret;
 
-	xlt_emergency_page = (void *)__get_free_page(GFP_KERNEL);
+	xlt_emergency_page = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!xlt_emergency_page)
 		return -ENOMEM;
 
 	mlx5_ib_event_wq = alloc_ordered_workqueue("mlx5_ib_event_wq", 0);
 	if (!mlx5_ib_event_wq) {
-		free_page((unsigned long)xlt_emergency_page);
+		kfree(xlt_emergency_page);
 		return -ENOMEM;
 	}
 
@@ -5538,10 +5537,11 @@ mp_err:
 dd_err:
 	mlx5r_rep_cleanup();
 rep_err:
+	rcu_barrier();
 	mlx5_ib_qp_event_cleanup();
 qp_event_err:
 	destroy_workqueue(mlx5_ib_event_wq);
-	free_page((unsigned long)xlt_emergency_page);
+	kfree(xlt_emergency_page);
 	return ret;
 }
 
@@ -5551,10 +5551,11 @@ static void __exit mlx5_ib_cleanup(void)
 	auxiliary_driver_unregister(&mlx5r_driver);
 	auxiliary_driver_unregister(&mlx5r_mp_driver);
 	mlx5r_rep_cleanup();
+	rcu_barrier();
 
 	mlx5_ib_qp_event_cleanup();
 	destroy_workqueue(mlx5_ib_event_wq);
-	free_page((unsigned long)xlt_emergency_page);
+	kfree(xlt_emergency_page);
 }
 
 module_init(mlx5_ib_init);

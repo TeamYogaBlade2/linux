@@ -24,6 +24,7 @@ description: |
   - LED
   - Keys
   - Power controller
+  - Accessory detection
 
   It is interfaced to host controller using SPI interface by a proprietary hardware
   called PMIC wrapper or pwrap. MT6397/MT6323 PMIC is a child device of pwrap.
@@ -112,6 +113,31 @@ properties:
     required:
       - compatible
 
+  accdet:
+    type: object
+    description:
+      Accessory detection support with MT6323.
+    additionalProperties: false
+
+    properties:
+      compatible:
+        const: mediatek,mt6323-accdet
+
+      interrupts:
+        items:
+          - description: Interrupt from the GPIO to wake up accdet.
+          - description: PMIC interrupt for insertion, removal and keys events.
+
+      interrupt-names:
+        items:
+          - const: eint
+          - const: pmic
+
+    required:
+      - compatible
+      - interrupts
+      - interrupt-names
+
   adc:
     type: object
     $ref: /schemas/iio/adc/mediatek,mt6359-auxadc.yaml#
@@ -120,13 +146,14 @@ properties:
   audio-codec:
     type: object
     description:
-      Audio codec support with MT6358 and MT6397.
+      Audio codec support with MT6323, MT6358 and MT6397.
     additionalProperties: true
 
     properties:
       compatible:
         oneOf:
           - enum:
+              - mediatek,mt6323-sound
               - mediatek,mt6358-sound
               - mediatek,mt6359-codec
               - mediatek,mt6397-codec

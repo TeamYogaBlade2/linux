@@ -22,6 +22,10 @@
 
 /* SMI COMMON */
 #define SMI_L1LEN			0x100
+#define MT6572_SMI_L1LEN		0x200
+
+#define MT6572_SMI_L1_ARB0		0x204
+#define MT6572_SMI_L1_ARB1		0x208
 
 #define SMI_L1_ARB			0x200
 #define SMI_BUS_SEL			0x220
@@ -37,6 +41,7 @@
 #define SMI_DUMMY			0x444
 
 /* SMI LARB */
+#define SMI_LARB_STAT                   0x0
 #define SMI_LARB_SLP_CON                0xc
 #define SLP_PROT_EN                     BIT(0)
 #define SLP_PROT_RDY                    BIT(16)
@@ -48,8 +53,13 @@
 #define SMI_LARB_SW_FLAG		0x40
 #define SMI_LARB_SW_FLAG_1		0x1
 
+#define SMI_LARB_BWFILTER_EN     0x60
+#define SMI_LARB_OSTD_CTRL_EN    0x64
+
 #define SMI_LARB_OSTDL_PORT		0x200
 #define SMI_LARB_OSTDL_PORTx(id)	(SMI_LARB_OSTDL_PORT + (((id) & 0x1f) << 2))
+
+#define SMI_LARB_FIFO_STAT0      0x600
 
 /* Below are about mmu enable registers, they are different in SoCs */
 /* gen1: mt2701 */
@@ -92,6 +102,7 @@
 #define MTK_SMI_FLAG_SW_FLAG		BIT(1)
 #define MTK_SMI_FLAG_SLEEP_CTL		BIT(2)
 #define MTK_SMI_FLAG_CFG_PORT_SEC_CTL	BIT(3)
+#define MTK_SMI_FLAG_BW_CALIBRATE     BIT(4)
 #define MTK_SMI_CAPS(flags, _x)		(!!((flags) & (_x)))
 
 struct mtk_smi_reg_pair {
@@ -100,6 +111,7 @@ struct mtk_smi_reg_pair {
 };
 
 enum mtk_smi_type {
+	MTK_SMI_GEN0,
 	MTK_SMI_GEN1,
 	MTK_SMI_GEN2,		/* gen2 smi common */
 	MTK_SMI_GEN2_SUB_COMM,	/* gen2 smi sub common */
@@ -141,10 +153,8 @@ struct mtk_smi {
 	unsigned int			clk_num;
 	struct clk_bulk_data		clks[MTK_SMI_CLK_NR_MAX];
 	struct clk			*clk_async; /*only needed by mt2701*/
-	union {
-		void __iomem		*smi_ao_base; /* only for gen1 */
-		void __iomem		*base;	      /* only for gen2 */
-	};
+	void __iomem		*smi_ao_base;
+	void __iomem		*base;
 	struct device			*smi_common_dev; /* for sub common */
 	const struct mtk_smi_common_plat *plat;
 };
@@ -187,6 +197,65 @@ static const struct component_ops mtk_smi_larb_component_ops = {
 	.bind = mtk_smi_larb_bind,
 	.unbind = mtk_smi_larb_unbind,
 };
+
+static int mtk_smi_larb_config_port_gen0(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
+	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
+	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
+					      NULL;
+	int i, m4u_port_id, larb_port_num;
+	u32 sec_con_val, reg_val, tmp;
+	int ret;
+
+	m4u_port_id = larb_gen->port_in_larb[larb->larbid];
+	larb_port_num = larb_gen->port_in_larb[larb->larbid + 1] - m4u_port_id;
+
+	/* gen 1 part */
+	for (i = 0; i < larb_port_num; i++, m4u_port_id++) {
+		if (*larb->mmu & BIT(i)) {
+			sec_con_val = SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
+		} else {
+			continue;
+		}
+
+		reg_val = readl(common->smi_ao_base +
+				REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+		reg_val &= SMI_SECUR_CON_VAL_MSK(m4u_port_id);
+		reg_val |= sec_con_val;
+		reg_val |= SMI_SECUR_CON_VAL_DOMAIN(m4u_port_id);
+		writel(reg_val, common->smi_ao_base +
+					REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+	}
+
+	/* gen 2 part */
+	for (i = 0; i < SMI_LARB_PORT_NR_MAX && larbostd && !!larbostd[i]; i++)
+		writel_relaxed(larbostd[i],
+			       larb->base + SMI_LARB_OSTDL_PORTx(i));
+
+	/* some gen 0 SoCs need BW calibration */
+	if (MTK_SMI_CAPS(larb_gen->flags_general, MTK_SMI_FLAG_BW_CALIBRATE)) {
+		reg_val = readl_relaxed(larb->base + SMI_LARB_STAT);
+		if (!reg_val) {
+			writel_relaxed(0xffffffff,
+				       larb->base + SMI_LARB_BWFILTER_EN);
+
+			ret = readl_poll_timeout(
+				larb->base + SMI_LARB_FIFO_STAT0, tmp,
+				tmp == 0xaaaa, 500, 64 * 500);
+			if (ret)
+				dev_warn(dev,
+					 "BW limiter calibration timeout\n");
+
+			writel_relaxed(0, larb->base + SMI_LARB_BWFILTER_EN);
+			writel_relaxed(0xffffffff,
+				       larb->base + SMI_LARB_OSTD_CTRL_EN);
+		}
+	}
+
+	return 0;
+}
 
 static int mtk_smi_larb_config_port_gen1(struct device *dev)
 {
@@ -282,6 +351,11 @@ static int mtk_smi_larb_config_port_gen2_general(struct device *dev)
 	}
 	return 0;
 }
+
+static const u8 mtk_smi_larb_mt6572_ostd[][SMI_LARB_PORT_NR_MAX] = {
+  [0] = {0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f,
+  	0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f},
+};
 
 static const u8 mtk_smi_larb_mt6893_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[0] = {0x2, 0x6, 0x2, 0x2, 0x2, 0x28, 0x18, 0x18, 0x1, 0x1, 0x1, 0x8,
@@ -491,6 +565,14 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 	.larb_direct_to_common_mask = BIT(8) | BIT(9),      /* bdpsys */
 };
 
+static const struct mtk_smi_larb_gen mtk_smi_larb_mt6572 = {
+	/* larb0 has 16 ports */
+  .port_in_larb = { 0, 16 },
+  .config_port = mtk_smi_larb_config_port_gen0,
+  .flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
+  .ostd = mtk_smi_larb_mt6572_ostd,
+};
+
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6779 = {
 	.config_port  = mtk_smi_larb_config_port_gen2_general,
 	.larb_direct_to_common_mask =
@@ -548,6 +630,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt8195 = {
 static const struct of_device_id mtk_smi_larb_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-larb", .data = &mtk_smi_larb_mt2701},
 	{.compatible = "mediatek,mt2712-smi-larb", .data = &mtk_smi_larb_mt2712},
+	{.compatible = "mediatek,mt6572-smi-larb", .data = &mtk_smi_larb_mt6572},
 	{.compatible = "mediatek,mt6779-smi-larb", .data = &mtk_smi_larb_mt6779},
 	{.compatible = "mediatek,mt6795-smi-larb", .data = &mtk_smi_larb_mt8173},
 	{.compatible = "mediatek,mt6893-smi-larb", .data = &mtk_smi_larb_mt6893},
@@ -739,6 +822,14 @@ static struct platform_driver mtk_smi_larb_driver = {
 	}
 };
 
+static const struct mtk_smi_reg_pair mtk_smi_common_mt6572_init[SMI_COMMON_INIT_REGS_NR] = {
+	{MT6572_SMI_L1LEN, 0x3},
+	{MT6572_SMI_L1_ARB0, 0},
+	{MT6572_SMI_L1_ARB1, 0},
+	{SMI_M4U_TH, 0x29ca7},
+	{SMI_READ_FIFO_TH, 0x320},
+};
+
 static const struct mtk_smi_reg_pair mtk_smi_common_mt6795_init[SMI_COMMON_INIT_REGS_NR] = {
 	{SMI_L1_ARB, 0x1b},
 	{SMI_M4U_TH, 0xce810c85},
@@ -753,6 +844,11 @@ static const struct mtk_smi_reg_pair mtk_smi_common_mt8195_init[SMI_COMMON_INIT_
 	{SMI_FIFO_TH2, 0x506090a},
 	{SMI_DCM, 0x4f1},
 	{SMI_DUMMY, 0x1},
+};
+
+static const struct mtk_smi_common_plat mtk_smi_common_mt6572 = {
+	.type     = MTK_SMI_GEN0,
+	.init     = mtk_smi_common_mt6572_init,
 };
 
 static const struct mtk_smi_common_plat mtk_smi_common_gen1 = {
@@ -843,6 +939,7 @@ static const struct mtk_smi_common_plat mtk_smi_common_mt8365 = {
 static const struct of_device_id mtk_smi_common_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-common", .data = &mtk_smi_common_gen1},
 	{.compatible = "mediatek,mt2712-smi-common", .data = &mtk_smi_common_gen2},
+	{.compatible = "mediatek,mt6572-smi-common", .data = &mtk_smi_common_mt6572},
 	{.compatible = "mediatek,mt6779-smi-common", .data = &mtk_smi_common_mt6779},
 	{.compatible = "mediatek,mt6795-smi-common", .data = &mtk_smi_common_mt6795},
 	{.compatible = "mediatek,mt6893-smi-common", .data = &mtk_smi_common_mt6893},
@@ -883,31 +980,42 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	/*
-	 * for mtk smi gen 1, we need to get the ao(always on) base to config
-	 * m4u port, and we need to enable the aync clock for transform the smi
-	 * clock into emi clock domain, but for mtk smi gen2, there's no smi ao
-	 * base.
-	 */
-	if (common->plat->type == MTK_SMI_GEN1) {
-		common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(common->smi_ao_base))
-			return PTR_ERR(common->smi_ao_base);
-
-		common->clk_async = devm_clk_get_enabled(dev, "async");
-		if (IS_ERR(common->clk_async))
-			return PTR_ERR(common->clk_async);
-	} else {
-		common->base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(common->base))
-			return PTR_ERR(common->base);
-	}
-
-	/* link its smi-common if this is smi-sub-common */
-	if (common->plat->type == MTK_SMI_GEN2_SUB_COMM) {
-		ret = mtk_smi_device_link_common(dev, &common->smi_common_dev);
-		if (ret < 0)
-			return ret;
+	switch (common->plat->type) {
+		case MTK_SMI_GEN0:
+			/*
+			 * gen 0 uses 2 mmio ranges: ao base for iommu configuration,
+			 * and ext base for ostd, fifo and bw limiter setup
+			 */
+			common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->smi_ao_base))
+				return PTR_ERR(common->smi_ao_base);
+			common->base = devm_platform_ioremap_resource(pdev, 1);
+			if (IS_ERR(common->base))
+				return PTR_ERR(common->base);
+			break;
+		case MTK_SMI_GEN1:
+			/*
+			 * gen 1 needs async clock to transform the smi clock to the
+			 * emi clock domain
+			 */
+			common->smi_ao_base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->smi_ao_base))
+				return PTR_ERR(common->smi_ao_base);
+			common->clk_async = devm_clk_get_enabled(dev, "async");
+			if (IS_ERR(common->clk_async))
+				return PTR_ERR(common->clk_async);
+			break;
+		case MTK_SMI_GEN2:
+			common->base = devm_platform_ioremap_resource(pdev, 0);
+			if (IS_ERR(common->base))
+				return PTR_ERR(common->base);
+			break;
+		case MTK_SMI_GEN2_SUB_COMM:
+			/* link its smi-common if this is smi-sub-common */
+			ret = mtk_smi_device_link_common(dev, &common->smi_common_dev);
+			if (ret < 0)
+				return ret;
+			break;
 	}
 
 	pm_runtime_enable(dev);
@@ -936,13 +1044,15 @@ static int __maybe_unused mtk_smi_common_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	if (common->plat->type != MTK_SMI_GEN2)
+	if (common->plat->type != MTK_SMI_GEN0 && common->plat->type != MTK_SMI_GEN2)
 		return 0;
 
 	for (i = 0; i < SMI_COMMON_INIT_REGS_NR && init && init[i].offset; i++)
 		writel_relaxed(init[i].value, common->base + init[i].offset);
 
-	writel(bus_sel, common->base + SMI_BUS_SEL);
+	if (common->plat->type == MTK_SMI_GEN2)
+		writel(bus_sel, common->base + SMI_BUS_SEL);
+
 	return 0;
 }
 

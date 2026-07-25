@@ -364,11 +364,8 @@ static int max8903_probe(struct platform_device *pdev)
 					IRQF_TRIGGER_FALLING |
 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 					"MAX8903 DC IN", data);
-		if (ret) {
-			dev_err(dev, "Cannot request irq %d for DC (%d)\n",
-					gpiod_to_irq(data->dok), ret);
+		if (ret)
 			return ret;
-		}
 	}
 
 	if (data->uok) {
@@ -377,11 +374,8 @@ static int max8903_probe(struct platform_device *pdev)
 					IRQF_TRIGGER_FALLING |
 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 					"MAX8903 USB IN", data);
-		if (ret) {
-			dev_err(dev, "Cannot request irq %d for USB (%d)\n",
-					gpiod_to_irq(data->uok), ret);
+		if (ret)
 			return ret;
-		}
 	}
 
 	if (data->flt) {
@@ -390,11 +384,8 @@ static int max8903_probe(struct platform_device *pdev)
 					IRQF_TRIGGER_FALLING |
 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 					"MAX8903 Fault", data);
-		if (ret) {
-			dev_err(dev, "Cannot request irq %d for Fault (%d)\n",
-					gpiod_to_irq(data->flt), ret);
+		if (ret)
 			return ret;
-		}
 	}
 
 	return 0;

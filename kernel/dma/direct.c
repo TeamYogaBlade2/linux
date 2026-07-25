@@ -489,9 +489,8 @@ int dma_direct_map_sg(struct device *dev, struct scatterlist *sgl, int nents,
 		case PCI_P2PDMA_MAP_BUS_ADDR:
 			sg->dma_address = pci_p2pdma_bus_addr_map(
 				p2pdma_state.mem, sg_phys(sg));
-			sg_dma_len(sg) = sg->length;
 			sg_dma_mark_bus_address(sg);
-			continue;
+			break;
 		default:
 			ret = -EREMOTEIO;
 			goto out_unmap;
@@ -534,6 +533,8 @@ int dma_direct_mmap(struct device *dev, struct vm_area_struct *vma,
 	unsigned long user_count = vma_pages(vma);
 	unsigned long count = PAGE_ALIGN(size) >> PAGE_SHIFT;
 	unsigned long pfn = PHYS_PFN(dma_to_phys(dev, dma_addr));
+	const pgoff_t pgoff_start = vma_start_pgoff(vma);
+	const pgoff_t pgoff_end = vma_end_pgoff(vma);
 	int ret = -ENXIO;
 
 	vma->vm_page_prot = dma_pgprot(dev, vma->vm_page_prot, attrs);
@@ -545,9 +546,9 @@ int dma_direct_mmap(struct device *dev, struct vm_area_struct *vma,
 	if (dma_mmap_from_global_coherent(vma, cpu_addr, size, &ret))
 		return ret;
 
-	if (vma->vm_pgoff >= count || user_count > count - vma->vm_pgoff)
+	if (pgoff_start >= count || pgoff_end > count)
 		return -ENXIO;
-	return remap_pfn_range(vma, vma->vm_start, pfn + vma->vm_pgoff,
+	return remap_pfn_range(vma, vma->vm_start, pfn + pgoff_start,
 			user_count << PAGE_SHIFT, vma->vm_page_prot);
 }
 

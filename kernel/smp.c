@@ -137,9 +137,9 @@ csd_do_func(smp_call_func_t func, void *info, call_single_data_t *csd)
 	trace_csd_function_exit(func, csd);
 }
 
-#ifdef CONFIG_CSD_LOCK_WAIT_DEBUG
-
 static DEFINE_STATIC_KEY_MAYBE(CONFIG_CSD_LOCK_WAIT_DEBUG_DEFAULT, csdlock_debug_enabled);
+
+#ifdef CONFIG_CSD_LOCK_WAIT_DEBUG
 
 /*
  * Parse the csdlock_debug= kernel boot parameter.
@@ -182,16 +182,22 @@ static atomic_t csd_bug_count = ATOMIC_INIT(0);
 static void __csd_lock_record(call_single_data_t *csd)
 {
 	if (!csd) {
-		smp_mb(); /* NULL cur_csd after unlock. */
-		__this_cpu_write(cur_csd, NULL);
+		/*
+		 * Pairs with smp_load_acquire() of cur_csd in
+		 * csd_lock_wait_toolong(): orders any preceding CSD
+		 * callback/unlock before a remote reader observes NULL.
+		 */
+		smp_store_release(this_cpu_ptr(&cur_csd), NULL);
 		return;
 	}
 	__this_cpu_write(cur_csd_func, csd->func);
 	__this_cpu_write(cur_csd_info, csd->info);
-	smp_wmb(); /* func and info before csd. */
-	__this_cpu_write(cur_csd, csd);
-	smp_mb(); /* Update cur_csd before function call. */
-		  /* Or before unlock, as the case may be. */
+	/*
+	 * Pairs with smp_load_acquire() of cur_csd in
+	 * csd_lock_wait_toolong(): publishes cur_csd_func and
+	 * cur_csd_info before the non-NULL pointer becomes visible.
+	 */
+	smp_store_release(this_cpu_ptr(&cur_csd), csd);
 }
 
 static __always_inline void csd_lock_record(call_single_data_t *csd)
@@ -272,7 +278,13 @@ static bool csd_lock_wait_toolong(call_single_data_t *csd, u64 ts0, u64 *ts1, in
 		cpux = 0;
 	else
 		cpux = cpu;
-	cpu_cur_csd = smp_load_acquire(&per_cpu(cur_csd, cpux)); /* Before func and info. */
+	/*
+	 * Pairs with smp_store_release() of cur_csd in __csd_lock_record():
+	 * a non-NULL cur_csd here implies cur_csd_func and cur_csd_info
+	 * are the matching publication; a NULL value is ordered after any
+	 * preceding CSD callback/unlock on the remote CPU.
+	 */
+	cpu_cur_csd = smp_load_acquire(&per_cpu(cur_csd, cpux));
 	/* How long since this CSD lock was stuck. */
 	ts_delta = ts2 - ts0;
 	pr_alert("csd: %s non-responsive CSD lock (#%d) on CPU#%d, waiting %lld ns for CPU#%02d %pS(%ps).\n",
@@ -342,6 +354,10 @@ static __always_inline void csd_lock_wait(call_single_data_t *csd)
 	smp_cond_load_acquire(&csd->node.u_flags, !(VAL & CSD_FLAG_LOCK));
 }
 #else
+static __always_inline void __csd_lock_wait(call_single_data_t *csd)
+{
+}
+
 static void csd_lock_record(call_single_data_t *csd)
 {
 }
@@ -354,8 +370,22 @@ static __always_inline void csd_lock_wait(call_single_data_t *csd)
 
 static __always_inline void csd_lock(call_single_data_t *csd)
 {
-	csd_lock_wait(csd);
-	csd->node.u_flags |= CSD_FLAG_LOCK;
+	if (IS_ENABLED(CONFIG_CSD_LOCK_WAIT_DEBUG) &&
+	    static_branch_unlikely(&csdlock_debug_enabled)) {
+		unsigned int flags;
+
+		for (;;) {
+			__csd_lock_wait(csd);
+			flags = READ_ONCE(csd->node.u_flags);
+			if (!(flags & CSD_FLAG_LOCK) &&
+			    try_cmpxchg_acquire(&csd->node.u_flags, &flags,
+						flags | CSD_FLAG_LOCK))
+				break;
+		}
+	} else {
+		csd_lock_wait(csd);
+		csd->node.u_flags |= CSD_FLAG_LOCK;
+	}
 
 	/*
 	 * prevent CPU from reordering the above assignment
@@ -380,7 +410,8 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(call_single_data_t, csd_data);
 #ifdef CONFIG_CSD_LOCK_WAIT_DEBUG
 static call_single_data_t *get_single_csd_data(int cpu)
 {
-	if (static_branch_unlikely(&csdlock_debug_enabled))
+	if (static_branch_unlikely(&csdlock_debug_enabled) &&
+	    (unsigned int)cpu < nr_cpu_ids)
 		return per_cpu_ptr(&csd_data, cpu);
 	return this_cpu_ptr(&csd_data);
 }

@@ -1688,6 +1688,9 @@ int snd_hda_hdmi_generic_pcm_prepare(struct hda_pcm_stream *hinfo,
 		per_pin->channels = substream->runtime->channels;
 		per_pin->setup = true;
 
+		if (spec->ops.prepare)
+			spec->ops.prepare(codec, per_pin);
+
 		if (get_wcaps(codec, cvt_nid) & AC_WCAP_STRIPE) {
 			stripe = snd_hdac_get_stream_stripe_ctl(&codec->bus->core,
 								substream);
@@ -2233,8 +2236,10 @@ void snd_hda_hdmi_acomp_pin_eld_notify(void *audio_ptr, int port, int dev_id)
 	/* skip notification during system suspend (but not in runtime PM);
 	 * the state will be updated at resume
 	 */
-	if (codec->core.dev.power.power_state.event == PM_EVENT_SUSPEND)
+	if (codec->core.dev.power.power_state.event == PM_EVENT_SUSPEND) {
+		codec->acomp_requested_resume = 1;
 		return;
+	}
 
 	snd_hda_hdmi_check_presence_and_report(codec, pin_nid, dev_id);
 }

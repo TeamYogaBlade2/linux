@@ -1752,10 +1752,8 @@ static int bq256xx_probe(struct i2c_client *client)
 						IRQF_TRIGGER_FALLING |
 						IRQF_ONESHOT,
 						dev_name(&client->dev), bq);
-		if (ret < 0) {
-			dev_err(dev, "get irq fail: %d\n", ret);
+		if (ret < 0)
 			return ret;
-		}
 	}
 
 	ret = bq256xx_hw_init(bq);

@@ -550,7 +550,6 @@ struct sched_statistics {
 	s64				exec_max;
 	u64				slice_max;
 
-	u64				nr_migrations_cold;
 	u64				nr_failed_migrations_affine;
 	u64				nr_failed_migrations_running;
 	u64				nr_failed_migrations_hot;
@@ -563,8 +562,6 @@ struct sched_statistics {
 	u64				nr_wakeups_remote;
 	u64				nr_wakeups_affine;
 	u64				nr_wakeups_affine_attempts;
-	u64				nr_wakeups_passive;
-	u64				nr_wakeups_idle;
 
 #ifdef CONFIG_SCHED_CORE
 	u64				core_forceidle_sum;
@@ -575,6 +572,7 @@ struct sched_statistics {
 struct sched_entity {
 	/* For load-balancing: */
 	struct load_weight		load;
+	struct load_weight		h_load;
 	struct rb_node			run_node;
 	u64				deadline;
 	u64				min_vruntime;
@@ -1191,6 +1189,7 @@ struct task_struct {
 	unsigned long			last_switch_time;
 #endif
 	/* Filesystem information: */
+	struct fs_struct		*real_fs;
 	struct fs_struct		*fs;
 
 	/* Open file information: */
@@ -1288,6 +1287,7 @@ struct task_struct {
 	u64				curr_chain_key;
 	int				lockdep_depth;
 	unsigned int			lockdep_recursion;
+	unsigned int			lockdep_seq;
 	struct held_lock		held_locks[MAX_LOCK_DEPTH];
 #endif
 

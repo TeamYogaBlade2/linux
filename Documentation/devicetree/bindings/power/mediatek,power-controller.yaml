@@ -23,6 +23,7 @@ properties:
 
   compatible:
     enum:
+      - mediatek,mt6572-power-controller
       - mediatek,mt6735-power-controller
       - mediatek,mt6795-power-controller
       - mediatek,mt6893-power-controller
@@ -34,6 +35,7 @@ properties:
       - mediatek,mt8189-power-controller
       - mediatek,mt8192-power-controller
       - mediatek,mt8195-power-controller
+      - mediatek,mt8196-hfrp-power-controller
       - mediatek,mt8196-hwv-hfrp-power-controller
       - mediatek,mt8196-hwv-scp-power-controller
       - mediatek,mt8196-power-controller
@@ -155,6 +157,18 @@ required:
   - compatible
 
 allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - mediatek,mt6572-power-controller
+    then:
+      properties:
+        access-controllers:
+          minItems: 1
+          maxItems: 1
+
   - if:
       properties:
         compatible:
