@@ -202,38 +202,122 @@ static int mt6323_speaker_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);	/* voice buffer, min gain */
-		regmap_write(priv->regmap, AUDTOP_CON(6), 0xb7f6);	/* HP input short, 2.4V, audio clk */
-		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0014);	/* audio bias + LCH DAC */
-		fsleep(10000);						/* bias/DAC settle */
-		regmap_write(priv->regmap, AUDTOP_CON(7), 0x3550);	/* connect voice buffer -> SPK amp */
-		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_CLR, PMIC_RG_AUD_SPK_PDN);	/* speaker clock on */
-		regmap_write(priv->regmap, SPK_CON(2), 0x0214);		/* class-AB OC protection */
+		/* Set voice buffer to smallest -22dB. */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);
+		/* enable input short of HP to prevent voice signal leakage . Enable 2.4V. */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0xb7f6);
+		/* enable clean 1.35VCM buffer in audioUL */
+		regmap_update_bits(priv->regmap, AUDTOP_CON(0), 0x7000, 0xf000);
+		/* enable audio bias. enable LCH DAC */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0014);
+		fsleep(10000);
+		/* enable voice buffer and -11dB gain. Inter-connect voice buffer to SPK AMP */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x3550);
+		/* Speaker clock */
+		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_CLR, PMIC_RG_AUD_SPK_PDN);
+		/* enable classAB OC function */
+		regmap_write(priv->regmap, SPK_CON(2), 0x0214);
+
 		/* SPK_CON9 PGA gain is owned by the "Speaker Volume" control. */
-		regmap_write(priv->regmap, SPK_CON(0), 0x3008);		/* enable amp, offset trim, class-D */
+
+		/* enable SPK-Amp with 0dB gain, enable SPK amp offset triming, select class D mode */
+		regmap_write(priv->regmap, SPK_CON(0), 0x3008);
+		/* Enable Class ABD */
 		regmap_write(priv->regmap, SPK_CON(0), 0x3009);
-		fsleep(5000);						/* amp power-up settle */
-		regmap_write(priv->regmap, SPK_CON(0), 0x3001);		/* class-D, amp enable */
-		regmap_write(priv->regmap, SPK_CON(12), 0x0a00);	/* output stage enable */
-		/* Ramp the voice-buffer gain to 0dB (final 0x35b0), 1ms/step. */
+		fsleep(5000);
+
+		/* enable SPK AMP with 0dB gain, select Class D. enable Amp. */
+		regmap_write(priv->regmap, SPK_CON(0), 0x3001);
+		/* spk output stage enable and enable */
+		regmap_write(priv->regmap, SPK_CON(12), 0x0a00);
 		for (i = 6; i <= 11; i++) {
 			fsleep(1000);
+			/* enable voice buffer and +1dB gain. Inter-connect voice buffer to SPK AMP */
 			regmap_write(priv->regmap, AUDTOP_CON(7), 0x3500 | (i << 4));
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
-		regmap_write(priv->regmap, SPK_CON(0), 0x0004);		/* mute + disable class-D amp */
-		regmap_write(priv->regmap, SPK_CON(12), 0x0000);	/* output stage off */
-		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_SET, PMIC_RG_AUD_SPK_PDN);	/* speaker clock off */
-		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);	/* voice buffer off */
-		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0000);	/* LCH DAC off */
-		regmap_write(priv->regmap, AUDTOP_CON(6), 0x37e2);	/* baseline */
+		for (i = 10; i >= 5; i--) {
+			/* ramp to -11dB. Inter-connect voice buffer to SPK AMP */
+			regmap_write(priv->regmap, AUDTOP_CON(7), 0x3500 | (i << 4));
+			fsleep(1000);
+		}
+
+		/* Mute Spk amp, select to original class AB mode. disable class-D Amp */
+		regmap_write(priv->regmap, SPK_CON(0), 0x0004);
+		/* Disable SPK output stage, disable spk amp. */
+		regmap_write(priv->regmap, SPK_CON(12), 0x0000);
+		/* Disable Speaker clock */
+		regmap_write(priv->regmap, MT6323_TOP_CKPDN1_SET, PMIC_RG_AUD_SPK_PDN);
+		/* set voice buffer gain as -22dB */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2500);
+		/* Disable voice buffer */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);
+		/* Disable audio bias and L-DAC */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0000);
+		/* Disable input short of HP drivers for voice signal leakage prevent and disable 2.4V reference buffer , audio DAC clock. */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0x37e2);
 		break;
 	}
 	return 0;
 }
 
+#define AUDTOP_CON7_TEARDOWN_MASK	GENMASK(7, 4)
+
+static int mt6323_earpiece_event(struct snd_soc_dapm_widget *w,
+				 struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6323_codec_priv *priv = snd_soc_component_get_drvdata(
+		snd_soc_dapm_to_component(w->dapm));
+	u32 val, target_vol;
+	int i;
+
+	regmap_read(priv->regmap, AUDTOP_CON(7), &val);
+	target_vol = FIELD_GET(AUDTOP_CON7_TEARDOWN_MASK, val);
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		/* Set voice buffer to smallest -22dB */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400);
+		/* enable input short of HP to prevent voice signal leakage . Enable 2.4V. */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0xb7f6);
+		/* enable clean 1.35VCM buffer in audioUL */
+		regmap_update_bits(priv->regmap, AUDTOP_CON(0), 0x7000, 0xf000);
+		/* enable audio bias. enable LCH DAC */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0014);
+
+		for (i = 0; i <= target_vol; i++) {
+			fsleep(5000);
+			regmap_write(priv->regmap, AUDTOP_CON(7), 0x2500 | (i << 4));
+		}
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		for (i = target_vol - 1; i >= 0; i--) {
+			fsleep(5000);
+			regmap_write(priv->regmap, AUDTOP_CON(7), 0x2500 | (i << 4));
+		}
+
+		/* Disable voice buffer but keep volume so we know the state */
+		regmap_write(priv->regmap, AUDTOP_CON(7), 0x2400 | (target_vol << 4));
+		/* Disable audio bias and L-DAC */
+		regmap_write(priv->regmap, AUDTOP_CON(4), 0x0000);
+		/* Disable input short of HP drivers for voice signal leakage prevent and disable 2.4V reference buffer , audio DAC clock. */
+		regmap_write(priv->regmap, AUDTOP_CON(6), 0x37e2);
+		break;
+	}
+	return 0;
+}
+
+static const struct snd_kcontrol_new spk_route_switch =
+	SOC_DAPM_SINGLE_VIRT("Switch", 1);
+
+static const struct snd_kcontrol_new earpiece_route_switch =
+	SOC_DAPM_SINGLE_VIRT("Switch", 1);
+
 static const struct snd_soc_dapm_widget mt6323_dapm_widgets[] = {
+	SND_SOC_DAPM_SWITCH("Speaker Route", SND_SOC_NOPM, 0, 0, &spk_route_switch),
+	SND_SOC_DAPM_SWITCH("Earpiece Route", SND_SOC_NOPM, 0, 0, &earpiece_route_switch),
+
 	SND_SOC_DAPM_SUPPLY("AUDCLK", SND_SOC_NOPM, 0, 0, mt6323_clk_event,
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_SUPPLY("NEWIF", SND_SOC_NOPM, 0, 0, mt6323_newif_event,
@@ -247,6 +331,9 @@ static const struct snd_soc_dapm_widget mt6323_dapm_widgets[] = {
 	SND_SOC_DAPM_OUT_DRV_E("Speaker Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
 			       mt6323_speaker_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_OUT_DRV_E("Earpiece Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
+			       mt6323_earpiece_event,
+			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
 static const struct snd_soc_dapm_route mt6323_dapm_routes[] = {
@@ -255,7 +342,12 @@ static const struct snd_soc_dapm_route mt6323_dapm_routes[] = {
 	{ "DAC", NULL, "NEWIF" },
 	{ "HP Driver", NULL, "DAC" },
 	{ "Headphone", NULL, "HP Driver" },
-	{ "Speaker Driver", NULL, "DAC" },
+
+	{ "Speaker Route", "Switch", "DAC" },
+	{ "Speaker Driver", NULL, "Speaker Route" },
+
+	{ "Earpiece Route", "Switch", "DAC" },
+	{ "Earpiece Driver", NULL, "Earpiece Route" },
 };
 
 /*
@@ -282,6 +374,9 @@ static const DECLARE_TLV_DB_RANGE(mt6323_spk_tlv,
 	1, 1, TLV_DB_SCALE_ITEM(0, 0, 0),
 	2, 15, TLV_DB_SCALE_ITEM(400, 100, 0));
 
+/* Voice buffer gain AUDTOP_CON7[7:4]. -22dB to +8dB in 2dB steps. */
+static const DECLARE_TLV_DB_SCALE(mt6323_voice_tlv, -2200, 200, 0);
+
 static const struct snd_kcontrol_new mt6323_snd_controls[] = {
 	MT6323_PIN_SWITCH("Headphone"),
 	SOC_DOUBLE_TLV("Headphone Volume", ZCD_CON2, 0, 7, ZCD_GAIN_CTL_MAX, 1,
@@ -289,6 +384,7 @@ static const struct snd_kcontrol_new mt6323_snd_controls[] = {
 	SOC_DOUBLE_TLV("Lineout Volume", ZCD_CON1, 0, 7, ZCD_GAIN_CTL_MAX, 1,
 		       mt6323_dl_tlv),
 	SOC_SINGLE_TLV("Speaker Volume", SPK_CON(9), 8, 0x0f, 0, mt6323_spk_tlv),
+	SOC_SINGLE_TLV("Earpiece Volume", AUDTOP_CON(7), 4, 15, 0, mt6323_voice_tlv),
 };
 
 static int mt6323_component_probe(struct snd_soc_component *component)
