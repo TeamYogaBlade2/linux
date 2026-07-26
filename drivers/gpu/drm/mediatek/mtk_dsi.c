@@ -85,6 +85,8 @@
 #define DSI_SIZE_CON		0x38
 #define DSI_HEIGHT				GENMASK(30, 16)
 #define DSI_WIDTH				GENMASK(14, 0)
+#define DSI_MEM_CONTI		0x3c
+#define DSI_WMEM_CONTI			0x3c
 #define DSI_HSA_WC		0x50
 #define DSI_HBP_WC		0x54
 #define DSI_HFP_WC		0x58
@@ -735,6 +737,8 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 
 	mtk_dsi_reset_engine(dsi);
 	mtk_dsi_phy_timconfig(dsi);
+
+	writel(DSI_WMEM_CONTI, dsi->regs + DSI_MEM_CONTI);
 
 	mtk_dsi_ps_control(dsi, true);
 	mtk_dsi_set_vm_cmd(dsi);
