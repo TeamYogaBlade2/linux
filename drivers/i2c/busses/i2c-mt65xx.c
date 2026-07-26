@@ -270,6 +270,7 @@ struct mtk_i2c_compatible {
 	unsigned char ltiming_adjust: 1;
 	unsigned char apdma_sync: 1;
 	unsigned char max_dma_support;
+	unsigned char broken_dma_wrrd;
 };
 
 struct mtk_i2c_ac_timing {
@@ -388,6 +389,20 @@ static const struct mtk_i2c_compatible mt6577_compat = {
 	.ltiming_adjust = 0,
 	.apdma_sync = 0,
 	.max_dma_support = 32,
+};
+
+static const struct mtk_i2c_compatible mt6582_compat = {
+	.regs = mt_i2c_regs_v1,
+	.pmic_i2c = 0,
+	.dcm = 1,
+	.auto_restart = 1,
+	.aux_len_reg = 0,
+	.timing_adjust = 1,
+	.dma_sync = 0,
+	.ltiming_adjust = 0,
+	.apdma_sync = 0,
+	.max_dma_support = 32,
+	.broken_dma_wrrd = 1,
 };
 
 static const struct mtk_i2c_compatible mt6589_compat = {
@@ -526,6 +541,7 @@ static const struct mtk_i2c_compatible mt8192_compat = {
 static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt2712-i2c", .data = &mt2712_compat },
 	{ .compatible = "mediatek,mt6577-i2c", .data = &mt6577_compat },
+	{ .compatible = "mediatek,mt6582-i2c", .data = &mt6582_compat },
 	{ .compatible = "mediatek,mt6589-i2c", .data = &mt6589_compat },
 	{ .compatible = "mediatek,mt7622-i2c", .data = &mt7622_compat },
 	{ .compatible = "mediatek,mt7981-i2c", .data = &mt7981_compat },
@@ -1256,6 +1272,29 @@ static int mtk_i2c_transfer(struct i2c_adapter *adap,
 		goto err_regulator;
 
 	i2c->auto_restart = i2c->dev_comp->auto_restart;
+
+	/* wrrd workaround fot mt6582 (hw bug) */
+	if (i2c->dev_comp->broken_dma_wrrd && num == 2) {
+		if (!(msgs[0].flags & I2C_M_RD) && (msgs[1].flags & I2C_M_RD) &&
+		    msgs[0].addr == msgs[1].addr) {
+			
+
+			i2c->op = I2C_MASTER_WR;
+			ret = mtk_i2c_do_transfer(i2c, &msgs[0], 1, 1);
+			if (ret < 0)
+				goto err_exit;
+
+			// udelay(30);
+
+			i2c->op = I2C_MASTER_RD;
+			ret = mtk_i2c_do_transfer(i2c, &msgs[1], 1, 0);
+			if (ret < 0)
+				goto err_exit;
+
+			ret = 2;
+			goto err_exit;
+		}
+	}
 
 	/* checking if we can skip restart and optimize using WRRD mode */
 	if (num == 2) {
