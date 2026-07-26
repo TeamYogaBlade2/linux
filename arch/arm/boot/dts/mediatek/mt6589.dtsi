@@ -798,16 +798,6 @@
 			clock-names = "system-clk", "rtc-clk";
 		};
 
-		mipi_tx0: dsi-phy@10012000 {
-			compatible = "mediatek,mt7623-mipi-tx",
-				     "mediatek,mt2701-mipi-tx";
-			reg = <0x10012000 0x90>;
-			clocks = <&dispsys CLK_DISP1_DSI_DIGITAL_LANE>; // uart_clk
-			clock-output-names = "mipi_tx0_pll";
-			#clock-cells = <0>;
-			#phy-cells = <0>;
-		};
-
 		pwrap: pwrap@1000f000 {
 			compatible = "mediatek,mt6589-pwrap";
 			reg = <0x1000f000 0x1000>,
@@ -822,9 +812,11 @@
 			reset-names = "pwrap", "pwrap-bridge";
 		};
 
-		mipi_tx: dsi-phy@10012000 {
+		mipi_tx0: dsi-phy@10012000 {
 			compatible = "mediatek,mt6589-mipi-tx";
+			reg = <0x10012000 0x90>;
 			clocks = <&clk26m>;
+			/* <&dispsys CLK_DISP1_DSI_DIGITAL_LANE> ? */
 			clock-output-names = "mipi_tx0_pll";
 			#clock-cells = <0>;
 			#phy-cells = <0>;
