@@ -765,6 +765,13 @@
 			status = "disabled";
 		};
 
+		color: color@1400a000 {
+			compatible = "mediatek,mt6589-disp-color";
+			reg = <0x1400a000 0x1000>;
+			interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_COLOR>;
+		};
+
 		imgsys: syscon@15000000 {
 			compatible = "mediatek,mt6589-imgsys", "syscon";
 			reg = <0x15000000 0x1000>;
