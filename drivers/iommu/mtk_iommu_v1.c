@@ -156,6 +156,9 @@ struct dma_iommu_mapping {
 
 #define MAX_M4U_CORES				2
 
+// static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1, 0};
+static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1};
+
 struct mtk_iommu_v1_data;
 
 struct mtk_iommu_v1_soc_data {
@@ -372,7 +375,7 @@ static void mt2701_get_fault_larb_port(u32 int_id, unsigned int *larb,
 static void mt6589_get_fault_larb_port(u32 int_id, unsigned int *larb,
 				       unsigned int *port)
 {
-	*larb = 6 - (int_id >> 12) & 0x7;
+	*larb = 6 - ((int_id >> 12) & 0x7);
 	*port = (int_id >> 8) & 0xF;
 }
 
@@ -440,9 +443,7 @@ static void mtk_iommu_v1_config(struct mtk_iommu_v1_data *data,
 		for (i = 0; i < fwspec->num_ids; i++) {
 			portid = mtk_iommu_v1_to_port(data, fwspec->ids[i]);
 			larbid = mtk_iommu_v1_to_larb(data, fwspec->ids[i]);
-
-			/* Determine which M4U core this LARB is connected to */
-			mmu_id = (larbid == 0 || larbid == 2) ? 0 : 1;
+			mmu_id = mt6589_larb_to_mmu[larbid];
 			base = data->cores[mmu_id].base;
 
 			/* Set distance = 1 */
@@ -802,6 +803,13 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 		   data->global_base + REG_MMUg_L2_SEL);
 	writel_relaxed(F_MMUg_DCM_ON(1), data->global_base + REG_MMUg_DCM);
 
+	/*
+	 * Before any TLB operations, set a safe dummy page table base address.
+	 * The real page table will be set later in domain_finalise().
+	 * Use the protect buffer as a dummy, as downstream does.
+	 */
+	writel_relaxed(data->protect_base, data->global_base + REG_MMUg_PT_BASE);
+
 	/* ---- L2 cache ---- */
 	if (data->l2_base) {
 		regval = F_L2_GDC_BYPASS(0) |
@@ -829,7 +837,7 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 			 F_INT_PFH_DMA_FIFO_OVERFLOW |
 			 F_INT_MISS_DMA_FIFO_OVERFLOW;
 		writel_relaxed(regval, base + REG_MMU_INT_CONTROL);
-
+		writel_relaxed(0xff, base + REG_MMU_FAULT_ST);
 		writel_relaxed(data->protect_base, base + REG_MMU_IVRP_PADDR);
 	}
 
@@ -1108,12 +1116,10 @@ static void mt6589_restore_pfh_settings(struct mtk_iommu_v1_data *data)
 {
 	const int *offsets = data->soc->larb_port_offsets;
 	int num_larb = data->soc->num_larb;
-	/* LARB to M4U core mapping (from downstream m4u_index_of_larb) */
-	static const int larb_to_mmu[] = {0, 0, 1, 0, 1, 0};
 	int larb, port;
 
 	for (larb = 0; larb < num_larb; larb++) {
-		int mmu_id = larb_to_mmu[larb];
+		int mmu_id = mt6589_larb_to_mmu[larb];
 		void __iomem *base = data->cores[mmu_id].base;
 		int first_port = offsets[larb];
 		int last_port = (larb == num_larb - 1) ?
@@ -1135,6 +1141,7 @@ static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
 	struct mtk_iommu_v1_data *data = dev_get_drvdata(dev);
 	struct mtk_iommu_v1_suspend_reg *reg = &data->reg;
 	void __iomem *base = data->cores[0].base;
+	int i;
 
 	if (data->soc->has_global_base) {
 		writel_relaxed(reg->mmug_ctrl, data->global_base + REG_MMUg_CTRL);
@@ -1146,7 +1153,7 @@ static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
 	}
 
 	/* Per-core restore (common) */
-	for (int i = 0; i < data->soc->num_cores; i++) {
+	for (i = 0; i < data->soc->num_cores; i++) {
 		base = data->cores[i].base;
 		writel_relaxed(reg->ctrl_reg, base + REG_MMU_CTRL_REG);
 		writel_relaxed(reg->int_control0, base + REG_MMU_INT_CONTROL);
