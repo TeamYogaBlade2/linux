@@ -51,6 +51,17 @@ static int mtk_reset(struct reset_controller_dev *rcdev, unsigned long id)
 	return mtk_reset_deassert(rcdev, id);
 }
 
+static int mtk_reset_rstb(struct reset_controller_dev *rcdev, unsigned long id)
+{
+	int ret;
+
+	ret = mtk_reset_deassert(rcdev, id);
+	if (ret)
+		return ret;
+
+	return mtk_reset_assert(rcdev, id);
+}
+
 static int mtk_reset_update_set_clr(struct reset_controller_dev *rcdev,
 				    unsigned long id, bool deassert)
 {
@@ -92,6 +103,13 @@ static const struct reset_control_ops mtk_reset_ops = {
 	.reset = mtk_reset,
 };
 
+static const struct reset_control_ops mtk_reset_rstb_ops = {
+	/* inverted logic for reset bar */
+	.assert = mtk_reset_deassert,
+	.deassert = mtk_reset_assert,
+	.reset = mtk_reset_rstb,
+};
+
 static const struct reset_control_ops mtk_reset_ops_set_clr = {
 	.assert = mtk_reset_assert_set_clr,
 	.deassert = mtk_reset_deassert_set_clr,
@@ -127,6 +145,9 @@ int mtk_register_reset_controller_with_dev(struct device *dev,
 	switch (desc->version) {
 	case MTK_RST_SIMPLE:
 		rcops = &mtk_reset_ops;
+		break;
+	case MTK_RST_SIMPLE_RSTB:
+		rcops = &mtk_reset_rstb_ops;
 		break;
 	case MTK_RST_SET_CLR:
 		rcops = &mtk_reset_ops_set_clr;
