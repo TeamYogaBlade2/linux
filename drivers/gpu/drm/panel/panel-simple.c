@@ -5809,6 +5809,11 @@ static const struct panel_desc_dsi boe_hx8896_a01 = {
 		.bpc = 8,
 		.size = { .width = 217, .height = 136 }, /* TODO */
 		.connector_type = DRM_MODE_CONNECTOR_DSI,
+		.delay = {
+			.prepare = 120, /* or 120 */
+			.enable = 100, /* or 0 */
+			.disable = 320,
+		},
 	},
 	.flags = MIPI_DSI_MODE_VIDEO,
 	.format = MIPI_DSI_FMT_RGB888,
@@ -5864,6 +5869,11 @@ static const struct panel_desc_dsi innolux_hx8896_a01 = {
 		.bpc = 8,
 		.size = { .width = 217, .height = 136 }, /* TODO */
 		.connector_type = DRM_MODE_CONNECTOR_DSI,
+		.delay = {
+			.prepare = 120, /* or 120 */
+			.enable = 100, /* or 0 */
+			.disable = 320,
+		},
 	},
 	.flags = MIPI_DSI_MODE_VIDEO,
 	.format = MIPI_DSI_FMT_RGB888,
@@ -5991,13 +6001,13 @@ static const struct of_device_id dsi_of_match[] = {
 		.compatible = "auo,b080uan01",
 		.data = &auo_b080uan01
 	}, {
-		.compatible = "boe,hx8896-a01",
+		.compatible = "boe,hx8896-a01-panel",
 		.data = &boe_hx8896_a01
 	}, {
 		.compatible = "boe,tv080wum-nl0",
 		.data = &boe_tv080wum_nl0
 	}, {
-		.compatible = "innolux,hx8896-a01",
+		.compatible = "innolux,hx8896-a01-panel",
 		.data = &innolux_hx8896_a01
 	}, {
 		.compatible = "lg,lh500wx1-sd03",

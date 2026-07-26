@@ -15,16 +15,19 @@
 		format = "r5g6b5";
 		//status = "disabled";
 	};
+};
 
-	reg_panel: regulator-panel {
-		compatible = "regulator-fixed";
-		regulator-name = "fixed-1.2V";
-		regulator-min-microvolt = <1200000>;
-		regulator-max-microvolt = <1200000>;
-		regulator-boot-on;
-		regulator-always-on;
+&pio {
+	panel_pins: panel-pins {
+		pins_power_en {
+			pinmux = <MT6589_GPIO137__FUNC_GPIO137>;
+		};
 	};
+};
 
+&mt6320_ldo_vrf28_2 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
 };
 
 &dsi {
@@ -33,13 +36,12 @@
 	status = "okay";
 
 	panel@0 {
-		compatible = "boe,hx8896-a01";
-		/*
-		 * or innolux,hx8896-a01
-		 * TODO: panel mux
-		 */
+		compatible = "boe,hx8896-a01-panel";
 		reg = <0>;
-		power-supply = <&reg_panel>;
+		power-supply = <&mt6320_ldo_vrf28_2>;
+		enable-gpios = <&pio 137 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_pins>;
 
 		port {
 			panel_in: endpoint {
@@ -47,6 +49,20 @@
 			};
 		};
 	};
+
+	/*
+	panel@0 {
+		compatible = "innolux,hx8896-a01";
+		reg = <0>;
+		power-supply = <&mt6320_ldo_vrf28_2>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+	*/
 
 	port {
 		dsi_out: endpoint {
