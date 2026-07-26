@@ -97,6 +97,28 @@
 
 #define OVL_COLOR_ALPHA		GENMASK(31, 24)
 
+/* MT6589 specific registers for YUV-to-RGB conversion matrix */
+#define DISP_REG_OVL_Y2R_BASE(n)	(0x0134 + 0x28 * (n))
+#define Y2R_R0				0x00
+#define Y2R_R1				0x04
+#define Y2R_G0				0x08
+#define Y2R_G1				0x0C
+#define Y2R_B0				0x10
+#define Y2R_B1				0x14
+#define Y2R_YUV_A0			0x18
+#define Y2R_YUV_A1			0x1C
+#define Y2R_RGB_A0			0x20
+#define Y2R_RGB_A1			0x24
+
+/* BT.601 coefficients: 5x3 matrix, 13-bit signed (as used by MT6589) */
+static const s16 mt6589_yuv2rgb_coef[5][3] = {
+	{ 306,  601,  117 },
+	{ -173, -339, 512 },
+	{ 512, -429, -83  },
+	{ 0,    0,    0   },
+	{ 0,    0,    0   },
+};
+
 static inline bool is_10bit_rgb(u32 fmt)
 {
 	switch (fmt) {
@@ -158,6 +180,15 @@ struct mtk_disp_ovl_data {
 	bool fmt_rgb565_is_0;
 	bool smi_id_en;
 	bool supports_afbc;
+	bool has_const_blend;
+	bool set_layer_src;
+	unsigned int vblank_en_mask;
+	unsigned int fme_und_bit;
+	unsigned int rdma0_eof_abn_bit;
+	unsigned int rdma1_eof_abn_bit;
+	unsigned int rdma0_fifo_und_bit;
+	unsigned int rdma1_fifo_und_bit;
+	unsigned int (*fmt_convert)(unsigned int fmt, unsigned int blend_mode);
 	const u32 blend_modes;
 	const u32 *formats;
 	size_t num_formats;
@@ -184,15 +215,15 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
 
-	if (reg & OVL_FME_UND)
+	if (reg & priv->data->fme_und_bit)
 		pr_err("OVL: OVL frame underflow\n");
-	if (reg & OVL_RDMA0_EOF_ABNORMAL)
+	if (reg & priv->data->rdma0_eof_abn_bit)
 		pr_err("OVL: RDMA0 didn't complete frame\n");
-	if (reg & OVL_RDMA1_EOF_ABNORMAL)
+	if (reg & priv->data->rdma1_eof_abn_bit)
 		pr_err("OVL: RDMA1 didn't complete frame\n");
-	if (reg & OVL_RDMA0_FIFO_UND)
+	if (reg & priv->data->rdma0_fifo_und_bit)
 		pr_err("OVL: RDMA0 FIFO underflow\n");
-	if (reg & OVL_RDMA1_FIFO_UND)
+	if (reg & priv->data->rdma1_fifo_und_bit)
 		pr_err("OVL: RDMA1 FIFO underflow\n");
 
 	/* Clear frame completion interrupt */
@@ -229,10 +260,8 @@ void mtk_ovl_enable_vblank(struct device *dev)
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
 	writel(0x0, ovl->regs + DISP_REG_OVL_INTSTA);
-	writel_relaxed(OVL_FME_CPL_INT | OVL_FME_UND_INT |
-	               OVL_RDMA0_EOF_ABNORMAL_INT | OVL_RDMA1_EOF_ABNORMAL_INT |
-	               OVL_RDMA0_FIFO_UND_INT | OVL_RDMA1_FIFO_UND_INT,
-	               ovl->regs + DISP_REG_OVL_INTEN);
+	writel_relaxed(ovl->data->vblank_en_mask,
+		       ovl->regs + DISP_REG_OVL_INTEN);
 }
 
 void mtk_ovl_disable_vblank(struct device *dev)
@@ -337,6 +366,37 @@ static void mtk_ovl_set_bit_depth(struct device *dev, int idx, u32 format,
 			   OVL_CON_CLRFMT_BIT_DEPTH_MASK(idx));
 }
 
+static void mt6589_ovl_write_yuv_matrix(struct mtk_disp_ovl *ovl,
+					unsigned int idx, struct cmdq_pkt *cmdq_pkt)
+{
+	void __iomem *base = ovl->regs;
+	unsigned int reg_base = DISP_REG_OVL_Y2R_BASE(idx);
+
+	mtk_ddp_write(cmdq_pkt,
+		      (mt6589_yuv2rgb_coef[0][1] << 16) | (mt6589_yuv2rgb_coef[0][0] & 0x1FFF),
+		      &ovl->cmdq_reg, base, reg_base + Y2R_R0);
+	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[0][2] & 0x1FFF,
+		      &ovl->cmdq_reg, base, reg_base + Y2R_R1);
+	mtk_ddp_write(cmdq_pkt,
+		      (mt6589_yuv2rgb_coef[1][1] << 16) | (mt6589_yuv2rgb_coef[1][0] & 0x1FFF),
+		      &ovl->cmdq_reg, base, reg_base + Y2R_G0);
+	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[1][2] & 0x1FFF,
+		      &ovl->cmdq_reg, base, reg_base + Y2R_G1);
+	mtk_ddp_write(cmdq_pkt,
+		      (mt6589_yuv2rgb_coef[2][1] << 16) | (mt6589_yuv2rgb_coef[2][0] & 0x1FFF),
+		      &ovl->cmdq_reg, base, reg_base + Y2R_B0);
+	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[2][2] & 0x1FFF,
+		      &ovl->cmdq_reg, base, reg_base + Y2R_B1);
+	/* Offsets and RGB gains (neutral: 0 offset, 1024 gain) */
+	mtk_ddp_write(cmdq_pkt, (0 << 16) | 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A0);
+	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A1);
+	mtk_ddp_write(cmdq_pkt, (1024 << 16) | 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A0);
+	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A1);
+	/* Enable YUV-to-RGB conversion (bit 0 of some ctrl reg? Not needed on 6589,
+	 * matrix is automatically active when CLRFMT is YUV)
+	 */
+}
+
 void mtk_ovl_config(struct device *dev, unsigned int w,
 		    unsigned int h, unsigned int vrefresh,
 		    unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
@@ -413,6 +473,12 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 			    gmc_thrshd_h << 16 | gmc_thrshd_h << 24;
 	mtk_ddp_write(cmdq_pkt, gmc_value,
 		      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RDMA_GMC(idx));
+
+	/* For MT6589, explicitly set layer source to memory (0) */
+	if (ovl->data->set_layer_src)
+		mtk_ddp_write_mask(cmdq_pkt, 0, &ovl->cmdq_reg, ovl->regs,
+				   DISP_REG_OVL_CON(idx), GENMASK(29, 28));
+
 	mtk_ddp_write_mask(cmdq_pkt, BIT(idx), &ovl->cmdq_reg, ovl->regs,
 			   DISP_REG_OVL_SRC_CON, BIT(idx));
 }
@@ -428,8 +494,7 @@ void mtk_ovl_layer_off(struct device *dev, unsigned int idx,
 		      DISP_REG_OVL_RDMA_CTRL(idx));
 }
 
-static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl,
-					struct mtk_plane_state *state)
+static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl, struct mtk_plane_state *state)
 {
 	unsigned int fmt = state->pending.format;
 	unsigned int blend_mode = DRM_MODE_BLEND_COVERAGE;
@@ -494,6 +559,27 @@ static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl,
 	}
 }
 
+static unsigned int mt6589_fmt_convert(unsigned int fmt, unsigned int blend_mode)
+{
+	switch (fmt) {
+	case DRM_FORMAT_RGB565:  return (1 << 12);
+	case DRM_FORMAT_BGR565:  return (1 << 12) | OVL_CON_BYTE_SWAP;
+	case DRM_FORMAT_RGB888:  return (0 << 12);
+	case DRM_FORMAT_BGR888:  return (0 << 12) | OVL_CON_BYTE_SWAP;
+	case DRM_FORMAT_RGBA8888:
+	case DRM_FORMAT_RGBX8888: return (3 << 12);
+	case DRM_FORMAT_BGRA8888:
+	case DRM_FORMAT_BGRX8888: return (3 << 12) | OVL_CON_BYTE_SWAP;
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XRGB8888: return (2 << 12);
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888: return (2 << 12) | OVL_CON_BYTE_SWAP;
+	case DRM_FORMAT_UYVY:    return (9 << 12);
+	case DRM_FORMAT_YUYV:    return (8 << 12);
+	}
+	return 0;
+}
+
 static void mtk_ovl_afbc_layer_config(struct mtk_disp_ovl *ovl,
 				      unsigned int idx,
 				      struct mtk_plane_pending_state *pending,
@@ -530,7 +616,7 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	unsigned int offset = (pending->y << 16) | pending->x;
 	unsigned int src_size = (pending->height << 16) | pending->width;
 	unsigned int blend_mode = state->base.pixel_blend_mode;
-	unsigned int ignore_pixel_alpha = 0;
+	unsigned int ignore_pixel_alpha = 0, const_blend = 0;
 	unsigned int con;
 
 	if (!pending->enable) {
@@ -538,7 +624,14 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 		return;
 	}
 
-	con = mtk_ovl_fmt_convert(ovl, state);
+	if (ovl->data->fmt_convert)
+		con = ovl->data->fmt_convert(fmt, blend_mode);
+	else
+		con = mtk_ovl_fmt_convert(ovl, state);
+
+	if (ovl->data->has_const_blend)
+		const_blend = OVL_CONST_BLEND;
+
 	if (state->base.fb) {
 		con |= state->base.alpha & OVL_CON_ALPHA;
 
@@ -556,7 +649,7 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 		 * affect the result. Therefore we use !has_alpha as the condition.
 		 */
 		if (blend_mode == DRM_MODE_BLEND_PIXEL_NONE || !state->base.fb->format->has_alpha)
-			ignore_pixel_alpha = OVL_CONST_BLEND;
+			ignore_pixel_alpha = const_blend;
 	}
 
 	/*
@@ -596,6 +689,11 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 
 	mtk_ovl_set_bit_depth(dev, idx, fmt, cmdq_pkt);
 	mtk_ovl_layer_on(dev, idx, cmdq_pkt);
+
+	/* For MT6589, write YUV conversion matrix if needed */
+	if (ovl->data->fmt_convert == mt6589_fmt_convert &&
+	    (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV))
+		mt6589_ovl_write_yuv_matrix(ovl, idx, cmdq_pkt);
 }
 
 void mtk_ovl_bgclr_in_on(struct device *dev)
@@ -716,6 +814,15 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.has_const_blend = false,
+	.set_layer_src = true,
+	.vblank_en_mask = 0xF, /* Reg update, frame done, underflow, sw reset done */
+	.fme_und_bit = BIT(2),
+	.rdma0_eof_abn_bit = BIT(4),
+	.rdma1_eof_abn_bit = BIT(5),
+	.rdma0_fifo_und_bit = BIT(8),
+	.rdma1_fifo_und_bit = BIT(9),
+	.fmt_convert = mt6589_fmt_convert,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
