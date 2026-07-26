@@ -1,0 +1,433 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+
+ */
+
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/mediatek,mt6582-clk.h>
+#include <dt-bindings/reset/mediatek,mt6582-resets.h>
+#include <dt-bindings/pinctrl/mt6582-pinfunc.h>
+#include <dt-bindings/phy/phy.h>
+#include <dt-bindings/gpio/gpio.h>
+// #include <dt-bindings/power/mediatek,mt6582-power.h>
+#include <dt-bindings/thermal/thermal.h>
+// #include <dt-bindings/memory/mt6582-larb-port.h>
+
+/ {
+	compatible = "simple-bus";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&sysirq>;
+	
+
+	cpus {
+		#size-cells = <0>;
+		#address-cells = <1>;
+		enable-method = "mediatek,mt6589-smp";
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x0>;
+			clocks = <&infracfg CLK_INFRA_CPUSEL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+			clock-names = "cpu", "intermediate";
+			// operating-points-v2 = <&cpu_opp_table>;
+			#cooling-cells = <2>;
+			clock-frequency = <1300000000>;
+		};
+
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x1>;
+			clocks = <&infracfg CLK_INFRA_CPUSEL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+			clock-names = "cpu", "intermediate";
+			// operating-points-v2 = <&cpu_opp_table>;
+			#cooling-cells = <2>;
+			clock-frequency = <1300000000>;
+		};
+
+		cpu2: cpu@2 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x2>;
+			clocks = <&infracfg CLK_INFRA_CPUSEL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+			clock-names = "cpu", "intermediate";
+			// operating-points-v2 = <&cpu_opp_table>;
+			#cooling-cells = <2>;
+			clock-frequency = <1300000000>;
+		};
+
+		cpu3: cpu@3 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a7";
+			reg = <0x3>;
+			clocks = <&infracfg CLK_INFRA_CPUSEL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>;
+			clock-names = "cpu", "intermediate";
+			// operating-points-v2 = <&cpu_opp_table>;
+			#cooling-cells = <2>;
+			clock-frequency = <1300000000>;
+		};
+	};
+
+	pmu {
+		compatible = "arm,cortex-a7-pmu";
+		interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 5 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 6 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 7 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-affinity = <&cpu0>, <&cpu1>, <&cpu2>, <&cpu3>;
+	};
+
+	system_clk: dummy13m {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <13000000>;
+	};
+
+	clk26m: clk26m {
+            compatible = "fixed-clock";
+            #clock-cells = <0>;
+            clock-frequency = <26000000>;
+            clock-output-names = "clk26m";
+	};
+
+	clk32k: clk32k {
+            compatible = "fixed-clock";
+            #clock-cells = <0>;
+            clock-frequency = <32768>;
+            clock-output-names = "clk32k";
+        };
+
+	dmpll: dmpll {
+            compatible = "fixed-clock";
+            #clock-cells = <0>;
+            clock-frequency = <533000000>;
+            clock-output-names = "dmpll";
+        };
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		topckgen: syscon@10000000 {
+			compatible = "mediatek,mt6582-topckgen",
+			     	"syscon";
+			reg = <0x10000000 0x1000>;
+			#clock-cells = <1>;
+			//clocks = <&CLK_TOP_CLK26M>;
+		};
+ 		
+		infracfg: syscon@10001000 {
+			compatible = "mediatek,mt6582-infracfg",
+			     	"syscon";
+			reg = <0x10001000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+			//clocks = <&CLK_TOP_CLK26M>;
+		};
+		
+
+		pericfg: syscon@10003000 {
+			compatible = "mediatek,mt6582-pericfg",
+			      	"syscon";
+			reg = <0x10003000 0x1000>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
+		};
+		
+		pio: pinctrl@10005000 {
+    			compatible = "mediatek,mt6582-pinctrl";
+    			reg = <0x10005000 0x1000>,
+				  <0x1000b000 0x1000>;
+			reg-names = "gpio", "eint";
+    			#pinctrl-cells = <1>;
+			gpio-ranges = <&pio 0 0 168>; 
+			gpio-controller;
+			#gpio-cells = <2>;
+    			interrupt-controller;
+    			#interrupt-cells = <2>;
+    			interrupt-parent = <&gic>;
+    			interrupts = <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>,
+					 <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		watchdog: watchdog@10007000 {
+			compatible = "mediatek,mt6582-wdt", "mediatek,mt6589-wdt";
+			reg = <0x10007000 0x100>;
+		};
+
+		gpt: gpt@10008000 {
+			compatible = "mediatek,mt6582-timer", "mediatek,mt6577-timer";
+			reg = <0x10008000 0x80>;
+			interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&system_clk>, <&clk32k>;
+		};
+
+		pwrap: pwrap@1000d000 {
+			compatible =
+			     "mediatek,mt6582-pwrap";
+			reg = < 0x1000d000  0x1000>;
+			reg-names = "pwrap";
+			interrupts = <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>;
+			resets = <&infracfg INFRA_RST0_PMIC_WRAP_RST>;
+			reset-names = "pwrap";
+			clocks = <&topckgen CLK_TOP_PMICSPI_SEL>,
+			 	<&infracfg CLK_INFRA_PMICWRAP>;
+			clock-names = "spi", "wrap";
+			mediatek,syscon = <&infracfg>;
+        		pinctrl-names = "default";
+        		pinctrl-0 = <&pwrap_pins_default>;
+		};
+		/* vencpll */
+		ddrphy: syscon@1000f000 {
+			compatible = "mediatek,mt6582-ddrphy",
+			     	"syscon";
+			reg = <0x1000f000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		sysirq: interrupt-controller@10200100 {
+			compatible = "mediatek,mt6582-sysirq", "mediatek,mt6577-sysirq";
+			reg = <0x10200100 0x1c>;
+			interrupt-parent = <&gic>;
+			interrupt-controller;
+			#interrupt-cells = <3>;
+		};
+
+		apmixedsys: syscon@10209000 {
+			compatible = "mediatek,mt6582-apmixedsys",
+			     	"syscon";
+			reg = <0x10209000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		rng: rng@1020f000 {
+			compatible = "mediatek,mt6582-rng",
+					"mediatek,mt7623-rng";
+			reg = < 0x1020f000  0x1000>;
+			clocks = <&infracfg CLK_INFRA_TRNG>;
+			clock-names = "rng";
+			resets = <&infracfg INFRA_RST1_TRNG_RST>;
+		};
+
+		gic: interrupt-controller@10211000 {
+			compatible = "arm,cortex-a7-gic";
+			#interrupt-cells = <3>;
+			interrupt-controller;
+			interrupt-parent = <&gic>;
+			reg = <0x10211000 0x1000>,
+			      <0x10212000 0x2000>,
+			      <0x10214000 0x2000>,
+			      <0x10216000 0x2000>;
+		};
+
+		uart0: serial@11002000 {
+			compatible = "mediatek,mt6582-uart", "mediatek,mt6577-uart";
+			reg = <0x11002000 0x400>;
+			interrupts = <GIC_SPI 51 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&clk26m>, <&clk26m>;
+			clock-names = "baud", "bus";
+			status = "disabled";
+		};
+
+		uart1: serial@11003000 {
+			compatible = "mediatek,mt6582-uart", "mediatek,mt6577-uart";
+			reg = <0x11003000 0x400>;
+			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&clk26m>, <&clk26m>;
+			clock-names = "baud", "bus";
+			status = "disabled";
+		};
+
+		uart2: serial@11004000 {
+			compatible = "mediatek,mt6582-uart", "mediatek,mt6577-uart";
+			reg = <0x11004000 0x400>;
+			interrupts = <GIC_SPI 53 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&clk26m>, <&clk26m>;
+			clock-names = "baud", "bus";
+			status = "disabled";
+		};
+
+		uart3: serial@11005000 {
+			compatible = "mediatek,mt6582-uart", "mediatek,mt6577-uart";
+			reg = <0x11005000 0x400>;
+			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&clk26m>, <&clk26m>;
+			clock-names = "baud", "bus";
+			status = "disabled";
+		};
+
+		// pwm: pwm@11006000 {
+		// 	compatible = "mediatek,mt7623-pwm";
+		// 	reg = <0x11006000 0x1000>;
+		// 	#pwm-cells = <2>;
+		// 	clocks = <&topckgen CLK_TOP_PWM_SEL>,
+		// 		<&pericfg CLK_PERI_PWM>,
+		// 		<&pericfg CLK_PERI_PWM1>,
+		// 		<&pericfg CLK_PERI_PWM2>,
+		// 		<&pericfg CLK_PERI_PWM3>,
+		// 		<&pericfg CLK_PERI_PWM4>,
+		// 		<&pericfg CLK_PERI_PWM5>;
+		// 	clock-names = "top", "main", "pwm1", "pwm2",
+		// 		"pwm3", "pwm4", "pwm5";
+		// 	status = "disabled";
+		// };
+
+		i2c0: i2c@11007000 {
+			compatible = "mediatek,mt6582-i2c";
+			reg = <0x11007000 0x70>,
+		          <0x11000200 0x80>;
+			interrupts = <GIC_SPI 44 IRQ_TYPE_LEVEL_LOW>;
+			clock-div = <16>;
+			clocks = <&pericfg CLK_PERI_I2C0>, <&pericfg CLK_PERI_AP_DMA>;
+			clock-names = "main", "dma";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c1: i2c@11008000 {
+			compatible = "mediatek,mt6582-i2c";
+			reg = <0x11008000 0x70>,
+				  <0x11000280 0x80>;
+			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_LOW>;
+			clock-div = <16>;
+			clocks = <&pericfg CLK_PERI_I2C1>, <&pericfg CLK_PERI_AP_DMA>;
+			clock-names = "main", "dma";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c2: i2c@11009000 {
+			compatible = "mediatek,mt6582-i2c";
+			reg = <0x11009000  0x70>,
+				  <0x11000360  0x80>;
+			interrupts = <GIC_SPI 46 IRQ_TYPE_LEVEL_LOW>;
+			clock-div = <16>;
+			clocks = <&pericfg CLK_PERI_I2C2>, <&pericfg CLK_PERI_AP_DMA>;
+			clock-names = "main", "dma";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		mmc0: mmc@11230000 {
+			compatible = "mediatek,mt6582-mmc";
+				
+			reg = < 0x11230000  0x1000>;
+			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI_MSDC30_0>,
+				<&topckgen CLK_TOP_MSDC30_0_SEL>;
+			clock-names = "source", "hclk";
+			resets = <&pericfg PERI_MSDC0_SW_RST>;
+			reset-names = "hrst";
+			status = "disabled";
+		};
+
+		mmc1: mmc@11240000 {
+			compatible = "mediatek,mt6582-mmc";
+				
+			reg = < 0x11240000  0x1000>;
+			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI_MSDC30_1>,
+				<&topckgen CLK_TOP_MSDC30_1_SEL>;
+			clock-names = "source", "hclk";
+			resets = <&pericfg PERI_MSDC1_SW_RST>;
+			reset-names = "hrst";
+			status = "disabled";
+		};
+    	};
+};
+
+&pio {
+	i2c0_pins: i2c0-default {
+		pin-i2c0 {
+			pinmux = <MT6582_PIN_84_SDA0__FUNC_SDA0>,
+				 <MT6582_PIN_85_SCL0__FUNC_SCL0>;
+			input-enable;
+			// bias-pull-up;
+		};
+	};
+
+	i2c1_pins: i2c1-default {
+		pin-i2c1 {
+			pinmux = <MT6582_PIN_86_SDA1__FUNC_SDA1>,
+				 <MT6582_PIN_87_SCL1__FUNC_SCL1>;
+			input-enable;
+			//bias-pull-up;
+			//bias-disable;
+		};
+	};
+
+	i2c2_pins: i2c2-default {
+		pin-i2c0 {
+			pinmux = <MT6582_PIN_88_SDA2__FUNC_SDA2>,
+				 <MT6582_PIN_89_SCL2__FUNC_SCL2>;
+			input-enable;
+			//bias-pull-up;
+			//bias-disable;
+		};
+	};
+
+	msdc0_pins_default: msdc0-default {
+		pins-cmd-dat{
+			pinmux = <MT6582_PIN_135_MSDC0_CMD__FUNC_MSDC0_CMD>,
+				 <MT6582_PIN_140_MSDC0_DAT0__FUNC_MSDC0_DAT0>,
+				 <MT6582_PIN_139_MSDC0_DAT1__FUNC_MSDC0_DAT1>,
+				 <MT6582_PIN_138_MSDC0_DAT2__FUNC_MSDC0_DAT2>,
+				 <MT6582_PIN_137_MSDC0_DAT3__FUNC_MSDC0_DAT3>,
+				 <MT6582_PIN_133_MSDC0_DAT4__FUNC_MSDC0_DAT4>,
+				 <MT6582_PIN_132_MSDC0_DAT5__FUNC_MSDC0_DAT5>,
+				 <MT6582_PIN_131_MSDC0_DAT6__FUNC_MSDC0_DAT6>,
+				 <MT6582_PIN_130_MSDC0_DAT7__FUNC_MSDC0_DAT7>;
+			input-enable;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+
+		};
+		pins-clk {
+			pinmux = <MT6582_PIN_136_MSDC0_CLK__FUNC_MSDC0_CLK>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_01>;
+		};
+		pins-rst {
+			pinmux = <MT6582_PIN_134_MSDC0_RSTB__FUNC_MSDC0_RSTB>;
+			bias-pull-up;
+		};
+	};
+	msdc0_pins_uhs: msdc0 {
+		pins-cmd-dat{
+			pinmux = <MT6582_PIN_135_MSDC0_CMD__FUNC_MSDC0_CMD>,
+				 <MT6582_PIN_140_MSDC0_DAT0__FUNC_MSDC0_DAT0>,
+				 <MT6582_PIN_139_MSDC0_DAT1__FUNC_MSDC0_DAT1>,
+				 <MT6582_PIN_138_MSDC0_DAT2__FUNC_MSDC0_DAT2>,
+				 <MT6582_PIN_137_MSDC0_DAT3__FUNC_MSDC0_DAT3>,
+				 <MT6582_PIN_133_MSDC0_DAT4__FUNC_MSDC0_DAT4>,
+				 <MT6582_PIN_132_MSDC0_DAT5__FUNC_MSDC0_DAT5>,
+				 <MT6582_PIN_131_MSDC0_DAT6__FUNC_MSDC0_DAT6>,
+				 <MT6582_PIN_130_MSDC0_DAT7__FUNC_MSDC0_DAT7>;
+			input-enable;
+			drive-strength = <4>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+		};
+		pins-clk {
+			pinmux = <MT6582_PIN_136_MSDC0_CLK__FUNC_MSDC0_CLK>;
+			drive-strength = <10>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+		pins-rst {
+			pinmux = <MT6582_PIN_134_MSDC0_RSTB__FUNC_MSDC0_RSTB>;
+			bias-pull-up;
+		};
+	};
+
+	
+
+};
