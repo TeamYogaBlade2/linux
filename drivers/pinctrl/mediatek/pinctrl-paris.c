@@ -106,8 +106,19 @@ static int mtk_pinmux_gpio_request_enable(struct pinctrl_dev *pctldev,
 {
 	struct mtk_pinctrl *hw = pinctrl_dev_get_drvdata(pctldev);
 	const struct mtk_pin_desc *desc;
+	int mux;
 
 	desc = (const struct mtk_pin_desc *)&hw->soc->pins[pin];
+
+	/*
+	 * If EINT is available and the GPIO is already set to the EINT,
+	 * don't re-mux to the default value.
+	 */
+	if (desc->eint.eint_m != NO_EINT_SUPPORT) {
+		if (!mtk_hw_get_value(hw, desc, PINCTRL_PIN_REG_MODE, &mux) &&
+		    mux == desc->eint.eint_m)
+			return 0;
+	}
 
 	return mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_MODE,
 				hw->soc->gpio_m);

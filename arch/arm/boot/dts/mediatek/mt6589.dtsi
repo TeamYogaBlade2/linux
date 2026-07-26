@@ -24,7 +24,7 @@
 		compatible = "operating-points-v2";
 		opp-shared;
 
-		/* 
+		/*
 		 * CONFIG_MTK_FORCE_CPU_89T : 1.5 GHz : PTP 3
 		 * bit 0 : free mode : ptp_free_grade
 		 * bit 1 : 1.5 GHz : PTP 3 : mt6589_freqs_e1_2
@@ -37,7 +37,7 @@
 		 * ----- : ------- : PTP 4 : mt6589_freqs_e1_1
 		 * ----- : ------- : PTP 5 : mt6589_freqs_e1_0
 		 ** preloader
-		 * 6, 7  : 806 MHz 
+		 * 6, 7  : 806 MHz
 		 * other : 1001MHz
 		 */
 
@@ -53,6 +53,13 @@
 			opp-supported-hw = <0xff>;
 		};
 
+		/* TODO: can bit 6 hw run this freq with 1.15 V ? */
+		opp-806000000 {
+			opp-hz = /bits/ 64 <806000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0xff>;
+		};
+
 		opp-988000000-1150 {
 			opp-hz = /bits/ 64 <988000000>;
 			opp-microvolt = <1150000>;
@@ -63,6 +70,12 @@
 			opp-hz = /bits/ 64 <988000000>;
 			opp-microvolt = <1200000>;
 			opp-supported-hw = <0x40>; /* bit 6 */
+		};
+
+		opp-1001000000 {
+			opp-hz = /bits/ 64 <1001000000>;
+			opp-microvolt = <1150000>;
+			opp-supported-hw = <0x3f>; /* bits 0-5 */
 		};
 
 		opp-1209000000 {
@@ -436,7 +449,7 @@
 
 			dis_3g: dis-3g@100 {
 				reg = <0x100 0x4>;
-				bits = <25 1>;
+				bits = <24 1>;
 			};
 
 			ptp_free_grade: ptp-free@120 {
@@ -488,6 +501,70 @@
 				reg = <0x174 0x4>;
 			};
 
+			ptp_od_data: ptp-od@178 {
+				reg = <0x178 0x10>;
+			};
+
+			ptp_initen: ptp-initen@178 {
+				reg = <0x178 0x4>;
+				bits = <0 1>;
+			};
+
+			ptp_monen: ptp-monen@178 {
+				reg = <0x178 0x4>;
+				bits = <1 1>;
+			};
+
+			ptp_mdes: ptp-mdes@178 {
+				reg = <0x178 0x4>;
+				bits = <8 8>;
+			};
+
+			ptp_bdes: ptp-bdes@178 {
+				reg = <0x178 0x4>;
+				bits = <16 8>;
+			};
+
+			ptp_dcmdet: ptp-dcmdet@178 {
+				reg = <0x178 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_dcconfig: ptp-dcconfig@17c {
+				reg = <0x17c 0x4>;
+				bits = <0 24>;
+			};
+
+			ptp_dcbdet: ptp-dcbdet@17c {
+				reg = <0x17c 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_ageconfig: ptp-ageconfig@180 {
+				reg = <0x180 0x4>;
+				bits = <0 24>;
+			};
+
+			ptp_agem: ptp-agem@180 {
+				reg = <0x180 0x4>;
+				bits = <24 8>;
+			};
+
+			ptp_dvtfixed: ptp-dvtfixed@184 {
+				reg = <0x184 0x4>;
+				bits = <8 8>;
+			};
+
+			ptp_mtdes: ptp-mtdes@184 {
+				reg = <0x184 0x4>;
+				bits = <16 8>;
+			};
+
+			ptp_vco: ptp-vco@184 {
+				reg = <0x184 0x4>;
+				bits = <24 8>;
+			};
+
 			cell@178 {
 				reg = <0x178 0x4>;
 			};
@@ -531,6 +608,26 @@
 			compatible = "mediatek,mt6589-audsys", "syscon";
 			reg = <0x12070000 0x1000>;
 			#clock-cells = <1>;
+		};
+
+		pwm: pwm@1100b000 {
+			compatible = "mediatek,mt6589-pwm",
+				     "mediatek,mt6795-pwm";
+			reg = <0x1100b000 0x1000>;
+			#pwm-cells = <2>;
+			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_PWM>,
+				 <&pericfg CLK_PERI0_PWM>,
+				 <&pericfg CLK_PERI0_PWM1>,
+				 <&pericfg CLK_PERI0_PWM2>,
+				 <&pericfg CLK_PERI0_PWM3>,
+				 <&pericfg CLK_PERI0_PWM4>,
+				 <&pericfg CLK_PERI0_PWM5>,
+				 <&pericfg CLK_PERI0_PWM6>,
+				 <&pericfg CLK_PERI0_PWM7>;
+			clock-names = "top", "main", "pwm1", "pwm2", "pwm3",
+				      "pwm4", "pwm5", "pwm6", "pwm7";
+			status = "disabled";
 		};
 
 		i2c0: i2c@1100d000 {
@@ -847,8 +944,8 @@
 			phys = <&usb_port0 PHY_TYPE_USB2>;
 			dr_mode = "otg";
 			clocks = <&pericfg CLK_PERI0_USB0>,
-				 <&pericfg CLK_PERI0_USB0>, /* univpll_usb_48m ? */
-				 <&topckgen CLK_TOP_UNIVPLL_D26>;
+				 <&pericfg CLK_PERI0_USB0>,
+				 <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 			clock-names = "main", "mcu", "univpll";
 			resets = <&pericfg MT6589_PERI_USB_SW_RST>;
 			reset-names = "hrst";
@@ -870,7 +967,7 @@
 			/* USB 2.0 */
 			usb_port0: usb-phy@11220800 {
 				reg = <0x11220800 0x0100>;
-				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+				clocks = <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "okay";
@@ -879,7 +976,7 @@
 			/* USB 1.1 */
 			usb_port1: usb-phy@11220900 {
 				reg = <0x11220900 0x0100>;
-				clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
+				clocks = <&apmixedsys CLK_APMIXED_UNIVPLL_USB_48M>;
 				clock-names = "ref";
 				#phy-cells = <1>;
 				status = "disabled";

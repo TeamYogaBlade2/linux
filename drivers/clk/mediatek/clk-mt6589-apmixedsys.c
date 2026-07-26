@@ -83,49 +83,49 @@
 	}
 
 static int mt6589_lc_pll_set_rate(struct clk_hw *hw, unsigned long rate,
-                                  unsigned long parent_rate)
+				  unsigned long parent_rate)
 {
-    struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
-    u32 pcw = 0;
-    u32 postdiv;
-    u32 mask, val;
+	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
+	u32 pcw = 0;
+	u32 postdiv;
+	u32 mask, val;
 
-    mtk_pll_calc_values(pll, &pcw, &postdiv, rate, parent_rate);
+	mtk_pll_calc_values(pll, &pcw, &postdiv, rate, parent_rate);
 
-    /* LC PLL: write directly to CON0, no PCW_CHG trigger */
-    val = readl(pll->base_addr);
-    /* Clear postdiv field (2 bits) */
-    mask = pll->data->pd_mask ?: 0x3;
-    val &= ~(mask << pll->data->pd_shift);
-    /* Clear FBKDIV field (pcwbits, from pcw_shift) */
-    val &= ~(GENMASK(pll->data->pcw_shift + pll->data->pcwbits - 1,
-                     pll->data->pcw_shift));
-    /* Set new postdiv and pcw */
-    val |= ((ffs(postdiv) - 1) << pll->data->pd_shift);
-    val |= (pcw << pll->data->pcw_shift);
+	/* LC PLL: write directly to CON0, no PCW_CHG trigger */
+	val = readl(pll->base_addr);
+	/* Clear postdiv field (2 bits) */
+	mask = pll->data->pd_mask ?: 0x3;
+	val &= ~(mask << pll->data->pd_shift);
+	/* Clear FBKDIV field (pcwbits, from pcw_shift) */
+	val &= ~(GENMASK(pll->data->pcw_shift + pll->data->pcwbits - 1,
+		 pll->data->pcw_shift));
+	/* Set new postdiv and pcw */
+	val |= ((ffs(postdiv) - 1) << pll->data->pd_shift);
+	val |= (pcw << pll->data->pcw_shift);
 
-    writel(val, pll->base_addr);
-    udelay(20); /* stabilize */
+	writel(val, pll->base_addr);
+	udelay(20); /* stabilize */
 
-    return 0;
+	return 0;
 }
 
 static const struct clk_ops mt6589_lc_pll_ops = {
-    .is_prepared	= mtk_pll_is_prepared,
-    .prepare		= mtk_pll_prepare,
-    .unprepare		= mtk_pll_unprepare,
-    .recalc_rate	= mtk_pll_recalc_rate,
-    .determine_rate	= mtk_pll_determine_rate,
-    .set_rate		= mt6589_lc_pll_set_rate,
+	.is_prepared	= mtk_pll_is_prepared,
+	.prepare		= mtk_pll_prepare,
+	.unprepare		= mtk_pll_unprepare,
+	.recalc_rate	= mtk_pll_recalc_rate,
+	.determine_rate	= mtk_pll_determine_rate,
+	.set_rate		= mt6589_lc_pll_set_rate,
 };
 
 static const struct clk_ops mt6589_fixed_lc_pll_ops = {
-    .is_prepared	= mtk_pll_is_prepared,
-    .prepare		= mtk_pll_prepare,
-    .unprepare		= mtk_pll_unprepare,
-    .recalc_rate	= mtk_pll_recalc_rate,
-    .determine_rate	= mtk_pll_determine_rate,
-    /* no .set_rate */
+	.is_prepared	= mtk_pll_is_prepared,
+	.prepare		= mtk_pll_prepare,
+	.unprepare		= mtk_pll_unprepare,
+	.recalc_rate	= mtk_pll_recalc_rate,
+	.determine_rate	= mtk_pll_determine_rate,
+	/* no .set_rate */
 };
 
 static const struct mtk_pll_data plls[] = {

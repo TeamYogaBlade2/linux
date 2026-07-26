@@ -21,7 +21,7 @@ static const char * const infra_mux1_parents[] = {
 	"clk26m",
 	"armpll",
 	"mainpll",
-	"mmpll", /* MMPLL/2 */
+	"mmpll_d2",
 };
 
 static const struct mtk_composite cpu_muxes[] = {

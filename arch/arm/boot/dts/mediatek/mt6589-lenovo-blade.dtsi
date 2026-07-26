@@ -453,3 +453,7 @@
 	keypad,num-columns = <3>;
 	debounce-delay-ms = <32>;
 };
+
+&pwm {
+	status = "okay";
+};
