@@ -18,6 +18,8 @@
 #define DISP_CG_SET1	0x0114
 #define DISP_CG_CLR1	0x0118
 
+#define DISP_SW_RST_B	0x0140
+
 static const struct mtk_gate_regs disp0_cg_regs = {
 	.set_ofs = DISP_CG_SET0,
 	.clr_ofs = DISP_CG_CLR0,
@@ -75,9 +77,18 @@ static const struct mtk_gate disp_clks[] = {
 	GATE_DISP1(CLK_DISP1_SLCD, "disp1_slcd", "disp_sel", 9),
 };
 
+static u16 disp_rst_ofs[] = { DISP_SW_RST_B };
+
+static const struct mtk_clk_rst_desc disp_clk_rst_desc = {
+	.version = MTK_RST_SIMPLE_RSTB,
+	.rst_bank_ofs = disp_rst_ofs,
+	.rst_bank_nr = ARRAY_SIZE(disp_rst_ofs),
+};
+
 static const struct mtk_clk_desc disp_desc = {
 	.clks = disp_clks,
 	.num_clks = ARRAY_SIZE(disp_clks),
+	.rst_desc = &disp_clk_rst_desc,
 };
 
 static const struct of_device_id of_match_clk_mt6589_disp[] = {
