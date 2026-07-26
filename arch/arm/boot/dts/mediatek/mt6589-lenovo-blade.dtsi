@@ -259,6 +259,10 @@
 	status = "okay";
 };
 
+&gpu {
+	vdd-supply = <&mt6320_buck_vrf18_2>;
+};
+
 /* Internal storage */
 &mmc0 {
 	status = "okay";
