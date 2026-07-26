@@ -752,6 +752,7 @@
 			compatible = "mediatek,mt6589-dispsys", "syscon";
 			reg = <0x14000000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		imgsys: syscon@15000000 {
