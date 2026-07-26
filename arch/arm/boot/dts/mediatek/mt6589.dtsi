@@ -755,6 +755,16 @@
 			#reset-cells = <1>;
 		};
 
+		bls: pwm@14008000 {
+			compatible = "mediatek,mt6589-disp-pwm";
+			reg = <0x14008000 0x1000>;
+			#pwm-cells = <2>;
+			clocks = <&dispsys CLK_DISP0_BLS>;
+			clock-names = "main";
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			status = "disabled";
+		};
+
 		imgsys: syscon@15000000 {
 			compatible = "mediatek,mt6589-imgsys", "syscon";
 			reg = <0x15000000 0x1000>;
