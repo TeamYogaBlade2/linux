@@ -55,6 +55,7 @@ struct mtk_crtc {
 	struct cmdq_pkt			cmdq_handle;
 	u32				cmdq_event;
 	u32				cmdq_vblank_cnt;
+	bool				cmdq_primed;
 	wait_queue_head_t		cb_blocking_queue;
 #endif
 
@@ -604,9 +605,19 @@ static void mtk_crtc_update_config(struct mtk_crtc *mtk_crtc, bool needs_vblank)
 	if (mtk_crtc->cmdq_client.chan) {
 		mbox_flush(mtk_crtc->cmdq_client.chan, 2000);
 		cmdq_handle->cmd_buf_size = 0;
-		cmdq_pkt_clear_event(cmdq_handle, mtk_crtc->cmdq_event);
-		cmdq_pkt_wfe(cmdq_handle, mtk_crtc->cmdq_event, false);
-		mtk_crtc_ddp_config(crtc, cmdq_handle);
+		if (priv->data->shadow_register) {
+			if (mtk_crtc->cmdq_primed)
+				cmdq_pkt_wfe(cmdq_handle, mtk_crtc->cmdq_event, true);
+			mtk_crtc->cmdq_primed = true;
+
+			mtk_mutex_acquire_by_cmdq(mtk_crtc->mutex, cmdq_handle);
+			mtk_crtc_ddp_config(crtc, cmdq_handle);
+			mtk_mutex_release_by_cmdq(mtk_crtc->mutex, cmdq_handle);
+		} else {
+			cmdq_pkt_clear_event(cmdq_handle, mtk_crtc->cmdq_event);
+			cmdq_pkt_wfe(cmdq_handle, mtk_crtc->cmdq_event, false);
+			mtk_crtc_ddp_config(crtc, cmdq_handle);
+		}
 		cmdq_pkt_eoc(cmdq_handle);
 		dma_sync_single_for_device(mtk_crtc->cmdq_client.chan->mbox->dev,
 					   cmdq_handle->pa_base,
