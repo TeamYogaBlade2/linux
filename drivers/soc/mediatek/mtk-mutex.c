@@ -1061,6 +1061,50 @@ void mtk_mutex_release(struct mtk_mutex *mutex)
 }
 EXPORT_SYMBOL_GPL(mtk_mutex_release);
 
+int mtk_mutex_acquire_by_cmdq(struct mtk_mutex *mutex, void *pkt)
+{
+	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
+						 mutex[mutex->id]);
+	struct cmdq_pkt *cmdq_pkt = (struct cmdq_pkt *)pkt;
+	dma_addr_t en_addr = mtx->addr + DISP_REG_MUTEX_EN(mutex->id);
+	dma_addr_t mutex_addr = mtx->addr + DISP_REG_MUTEX(mutex->id);
+
+	WARN_ON(&mtx->mutex[mutex->id] != mutex);
+
+	if (!mtx->cmdq_reg.size) {
+		dev_err(mtx->dev, "mediatek,gce-client-reg hasn't been set");
+		return -ENODEV;
+	}
+
+	mtx->cmdq_reg.pkt_write(cmdq_pkt, mtx->cmdq_reg.subsys, en_addr, en_addr, 1);
+	mtx->cmdq_reg.pkt_write(cmdq_pkt, mtx->cmdq_reg.subsys, mutex_addr,
+				mutex_addr, 1);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mtk_mutex_acquire_by_cmdq);
+
+int mtk_mutex_release_by_cmdq(struct mtk_mutex *mutex, void *pkt)
+{
+	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
+						 mutex[mutex->id]);
+	struct cmdq_pkt *cmdq_pkt = (struct cmdq_pkt *)pkt;
+	dma_addr_t mutex_addr = mtx->addr + DISP_REG_MUTEX(mutex->id);
+
+	WARN_ON(&mtx->mutex[mutex->id] != mutex);
+
+	if (!mtx->cmdq_reg.size) {
+		dev_err(mtx->dev, "mediatek,gce-client-reg hasn't been set");
+		return -ENODEV;
+	}
+
+	mtx->cmdq_reg.pkt_write(cmdq_pkt, mtx->cmdq_reg.subsys, mutex_addr,
+				mutex_addr, 0);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mtk_mutex_release_by_cmdq);
+
 int mtk_mutex_write_mod(struct mtk_mutex *mutex,
 			enum mtk_mutex_mod_index idx, bool clear)
 {
