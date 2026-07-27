@@ -81,6 +81,8 @@ void mtk_mutex_unprepare(struct mtk_mutex *mutex);
 void mtk_mutex_put(struct mtk_mutex *mutex);
 void mtk_mutex_acquire(struct mtk_mutex *mutex);
 void mtk_mutex_release(struct mtk_mutex *mutex);
+int mtk_mutex_acquire_by_cmdq(struct mtk_mutex *mutex, void *pkt);
+int mtk_mutex_release_by_cmdq(struct mtk_mutex *mutex, void *pkt);
 int mtk_mutex_write_mod(struct mtk_mutex *mutex,
 			enum mtk_mutex_mod_index idx,
 			bool clear);
