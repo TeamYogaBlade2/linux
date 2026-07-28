@@ -889,6 +889,7 @@
 			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
 					 <&larb3>, <&larb4>;
 			#iommu-cells = <1>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
 		};
 
 		gic: interrupt-controller@10211000 {
