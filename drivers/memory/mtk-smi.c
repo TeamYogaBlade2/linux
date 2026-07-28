@@ -1090,13 +1090,6 @@ static int __maybe_unused mtk_smi_common_resume(struct device *dev)
 	if (common->plat->bus_sel)
 		writel(bus_sel, common->base + SMI_BUS_SEL);
 
-	/* HACK: MT6589: force all ports to physical mode (non-virtual, domain=3) */
-	if (common->plat->type == MTK_SMI_GEN0)
-		for (i = 0; i < 7; i++) {
-			writel_relaxed(0x66666666,
-				       common->smi_ao_base + 0x5c0 + i * 4);
-	}
-
 	return 0;
 }
 
