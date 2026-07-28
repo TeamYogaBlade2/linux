@@ -258,7 +258,7 @@
 		ranges;
 
 		/* part of on-chip sram */
-		ramoops@0010dc00 {
+		ramoops@10dc00 {
 			compatible = "ramoops";
 			reg = <0x0010dc00 0x1c00>;
 			record-size = <0x400>;
