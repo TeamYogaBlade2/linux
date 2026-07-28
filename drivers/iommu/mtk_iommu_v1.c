@@ -24,6 +24,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string_choices.h>
@@ -56,6 +57,8 @@ struct dma_iommu_mapping {
 
 /* -------- Common M4U v1 register definitions (MT2701 and MT6589 core) -------- */
 #define REG_MMU_CTRL_REG			0x210
+#define F_MMU_CTRL_PFH_DIS(dis)			((!!(dis)) << 0)
+#define F_MMU_CTRL_TLB_WALK_DIS(dis)		((!!(dis)) << 1)
 #define F_MMU_CTRL_COHERENT_EN			BIT(8)
 #define REG_MMU_IVRP_PADDR			0x214
 #define REG_MMU_INT_CONTROL			0x220
@@ -156,8 +159,7 @@ struct dma_iommu_mapping {
 
 #define MAX_M4U_CORES				2
 
-// static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1, 0};
-static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1};
+static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1, 0};
 
 struct mtk_iommu_v1_data;
 
@@ -223,6 +225,13 @@ struct mtk_iommu_v1_data {
 
 	struct mtk_iommu_v1_suspend_reg reg;
 	struct page *dummy_page; /* Physical address of guard dummy page */
+
+	/* MT6589: dummy page table (64KB aligned) used before real domain is attached */
+	dma_addr_t		dummy_pgt_pa;
+	u32			*dummy_pgt_va;
+	void			*dummy_pgt_alloc_va;   /* original pointer for free */
+	dma_addr_t		dummy_pgt_alloc_pa;
+	size_t			dummy_pgt_alloc_size;
 };
 
 struct mtk_iommu_v1_domain {
@@ -233,11 +242,90 @@ struct mtk_iommu_v1_domain {
 	struct mtk_iommu_v1_data	*data;
 };
 
+static int mt6589_enable_mmu(struct mtk_iommu_v1_data *data)
+{
+	int i;
+	dma_addr_t alloc_pa;
+	void *alloc_va;
+	unsigned int entry, entry_count;
+	phys_addr_t dummy_pa;
+	size_t alloc_size = M2701_IOMMU_PGT_SIZE + SZ_64K;
+
+	if (!data->dummy_page)
+		return -EINVAL;
+
+	dummy_pa = page_to_phys(data->dummy_page);
+
+	/* Allocate dummy page table (64KB aligned) */
+	alloc_va = dma_alloc_coherent(data->dev, alloc_size, &alloc_pa, GFP_KERNEL);
+	if (!alloc_va)
+		return -ENOMEM;
+
+	data->dummy_pgt_alloc_va = alloc_va;
+	data->dummy_pgt_alloc_pa = alloc_pa;
+	data->dummy_pgt_alloc_size = alloc_size;
+	data->dummy_pgt_pa = ALIGN(alloc_pa, SZ_64K);
+	data->dummy_pgt_va = alloc_va + (data->dummy_pgt_pa - alloc_pa);
+
+	entry_count = M2701_IOMMU_PGT_SIZE / sizeof(u32);
+	for (entry = 0; entry < entry_count; entry++)
+		data->dummy_pgt_va[entry] = dummy_pa | F_DESC_VALID | F_DESC_NONSEC;
+
+	/* Set dummy page table base */
+	writel_relaxed(data->dummy_pgt_pa, data->global_base + REG_MMUg_PT_BASE);
+
+	/* Enable MMU on all cores */
+	for (i = 0; i < data->soc->num_cores; i++) {
+		void __iomem *base = data->cores[i].base;
+		u32 ctrl = F_MMU_CTRL_PFH_DIS(0) |
+			   F_MMU_CTRL_TLB_WALK_DIS(0) |
+			   F_MMU_TF_PROTECT_SEL(2);
+		writel_relaxed(ctrl, base + REG_MMU_CTRL_REG);
+	}
+
+	/* TLB invalidate all to clear any residual entries */
+	data->soc->tlb_flush_all(data);
+
+	return 0;
+}
+
 static int mtk_iommu_v1_bind(struct device *dev)
 {
 	struct mtk_iommu_v1_data *data = dev_get_drvdata(dev);
+	int i;
 
-	return component_bind_all(dev, &data->larb_imu);
+	int ret = component_bind_all(dev, &data->larb_imu);
+	if (ret)
+		return ret;
+
+	/* Force all LARBs to resume so they configure their ports to physical mode */
+	for (i = 0; i < data->soc->num_larb; i++) {
+		struct device *larbdev = data->larb_imu[i].dev;
+		if (!larbdev)
+			continue;
+		ret = pm_runtime_get_sync(larbdev);
+		if (ret < 0) {
+			dev_err(dev, "Failed to resume LARB %d\n", i);
+			goto err_unbind;
+		}
+		/* The LARB's config_port has now set all ports to physical (mmu bits are 0) */
+		pm_runtime_put(larbdev);
+	}
+
+	/* HACK for now, avoid writing SoC-specific code in common logic */
+	if (data->soc->has_global_base) {
+		ret = mt6589_enable_mmu(data);
+		if (ret) {
+			dev_err(dev, "Failed to enable MMU (%d)\n", ret);
+			goto err_unbind;
+		}
+	}
+
+	return 0;
+
+err_unbind:
+	component_unbind_all(dev, &data->larb_imu);
+	return ret;
 }
 
 static void mtk_iommu_v1_unbind(struct device *dev)
@@ -383,9 +471,18 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 {
 	struct mtk_iommu_v1_core *core = dev_id;
 	struct mtk_iommu_v1_data *data = core->data;
-	struct mtk_iommu_v1_domain *dom = data->m4u_dom;
+	struct mtk_iommu_v1_domain *dom;
 	u32 int_state, regval, fault_iova, fault_pa;
 	unsigned int fault_larb, fault_port;
+
+	/* The domain may not be ready yet; just clear the interrupt */
+	if (!data->m4u_dom) {
+		regval = readl_relaxed(core->base + REG_MMU_INT_CONTROL);
+		regval |= F_INT_CLR_BIT;
+		writel_relaxed(regval, core->base + REG_MMU_INT_CONTROL);
+		return IRQ_HANDLED;
+	}
+	dom = data->m4u_dom;
 
 	/* Read error information from registers */
 	int_state = readl_relaxed(core->base + REG_MMU_FAULT_ST);
@@ -473,6 +570,15 @@ static int mtk_iommu_v1_domain_finalise(struct mtk_iommu_v1_data *data)
 	else
 		writel(dom->pgt_pa, data->cores[0].base + data->soc->pt_base_reg_offset);
 
+	if (data->soc->has_global_base && data->dummy_pgt_alloc_va) {
+		dma_free_coherent(data->dev, data->dummy_pgt_alloc_size,
+				  data->dummy_pgt_alloc_va,
+				  data->dummy_pgt_alloc_pa);
+		data->dummy_pgt_alloc_va = NULL;
+		/* Ensure the global PT_BASE points to the real page table */
+		writel(dom->pgt_pa, data->global_base + REG_MMUg_PT_BASE);
+	}
+
 	dom->data = data;
 
 	return 0;
@@ -512,8 +618,10 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 
 	/* Only allow the domain created internally. */
 	mtk_mapping = data->mapping;
-	if (mtk_mapping->domain != domain)
+	if (mtk_mapping->domain != domain) {
+		dev_warn(dev, "Ignoring attach request for foreign domain\n");
 		return 0;
+	}
 
 	if (!data->m4u_dom) {
 		data->m4u_dom = dom;
@@ -794,21 +902,17 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 	ret = clk_prepare_enable(data->bclk);
 	if (ret) {
 		dev_err(data->dev, "Failed to enable bclk\n");
-		goto err_clk;
+		return ret;
 	}
 
-	/* ---- Global registers ---- */
+	/*
+	 * Leave MMU translation disabled for now.
+	 * The actual enable will happen after LARBs are bound in mtk_iommu_v1_bind().
+	 */
 	writel_relaxed(F_MMUg_L2_SEL_FLUSH_EN(1) | F_MMUg_L2_SEL_L2_ULTRA(1) |
 		   F_MMUg_L2_SEL_L2_SHARE(0) | F_MMUg_L2_SEL_L2_BUS_SEL(1),
 		   data->global_base + REG_MMUg_L2_SEL);
 	writel_relaxed(F_MMUg_DCM_ON(1), data->global_base + REG_MMUg_DCM);
-
-	/*
-	 * Before any TLB operations, set a safe dummy page table base address.
-	 * The real page table will be set later in domain_finalise().
-	 * Use the protect buffer as a dummy, as downstream does.
-	 */
-	writel_relaxed(data->protect_base, data->global_base + REG_MMUg_PT_BASE);
 
 	/* ---- L2 cache ---- */
 	if (data->l2_base) {
@@ -820,12 +924,17 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 		writel_relaxed(regval, data->l2_base + REG_L2_GDC_OP);
 	}
 
-	/* ---- Per-core setup ---- */
+	/*
+	 * Per-core setup: disable prefetch and table walk for now.
+	 * They will be enabled in mtk_iommu_v1_bind() after all ports are
+	 * set to physical mode by the SMI driver.
+	 */
 	for (i = 0; i < data->soc->num_cores; i++) {
 		void __iomem *base = data->cores[i].base;
 
-		regval = 0;  /* PFH enabled, walk enabled, cohere disabled */
-		regval |= F_MMU_TF_PROTECT_SEL(2);
+		regval = F_MMU_CTRL_PFH_DIS(1) |
+			 F_MMU_CTRL_TLB_WALK_DIS(1) |
+			 F_MMU_TF_PROTECT_SEL(2);
 		writel_relaxed(regval, base + REG_MMU_CTRL_REG);
 
 		regval = F_INT_TRANSLATION_FAULT |
@@ -842,9 +951,6 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 	}
 
 	return 0;
-
-err_clk:
-	return ret;
 }
 
 static const struct iommu_ops mtk_iommu_v1_ops = {
@@ -958,12 +1064,19 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	if (IS_ERR(data->bclk))
 		return PTR_ERR(data->bclk);
 
+	dummy_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!dummy_page)
+		return -ENOMEM;
+	data->dummy_page = dummy_page;
+
 	/* Interrupts - request after hw_init to avoid spurious IRQs? but
 	   we need the core IRQs ready before registering ISR. We'll request
 	   them after hw_init for simplicity. */
 	ret = soc->hw_init(data);
-	if (ret)
+	if (ret) {
+		__free_page(dummy_page);
 		return ret;
+	}
 
 	for (i = 0; i < soc->num_cores; i++) {
 		struct mtk_iommu_v1_core *core = &data->cores[i];
@@ -1028,13 +1141,6 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 					    component_compare_of, larbnode);
 	}
 
-	dummy_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	if (!dummy_page) {
-		ret = -ENOMEM;
-		goto out_put_larbs;
-	}
-	data->dummy_page = dummy_page;
-
 	platform_set_drvdata(pdev, data);
 
 	ret = iommu_device_sysfs_add(&data->iommu, dev, NULL,
@@ -1059,6 +1165,10 @@ out_put_larbs:
 	for (i = 0; i < MTK_LARB_NR_MAX; i++)
 		if (data->larb_imu[i].dev)
 			put_device(data->larb_imu[i].dev);
+	if (data->dummy_pgt_alloc_va)
+		dma_free_coherent(data->dev, data->dummy_pgt_alloc_size,
+				  data->dummy_pgt_alloc_va,
+				  data->dummy_pgt_alloc_pa);
 	if (data->dummy_page)
 		__free_page(data->dummy_page);
 out_clk_unprepare:
@@ -1079,6 +1189,11 @@ static void mtk_iommu_v1_remove(struct platform_device *pdev)
 		devm_free_irq(&pdev->dev, data->cores[i].irq, &data->cores[i]);
 	component_master_del(&pdev->dev, &mtk_iommu_v1_com_ops);
 	__free_page(data->dummy_page);
+
+	if (data->dummy_pgt_alloc_va)
+		dma_free_coherent(data->dev, data->dummy_pgt_alloc_size,
+				  data->dummy_pgt_alloc_va,
+				  data->dummy_pgt_alloc_pa);
 
 	for (i = 0; i < MTK_LARB_NR_MAX; i++)
 		if (data->larb_imu[i].dev)
