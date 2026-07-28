@@ -252,6 +252,20 @@
 		};
 	};
 
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/* part of on-chip sram */
+		ramoops@0010dc00 {
+			compatible = "ramoops";
+			reg = <0x0010dc00 0x1c00>;
+			record-size = <0x400>;
+			console-size = <0x1000>;
+		};
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
