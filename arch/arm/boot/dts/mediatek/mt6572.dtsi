@@ -334,6 +334,23 @@
 			interrupt-parent = <&gic>;
 		};
 
+		apdma: dma-controller@11000280 {
+			compatible = "mediatek,mt6572-uart-dma",
+				     "mediatek,mt6577-uart-dma";
+			reg = <0x11000280 0x60>,
+			      <0x11000300 0x60>,
+			      <0x11000380 0x60>,
+			      <0x11000400 0x60>;
+			interrupts = <GIC_SPI 43 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 44 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 45 IRQ_TYPE_LEVEL_LOW>,
+				     <GIC_SPI 46 IRQ_TYPE_LEVEL_LOW>;
+			dma-requests = <4>;
+			clocks = <&topckgen CLK_TOP_APDMA>;
+			clock-names = "apdma";
+			#dma-cells = <1>;
+		};
+
 		auxadc: auxadc@11003000 {
 			compatible = "mediatek,mt6572-auxadc", "mediatek,mt8173-auxadc";
 			reg = <0x11003000 0x1000>;
@@ -355,6 +372,8 @@
 			clocks = <&topckgen CLK_TOP_UART0_SEL>,
 				 <&topckgen CLK_TOP_UART0>;
 			clock-names = "baud", "bus";
+			dmas = <&apdma 0>, <&apdma 1>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
@@ -365,6 +384,8 @@
 			clocks = <&topckgen CLK_TOP_UART1_SEL>,
 				 <&topckgen CLK_TOP_UART1>;
 			clock-names = "baud", "bus";
+			dmas = <&apdma 2>, <&apdma 3>;
+			dma-names = "tx", "rx";
 			status = "disabled";
 		};
 
