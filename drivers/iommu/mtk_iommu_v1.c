@@ -1103,7 +1103,7 @@ out_clk_unprepare:
 		}
 	}
 
-	clk_disable_unprepare(data->bclk);
+	// clk_disable_unprepare(data->bclk);
 	return ret;
 }
 
