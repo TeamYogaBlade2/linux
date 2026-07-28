@@ -167,6 +167,12 @@
 			interrupt-parent = <&gic>;
 		};
 
+		fhctl: clock-controller@11004000 {
+			compatible = "mediatek,mt6572-fhctl";
+			reg = <0x11004000 0x100>;
+			status = "disabled";
+		};
+
 		uart0: serial@11005000 {
 			compatible = "mediatek,mt6572-uart", "mediatek,mt6577-uart";
 			reg = <0x11005000 0x400>;
