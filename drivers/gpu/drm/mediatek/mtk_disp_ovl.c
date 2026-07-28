@@ -756,6 +756,12 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->regs))
 		return dev_err_probe(dev, PTR_ERR(priv->regs),
 				     "failed to ioremap ovl\n");
+
+	/* Stop any leftover OVL activity from bootloader */
+	writel(0x0, priv->regs + DISP_REG_OVL_EN);
+	writel(0x0, priv->regs + DISP_REG_OVL_INTEN);
+	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
+
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	ret = cmdq_dev_get_client_reg(dev, &priv->cmdq_reg, 0);
 	if (ret)
