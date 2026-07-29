@@ -18,6 +18,7 @@
 #include <linux/soc/mediatek/infracfg.h>
 #include <linux/soc/mediatek/mtk_sip_svc.h>
 
+#include "mt6582-pm-domains.h"
 #include "mt6735-pm-domains.h"
 #include "mt6795-pm-domains.h"
 #include "mt6893-pm-domains.h"
@@ -1144,6 +1145,10 @@ static int scpsys_get_bus_protection(struct device *dev, struct scpsys *scpsys)
 }
 
 static const struct of_device_id scpsys_of_match[] = {
+	{
+		.compatible = "mediatek,mt6582-power-controller",
+		.data = &mt6582_scpsys_data,
+	},
 	{
 		.compatible = "mediatek,mt6735-power-controller",
 		.data = &mt6735_scpsys_data,
