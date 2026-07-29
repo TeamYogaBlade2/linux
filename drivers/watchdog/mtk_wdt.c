@@ -10,6 +10,7 @@
  */
 
 #include <dt-bindings/reset/mt2712-resets.h>
+#include <dt-bindings/reset/mediatek,mt6582-resets.h>
 #include <dt-bindings/reset/mediatek,mt6735-wdt.h>
 #include <dt-bindings/reset/mediatek,mt6795-resets.h>
 #include <dt-bindings/reset/mt7986-resets.h>
@@ -82,6 +83,10 @@ struct mtk_wdt_dev {
 struct mtk_wdt_data {
 	int toprgu_sw_rst_num;
 	bool has_swsysrst_en;
+};
+
+static const struct mtk_wdt_data mt6582_data = {
+	.toprgu_sw_rst_num = MT6582_TOPRGU_SW_RST_NUM,
 };
 
 static const struct mtk_wdt_data mt2712_data = {
@@ -493,6 +498,7 @@ static int mtk_wdt_resume(struct device *dev)
 
 static const struct of_device_id mtk_wdt_dt_ids[] = {
 	{ .compatible = "mediatek,mt2712-wdt", .data = &mt2712_data },
+	{ .compatible = "mediatek,mt6582-wdt", .data = &mt6582_data },
 	{ .compatible = "mediatek,mt6589-wdt" },
 	{ .compatible = "mediatek,mt6735-wdt", .data = &mt6735_data },
 	{ .compatible = "mediatek,mt6795-wdt", .data = &mt6795_data },
