@@ -65,6 +65,9 @@ properties:
     items:
       - description: RDMA Clock
 
+  resets:
+    maxItems: 1
+
   iommus:
     maxItems: 1
 
