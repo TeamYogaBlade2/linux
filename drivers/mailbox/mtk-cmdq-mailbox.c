@@ -89,6 +89,7 @@ struct cmdq {
 	const struct gce_plat	*pdata;
 	struct cmdq_thread	*thread;
 	struct clk_bulk_data	*clocks;
+	struct clk		*smi_clock;
 	bool			suspended;
 };
 
@@ -213,6 +214,7 @@ static void cmdq_init(struct cmdq *cmdq)
 	int i;
 
 	WARN_ON(clk_bulk_enable(cmdq->pdata->gce_num, cmdq->clocks));
+	WARN_ON(clk_enable(cmdq->smi_clock));
 
 	cmdq_vm_init(cmdq);
 	cmdq_gctl_value_toggle(cmdq, true);
@@ -221,6 +223,7 @@ static void cmdq_init(struct cmdq *cmdq)
 	for (i = 0; i <= CMDQ_MAX_EVENT; i++)
 		writel(i, cmdq->base + CMDQ_SYNC_TOKEN_UPDATE);
 	clk_bulk_disable(cmdq->pdata->gce_num, cmdq->clocks);
+	clk_disable(cmdq->smi_clock);
 }
 
 static int cmdq_thread_reset(struct cmdq *cmdq, struct cmdq_thread *thread)
@@ -388,6 +391,10 @@ static int cmdq_runtime_resume(struct device *dev)
 	if (ret)
 		return ret;
 
+	ret = clk_enable(cmdq->smi_clock);
+	if (ret)
+		return ret;
+
 	cmdq_gctl_value_toggle(cmdq, true);
 	return 0;
 }
@@ -398,6 +405,7 @@ static int cmdq_runtime_suspend(struct device *dev)
 
 	cmdq_gctl_value_toggle(cmdq, false);
 	clk_bulk_disable(cmdq->pdata->gce_num, cmdq->clocks);
+	clk_disable(cmdq->smi_clock);
 	return 0;
 }
 
@@ -442,6 +450,7 @@ static void cmdq_remove(struct platform_device *pdev)
 		cmdq_runtime_suspend(&pdev->dev);
 
 	clk_bulk_unprepare(cmdq->pdata->gce_num, cmdq->clocks);
+	clk_unprepare(cmdq->smi_clock);
 }
 
 static int cmdq_mbox_send_data(struct mbox_chan *chan, void *data)
@@ -644,6 +653,12 @@ static int cmdq_get_clocks(struct device *dev, struct cmdq *cmdq)
 	if (!cmdq->clocks)
 		return -ENOMEM;
 
+	/* Some SoCs require additional CMDQ SMI clock */
+	cmdq->smi_clock = devm_clk_get_optional(dev, "smi");
+	if (IS_ERR(cmdq->smi_clock))
+		return dev_err_probe(dev, PTR_ERR(cmdq->smi_clock),
+		                     "failed to get smi clock\n");
+
 	if (cmdq->pdata->gce_num == 1) {
 		clks = &cmdq->clocks[0];
 
@@ -747,6 +762,7 @@ static int cmdq_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, cmdq);
 
 	WARN_ON(clk_bulk_prepare(cmdq->pdata->gce_num, cmdq->clocks));
+	clk_prepare(cmdq->smi_clock);
 
 	cmdq_init(cmdq);
 
