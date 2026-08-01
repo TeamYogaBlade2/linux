@@ -182,7 +182,6 @@ static const struct mtk_clk_desc apmixed_desc = {
 	.num_plls = ARRAY_SIZE(plls),
 	.factor_clks = pll_divs,
 	.num_factor_clks = ARRAY_SIZE(pll_divs),
-
 };
 
 static const struct of_device_id of_match_clk_mt6589_apmixed[] = {
