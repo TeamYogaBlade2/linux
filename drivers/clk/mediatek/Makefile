@@ -54,7 +54,7 @@ obj-$(CONFIG_COMMON_CLK_MT2712_VENCSYS) += clk-mt2712-venc.o
 obj-$(CONFIG_COMMON_CLK_MT6582) += clk-mt6582-apmixedsys.o clk-mt6582-infracfg.o clk-mt6582-pericfg.o clk-mt6582-topckgen.o
 obj-$(CONFIG_COMMON_CLK_MT6582_IMGSYS) += clk-mt6582-img.o
 obj-$(CONFIG_COMMON_CLK_MT6582_MFGCFG) += clk-mt6582-mfg.o
-obj-$(CONFIG_COMMON_CLK_MT6582_MMSYS) += clk-mt6582-mmsys.o
+obj-$(CONFIG_COMMON_CLK_MT6582_MMSYS) += clk-mt6582-mm.o
 obj-$(CONFIG_COMMON_CLK_MT7622) += clk-mt7622-apmixedsys.o clk-mt7622.o \
 				   clk-mt7622-infracfg.o
 obj-$(CONFIG_COMMON_CLK_MT7622_ETHSYS) += clk-mt7622-eth.o

@@ -147,6 +147,12 @@ config COMMON_CLK_MT6582_MFGCFG
 	  This enables a driver for clocks and resets provided
 	  by mfgcfg on the MediaTek MT6582 SoC.
 
+config COMMON_CLK_MT6582_MMSYS
+	tristate "Clock driver for MediaTek MT6582 mmsys"
+	depends on COMMON_CLK_MT6582
+	help
+	  This driver supports MediaTek MT6582 mmsys clocks.
+
 config COMMON_CLK_MT6735
 	tristate "Main clock drivers for MediaTek MT6735"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
