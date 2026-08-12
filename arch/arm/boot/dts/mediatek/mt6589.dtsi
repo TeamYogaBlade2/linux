@@ -272,6 +272,14 @@
 		compatible = "simple-bus";
 		ranges;
 
+		bootrom@0 {
+			compatible = "mediatek,mt6589-efuse",
+				     "mediatek,mt6572-efuse";
+			reg = <0x00000000 0x10000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+		};
+
 		/*
 		 * 0x08000000  CHIP_ID   0x8a006583  Main(0x6583) / Sub(0x8a00)
 		 * 0x08000004  CHIP_VER  0x0000ca00  HW ID(0xca00) / SW ID(0x0000)
