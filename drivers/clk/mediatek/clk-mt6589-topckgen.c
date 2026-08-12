@@ -10,7 +10,7 @@
 
 #include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
-static DEFINE_SPINLOCK(mt6589_clk_lock);
+static DEFINE_SPINLOCK(mt6589_topckgen_clk_lock);
 
 static const struct mtk_fixed_clk top_fixed_clks[] = {
 	FIXED_CLK(CLK_TOP_CLK_NULL, "clk_null", NULL, 0),
@@ -407,7 +407,7 @@ static const struct mtk_clk_desc topck_desc = {
 	.num_factor_clks = ARRAY_SIZE(top_divs),
 	.composite_clks = top_muxes,
 	.num_composite_clks = ARRAY_SIZE(top_muxes),
-	.clk_lock = &mt6589_clk_lock,
+	.clk_lock = &mt6589_topckgen_clk_lock,
 };
 
 static const struct of_device_id of_match_clk_mt6589_topckgen[] = {

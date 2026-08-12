@@ -19,6 +19,8 @@
 #define PERI_PDN1_CLR	0x0014
 #define PERI_PDN1_STA	0x001c
 
+static DEFINE_SPINLOCK(mt6589_peri_clk_lock);
+
 static const struct mtk_gate_regs peri0_cg_regs = {
 	.set_ofs = PERI_PDN0_SET,
 	.clr_ofs = PERI_PDN0_CLR,
@@ -108,8 +110,8 @@ static const struct mtk_clk_desc peri_desc = {
 	.composite_clks = peri_muxes,
 	.num_composite_clks = ARRAY_SIZE(peri_muxes),
 	.rst_desc = &peri_clk_rst_desc,
+	.clk_lock = &mt6589_peri_clk_lock,
 };
-
 
 static const struct of_device_id of_match_clk_mt6589_pericfg[] = {
 	{ .compatible = "mediatek,mt6589-pericfg", .data = &peri_desc, },

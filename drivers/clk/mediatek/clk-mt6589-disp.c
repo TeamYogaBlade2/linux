@@ -91,22 +91,18 @@ static const struct mtk_clk_desc disp_desc = {
 	.rst_desc = &disp_clk_rst_desc,
 };
 
-static const struct of_device_id of_match_clk_mt6589_disp[] = {
-	{
-		.compatible = "mediatek,mt6589-dispsys",
-		.data = &disp_desc,
-	}, {
-		/* sentinel */
-	}
+static const struct platform_device_id clk_mt6589_disp_id_table[] = {
+	{ .name = "clk-mt6589-disp", .driver_data = (kernel_ulong_t)&disp_desc },
+	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt6589_disp);
+MODULE_DEVICE_TABLE(platform, clk_mt6589_disp_id_table);
 
 static struct platform_driver clk_mt6589_disp_drv = {
-	.probe = mtk_clk_simple_probe,
-	.remove = mtk_clk_simple_remove,
+	.id_table = clk_mt6589_disp_id_table,
+	.probe = mtk_clk_pdev_probe,
+	.remove = mtk_clk_pdev_remove,
 	.driver = {
 		.name = "clk-mt6589-disp",
-		.of_match_table = of_match_clk_mt6589_disp,
 	},
 };
 module_platform_driver(clk_mt6589_disp_drv);
