@@ -7,6 +7,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/delay.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_ioctl.h>
@@ -89,10 +90,15 @@ static int prismrv_probe(struct platform_device *pdev)
 		return PTR_ERR(pv->regs);
 	pv->regs_size = resource_size(res);
 
-	ret = devm_clk_bulk_get_all_enabled(&pdev->dev, &pv->clocks);
+	ret = devm_clk_bulk_get_all(&pdev->dev, &pv->clocks);
 	if (ret < 0)
 		return ret;
 	pv->nr_clocks = ret;
+
+	pv->rstc = devm_reset_control_get_optional_exclusive(&pdev->dev,
+							     "g3d");
+	if (IS_ERR(pv->rstc))
+		return PTR_ERR(pv->rstc);
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq >= 0) {
@@ -111,12 +117,13 @@ static int prismrv_probe(struct platform_device *pdev)
 	 * files are not yet installed */
 	ret = prismrv_fw_load(pv);
 	if (ret == 0) {
-		mutex_lock(&pv->init_mutex);
-		ret = prismrv_hw_init(pv);
-		mutex_unlock(&pv->init_mutex);
-	} else
+		pm_runtime_get_noresume(&pdev->dev);
+		ret = prismrv_runtime_resume(&pdev->dev);
+		pm_runtime_put_noidle(&pdev->dev);
+	}
+	if (ret)
 		dev_warn(&pdev->dev,
-			 "firmware unavailable, GPU left uninitialised (%d)\n",
+			 "GPU bring-up deferred (%d); will retry on open\n",
 			 ret);
 
 	/* runtime autosuspend: GPU idles 100ms after the last submit */
@@ -144,21 +151,40 @@ static int prismrv_runtime_suspend(struct device *dev)
 	struct prismrv_device *pv = dev_get_drvdata(dev);
 
 	pv->hw_ready = false;
+
+	/* assert the G3D reset line before gating the clocks */
+	reset_control_assert(pv->rstc);
+	clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
 	return 0;
 }
 
 static int prismrv_runtime_resume(struct device *dev)
 {
 	struct prismrv_device *pv = dev_get_drvdata(dev);
-	int ret = 0;
+	int ret;
+
+	ret = clk_bulk_prepare_enable(pv->nr_clocks, pv->clocks);
+	if (ret)
+		return ret;
+
+	/* release the G3D block from reset (vendor EnableSGXClocks order) */
+	reset_control_deassert(pv->rstc);
+	udelay(2);
 
 	if (!pv->hw_ready) {
 		mutex_lock(&pv->init_mutex);
 		if (pv->ukernel_cpu)
 			ret = prismrv_hw_init(pv);
+		else
+			ret = 0;   /* firmware never loaded: stay idle */
 		mutex_unlock(&pv->init_mutex);
+		if (ret) {
+			clk_bulk_disable_unprepare(pv->nr_clocks,
+						   pv->clocks);
+			return ret;
+		}
 	}
-	return ret;
+	return 0;
 }
 
 static const struct dev_pm_ops prismrv_pm_ops = {

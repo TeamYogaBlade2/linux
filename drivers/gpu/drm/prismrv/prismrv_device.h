@@ -8,6 +8,7 @@
 #include <linux/clk.h>
 #include <linux/platform_device.h>
 #include <linux/devfreq.h>
+#include <linux/reset.h>
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
@@ -129,6 +130,7 @@ struct prismrv_device {
 
 	void __iomem *regs;
 	resource_size_t regs_size;
+	struct reset_control *rstc;
 
 	struct clk_bulk_data *clocks;	/* from devm_clk_bulk_get_all_enabled */
 	int nr_clocks;
@@ -200,6 +202,8 @@ static inline struct prismrv_device *to_prismrv(struct drm_device *d)
 }
 
 int prismrv_hw_init(struct prismrv_device *pv);
+struct device;
+int prismrv_runtime_resume(struct device *dev);
 void prismrv_hw_fini(struct prismrv_device *pv);
 int prismrv_fw_load(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);

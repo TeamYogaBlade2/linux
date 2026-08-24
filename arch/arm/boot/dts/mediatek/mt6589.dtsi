@@ -624,6 +624,7 @@
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		apmixedsys: syscon@10209000 {
@@ -770,15 +771,15 @@
 			compatible = "operating-points-v2";
 
 			/*
-			 * GPU speed grades from eFuse word 0x0c bits[31:28]
-			 * (vendor /dev/devmap index 3).  Each grade certifies
-			 * a maximum frequency; lower steps remain usable.
+			 * Frequencies are the mt_gpufreq clock-tree outputs
+			 * (GPU_DVFS_F1..F8 in the vendor mt_gpufreq.h); each
+			 * eFuse speed grade certifies up to one of them.
 			 * Grade 0 (unfused) runs the vendor default of
-			 * 286.256 MHz without DVFS.
+			 * GPU_DVFS_F5 without DVFS.
 			 */
-			opp-156256000 {
-				opp-hz = /bits/ 64 <156256000>;
-				opp-supported-hw = <0xfe>; /* grades 1-7 */
+			opp-156000000 {
+				opp-hz = /bits/ 64 <156000000>;
+				opp-supported-hw = <0x02>; /* grade 1 */
 			};
 			opp-238333000 {
 				opp-hz = /bits/ 64 <238333000>;
@@ -788,12 +789,13 @@
 				opp-hz = /bits/ 64 <268666000>;
 				opp-supported-hw = <0xf8>; /* grades 3-7 */
 			};
-			opp-286256000 {
-				opp-hz = /bits/ 64 <286256000>;
-				opp-supported-hw = <0x01>; /* unfused default */
+			opp-286000000 {
+				opp-hz = /bits/ 64 <286000000>;
+				/* unfused default + grades 4-7 */
+				opp-supported-hw = <0xf1>;
 			};
-			opp-312240000 {
-				opp-hz = /bits/ 64 <312240000>;
+			opp-312000000 {
+				opp-hz = /bits/ 64 <312000000>;
 				opp-supported-hw = <0xf0>; /* grades 4-7 */
 			};
 			opp-357500000 {
@@ -804,8 +806,8 @@
 				opp-hz = /bits/ 64 <403000000>;
 				opp-supported-hw = <0xc0>; /* grades 6-7 */
 			};
-			opp-478202000 {
-				opp-hz = /bits/ 64 <478202000>;
+			opp-476666000 {
+				opp-hz = /bits/ 64 <476666000>;
 				opp-supported-hw = <0x80>; /* grade 7 */
 			};
 		};
@@ -814,12 +816,16 @@
 			compatible = "mediatek,mt6589-gpu", "img,powervr-sgx544";
 			reg = <0x13000000 0x10000>;
 			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&mfgsys CLK_MFG_G3D>,
+			clocks = <&topckgen CLK_TOP_MUX_SMI_MFG_AS>,
+				 <&mfgsys CLK_MFG_G3D>,
 				 <&mfgsys CLK_MFG_MEM>,
 				 <&mfgsys CLK_MFG_AXI>,
 				 <&mfgsys CLK_MFG_HYD>;
-			clock-names = "core", "mem", "sys", "hyd";
+			clock-names = "smi_mfg_as", "core", "mem", "sys", "hyd";
 			operating-points-v2 = <&gpu_opp_table>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
+			resets = <&mfgsys MT6589_MFG_G3D_RESET>;
+			reset-names = "g3d";
 			nvmem-cells = <&gpu_grade>;
 			nvmem-cell-names = "gpu_grade";
 		};
