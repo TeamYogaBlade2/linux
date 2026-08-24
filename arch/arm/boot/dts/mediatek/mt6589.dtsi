@@ -13,6 +13,7 @@
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 #include <dt-bindings/memory/mt6589-larb-port.h>
 #include <dt-bindings/power/mt6589-power.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	#address-cells = <1>;
@@ -249,6 +250,29 @@
 			clock-frequency = <32000>;
 			clock-output-names = "rtc_clk";
 			#clock-cells = <0>;
+		};
+	};
+
+	thermal-zones {
+		cpu_thermal: cpu-thermal {
+			polling-delay-passive = <1000>;
+			polling-delay = <1000>;
+
+			thermal-sensors = <&thermal 0>;
+
+			trips {
+				cpu_alert: cpu-alert {
+					temperature = <85000>;
+					hysteresis = <2000>;
+					type = "hot";
+				};
+
+				cpu_crit: cpu-crit {
+					temperature = <115000>;
+					hysteresis = <2000>;
+					type = "critical";
+				};
+			};
 		};
 	};
 
@@ -632,6 +656,20 @@
 			clocks = <&pericfg CLK_PERI1_AUXADC>;
 			clock-names = "main";
 			#io-channel-cells = <1>;
+		};
+
+		thermal: thermal@1100c000 {
+			compatible = "mediatek,mt6589-thermal";
+			reg = <0x1100c000 0x1000>;
+			interrupts = <GIC_SPI 38 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_THERM>,
+				 <&pericfg CLK_PERI1_AUXADC>;
+			clock-names = "therm", "auxadc";
+			mediatek,auxadc = <&auxadc>;
+			mediatek,apmixedsys = <&apmixedsys>;
+			nvmem-cells = <&thermal_cal_data>;
+			nvmem-cell-names = "calibration-data";
+			#thermal-sensor-cells = <1>;
 		};
 
 		audsys: syscon@12070000 {
