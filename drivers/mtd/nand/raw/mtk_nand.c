@@ -1471,6 +1471,21 @@ static const struct mtk_nfc_caps mtk_nfc_caps_mt2701 = {
 	.max_sector_size = 1024,
 };
 
+/*
+ * The MT6589 NFI is an earlier revision of the MT2701 one: same page
+ * format register layout (spare shift 4, FDM at bits 8/12), same
+ * spare per sector choices (16/26/27/28) and the same 512 byte
+ * sectors, as programmed by the downstream mt6589 mtk_nand.c.
+ */
+static const struct mtk_nfc_caps mtk_nfc_caps_mt6589 = {
+	.spare_size = spare_size_mt2701,
+	.num_spare_size = 16,
+	.pageformat_spare_shift = 4,
+	.nfi_clk_div = 1,
+	.max_sector = 16,
+	.max_sector_size = 1024,
+};
+
 static const struct mtk_nfc_caps mtk_nfc_caps_mt2712 = {
 	.spare_size = spare_size_mt2712,
 	.num_spare_size = 19,
@@ -1493,6 +1508,9 @@ static const struct of_device_id mtk_nfc_id_table[] = {
 	{
 		.compatible = "mediatek,mt2701-nfc",
 		.data = &mtk_nfc_caps_mt2701,
+	}, {
+		.compatible = "mediatek,mt6589-nfc",
+		.data = &mtk_nfc_caps_mt6589,
 	}, {
 		.compatible = "mediatek,mt2712-nfc",
 		.data = &mtk_nfc_caps_mt2712,

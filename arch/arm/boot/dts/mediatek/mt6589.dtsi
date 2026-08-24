@@ -885,6 +885,30 @@
 			clocks = <&dispsys CLK_DISP0_2DSHP>;
 		};
 
+		/* NAND flash controller */
+		nfi: nand-controller@11001000 {
+			compatible = "mediatek,mt6589-nfc";
+			reg = <0x11001000 0x1000>;
+			interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_NFI>,
+				 <&pericfg CLK_PERI0_NFI>;
+			clock-names = "nfi_clk", "pad_clk";
+			resets = <&pericfg MT6589_PERI_NFI_SW_RST_RST>;
+			reset-names = "nfi";
+			ecc-engine = <&nfiecc>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		nfiecc: ecc@11002000 {
+			compatible = "mediatek,mt6589-ecc";
+			reg = <0x11002000 0x1000>;
+			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_NFI>;
+			clock-names = "nfiecc_clk";
+		};
+
 		imgsys: syscon@15000000 {
 			compatible = "mediatek,mt6589-imgsys", "syscon";
 			reg = <0x15000000 0x1000>;

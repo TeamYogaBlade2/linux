@@ -70,6 +70,20 @@ allOf:
       properties:
         compatible:
           contains:
+            const: mediatek,mt6589-nfc
+    then:
+      patternProperties:
+        "^nand@[a-f0-9]$":
+          properties:
+            nand-ecc-step-size:
+              enum: [ 512 ]
+            nand-ecc-strength:
+              enum: [4, 8, 12]
+
+  - if:
+      properties:
+        compatible:
+          contains:
             const: mediatek,mt2712-nfc
     then:
       patternProperties:
