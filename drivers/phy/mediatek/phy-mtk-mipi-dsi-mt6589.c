@@ -123,13 +123,16 @@ static unsigned long mt6589_pll_rate(const struct mt6589_pll_config *cfg)
 	unsigned int pre = div_factor(cfg->pre_div);
 	unsigned int div1 = div_factor(cfg->txdiv0);
 	unsigned int div2 = div_factor(cfg->txdiv1);
-	unsigned long rate;
+	/*
+	 * Lane data rate [Mbps] = 26 * (fbk_div + 1) * fbk_sel /
+	 *                         (txdiv0 * txdiv1 * pre_div)
+	 *
+	 * With this the table entries reproduce the downstream
+	 * LCM_DSI_6589_PLL_CLOCK_* enumeration (201.5 + 6.5 * i MHz).
+	 */
+	unsigned int mbps = 26 * fbk * fbk_sel / (div1 * div2 * pre);
 
-	/* Lane data rate (Mbps) = 26 * fbk * fbk_sel * 2 / (8 * div1 * div2 * pre) */
-	rate = 26 * fbk * fbk_sel * 2;
-	rate /= 8 * div1 * div2 * pre;
-	/* Convert to Hz */
-	return rate * 1000000UL;
+	return mbps * 1000000UL;
 }
 
 /* Find the table entry whose output rate is closest to the target */
