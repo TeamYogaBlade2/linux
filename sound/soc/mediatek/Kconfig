@@ -25,6 +25,16 @@ config SND_SOC_MT6572_MT6323
 	  detection and an optional external speaker amplifier.
 	  Select Y if you have such a device. If unsure select "N".
 
+config SND_SOC_MT6589_MT6320
+	tristate "ASoC machine driver for MT6589 with the MT6320 codec"
+	depends on SND_SOC_MT6572
+	select SND_SOC_MT6320
+	help
+	  This adds the ASoC machine driver for a MediaTek MT6589 board with
+	  the on-PMIC MT6320 analog audio codec: DL1 playback and optional
+	  headphone-jack detection.
+	  Select Y if you have such a device. If unsure select "N".
+
 config SND_SOC_MT2701
 	tristate "ASoC support for Mediatek MT2701 chip"
 	depends on ARCH_MEDIATEK

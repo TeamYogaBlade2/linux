@@ -711,9 +711,16 @@
 		};
 
 		audsys: syscon@12070000 {
-			compatible = "mediatek,mt6589-audsys", "syscon";
+			compatible = "mediatek,mt6589-audsys", "syscon",
+				     "simple-mfd";
 			reg = <0x12070000 0x1000>;
 			#clock-cells = <1>;
+
+			afe: audio-controller {
+				compatible = "mediatek,mt6589-audio";
+				clocks = <&audsys CLK_AUDIO_AFE>;
+				interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
+			};
 		};
 
 		pwm: pwm@1100b000 {

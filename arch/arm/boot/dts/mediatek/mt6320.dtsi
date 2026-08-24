@@ -50,6 +50,10 @@
 			#clock-cells = <1>;
 		};
 
+		sound {
+			compatible = "mediatek,mt6320-sound";
+		};
+
 		mt6320regulator: mt6320regulator {
 			compatible = "mediatek,mt6320-regulator";
 

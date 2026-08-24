@@ -163,6 +163,9 @@ static const struct mfd_cell mt6320_devs[] = {
 		.num_resources = ARRAY_SIZE(mt6323_pwrc_resources),
 		.resources = mt6323_pwrc_resources,
 		.of_compatible = "mediatek,mt6320-pwrc",
+	}, {
+		.name = "mt6320-sound",
+		.of_compatible = "mediatek,mt6320-sound"
 	},
 };
 

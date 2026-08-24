@@ -2774,6 +2774,14 @@ config SND_SOC_MT6323
 	  Enable support for the platform which uses MT6323 as
 	  external codec device.
 
+config SND_SOC_MT6320
+	tristate "MediaTek MT6320 Codec"
+	depends on MFD_MT6397
+	select SND_SOC_MEDIATEK
+	help
+	  Enable support for the platform which uses MT6320 as
+	  external codec device.
+
 config SND_SOC_MT6351
 	tristate "MediaTek MT6351 Codec"
 

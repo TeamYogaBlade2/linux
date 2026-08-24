@@ -416,6 +416,7 @@ static int mt6572_afe_pcm_dev_probe(struct platform_device *pdev)
 
 static const struct of_device_id mt6572_afe_pcm_dt_match[] = {
 	{ .compatible = "mediatek,mt6572-audio" },
+	{ .compatible = "mediatek,mt6589-audio" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mt6572_afe_pcm_dt_match);
