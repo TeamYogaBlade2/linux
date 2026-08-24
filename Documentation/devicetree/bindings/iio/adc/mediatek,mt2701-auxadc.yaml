@@ -24,6 +24,7 @@ properties:
       - enum:
           - mediatek,mt2701-auxadc
           - mediatek,mt2712-auxadc
+          - mediatek,mt6589-auxadc
           - mediatek,mt6765-auxadc
           - mediatek,mt7622-auxadc
           - mediatek,mt7986-auxadc
