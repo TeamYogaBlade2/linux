@@ -1,0 +1,110 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * prismrv_mmu.c — BIF MMU (2-level, 4 KiB pages, 32-bit VA).
+ *
+ * Page directory: 1024 entries mapping 4 MiB superpages.
+ * Page tables:    1024 entries each, allocated on demand from a
+ *                 dma-coherent pool.  A kernel shadow of the PT cpu
+ *                 pointers is kept in pd_pts[].
+ */
+#include <linux/dma-mapping.h>
+#include <linux/dma-direct.h>
+#include <linux/slab.h>
+
+#include "prismrv_device.h"
+
+#define PD_ENTRIES	1024
+#define PT_ENTRIES	1024
+#define PT_SIZE		(PT_ENTRIES * sizeof(u32))
+
+int prismrv_mmu_init(struct prismrv_device *pv)
+{
+	pv->pd_cpu = dma_alloc_coherent(pv->drm.dev, PAGE_SIZE,
+					&pv->pt_dma_addr, GFP_KERNEL);
+	if (!pv->pd_cpu)
+		return -ENOMEM;
+
+	pv->pd_pts = kcalloc(PD_ENTRIES, sizeof(u32 *), GFP_KERNEL);
+	if (!pv->pd_pts) {
+		dma_free_coherent(pv->drm.dev, PAGE_SIZE, pv->pd_cpu,
+				  pv->pt_dma_addr);
+		pv->pd_cpu = NULL;
+		return -ENOMEM;
+	}
+
+	memset(pv->pd_cpu, 0, PAGE_SIZE);
+	pv->pd_gpu_addr = pv->pt_dma_addr & EUR_CR_BIF_DIR_LIST_BASE_ADDR_MASK;
+
+	writel(pv->pd_gpu_addr, pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+	readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+
+	return 0;
+}
+
+void prismrv_mmu_fini(struct prismrv_device *pv)
+{
+	unsigned int i;
+
+	if (pv->pd_pts) {
+		for (i = 0; i < PD_ENTRIES; i++)
+			pv->pd_pts[i] = NULL; /* PTs freed with the device */
+		kfree(pv->pd_pts);
+		pv->pd_pts = NULL;
+	}
+	if (pv->pd_cpu) {
+		dma_free_coherent(pv->drm.dev, PAGE_SIZE, pv->pd_cpu,
+				  pv->pt_dma_addr);
+		pv->pd_cpu = NULL;
+	}
+}
+
+int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
+		    dma_addr_t phys, size_t size)
+{
+	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
+	unsigned long i;
+
+	for (i = 0; i < n_pages; i++) {
+		u32 va = vaddr + i * PAGE_SIZE;
+		u32 pd_idx = va >> 22;
+		u32 pt_idx = (va >> 12) & 0x3ff;
+		u32 *pt;
+
+		if (!(pv->pd_cpu[pd_idx] & SGX_MMU_PDE_VALID)) {
+			dma_addr_t pt_dma;
+
+			pt = dma_alloc_coherent(pv->drm.dev, PT_SIZE,
+						&pt_dma, GFP_KERNEL);
+			if (!pt)
+				return -ENOMEM;
+			memset(pt, 0, PT_SIZE);
+			pv->pd_pts[pd_idx] = pt;
+			pv->pd_cpu[pd_idx] =
+				cpu_to_le32((pt_dma &
+					     EUR_CR_BIF_DIR_LIST_BASE_ADDR_MASK) |
+					    SGX_MMU_PDE_VALID |
+					    SGX_MMU_PDE_PAGE_SIZE_4K);
+		}
+		pt = pv->pd_pts[pd_idx];
+		pt[pt_idx] = cpu_to_le32(((phys + i * PAGE_SIZE) &
+					  SGX_MMU_PTE_ADDR_MASK) |
+					 SGX_MMU_PTE_VALID);
+	}
+
+	return 0;
+}
+
+void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size)
+{
+	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
+	unsigned long i;
+
+	for (i = 0; i < n_pages; i++) {
+		u32 va = vaddr + i * PAGE_SIZE;
+		u32 pd_idx = va >> 22;
+		u32 pt_idx = (va >> 12) & 0x3ff;
+
+		if (pv->pd_pts[pd_idx])
+			pv->pd_pts[pd_idx][pt_idx] = 0;
+	}
+}
