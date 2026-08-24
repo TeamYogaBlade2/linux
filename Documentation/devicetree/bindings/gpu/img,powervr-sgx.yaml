@@ -51,7 +51,6 @@ properties:
       - const: mem
       - const: sys
       - const: hyd
-      - const: smi_mfg_as
 
   operating-points-v2: true
 
@@ -108,13 +107,13 @@ allOf:
         - resets
       properties:
         clocks:
-          minItems: 5
-          maxItems: 5
+          minItems: 4
+          maxItems: 4
         clock-names:
-          minItems: 5
-          maxItems: 5
+          minItems: 4
+          maxItems: 4
           items:
-            enum: [smi_mfg_as, core, mem, sys, hyd]
+            enum: [core, mem, sys, hyd]
   - if:
       properties:
         compatible:
