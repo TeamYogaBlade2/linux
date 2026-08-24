@@ -54,6 +54,11 @@
 			compatible = "mediatek,mt6320-sound";
 		};
 
+		mt6320_adc: adc {
+			compatible = "mediatek,mt6320-auxadc";
+			#io-channel-cells = <1>;
+		};
+
 		mt6320regulator: mt6320regulator {
 			compatible = "mediatek,mt6320-regulator";
 
