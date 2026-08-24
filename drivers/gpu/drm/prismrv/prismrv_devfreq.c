@@ -9,9 +9,41 @@
 #include <linux/clk.h>
 #include <linux/devfreq.h>
 #include <linux/devfreq_cooling.h>
+#include <linux/nvmem-consumer.h>
 #include <linux/pm_opp.h>
 
 #include "prismrv_device.h"
+
+/**
+ * prismrv_read_gpu_grade() - fetch the fused GPU speed grade.
+ *
+ * MT6589 stores a 4-bit grade (values 1..7) in eFuse word 0x0c
+ * bits[31:28] (the vendor /dev/devmap index-3 word).  Grade 0 means
+ * unfused: the vendor boot code then runs a fixed default frequency
+ * without DVFS.  Returns the raw grade, or a negative errno.
+ */
+static int prismrv_read_gpu_grade(struct device *dev)
+{
+	struct nvmem_cell *cell;
+	size_t len;
+	u8 *buf;
+	int grade;
+
+	cell = devm_nvmem_cell_get(dev, "gpu_grade");
+	if (IS_ERR(cell)) {
+		/* no cell wired up: treat as unfused */
+		return 0;
+	}
+
+	buf = nvmem_cell_read(cell, &len);
+	devm_nvmem_cell_put(dev, cell);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
+
+	grade = buf[0];
+	kfree(buf);
+	return grade;
+}
 
 static void prismrv_devfreq_update_utilization(struct prismrv_devfreq *df)
 {
@@ -72,10 +104,25 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 	struct prismrv_devfreq *df = &pv->devfreq;
 	struct dev_pm_opp *opp;
 	unsigned long cur_freq;
-	int ret;
+	u32 version;
+	int ret, grade;
 
 	spin_lock_init(&df->lock);
 	df->time_last_update = ktime_get();
+
+	grade = prismrv_read_gpu_grade(pv->drm.dev);
+	if (grade < 0)
+		return grade;
+
+	version = BIT(grade);
+	ret = dev_pm_opp_set_supported_hw(pv->drm.dev, &version, 1);
+	if (ret)
+		return ret;
+	if (grade == 0)
+		dev_info(pv->drm.dev,
+			 "GPU grade unfused: fixed default frequency\n");
+	else
+		dev_info(pv->drm.dev, "GPU speed grade %d\n", grade);
 
 	ret = devm_pm_opp_set_clkname(pv->drm.dev, pv->clocks[0].id);
 	if (ret)

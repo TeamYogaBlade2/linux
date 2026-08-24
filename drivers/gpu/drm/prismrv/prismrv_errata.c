@@ -66,10 +66,11 @@ static const struct prismrv_errata_entry prismrv_errata_table[] = {
  */
 u32 prismrv_read_revision(struct prismrv_device *pv)
 {
-	u32 val = readl(pv->regs + EUR_CR_CORE_REVISION);
-
-	pv->core_rev_major = (val >> EUR_CR_CORE_REVISION_MAJOR_SHIFT) & 0xff;
-	pv->core_rev_minor = (val >> EUR_CR_CORE_REVISION_MINOR_SHIFT) & 0xff;
+	pv->core_revision = readl(pv->regs + EUR_CR_CORE_REVISION);
+	pv->core_rev_major =
+		(pv->core_revision >> EUR_CR_CORE_REVISION_MAJOR_SHIFT) & 0xff;
+	pv->core_rev_minor =
+		(pv->core_revision >> EUR_CR_CORE_REVISION_MINOR_SHIFT) & 0xff;
 
 	return pv->core_rev_major;
 }

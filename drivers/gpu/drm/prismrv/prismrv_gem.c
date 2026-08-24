@@ -95,7 +95,9 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 
 	switch (args->param) {
 	case PRISMRV_PARAM_GPU_ID:
-		args->value = pv->info->core_id | (pv->core_rev_major << 8);
+		/* raw EUR_CR_CORE_REVISION: [23:16] major (RTL head rev),
+		 * [15:8] minor, [7:0] maintenance */
+		args->value = pv->core_revision;
 		break;
 	case PRISMRV_PARAM_CORE_COUNT:
 		args->value = pv->info->num_cores;

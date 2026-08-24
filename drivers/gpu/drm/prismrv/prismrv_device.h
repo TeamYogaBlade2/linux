@@ -80,6 +80,7 @@ struct prismrv_device {
 	int nr_clocks;
 
 	/* runtime-detected hardware revision */
+	u32 core_revision;	/* raw EUR_CR_CORE_REVISION */
 	u32 core_rev_major;
 	u32 core_rev_minor;
 
@@ -90,6 +91,7 @@ struct prismrv_device {
 	u32 pd_gpu_addr;		/* page directory in device space */
 	u32 *pd_cpu;			/* page directory (kernel shadow) */
 	u32 **pd_pts;			/* per-PDE page table cpu pointers */
+	dma_addr_t *pd_pt_dma;		/* matching dma addresses */
 	dma_addr_t pt_dma_addr;		/* scratch dma addr (PD alloc / latest PT) */
 
 	/* uKernel */

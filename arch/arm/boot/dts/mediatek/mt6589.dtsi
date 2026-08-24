@@ -427,6 +427,12 @@
 				bits = <0 3>;
 			};
 
+			/* GPU speed grade: devinfo index 3, bits[31:28] */
+			gpu_grade: gpu-grade@c {
+				reg = <0xc 0x4>;
+				bits = <28 4>;
+			};
+
 			core_count_flag: core-count@40 {
 				reg = <0x40 0x4>;
 				bits = <24 4>;
@@ -760,14 +766,62 @@
 			status = "disabled";
 		};
 
+		gpu_opp_table: opp-table {
+			compatible = "operating-points-v2";
+
+			/*
+			 * GPU speed grades from eFuse word 0x0c bits[31:28]
+			 * (vendor /dev/devmap index 3).  Each grade certifies
+			 * a maximum frequency; lower steps remain usable.
+			 * Grade 0 (unfused) runs the vendor default of
+			 * 286.256 MHz without DVFS.
+			 */
+			opp-156256000 {
+				opp-hz = /bits/ 64 <156256000>;
+				opp-supported-hw = <0xfe>; /* grades 1-7 */
+			};
+			opp-238333000 {
+				opp-hz = /bits/ 64 <238333000>;
+				opp-supported-hw = <0xfc>; /* grades 2-7 */
+			};
+			opp-268666000 {
+				opp-hz = /bits/ 64 <268666000>;
+				opp-supported-hw = <0xf8>; /* grades 3-7 */
+			};
+			opp-286256000 {
+				opp-hz = /bits/ 64 <286256000>;
+				opp-supported-hw = <0x01>; /* unfused default */
+			};
+			opp-312240000 {
+				opp-hz = /bits/ 64 <312240000>;
+				opp-supported-hw = <0xf0>; /* grades 4-7 */
+			};
+			opp-357500000 {
+				opp-hz = /bits/ 64 <357500000>;
+				opp-supported-hw = <0xe0>; /* grades 5-7 */
+			};
+			opp-403000000 {
+				opp-hz = /bits/ 64 <403000000>;
+				opp-supported-hw = <0xc0>; /* grades 6-7 */
+			};
+			opp-478202000 {
+				opp-hz = /bits/ 64 <478202000>;
+				opp-supported-hw = <0x80>; /* grade 7 */
+			};
+		};
+
 		gpu: gpu@13000000 {
 			compatible = "mediatek,mt6589-gpu", "img,powervr-sgx544";
 			reg = <0x13000000 0x10000>;
 			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&mfgsys CLK_MFG_G3D>,
 				 <&mfgsys CLK_MFG_MEM>,
-				 <&mfgsys CLK_MFG_AXI>;
-			clock-names = "core", "mem", "sys";
+				 <&mfgsys CLK_MFG_AXI>,
+				 <&mfgsys CLK_MFG_HYD>;
+			clock-names = "core", "mem", "sys", "hyd";
+			operating-points-v2 = <&gpu_opp_table>;
+			nvmem-cells = <&gpu_grade>;
+			nvmem-cell-names = "gpu_grade";
 		};
 
 		dispsys: syscon@14000000 {

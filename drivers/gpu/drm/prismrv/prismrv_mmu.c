@@ -25,7 +25,12 @@ int prismrv_mmu_init(struct prismrv_device *pv)
 		return -ENOMEM;
 
 	pv->pd_pts = kcalloc(PD_ENTRIES, sizeof(u32 *), GFP_KERNEL);
-	if (!pv->pd_pts) {
+	pv->pd_pt_dma = kcalloc(PD_ENTRIES, sizeof(dma_addr_t), GFP_KERNEL);
+	if (!pv->pd_pts || !pv->pd_pt_dma) {
+		kfree(pv->pd_pts);
+		kfree(pv->pd_pt_dma);
+		pv->pd_pts = NULL;
+		pv->pd_pt_dma = NULL;
 		dma_free_coherent(pv->drm.dev, PAGE_SIZE, pv->pd_cpu,
 				  pv->pt_dma_addr);
 		pv->pd_cpu = NULL;
@@ -33,7 +38,7 @@ int prismrv_mmu_init(struct prismrv_device *pv)
 	}
 
 	memset(pv->pd_cpu, 0, PAGE_SIZE);
-	pv->pd_gpu_addr = pv->pt_dma_addr & EUR_CR_BIF_DIR_LIST_BASE_ADDR_MASK;
+	pv->pd_gpu_addr = pv->pt_dma_addr & EUR_CR_BIF_DIR_LIST_ADDR_MASK;
 
 	writel(pv->pd_gpu_addr, pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
 	readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
@@ -45,12 +50,20 @@ void prismrv_mmu_fini(struct prismrv_device *pv)
 {
 	unsigned int i;
 
-	if (pv->pd_pts) {
-		for (i = 0; i < PD_ENTRIES; i++)
-			pv->pd_pts[i] = NULL; /* PTs freed with the device */
-		kfree(pv->pd_pts);
-		pv->pd_pts = NULL;
+	if (pv->pd_pts && pv->pd_pt_dma) {
+		for (i = 0; i < PD_ENTRIES; i++) {
+			if (pv->pd_pts[i]) {
+				dma_free_coherent(pv->drm.dev, PT_SIZE,
+						  pv->pd_pts[i],
+						  pv->pd_pt_dma[i]);
+				pv->pd_pts[i] = NULL;
+			}
+		}
 	}
+	kfree(pv->pd_pts);
+	kfree(pv->pd_pt_dma);
+	pv->pd_pts = NULL;
+	pv->pd_pt_dma = NULL;
 	if (pv->pd_cpu) {
 		dma_free_coherent(pv->drm.dev, PAGE_SIZE, pv->pd_cpu,
 				  pv->pt_dma_addr);
@@ -79,9 +92,10 @@ int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
 				return -ENOMEM;
 			memset(pt, 0, PT_SIZE);
 			pv->pd_pts[pd_idx] = pt;
+			pv->pd_pt_dma[pd_idx] = pt_dma;
 			pv->pd_cpu[pd_idx] =
 				cpu_to_le32((pt_dma &
-					     EUR_CR_BIF_DIR_LIST_BASE_ADDR_MASK) |
+					     EUR_CR_BIF_DIR_LIST_ADDR_MASK) |
 					    SGX_MMU_PDE_VALID |
 					    SGX_MMU_PDE_PAGE_SIZE_4K);
 		}
