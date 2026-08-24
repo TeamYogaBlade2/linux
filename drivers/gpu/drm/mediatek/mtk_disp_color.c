@@ -32,7 +32,6 @@
 /* Additional registers needed by MT6589 */
 #define DISP_COLOR_R2Y_EN			(DISP_COLOR_START_MT2701 + 0x60)	/* 0xf60 */
 #define DISP_COLOR_R2Y_MATRIX_BASE		(DISP_COLOR_START_MT2701 + 0x64)	/* 0xf64 */
-#define DISP_COLOR_CCOR_EN			(DISP_COLOR_START_MT2701 + 0xa0)	/* 0xfa0 */
 
 struct mtk_disp_color *color;
 
@@ -83,28 +82,42 @@ void mtk_color_config(struct device *dev, unsigned int w,
 static void mt6589_color_init(struct mtk_disp_color *color)
 {
 	void __iomem *regs = color->regs;
+	unsigned int i;
 
-	/* Color matrix coefficients (downstream values) */
-	writel(306,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x00);
-	writel(601,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x04);
-	writel(117,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x08);
-	writel(-173,  regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x0c);
-	writel(-339,  regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x10);
-	writel(512,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x14);
-	writel(512,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x18);
-	writel(-429,  regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x1c);
-	writel(-83,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x20);
-	/* The rest of the matrix (0x00 at 0x24..0x34) are already zero */
+	/*
+	 * Register sequence of the downstream DpEngine_COLORonInit(): one
+	 * contiguous coefficient table at 0xf64..0xfdc holding the R2Y
+	 * matrix, its RGB gains and input offsets (+128), the Y2R enable
+	 * bit at 0xfa0 and the Y2R matrix with U/V offsets of -128 at
+	 * 0xfcc/0xfd0.
+	 */
+	static const u32 coef[] = {
+		306, 601, 117, -173, -339, 512,		/* 0xf64: R2Y */
+		512, -429, -83,
+		0, 0, 0, 0,				/* reserved   */
+		128, 128,				/* R/G offsets */
+		1,					/* 0xfa0: Y2R_EN */
+		1024, -1, 1436,				/* 0xfa4: Y2R */
+		1024,
+		-353, -731,
+		1024, 1814,
+		1, 0,					/* gains tail */
+		-128, -128,				/* U/V offsets */
+		0, 0, 0,
+	};
 
-	writel(128,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x34);	/* offset R */
-	writel(128,   regs + DISP_COLOR_R2Y_MATRIX_BASE + 0x38);	/* offset G */
-	/* 0x00 at 0x3c already zero */
+	for (i = 0; i < ARRAY_SIZE(coef); i++)
+		writel(coef[i], regs + DISP_COLOR_R2Y_MATRIX_BASE + i * 4);
 
-	/* Enable R2Y (YUV to RGB conversion) */
+	/* Enable the R2Y stage (0xf60) */
 	writel(1, regs + DISP_COLOR_R2Y_EN);
 
-	/* Enable color correction (CCOR) */
-	writel(1, regs + DISP_COLOR_CCOR_EN);
+	/*
+	 * Use the same 10-bit to 8-bit rounding pattern as the downstream
+	 * kernel.  The interrupt mask at 0xf04 is intentionally left alone:
+	 * this driver does not service COLOR interrupts.
+	 */
+	writel(0x333, regs + DISP_COLOR_START_MT2701 + 0x0c);
 }
 
 void mtk_color_start(struct device *dev)
