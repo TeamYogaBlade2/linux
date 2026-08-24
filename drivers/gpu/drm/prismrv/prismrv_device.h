@@ -186,6 +186,7 @@ struct prismrv_device {
 	spinlock_t event_lock;		/* protects kicker + event masks */
 	struct dma_fence *pending_fence; /* signalled by the IRQ handler */
 	unsigned int missed_completions;
+	atomic_t busy_count;
 	struct work_struct recovery_work;
 	struct mutex init_mutex;	/* serialises prismrv_hw_init */
 

@@ -45,17 +45,18 @@ static int prismrv_read_gpu_grade(struct device *dev)
 	return grade;
 }
 
-static void prismrv_devfreq_update_utilization(struct prismrv_devfreq *df)
+static void prismrv_devfreq_update_utilization(struct prismrv_device *pv)
 {
+	struct prismrv_devfreq *df = &pv->devfreq;
 	ktime_t now, last;
 
 	now = ktime_get();
 	last = df->time_last_update;
 
-	if (df->busy_count > 0)
-		df->busy_time += ktime_sub(now, last);
+	if (atomic_read(&pv->busy_count) > 0)
+		df->busy_time += ktime_to_ns(ktime_sub(now, last));
 	else
-		df->idle_time += ktime_sub(now, last);
+		df->idle_time += ktime_to_ns(ktime_sub(now, last));
 
 	df->time_last_update = now;
 }
@@ -81,8 +82,9 @@ static int prismrv_devfreq_get_dev_status(struct device *dev,
 	unsigned long irqflags;
 
 	spin_lock_irqsave(&df->lock, irqflags);
-	prismrv_devfreq_update_utilization(df);
+	prismrv_devfreq_update_utilization(pv);
 	status->current_frequency = clk_get_rate(pv->clocks[0].clk);
+	prismrv_devfreq_update_utilization(pv);
 	status->busy_time = df->busy_time;
 	status->total_time = df->busy_time + df->idle_time;
 

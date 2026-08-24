@@ -16,7 +16,10 @@
  */
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
+#include <linux/units.h>
+#include <linux/delay.h>
 #include <linux/sync_file.h>
+#include <linux/pm_runtime.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_shmem_helper.h>
@@ -88,6 +91,18 @@ void prismrv_ccb_fini(struct prismrv_device *pv)
 	}
 }
 
+/*
+ * Vendor SGXAcquireKernelCCBSlot: the CCB is full when advancing the
+ * write offset would swallow an unconsumed command.  Wait for the
+ * uKernel to drain it instead of corrupting the ring.
+ */
+/* ring-full test: caller holds ccb_lock or otherwise serialises */
+static bool prismrv_ccb_full(struct prismrv_device *pv)
+{
+	return ((le32_to_cpu(pv->ccb->write_offset) + 1 -
+		 le32_to_cpu(pv->ccb->read_offset)) & 255) == 0;
+}
+
 static void prismrv_ccb_schedule(struct prismrv_device *pv,
 				 enum prismrv_cmd_type type,
 				 const __le32 data[6])
@@ -96,6 +111,15 @@ static void prismrv_ccb_schedule(struct prismrv_device *pv,
 	u32 slot;
 
 	spin_lock(&pv->ccb_lock);
+
+	while (prismrv_ccb_full(pv)) {
+		spin_unlock(&pv->ccb_lock);
+		/* nudge the uKernel main loop so it drains the CCB */
+		writel(EUR_CR_EVENT_KICK_NOW_MASK,
+		       pv->regs + EUR_CR_EVENT_KICK);
+		usleep_range(50, 100);
+		spin_lock(&pv->ccb_lock);
+	}
 
 	slot = le32_to_cpu(pv->ccb->write_offset) & 255;
 	cmd = &pv->ccb->commands[slot];
@@ -118,6 +142,43 @@ static void prismrv_ccb_schedule(struct prismrv_device *pv,
 	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
 }
 
+/*
+ * Import the user-passed sync_file fds and wait for every dependency
+ * before the CCB command is published (implicit-sync semantics).
+ */
+static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
+{
+	u32 *fds;
+	unsigned int i;
+	long ret = 0;
+
+	if (!num_fds)
+		return 0;
+
+	fds = kmemdup_array(user_fds, num_fds, sizeof(u32), GFP_KERNEL);
+	if (!fds)
+		return -ENOMEM;
+
+	for (i = 0; i < num_fds && ret == 0; i++) {
+		struct dma_fence *fence;
+
+		fence = sync_file_get_fence(fds[i]);
+		if (!fence) {
+			ret = -EINVAL;
+			break;
+		}
+		ret = dma_fence_wait_timeout(fence, true, MAX_SCHEDULE_TIMEOUT);
+		dma_fence_put(fence);
+		if (ret < 0)
+			break;
+	}
+	kfree(fds);
+
+	if (ret > 0)
+		return 0;
+	return (int)ret ?: -ETIMEDOUT;
+}
+
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file)
 {
@@ -126,18 +187,32 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object **objs = NULL;
 	struct prismrv_fence *f;
 	struct sync_file *sf;
+	u32 __user *in_fds;
 	__le32 cmd_data[6] = {};
-	void *cmd_cpu;
 	int ret = 0, fd;
 
-	if (!pv->hw_ready)
+	ret = pm_runtime_resume_and_get(pv->drm.dev);
+	if (ret)
+		return ret;
+
+	if (!pv->hw_ready) {
+		pm_runtime_put_sync(pv->drm.dev);
 		return -ENODEV;
-	if (args->cmd_type >= PRISMRV_CMD_COUNT)
+	}
+	if (args->cmd_type >= PRISMRV_CMD_COUNT) {
+		pm_runtime_put_sync(pv->drm.dev);
 		return -EINVAL;
+	}
 
 	objs = kvcalloc(max(args->num_bos, 1U), sizeof(*objs), GFP_KERNEL);
 	if (!objs)
 		return -ENOMEM;
+
+	/* block on explicit dependencies first */
+	in_fds = u64_to_user_ptr(args->in_fences);
+	ret = prismrv_wait_in_fences(args->num_in_fences, in_fds);
+	if (ret)
+		goto out_put;
 
 	/* pin + DMA-map + MMU-map every referenced BO */
 	{
@@ -210,8 +285,12 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	pv->pending_fence = &f->base;
 	spin_unlock(&pv->event_lock);
 
+	atomic_inc(&pv->busy_count);
 	prismrv_ccb_schedule(pv, args->cmd_type, cmd_data);
+	pm_runtime_mark_last_busy(pv->drm.dev);
+	pm_runtime_put_autosuspend(pv->drm.dev);
 
+	/* record the fence so devfreq can see the busy window */
 out_put:
 	while (args->num_bos-- && objs[args->num_bos])
 		drm_gem_object_put(objs[args->num_bos]);

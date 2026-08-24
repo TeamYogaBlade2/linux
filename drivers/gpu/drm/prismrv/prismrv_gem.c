@@ -8,6 +8,7 @@
  * mmap path (drm_gem_shmem_vm_ops).
  */
 #include <linux/dma-mapping.h>
+#include <linux/list.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_prime.h>
@@ -23,6 +24,14 @@
 #define PRISMRV_VA_SIZE		0x30000000u
 
 static DEFINE_MUTEX(va_lock);
+
+/* free-list of (base, size) VA ranges reclaimed on BO destroy */
+struct prismrv_va_range {
+	u32 base;
+	size_t size;
+	struct list_head node;
+};
+static LIST_HEAD(va_free_list);
 static u32 va_next = PRISMRV_VA_BASE;
 
 struct prismrv_bo {
@@ -86,8 +95,29 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	}
 
 	mutex_lock(&va_lock);
-	bo->gpu_va = va_next;
-	va_next += PAGE_ALIGN(shmem->base.size);
+	/* reuse the first freed range large enough, else bump-allocate */
+	{
+		struct prismrv_va_range *range;
+		size_t want = PAGE_ALIGN(shmem->base.size);
+
+		list_for_each_entry(range, &va_free_list, node) {
+			if (range->size >= want) {
+				bo->gpu_va = range->base;
+				if (range->size > want) {
+					range->base += want;
+					range->size -= want;
+				} else {
+					list_del(&range->node);
+					kfree(range);
+				}
+				break;
+			}
+		}
+		if (!bo->gpu_va) {
+			bo->gpu_va = va_next;
+			va_next += want;
+		}
+	}
 	mutex_unlock(&va_lock);
 
 	for_each_sgtable_dma_sg(sgt, sg, i) {

@@ -35,6 +35,7 @@ static void prismrv_handle_completion(struct prismrv_device *pv)
 		dma_fence_put(fence);
 		pv->missed_completions = 0;
 	}
+	atomic_dec(&pv->busy_count);
 }
 
 static void prismrv_check_recovery(struct prismrv_device *pv)

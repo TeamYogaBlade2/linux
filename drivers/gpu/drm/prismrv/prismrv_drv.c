@@ -119,6 +119,13 @@ static int prismrv_probe(struct platform_device *pdev)
 			 "firmware unavailable, GPU left uninitialised (%d)\n",
 			 ret);
 
+	/* runtime autosuspend: GPU idles 100ms after the last submit */
+	pm_runtime_set_autosuspend_delay(&pdev->dev, 100);
+	pm_runtime_use_autosuspend(&pdev->dev);
+	pm_runtime_enable(&pdev->dev);
+	pm_runtime_mark_last_busy(&pdev->dev);
+	pm_runtime_put_autosuspend(&pdev->dev);
+
 	prismrv_devfreq_init(pv);
 
 	dev_info(&pdev->dev, "%s probed\n", pv->info->name);
@@ -132,7 +139,30 @@ static void prismrv_remove(struct platform_device *pdev)
 	drm_dev_unplug(&pv->drm);
 }
 
+static int prismrv_runtime_suspend(struct device *dev)
+{
+	struct prismrv_device *pv = dev_get_drvdata(dev);
+
+	pv->hw_ready = false;
+	return 0;
+}
+
+static int prismrv_runtime_resume(struct device *dev)
+{
+	struct prismrv_device *pv = dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (!pv->hw_ready) {
+		mutex_lock(&pv->init_mutex);
+		if (pv->ukernel_cpu)
+			ret = prismrv_hw_init(pv);
+		mutex_unlock(&pv->init_mutex);
+	}
+	return ret;
+}
+
 static const struct dev_pm_ops prismrv_pm_ops = {
+	RUNTIME_PM_OPS(prismrv_runtime_suspend, prismrv_runtime_resume, NULL)
 	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
 				pm_runtime_force_resume)
 };
