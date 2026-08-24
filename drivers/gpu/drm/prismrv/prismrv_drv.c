@@ -133,10 +133,16 @@ static int prismrv_probe(struct platform_device *pdev)
 	pm_runtime_mark_last_busy(&pdev->dev);
 	pm_runtime_put_autosuspend(&pdev->dev);
 
-	prismrv_devfreq_init(pv);
+	ret = prismrv_devfreq_init(pv);
+	if (ret == -EPROBE_DEFER)
+		goto err_devfreq;
 
 	dev_info(&pdev->dev, "%s probed\n", pv->info->name);
 	return 0;
+
+err_devfreq:
+	drm_dev_unplug(&pv->drm);
+	return ret;
 }
 
 static void prismrv_remove(struct platform_device *pdev)

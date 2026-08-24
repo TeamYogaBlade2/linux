@@ -117,16 +117,24 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 		return grade;
 
 	version = BIT(grade);
-	ret = dev_pm_opp_set_supported_hw(pv->drm.dev, &version, 1);
-	if (ret)
-		return ret;
 	if (grade == 0)
 		dev_info(pv->drm.dev,
 			 "GPU grade unfused: fixed default frequency\n");
 	else
 		dev_info(pv->drm.dev, "GPU speed grade %d\n", grade);
 
-	ret = devm_pm_opp_set_clkname(pv->drm.dev, pv->clocks[0].id);
+	/*
+	 * Bind the OPP table to the core clock and the VRF18_2 buck (the rail
+	 * the downstream mt_gpufreq switches for the MFG domain).  supported_hw
+	 * selects the grade-specific entries via opp-supported-hw in the DT.
+	 */
+	ret = devm_pm_opp_set_config(pv->drm.dev,
+		&(struct dev_pm_opp_config){
+			.clk_names = (const char *[]){ pv->clocks[0].id, NULL },
+			.regulator_names = (const char *[]){ "vrf18_2", NULL },
+			.supported_hw = &version,
+			.supported_hw_count = 1,
+		});
 	if (ret)
 		return ret;
 
