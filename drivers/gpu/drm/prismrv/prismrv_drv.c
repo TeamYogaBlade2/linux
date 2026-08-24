@@ -19,14 +19,6 @@
 #include <uapi/drm/prismrv_drm.h>
 #include "prismrv_device.h"
 
-static const struct prismrv_chip_info prismrv_sgx540_info = {
-	.name = "sgx540",
-	.core_id = PRISMRV_CORE_SGX540,
-	.num_cores = 1,
-	.has_isp2 = false,
-	.has_multi_event_kick = false,
-};
-
 static const struct prismrv_chip_info prismrv_sgx544_info = {
 	.name = "sgx544",
 	.core_id = PRISMRV_CORE_SGX544,
@@ -37,7 +29,6 @@ static const struct prismrv_chip_info prismrv_sgx544_info = {
 
 static const struct of_device_id prismrv_of_match[] = {
 	{ .compatible = "mediatek,mt6589-gpu", .data = &prismrv_sgx544_info },
-	{ .compatible = "img,powervr-sgx540", .data = &prismrv_sgx540_info },
 	{ .compatible = "img,powervr-sgx544", .data = &prismrv_sgx544_info },
 	{ /* sentinel */ }
 };
