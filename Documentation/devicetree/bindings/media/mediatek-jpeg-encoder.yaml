@@ -17,6 +17,7 @@ properties:
     items:
       - enum:
           - mediatek,mt2701-jpgenc
+          - mediatek,mt6589-jpgenc
           - mediatek,mt8183-jpgenc
           - mediatek,mt8186-jpgenc
           - mediatek,mt8188-jpgenc
@@ -28,10 +29,11 @@ properties:
     maxItems: 1
 
   clocks:
-    maxItems: 1
+    maxItems: 2
 
   clock-names:
     items:
+      - const: jpgenc-smi
       - const: jpgenc
 
   power-domains:

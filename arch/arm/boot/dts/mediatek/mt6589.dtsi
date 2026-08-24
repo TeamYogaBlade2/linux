@@ -696,6 +696,20 @@
 				 <&iommu MT6589_M4U_PORT_JPGDEC_BSDMA>;
 		};
 
+		jpgenc: jpeg-encoder@1500a000 {
+			compatible = "mediatek,mt6589-jpgenc",
+				     "mediatek,mtk-jpgenc";
+			reg = <0x1500a000 0x1000>;
+			interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&imgsys CLK_IMAGE_JPGE_SMI>,
+				 <&imgsys CLK_IMAGE_JPGE_JPG>;
+			clock-names = "jpgenc-smi",
+				      "jpgenc";
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+			iommus = <&iommu MT6589_M4U_PORT_JPGENC_RDMA>,
+				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
+		};
+
 		audsys: syscon@12070000 {
 			compatible = "mediatek,mt6589-audsys", "syscon";
 			reg = <0x12070000 0x1000>;

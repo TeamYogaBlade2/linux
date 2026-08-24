@@ -1859,6 +1859,7 @@ dec_end:
 }
 
 static struct clk_bulk_data mtk_jpeg_clocks[] = {
+	{ .id = "jpgenc-smi" },
 	{ .id = "jpgenc" },
 };
 
