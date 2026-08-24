@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+config MTK_GDMA
+	tristate "MediaTek MT6589 General Purpose DMA support"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Enable support for the General Purpose DMA controller on the
+	  MediaTek MT6589.  It provides two memory-to-memory channels with
+	  a flat per-channel register file.
+
 config MTK_HSDMA
 	tristate "MediaTek High-Speed DMA controller support"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
