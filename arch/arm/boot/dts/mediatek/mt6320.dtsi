@@ -59,6 +59,10 @@
 			#io-channel-cells = <1>;
 		};
 
+		efuse {
+			compatible = "mediatek,mt6320-efuse";
+		};
+
 		mt6320regulator: mt6320regulator {
 			compatible = "mediatek,mt6320-regulator";
 

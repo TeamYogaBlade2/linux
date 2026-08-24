@@ -167,6 +167,9 @@ static const struct mfd_cell mt6320_devs[] = {
 		.name = "mt6320-auxadc",
 		.of_compatible = "mediatek,mt6320-auxadc"
 	}, {
+		.name = "mt6320-efuse",
+		.of_compatible = "mediatek,mt6320-efuse"
+	}, {
 		.name = "mt6320-sound",
 		.of_compatible = "mediatek,mt6320-sound"
 	},
