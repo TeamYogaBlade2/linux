@@ -84,6 +84,23 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 	else
 		prismrv_check_recovery(pv);
 
+	/* HostCtl flag path (REVIEW R6): the uKernel raises bits in
+	 * ui32InterruptFlags to request host-side services; the host
+	 * acknowledges by writing the same mask into ui32ClearFlags
+	 * (vendor SGXMKIF_HOST_CTL convention).  Actual service dispatch
+	 * (e.g. PROCESS_QUEUES follow-up) happens through the CCB. */
+	if (pv->hostctl) {
+		u32 flags = le32_to_cpu(READ_ONCE(pv->hostctl->ui32InterruptFlags));
+
+		if (flags) {
+			WRITE_ONCE(pv->hostctl->ui32ClearFlags,
+				   cpu_to_le32(flags));
+			wmb();
+			writel(EUR_CR_EVENT_KICK_NOW_MASK,
+			       pv->regs + EUR_CR_EVENT_KICK);
+		}
+	}
+
 	clear |= EUR_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT_MASK;
 	writel(clear, pv->regs + EUR_CR_EVENT_HOST_CLEAR);
 

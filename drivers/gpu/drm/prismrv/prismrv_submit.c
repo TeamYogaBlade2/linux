@@ -190,6 +190,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	u32 __user *in_fds;
 	__le32 cmd_data[6] = {};
 	int ret = 0, fd;
+	unsigned int i;
 
 	ret = pm_runtime_resume_and_get(pv->drm.dev);
 	if (ret)
@@ -204,7 +205,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
-	objs = kvcalloc(max(args->num_bos, 1U), sizeof(*objs), GFP_KERNEL);
+	/* slot 0 = command BO, 1..num_bos = user bos */
+	objs = kvcalloc(args->num_bos + 1, sizeof(*objs), GFP_KERNEL);
 	if (!objs)
 		return -ENOMEM;
 
@@ -214,42 +216,38 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto out_put;
 
-	/* pin + DMA-map + MMU-map every referenced BO */
-	{
-		struct drm_gem_object **lut = objs;
-
-		ret = drm_gem_objects_lookup(file, u64_to_user_ptr(args->bos),
-					     args->num_bos, &lut);
-	}
-	if (ret)
-		goto out_put;
-	ret = prismrv_gem_populate(pv, objs, args->num_bos);
-	if (ret)
-		goto out_put;
-
-	/* map the command buffer for CPU access and copy out its first
-	 * 24 bytes as the pass-through payload words */
+	/* the command BO is always referenced object 0 so it is pinned,
+	 * DMA-mapped and MMU-mapped along with the rest */
 	objs[0] = drm_gem_object_lookup(file, args->cmd_handle);
 	if (!objs[0]) {
 		ret = -ENOENT;
 		goto out_put;
 	}
-	{
-		struct drm_gem_shmem_object *cmd_shmem =
-			to_drm_gem_shmem_obj(objs[0]);
-		struct iosys_map map;
 
-		dma_resv_lock(objs[0]->resv, NULL);
-		ret = drm_gem_shmem_vmap_locked(cmd_shmem, &map);
-		if (ret == 0) {
-			memcpy(cmd_data, map.vaddr,
-			       min((size_t)args->cmd_size, sizeof(cmd_data)));
-			drm_gem_shmem_vunmap_locked(cmd_shmem, &map);
-		}
-		dma_resv_unlock(objs[0]->resv);
-		if (ret)
-			goto out_put;
+	/* pin + DMA-map + MMU-map every referenced BO */
+	{
+		struct drm_gem_object **lut = objs + 1;
+
+		ret = drm_gem_objects_lookup(file,
+			u64_to_user_ptr(args->bos), args->num_bos, &lut);
 	}
+	if (ret)
+		goto out_put;
+	ret = prismrv_gem_populate(pv, objs, args->num_bos + 1);
+	if (ret)
+		goto out_put;
+
+	/* pass the command stream by reference: data[0] = GPU VA of the
+	 * command BO, data[1] = valid byte count.  The uKernel-side client
+	 * CCB handler (and the emulator's HostCtl shim) reads the packet
+	 * stream from there; the vendor model also keeps payload bodies
+	 * out of the 24-byte kernel CCB slot. */
+	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(objs[0]));
+	cmd_data[1] = cpu_to_le32(args->cmd_size);
+	if (args->num_bos >= 1 && objs[2])
+		/* bos array convention: user bos[0] (objs[2]) is the TA
+		 * packet-stream BO for draw submissions */
+		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(objs[2]));
 
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
 	if (!f) {
@@ -292,8 +290,10 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 	/* record the fence so devfreq can see the busy window */
 out_put:
-	while (args->num_bos-- && objs[args->num_bos])
-		drm_gem_object_put(objs[args->num_bos]);
+	/* objects 0..num_bos are referenced (0 = cmd BO) */
+	for (i = 0; i <= args->num_bos && objs; i++)
+		if (objs[i])
+			drm_gem_object_put(objs[i]);
 	kvfree(objs);
 	return ret;
 }
