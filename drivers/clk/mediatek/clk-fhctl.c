@@ -40,6 +40,27 @@ static const struct fhctl_offset fhctl_offset_v2 = {
 	.offset_mon = 0x10,
 };
 
+/*
+ * MT6572 / MT6589: the per-channel registers are laid out as
+ * FHCTLx_CFG (0x4c + i * 0x10), UPDNLMT, DDS, MON with no DVFS
+ * register; hopping is triggered through DDS bit 31.  The global
+ * "handoff permission" register is PLL_HP_CON0 at apmixed offset
+ * 0x14 and the two slope values live in the hopping SRAM at 0x20 /
+ * 0x24.
+ */
+static const struct fhctl_offset fhctl_offset_v3 = {
+	.offset_hp_en = 0x14,
+	.offset_clk_con = 0x20,
+	.offset_rst_con = 0x24,
+	.offset_slope0 = 0x20,
+	.offset_slope1 = 0x24,
+	.offset_cfg = 0x4c,
+	.offset_updnlmt = 0x50,
+	.offset_dds = 0x54,
+	.offset_dvfs = 0x54,
+	.offset_mon = 0x58,
+};
+
 const struct fhctl_offset *fhctl_get_offset_table(enum fhctl_variant v)
 {
 	switch (v) {
@@ -47,6 +68,8 @@ const struct fhctl_offset *fhctl_get_offset_table(enum fhctl_variant v)
 		return &fhctl_offset_v1;
 	case FHCTL_PLLFH_V2:
 		return &fhctl_offset_v2;
+	case FHCTL_PLLFH_V3:
+		return &fhctl_offset_v3;
 	default:
 		return ERR_PTR(-EINVAL);
 	};

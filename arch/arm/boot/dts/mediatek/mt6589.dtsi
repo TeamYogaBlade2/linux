@@ -650,6 +650,17 @@
 			#clock-cells = <1>;
 		};
 
+		fhctl: clock-controller@11005000 {
+			compatible = "mediatek,mt6589-fhctl";
+			reg = <0x11005000 0x100>;
+			clocks = <&apmixedsys CLK_APMIXED_ARMPLL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>,
+				 <&apmixedsys CLK_APMIXED_MSDCPLL>,
+				 <&apmixedsys CLK_APMIXED_TVDPLL>,
+				 <&apmixedsys CLK_APMIXED_LVDSPLL>;
+			mediatek,hopping-ssc-percent = <0>, <0>, <3>, <0>, <0>;
+		};
+
 		auxadc: adc@11003000 {
 			compatible = "mediatek,mt6589-auxadc";
 			reg = <0x11003000 0x1000>;

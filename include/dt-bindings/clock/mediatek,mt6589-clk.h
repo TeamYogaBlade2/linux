@@ -45,6 +45,8 @@
 
 #define CLK_APMIXED_LVDSPLL_180M	26
 
+#define CLK_APMIXED_NR_CLK		27
+
 
 /* TOPCKGEN */
 #define CLK_TOP_CLK_NULL	0
