@@ -79,6 +79,8 @@ static int prismrv_probe(struct platform_device *pdev)
 	pv->pdev = pdev;
 	pv->info = of_device_get_match_data(&pdev->dev);
 	spin_lock_init(&pv->event_lock);
+	mutex_init(&pv->init_mutex);
+	INIT_WORK(&pv->recovery_work, prismrv_recovery_work);
 	init_waitqueue_head(&pv->init_wq);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -108,9 +110,11 @@ static int prismrv_probe(struct platform_device *pdev)
 	/* firmware + hardware bring-up can be deferred if the firmware
 	 * files are not yet installed */
 	ret = prismrv_fw_load(pv);
-	if (ret == 0)
+	if (ret == 0) {
+		mutex_lock(&pv->init_mutex);
 		ret = prismrv_hw_init(pv);
-	else
+		mutex_unlock(&pv->init_mutex);
+	} else
 		dev_warn(&pdev->dev,
 			 "firmware unavailable, GPU left uninitialised (%d)\n",
 			 ret);

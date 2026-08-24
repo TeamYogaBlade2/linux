@@ -9,6 +9,8 @@
 #include <linux/platform_device.h>
 #include <linux/devfreq.h>
 #include <linux/interrupt.h>
+#include <linux/mutex.h>
+#include <linux/workqueue.h>
 #include <linux/io.h>
 #include <drm/drm_device.h>
 #include <drm/gpu_scheduler.h>
@@ -25,6 +27,58 @@
 
 /* uKernel upload address inside GPU virtual space */
 #define PRISMRV_UKERNEL_VADDR	0x0c000000u
+
+/*
+ * Fixed GPU-VA layout for uKernel shared structures.  The base addresses
+ * match the values the vendor loader patches into the uKernel image
+ * (DEADBEEF slot table): each slot selects the heap base the service
+ * routines operate on.
+ */
+#define PRISMRV_HOSTCTL_VADDR	0x00101000u	/* slot 0x0d */
+#define PRISMRV_CCB_VADDR	0x00400000u	/* slot 0x4d */
+#define PRISMRV_HWRTDATA_VADDR	0x00a00000u	/* slot 0xad (TA), 3D follows */
+
+/* kernel CCB: array of commands plus control block (sgx_mkif_km.h) */
+struct prismrv_ccb_cmd {
+	__le32 service_address;	/* USE handler address inside uKernel */
+	__le32 cache_control;
+	__le32 data[6];
+} __packed;
+
+struct prismrv_ccb {
+	struct prismrv_ccb_cmd commands[256];
+	__le32 write_offset;	/* advanced by the kernel */
+	__le32 read_offset;	/* consumed by the uKernel */
+};
+
+/* HostKickAddr service entry instruction indices in the uKernel image
+ * (analysis/ukernel/SERVICE_ROUTINES.md); service address = index * 8 */
+enum prismrv_cmd_type {
+	PRISMRV_CMD_TA = 0,
+	PRISMRV_CMD_TRANSFER,
+	PRISMRV_CMD_2D,
+	PRISMRV_CMD_POWER,
+	PRISMRV_CMD_CONTEXTSUSPEND,
+	PRISMRV_CMD_CLEANUP,
+	PRISMRV_CMD_GETMISCINFO,
+	PRISMRV_CMD_PROCESS_QUEUES,
+	PRISMRV_CMD_DATABREAKPOINT,
+	PRISMRV_CMD_SETHWPERFSTATUS,
+	PRISMRV_CMD_COUNT
+};
+
+static const unsigned int prismrv_hostkick_instr[PRISMRV_CMD_COUNT] = {
+	554,  /* TA */
+	523,  /* TRANSFER */
+	486,  /* 2D */
+	397,  /* POWER */
+	427,  /* CONTEXTSUSPEND */
+	75,   /* CLEANUP */
+	1115, /* GETMISCINFO */
+	1017, /* PROCESS_QUEUES */
+	0,    /* DATABREAKPOINT: not implemented in this uKernel */
+	1023, /* SETHWPERFSTATUS */
+};
 
 /* HostCtl block shared with the uKernel (SGXMKIF_HOST_CTL subset) */
 struct prismrv_host_ctl {
@@ -104,9 +158,36 @@ struct prismrv_device {
 	dma_addr_t hostctl_dma;
 	struct prismrv_host_ctl *hostctl;
 
+	/* kernel CCB + HWRTData render contexts */
+	dma_addr_t ccb_dma;
+	struct prismrv_ccb *ccb;
+	spinlock_t ccb_lock;
+
+	dma_addr_t hwrt_dma;
+	void *hwrt;			/* 2 x 496 bytes (TA, 3D) */
+
+	/* errata work-around allocations (prismrv_errata_apply) */
+#define PRISMRV_ERRATA_BUF_PTLA_WB	0	/* BRN_31780 */
+#define PRISMRV_ERRATA_BUF_CC_DM	1	/* BRN_36513 clear-clip DM stream */
+#define PRISMRV_ERRATA_BUF_CC_INDEX	2
+#define PRISMRV_ERRATA_BUF_CC_PDS	3
+#define PRISMRV_ERRATA_BUF_CC_USE	4
+#define PRISMRV_ERRATA_BUF_CC_PARAM	5
+#define PRISMRV_ERRATA_BUF_COUNT	6
+	struct {
+		void *cpu;
+		dma_addr_t dma;
+		size_t size;
+		u32 vaddr;
+	} errata_buf[PRISMRV_ERRATA_BUF_COUNT];
+
 	struct prismrv_devfreq devfreq;
 
 	spinlock_t event_lock;		/* protects kicker + event masks */
+	struct dma_fence *pending_fence; /* signalled by the IRQ handler */
+	unsigned int missed_completions;
+	struct work_struct recovery_work;
+	struct mutex init_mutex;	/* serialises prismrv_hw_init */
 
 	wait_queue_head_t init_wq;
 	bool hw_ready;
@@ -121,6 +202,8 @@ int prismrv_hw_init(struct prismrv_device *pv);
 void prismrv_hw_fini(struct prismrv_device *pv);
 int prismrv_fw_load(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);
+int prismrv_errata_apply(struct prismrv_device *pv);
+void prismrv_errata_release(struct prismrv_device *pv);
 u32 prismrv_read_revision(struct prismrv_device *pv);
 
 int prismrv_mmu_init(struct prismrv_device *pv);
@@ -130,6 +213,7 @@ int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
 void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size);
 
 irqreturn_t prismrv_irq_handler(int irq, void *data);
+void prismrv_recovery_work(struct work_struct *work);
 
 int prismrv_gem_init(struct prismrv_device *pv);
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
@@ -140,8 +224,15 @@ int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file);
 int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file);
+struct drm_gem_object;
+int prismrv_gem_populate(struct prismrv_device *pv,
+			 struct drm_gem_object **objs, u32 count);
+u32 prismrv_bo_gpuva(struct drm_gem_object *obj);
 
 int prismrv_devfreq_init(struct prismrv_device *pv);
 void prismrv_devfreq_fini(struct prismrv_device *pv);
+
+int prismrv_ccb_init(struct prismrv_device *pv);
+void prismrv_ccb_fini(struct prismrv_device *pv);
 
 #endif /* _PRISMRV_DEVICE_H_ */

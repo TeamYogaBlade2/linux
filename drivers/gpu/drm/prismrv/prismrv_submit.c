@@ -1,19 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /*
- * prismrv_submit.c — command submission and completion fences.
+ * prismrv_submit.c — command submission: kernel CCB + TA/3D kicks.
  *
- * Command buffers are opaque to the kernel: userspace builds the CCB
- * stream (the same format the uKernel consumes) and the kernel only
- * sequences execution, manages dependencies via dma_fence/sync_file and
- * kicks the hardware.
+ * Mirrors the vendor flow (sgxutils.c SGXScheduleCCBCommand):
+ *
+ *   1. acquire a CCB slot (256 entries, 32 bytes each)
+ *   2. fill the command; ui32ServiceAddress = uKernel base +
+ *      hostkick_instr[type] * 8 (the USE service handler entry)
+ *   3. advance ccb->write_offset (mod 256)
+ *   4. kick EUR_CR_EVENT_KICK
+ *
+ * The command payload (ui32Data[6]) is passed through from userspace:
+ * the vendor model has userspace (libsrv_um) define the per-command-type
+ * data layout, and the kernel only sequences execution.
  */
-#include <linux/dma-fence.h>
+#include <linux/dma-mapping.h>
+#include <linux/slab.h>
 #include <linux/sync_file.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_gem_shmem_helper.h>
+#include <linux/iosys-map.h>
+#include <linux/dma-resv.h>
 
 #include <uapi/drm/prismrv_drm.h>
 #include "prismrv_device.h"
+
+#define HWRTDATA_SIZE		496
 
 struct prismrv_fence {
 	struct dma_fence base;
@@ -25,32 +38,149 @@ static const char *prismrv_fence_name(struct dma_fence *f)
 	return "prismrv";
 }
 
-static bool prismrv_fence_signaled(struct dma_fence *f)
-{
-	return false;	/* signalled explicitly on IRQ */
-}
-
 const struct dma_fence_ops prismrv_fence_ops = {
 	.get_driver_name = prismrv_fence_name,
 	.get_timeline_name = prismrv_fence_name,
-	.signaled = prismrv_fence_signaled,
 };
+
+int prismrv_ccb_init(struct prismrv_device *pv)
+{
+	spin_lock_init(&pv->ccb_lock);
+
+	pv->ccb = dma_alloc_coherent(pv->drm.dev, sizeof(*pv->ccb),
+				     &pv->ccb_dma, GFP_KERNEL);
+	if (!pv->ccb)
+		return -ENOMEM;
+	memset(pv->ccb, 0, sizeof(*pv->ccb));
+
+	/* TA + 3D render contexts (HWRTData), zero-initialised */
+	pv->hwrt = dma_alloc_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE,
+				      &pv->hwrt_dma, GFP_KERNEL);
+	if (!pv->hwrt) {
+		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
+				  pv->ccb_dma);
+		pv->ccb = NULL;
+		return -ENOMEM;
+	}
+
+	/* expose the shared structures to the uKernel through the MMU */
+	prismrv_mmu_map(pv, PRISMRV_HOSTCTL_VADDR,
+			pv->hostctl_dma, sizeof(*pv->hostctl));
+	prismrv_mmu_map(pv, PRISMRV_CCB_VADDR,
+			pv->ccb_dma, sizeof(*pv->ccb));
+	prismrv_mmu_map(pv, PRISMRV_HWRTDATA_VADDR,
+			pv->hwrt_dma, 2 * HWRTDATA_SIZE);
+
+	return 0;
+}
+
+void prismrv_ccb_fini(struct prismrv_device *pv)
+{
+	if (pv->ccb) {
+		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
+				  pv->ccb_dma);
+		pv->ccb = NULL;
+	}
+	if (pv->hwrt) {
+		dma_free_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE, pv->hwrt,
+				  pv->hwrt_dma);
+		pv->hwrt = NULL;
+	}
+}
+
+static void prismrv_ccb_schedule(struct prismrv_device *pv,
+				 enum prismrv_cmd_type type,
+				 const __le32 data[6])
+{
+	struct prismrv_ccb_cmd *cmd;
+	u32 slot;
+
+	spin_lock(&pv->ccb_lock);
+
+	slot = le32_to_cpu(pv->ccb->write_offset) & 255;
+	cmd = &pv->ccb->commands[slot];
+
+	cmd->service_address =
+		cpu_to_le32(PRISMRV_UKERNEL_VADDR +
+			    prismrv_hostkick_instr[type] * 8);
+	cmd->cache_control = 0;
+	memcpy(cmd->data, data, sizeof(cmd->data));
+
+	/*
+	 * publish the command before bumping write_offset; the uKernel
+	 * polls write_offset on the other side of a coherent mapping
+	 */
+	wmb();
+	pv->ccb->write_offset = cpu_to_le32((slot + 1) & 255);
+
+	spin_unlock(&pv->ccb_lock);
+
+	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
+}
 
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file)
 {
 	struct prismrv_device *pv = to_prismrv(dev);
 	struct drm_prismrv_submit *args = data;
+	struct drm_gem_object **objs = NULL;
 	struct prismrv_fence *f;
 	struct sync_file *sf;
+	__le32 cmd_data[6] = {};
+	void *cmd_cpu;
 	int ret = 0, fd;
 
 	if (!pv->hw_ready)
 		return -ENODEV;
+	if (args->cmd_type >= PRISMRV_CMD_COUNT)
+		return -EINVAL;
+
+	objs = kvcalloc(max(args->num_bos, 1U), sizeof(*objs), GFP_KERNEL);
+	if (!objs)
+		return -ENOMEM;
+
+	/* pin + DMA-map + MMU-map every referenced BO */
+	{
+		struct drm_gem_object **lut = objs;
+
+		ret = drm_gem_objects_lookup(file, u64_to_user_ptr(args->bos),
+					     args->num_bos, &lut);
+	}
+	if (ret)
+		goto out_put;
+	ret = prismrv_gem_populate(pv, objs, args->num_bos);
+	if (ret)
+		goto out_put;
+
+	/* map the command buffer for CPU access and copy out its first
+	 * 24 bytes as the pass-through payload words */
+	objs[0] = drm_gem_object_lookup(file, args->cmd_handle);
+	if (!objs[0]) {
+		ret = -ENOENT;
+		goto out_put;
+	}
+	{
+		struct drm_gem_shmem_object *cmd_shmem =
+			to_drm_gem_shmem_obj(objs[0]);
+		struct iosys_map map;
+
+		dma_resv_lock(objs[0]->resv, NULL);
+		ret = drm_gem_shmem_vmap_locked(cmd_shmem, &map);
+		if (ret == 0) {
+			memcpy(cmd_data, map.vaddr,
+			       min((size_t)args->cmd_size, sizeof(cmd_data)));
+			drm_gem_shmem_vunmap_locked(cmd_shmem, &map);
+		}
+		dma_resv_unlock(objs[0]->resv);
+		if (ret)
+			goto out_put;
+	}
 
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
-	if (!f)
-		return -ENOMEM;
+	if (!f) {
+		ret = -ENOMEM;
+		goto out_put;
+	}
 	spin_lock_init(&f->lock);
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
 		       0 /* context */, 1 /* seqno */);
@@ -58,7 +188,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
 		kfree(f);
-		return fd;
+		ret = fd;
+		goto out_put;
 	}
 
 	sf = sync_file_create(&f->base);
@@ -66,16 +197,24 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (!sf) {
 		put_unused_fd(fd);
 		kfree(f);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto out_put;
 	}
 
 	args->out_fence_fd = fd;
 	fd_install(fd, sf->file);
 
-	/* TODO: program the CCB and kick TA/3D once the uKernel service
-	 * interface is wired up.  For now the fence is never signalled
-	 * and submissions complete immediately. */
-	dma_fence_signal(&f->base);
+	/* record the fence so the IRQ handler can signal it on completion */
+	dma_fence_get(&f->base);
+	spin_lock(&pv->event_lock);
+	pv->pending_fence = &f->base;
+	spin_unlock(&pv->event_lock);
 
+	prismrv_ccb_schedule(pv, args->cmd_type, cmd_data);
+
+out_put:
+	while (args->num_bos-- && objs[args->num_bos])
+		drm_gem_object_put(objs[args->num_bos]);
+	kvfree(objs);
 	return ret;
 }

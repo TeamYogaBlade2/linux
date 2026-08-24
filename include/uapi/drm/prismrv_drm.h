@@ -40,7 +40,7 @@ struct drm_prismrv_submit {
 	__u64 bos;		/* pointer to __u32 GEM handle array */
 
 	__u32 out_fence_fd;	/* out: sync_file fd signalling completion */
-	__u32 pad;
+	__u32 cmd_type;		/* PRISMRV_CMD_* service type */
 };
 
 struct drm_prismrv_get_param {

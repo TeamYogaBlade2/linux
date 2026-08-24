@@ -4,13 +4,65 @@
  *
  * Mirrors the vendor SGX_ISRHandler flow:
  *   1. read EUR_CR_EVENT_STATUS and mask with EUR_CR_EVENT_HOST_ENABLE
- *   2. on SW_EVENT: write the matching bit plus MASTER_INTERRUPT to
+ *   2. write the matching bits plus MASTER_INTERRUPT to
  *      EUR_CR_EVENT_HOST_CLEAR
- *   3. wake completion waiters
+ *   3. on render-completion events (TA_FINISHED, PIXELBE_END_RENDER),
+ *     signal the pending submission fence and schedule recovery if the
+ *     uKernel stopped making progress
  */
 #include <linux/interrupt.h>
 
 #include "prismrv_device.h"
+
+#define PRISMRV_IRQ_COMPLETION_EVENTS \
+	(EUR_CR_EVENT_STATUS_TA_FINISHED_MASK | \
+	 EUR_CR_EVENT_STATUS_PIXELBE_END_RENDER_MASK)
+
+/* consecutive completions without a fence being signalled trigger reset */
+#define PRISMRV_RECOVERY_THRESHOLD	3
+
+static void prismrv_handle_completion(struct prismrv_device *pv)
+{
+	struct dma_fence *fence;
+
+	spin_lock(&pv->event_lock);
+	fence = pv->pending_fence;
+	pv->pending_fence = NULL;
+	spin_unlock(&pv->event_lock);
+
+	if (fence) {
+		dma_fence_signal(fence);
+		dma_fence_put(fence);
+		pv->missed_completions = 0;
+	}
+}
+
+static void prismrv_check_recovery(struct prismrv_device *pv)
+{
+	if (++pv->missed_completions < PRISMRV_RECOVERY_THRESHOLD)
+		return;
+
+	pv->missed_completions = 0;
+	dev_err(pv->drm.dev,
+		"%d completions without progress, resetting GPU\n",
+		PRISMRV_RECOVERY_THRESHOLD);
+
+	/* HWRecoveryResetSGX equivalent: soft reset + re-run the init
+	 * sequence from a work item (sleeping allocations are not legal
+	 * in IRQ context). */
+	schedule_work(&pv->recovery_work);
+}
+
+void prismrv_recovery_work(struct work_struct *work)
+{
+	struct prismrv_device *pv =
+		container_of(work, struct prismrv_device, recovery_work);
+
+	mutex_lock(&pv->init_mutex);
+	pv->hw_ready = false;
+	prismrv_hw_init(pv);
+	mutex_unlock(&pv->init_mutex);
+}
 
 irqreturn_t prismrv_irq_handler(int irq, void *data)
 {
@@ -21,9 +73,15 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 	enable = readl(pv->regs + EUR_CR_EVENT_HOST_ENABLE);
 	status &= enable;
 
-	clear = status & EUR_CR_EVENT_STATUS_SW_EVENT_MASK;
+	clear = status & (EUR_CR_EVENT_HOST_CLEAR_SW_EVENT_MASK |
+			  PRISMRV_IRQ_COMPLETION_EVENTS);
 	if (!clear)
 		return IRQ_NONE;
+
+	if (status & PRISMRV_IRQ_COMPLETION_EVENTS)
+		prismrv_handle_completion(pv);
+	else
+		prismrv_check_recovery(pv);
 
 	clear |= EUR_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT_MASK;
 	writel(clear, pv->regs + EUR_CR_EVENT_HOST_CLEAR);

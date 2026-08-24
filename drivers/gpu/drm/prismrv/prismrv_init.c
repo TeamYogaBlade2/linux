@@ -121,6 +121,9 @@ int prismrv_hw_init(struct prismrv_device *pv)
 
 	prismrv_read_revision(pv);	/* revision stable after clocks on */
 	prismrv_errata_init(pv);
+	ret = prismrv_errata_apply(pv);
+	if (ret)
+		goto out_fw;
 
 	prismrv_soft_reset(pv);
 
@@ -133,8 +136,9 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	/* part 2: after reset */
 	ret = prismrv_run_script_range(pv, fw, next);
 	release_firmware(fw);
+	fw = NULL;
 	if (ret < 0)
-		return ret;
+		goto out_errata;
 
 	/* upload the uKernel into GPU address space */
 	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
@@ -148,6 +152,10 @@ int prismrv_hw_init(struct prismrv_device *pv)
 					 &pv->hostctl_dma, GFP_KERNEL);
 	if (!pv->hostctl)
 		return -ENOMEM;
+
+	ret = prismrv_ccb_init(pv);
+	if (ret)
+		return ret;
 
 	pv->hostctl->ui32HostClock = cpu_to_le32(jiffies_to_usecs(jiffies));
 	pv->hostctl->ui32InitStatus = 0;
@@ -169,5 +177,10 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	}
 
 	dev_err(pv->drm.dev, "uKernel init timeout\n");
-	return -ETIMEDOUT;
+	ret = -ETIMEDOUT;
+
+out_errata:
+	prismrv_errata_release(pv);
+out_fw:
+	return ret;
 }
