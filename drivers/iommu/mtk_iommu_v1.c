@@ -136,14 +136,6 @@ struct dma_iommu_mapping {
 #define F_L2_GPE_ST_RANGE_INV_DONE		BIT(1)
 #define F_L2_GPE_ST_PREFETCH_DONE		BIT(0)
 
-/* MT6589 core PFH distance / direction registers */
-#define REG_MMU_PFH_DIST(port)			(0x80 + (((port) >> 3) << 2))
-#define F_MMU_PFH_DIST_VAL(port, val)		(((val) & 0xf) << (((port) & 0x7) << 2))
-#define F_MMU_PFH_DIST_MASK(port)		F_MMU_PFH_DIST_VAL(port, 0xf)
-
-#define REG_MMU_PFH_DIR(port)			(((port) < 32) ? 0xF0 : 0xF4)
-#define F_MMU_PFH_DIR(port, val)		((!!(val)) << ((port) & 0x1f))
-
 /* Common page table descriptor bits */
 #define F_DESC_VALID				0x2
 #define F_DESC_NONSEC				BIT(3)
@@ -159,8 +151,6 @@ struct dma_iommu_mapping {
 
 #define MAX_M4U_CORES				2
 
-static const int mt6589_larb_to_mmu[] = {0, 0, 1, 0, 1, 0};
-
 struct mtk_iommu_v1_data;
 
 struct mtk_iommu_v1_soc_data {
@@ -168,6 +158,7 @@ struct mtk_iommu_v1_soc_data {
 	unsigned int num_cores;
 	bool has_global_base;
 	bool has_l2_cache;
+	u32 int_en_mask;
 
 	void (*tlb_flush_all)(struct mtk_iommu_v1_data *data);
 	void (*tlb_flush_range)(struct mtk_iommu_v1_data *data,
@@ -224,7 +215,6 @@ struct mtk_iommu_v1_data {
 	struct mtk_smi_larb_iommu larb_imu[MTK_LARB_NR_MAX];
 
 	struct mtk_iommu_v1_suspend_reg reg;
-	struct page *dummy_page; /* Physical address of guard dummy page */
 };
 
 struct mtk_iommu_v1_domain {
@@ -241,7 +231,17 @@ static void mt6589_enable_translation(struct mtk_iommu_v1_data *data)
 
 	for (i = 0; i < data->soc->num_cores; i++) {
 		void __iomem *base = data->cores[i].base;
-		u32 ctrl = F_MMU_CTRL_PFH_DIS(0) |
+
+		/*
+		 * Keep the prefetch engine (PFH) disabled.  The MT6589 PFH TLB
+		 * works on 128-bit (4 PTE) lines and speculatively fetches PTEs
+		 * beyond the end of every buffer.  Entries fetched past the end
+		 * of a mapping would be cached as invalid TLB lines and cause
+		 * translation-fault storms once the IOMMU sees traffic near
+		 * mapping boundaries.  Unlike the downstream kernel we cannot
+		 * pad each IOVA allocation, so simply run with PFH off.
+		 */
+		u32 ctrl = F_MMU_CTRL_PFH_DIS(1) |
 			   F_MMU_CTRL_TLB_WALK_DIS(0) |
 			   F_MMU_TF_PROTECT_SEL(2);
 		writel_relaxed(ctrl, base + REG_MMU_CTRL_REG);
@@ -297,13 +297,6 @@ static inline int mtk_iommu_v1_to_port(struct mtk_iommu_v1_data *data, int id)
 {
 	int larb = mtk_iommu_v1_to_larb(data, id);
 	return id - data->soc->larb_port_offsets[larb];
-}
-
-static inline void m4u_set_field(void __iomem *reg, u32 mask, u32 val)
-{
-	u32 regval = readl_relaxed(reg);
-	regval = (regval & ~mask) | val;
-	writel_relaxed(regval, reg);
 }
 
 /* MT2701 (single core, no global space) */
@@ -447,8 +440,7 @@ static void mtk_iommu_v1_config(struct mtk_iommu_v1_data *data,
 {
 	struct mtk_smi_larb_iommu *larb_mmu;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-	unsigned int larbid, portid, i, mmu_id;
-	void __iomem *base;
+	unsigned int larbid, portid, i;
 
 	for (i = 0; i < fwspec->num_ids; ++i) {
 		larbid = mtk_iommu_v1_to_larb(data, fwspec->ids[i]);
@@ -464,23 +456,6 @@ static void mtk_iommu_v1_config(struct mtk_iommu_v1_data *data,
 			larb_mmu->mmu &= ~MTK_SMI_MMU_EN(portid);
 	}
 
-	/* MT6589 specific: set default prefetch distance & direction */
-	if (data->soc->has_global_base) {
-		for (i = 0; i < fwspec->num_ids; i++) {
-			portid = mtk_iommu_v1_to_port(data, fwspec->ids[i]);
-			larbid = mtk_iommu_v1_to_larb(data, fwspec->ids[i]);
-			mmu_id = mt6589_larb_to_mmu[larbid];
-			base = data->cores[mmu_id].base;
-
-			/* Set distance = 1 */
-			m4u_set_field(base + REG_MMU_PFH_DIST(portid),
-				      F_MMU_PFH_DIST_MASK(portid),
-				      F_MMU_PFH_DIST_VAL(portid, 1));
-			/* Set direction = 0 */
-			m4u_set_field(base + REG_MMU_PFH_DIR(portid),
-				      1 << (portid & 0x1f), 0);
-		}
-	}
 }
 
 static int mtk_iommu_v1_domain_finalise(struct mtk_iommu_v1_data *data)
@@ -520,6 +495,7 @@ static struct iommu_domain *mtk_iommu_v1_domain_alloc_paging(struct device *dev)
 		return NULL;
 
 	dom->domain.pgsize_bitmap = MT2701_IOMMU_PAGE_SIZE;
+	dom->data = dev_iommu_priv_get(dev);
 
 	return &dom->domain;
 }
@@ -529,8 +505,10 @@ static void mtk_iommu_v1_domain_free(struct iommu_domain *domain)
 	struct mtk_iommu_v1_domain *dom = to_mtk_domain(domain);
 	struct mtk_iommu_v1_data *data = dom->data;
 
-	dma_free_coherent(data->dev, M2701_IOMMU_PGT_SIZE,
-			dom->pgt_va, dom->pgt_pa);
+	/* The page table only exists once the domain got attached. */
+	if (dom->pgt_va)
+		dma_free_coherent(data->dev, M2701_IOMMU_PGT_SIZE,
+				dom->pgt_va, dom->pgt_pa);
 	kfree(to_mtk_domain(domain));
 }
 
@@ -592,14 +570,6 @@ static int mtk_iommu_v1_map(struct iommu_domain *domain, unsigned long iova,
 	unsigned int i;
 	u32 *pgt_base_iova = dom->pgt_va + (iova >> MT2701_IOMMU_PAGE_SHIFT);
 	u32 pabase = (u32)paddr;
-	phys_addr_t dummy_pa = page_to_phys(data->dummy_page);
-	unsigned int guard_pages = 0;
-
-	if (data->soc->has_global_base) {
-		/* Align to 4-entry boundary then add 4 more for PFH prefetch */
-		unsigned int mod = pgcount & 0x3;
-		guard_pages = (mod ? (4 - mod) : 0) + 4;
-	}
 
 	spin_lock_irqsave(&dom->pgtlock, flags);
 	for (i = 0; i < pgcount; i++) {
@@ -607,18 +577,6 @@ static int mtk_iommu_v1_map(struct iommu_domain *domain, unsigned long iova,
 			break;
 		pgt_base_iova[i] = pabase | F_DESC_VALID | F_DESC_NONSEC;
 		pabase += MT2701_IOMMU_PAGE_SIZE;
-	}
-
-	if (guard_pages && i == pgcount) {
-		for (i = 0; i < guard_pages; i++) {
-			unsigned int idx = pgcount + i;
-			if ((iova >> MT2701_IOMMU_PAGE_SHIFT) + idx >=
-			    (M2701_IOMMU_PGT_SIZE / sizeof(u32)))
-				break;
-			if (!pgt_base_iova[idx])
-				pgt_base_iova[idx] = dummy_pa | F_DESC_VALID | F_DESC_NONSEC;
-		}
-		i = pgcount; /* for *mapped calculation */
 	}
 
 	spin_unlock_irqrestore(&dom->pgtlock, flags);
@@ -805,14 +763,7 @@ static int mt2701_hw_init(struct mtk_iommu_v1_data *data)
 	regval = F_MMU_CTRL_COHERENT_EN | F_MMU_TF_PROTECT_SEL(2);
 	writel_relaxed(regval, data->cores[0].base + REG_MMU_CTRL_REG);
 
-	regval = F_INT_TRANSLATION_FAULT |
-		F_INT_MAIN_MULTI_HIT_FAULT |
-		F_INT_INVALID_PA_FAULT |
-		F_INT_ENTRY_REPLACEMENT_FAULT |
-		F_INT_TABLE_WALK_FAULT |
-		F_INT_TLB_MISS_FAULT |
-		F_INT_PFH_DMA_FIFO_OVERFLOW |
-		F_INT_MISS_DMA_FIFO_OVERFLOW;
+	regval = data->soc->int_en_mask;
 	writel_relaxed(regval, data->cores[0].base + REG_MMU_INT_CONTROL);
 
 	writel_relaxed(data->protect_base, data->cores[0].base + REG_MMU_IVRP_PADDR);
@@ -859,19 +810,16 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 	for (i = 0; i < data->soc->num_cores; i++) {
 		void __iomem *base = data->cores[i].base;
 
+		/*
+		 * Keep prefetch and table-walk-based prefetch disabled; see
+		 * mt6589_enable_translation().
+		 */
 		regval = F_MMU_CTRL_PFH_DIS(1) |
 			 F_MMU_CTRL_TLB_WALK_DIS(1) |
 			 F_MMU_TF_PROTECT_SEL(2);
 		writel_relaxed(regval, base + REG_MMU_CTRL_REG);
 
-		regval = F_INT_TRANSLATION_FAULT |
-			 F_INT_MAIN_MULTI_HIT_FAULT |
-			 F_INT_INVALID_PA_FAULT |
-			 F_INT_ENTRY_REPLACEMENT_FAULT |
-			 F_INT_TABLE_WALK_FAULT |
-			 F_INT_TLB_MISS_FAULT |
-			 F_INT_PFH_DMA_FIFO_OVERFLOW |
-			 F_INT_MISS_DMA_FIFO_OVERFLOW;
+		regval = data->soc->int_en_mask;
 		writel_relaxed(regval, base + REG_MMU_INT_CONTROL);
 		writel_relaxed(0xff, base + REG_MMU_FAULT_ST);
 		writel_relaxed(data->protect_base, base + REG_MMU_IVRP_PADDR);
@@ -902,6 +850,14 @@ static const struct mtk_iommu_v1_soc_data mt2701_soc_data = {
 	.num_cores = 1,
 	.has_global_base = false,
 	.has_l2_cache = false,
+	.int_en_mask = F_INT_TRANSLATION_FAULT |
+		       F_INT_MAIN_MULTI_HIT_FAULT |
+		       F_INT_INVALID_PA_FAULT |
+		       F_INT_ENTRY_REPLACEMENT_FAULT |
+		       F_INT_TABLE_WALK_FAULT |
+		       F_INT_TLB_MISS_FAULT |
+		       F_INT_PFH_DMA_FIFO_OVERFLOW |
+		       F_INT_MISS_DMA_FIFO_OVERFLOW,
 	.tlb_flush_all = mt2701_tlb_flush_all,
 	.tlb_flush_range = mt2701_tlb_flush_range,
 	.get_fault_larb_port = mt2701_get_fault_larb_port,
@@ -917,6 +873,17 @@ static const struct mtk_iommu_v1_soc_data mt6589_soc_data = {
 	.num_cores = 2,
 	.has_global_base = true,
 	.has_l2_cache = true,
+	/*
+	 * The downstream kernel enables the first seven interrupt sources
+	 * only; F_INT_MISS_DMA_FIFO_OVERFLOW is left masked there as well.
+	 */
+	.int_en_mask = F_INT_TRANSLATION_FAULT |
+		       F_INT_MAIN_MULTI_HIT_FAULT |
+		       F_INT_INVALID_PA_FAULT |
+		       F_INT_ENTRY_REPLACEMENT_FAULT |
+		       F_INT_TABLE_WALK_FAULT |
+		       F_INT_TLB_MISS_FAULT |
+		       F_INT_PFH_DMA_FIFO_OVERFLOW,
 	.tlb_flush_all = mt6589_tlb_flush_all,
 	.tlb_flush_range = mt6589_tlb_flush_range,
 	.get_fault_larb_port = mt6589_get_fault_larb_port,
@@ -947,7 +914,6 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	struct component_match		*match = NULL;
 	void				*protect;
 	int				larb_nr, ret, i;
-	struct page			*dummy_page;
 
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
@@ -991,17 +957,8 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	if (IS_ERR(data->bclk))
 		return PTR_ERR(data->bclk);
 
-	dummy_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	if (!dummy_page)
-		return -ENOMEM;
-	data->dummy_page = dummy_page;
-
-	/* Interrupts - request after hw_init to avoid spurious IRQs? but
-	   we need the core IRQs ready before registering ISR. We'll request
-	   them after hw_init for simplicity. */
 	ret = soc->hw_init(data);
 	if (ret) {
-		__free_page(dummy_page);
 		return ret;
 	}
 
@@ -1092,8 +1049,6 @@ out_put_larbs:
 	for (i = 0; i < MTK_LARB_NR_MAX; i++)
 		if (data->larb_imu[i].dev)
 			put_device(data->larb_imu[i].dev);
-	if (data->dummy_page)
-		__free_page(data->dummy_page);
 out_clk_unprepare:
 	/* Before disabling clock, mask all interrupts to avoid spurious faults */
 	for (i = 0; i < data->soc->num_cores; i++) {
@@ -1119,7 +1074,6 @@ static void mtk_iommu_v1_remove(struct platform_device *pdev)
 	for (i = 0; i < data->soc->num_cores; i++)
 		devm_free_irq(&pdev->dev, data->cores[i].irq, &data->cores[i]);
 	component_master_del(&pdev->dev, &mtk_iommu_v1_com_ops);
-	__free_page(data->dummy_page);
 
 	for (i = 0; i < MTK_LARB_NR_MAX; i++)
 		if (data->larb_imu[i].dev)
@@ -1151,30 +1105,6 @@ static int __maybe_unused mtk_iommu_v1_suspend(struct device *dev)
 	}
 
 	return 0;
-}
-
-static void mt6589_restore_pfh_settings(struct mtk_iommu_v1_data *data)
-{
-	const int *offsets = data->soc->larb_port_offsets;
-	int num_larb = data->soc->num_larb;
-	int larb, port;
-
-	for (larb = 0; larb < num_larb; larb++) {
-		int mmu_id = mt6589_larb_to_mmu[larb];
-		void __iomem *base = data->cores[mmu_id].base;
-		int first_port = offsets[larb];
-		int last_port = (larb == num_larb - 1) ?
-				MT6589_M4U_PORT_NR - 1 :
-				offsets[larb + 1] - 1;
-
-		for (port = first_port; port <= last_port; port++) {
-			m4u_set_field(base + REG_MMU_PFH_DIST(port),
-				      F_MMU_PFH_DIST_MASK(port),
-				      F_MMU_PFH_DIST_VAL(port, 1));
-			m4u_set_field(base + REG_MMU_PFH_DIR(port),
-				      1 << (port & 0x1f), 0);
-		}
-	}
 }
 
 static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
@@ -1214,9 +1144,6 @@ static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
 		else
 			writel_relaxed(data->m4u_dom->pgt_pa, data->cores[0].base + data->soc->pt_base_reg_offset);
 	}
-
-	if (data->soc->has_global_base)
-		mt6589_restore_pfh_settings(data);
 
 	return 0;
 }
