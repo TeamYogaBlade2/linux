@@ -878,6 +878,13 @@
 			clocks = <&dispsys CLK_DISP0_COLOR>;
 		};
 
+		tdshp: tdshp@1400b000 {
+			compatible = "mediatek,mt6589-disp-tdshp";
+			reg = <0x1400b000 0x1000>;
+			interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_2DSHP>;
+		};
+
 		imgsys: syscon@15000000 {
 			compatible = "mediatek,mt6589-imgsys", "syscon";
 			reg = <0x15000000 0x1000>;
