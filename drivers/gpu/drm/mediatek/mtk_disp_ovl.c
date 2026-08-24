@@ -110,13 +110,21 @@
 #define Y2R_RGB_A0			0x20
 #define Y2R_RGB_A1			0x24
 
-/* BT.601 coefficients: 5x3 matrix, 13-bit signed (as used by MT6589) */
+/*
+ * BT.601 YUV2RGB conversion matrix for the OVL Y2R engine.
+ *
+ * The hardware takes a 5x3 coefficient table in the same layout as the
+ * downstream kernel's ddp_matrix_para.h: rows R/G/B hold {MY, MU, MV}
+ * multipliers (13-bit sign+2.10 fixed point), row 3 the {YA, UA, VA}
+ * offsets and row 4 the {RA, GA, BA} output gains.  This is
+ * yuv2rgb_601_0_0 (full-range input, full-range output).
+ */
 static const s16 mt6589_yuv2rgb_coef[5][3] = {
-	{ 306,  601,  117 },
-	{ -173, -339, 512 },
-	{ 512, -429, -83  },
-	{ 0,    0,    0   },
-	{ 0,    0,    0   },
+	{ 0x0400, 0x0000, 0x059b },	/*     1,      0, 1.402 */
+	{ 0x0400, 0x1ea0, 0x1d25 },	/*     1, -0.3341, -0.7141 */
+	{ 0x0400, 0x0716, 0x0000 },	/*     1,   1.772,      0 */
+	{ 0x0000, 0x0180, 0x0180 },	/*     0,   -128,   -128 */
+	{ 0x0000, 0x0000, 0x0000 },	/* gains are written separately */
 };
 
 static inline bool is_10bit_rgb(u32 fmt)
@@ -387,14 +395,17 @@ static void mt6589_ovl_write_yuv_matrix(struct mtk_disp_ovl *ovl,
 		      &ovl->cmdq_reg, base, reg_base + Y2R_B0);
 	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[2][2] & 0x1FFF,
 		      &ovl->cmdq_reg, base, reg_base + Y2R_B1);
-	/* Offsets and RGB gains (neutral: 0 offset, 1024 gain) */
-	mtk_ddp_write(cmdq_pkt, (0 << 16) | 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A0);
-	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A1);
-	mtk_ddp_write(cmdq_pkt, (1024 << 16) | 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A0);
-	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A1);
-	/* Enable YUV-to-RGB conversion (bit 0 of some ctrl reg? Not needed on 6589,
-	 * matrix is automatically active when CLRFMT is YUV)
+	/*
+	 * Offset fields are 9-bit signed (sign + 8.0): the U/V offsets of
+	 * -128 must be programmed as 0x180 like the downstream kernel does.
 	 */
+	mtk_ddp_write(cmdq_pkt,
+		      (mt6589_yuv2rgb_coef[3][1] << 16) | mt6589_yuv2rgb_coef[3][0],
+		      &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A0);
+	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A1);
+	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[4][0],
+		      &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A0);
+	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A1);
 }
 
 void mtk_ovl_config(struct device *dev, unsigned int w,
