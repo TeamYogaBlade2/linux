@@ -16,6 +16,7 @@
 #include <linux/usb/role.h>
 #include <linux/usb/usb_phy_generic.h>
 #include <linux/regulator/consumer.h>
+#include <linux/reset.h>
 #include "musb_core.h"
 #include "musb_dma.h"
 
@@ -52,6 +53,7 @@ struct mtk_glue {
 	enum usb_role role;
 	struct usb_role_switch *role_sw;
 	struct regulator *vusb;
+	struct reset_control *rstc;
 };
 
 static int mtk_musb_clks_get(struct mtk_glue *glue)
@@ -380,9 +382,15 @@ static const struct musb_platform_ops mtk_musb_ops = {
 	.set_mode = mtk_musb_set_mode,
 };
 
-#define MTK_MUSB_MAX_EP_NUM	8
+#define MTK_MUSB_MAX_EP_NUM	9
 #define MTK_MUSB_RAM_BITS	11
 
+/*
+ * FIFO configuration following the downstream MT6589 kernel: EP1..4
+ * bulk with double buffering, EP5/6 interrupt single buffered, EP7
+ * bulk single buffered and EP8 ISO double buffered.  The total adds up
+ * to exactly 8 KiB of FIFO RAM.
+ */
 static const struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
 	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512, },
@@ -394,10 +402,12 @@ static const struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
 	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 512, },
 	{ .hw_ep_num = 5, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 5, .style = FIFO_RX, .maxpacket = 512, },
-	{ .hw_ep_num = 6, .style = FIFO_TX, .maxpacket = 1024, },
-	{ .hw_ep_num = 6, .style = FIFO_RX, .maxpacket = 1024, },
+	{ .hw_ep_num = 6, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 6, .style = FIFO_RX, .maxpacket = 512, },
 	{ .hw_ep_num = 7, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 7, .style = FIFO_RX, .maxpacket = 64, },
+	{ .hw_ep_num = 7, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 8, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 8, .style = FIFO_RX, .maxpacket = 512, },
 };
 
 static const struct musb_hdrc_config mtk_musb_hdrc_config = {
@@ -441,6 +451,20 @@ static int mtk_musb_probe(struct platform_device *pdev)
 	ret = mtk_musb_clks_get(glue);
 	if (ret)
 		return ret;
+
+	/*
+	 * The MT6589 needs an explicit IP reset (PERICFG bit 29) before
+	 * the PHY/MAC can be brought up, like the downstream
+	 * musb_otg_reset_usb() does.
+	 */
+	glue->rstc = devm_reset_control_get_optional_exclusive(dev, "hrst");
+	if (IS_ERR(glue->rstc))
+		return dev_err_probe(dev, PTR_ERR(glue->rstc),
+				"failed to get reset control\n");
+
+	ret = reset_control_reset(glue->rstc);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to reset usb ip\n");
 
 	pdata->config = &mtk_musb_hdrc_config;
 	pdata->platform_ops = &mtk_musb_ops;
