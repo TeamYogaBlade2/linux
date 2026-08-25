@@ -222,7 +222,6 @@ void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size);
 irqreturn_t prismrv_irq_handler(int irq, void *data);
 void prismrv_recovery_work(struct work_struct *work);
 
-int prismrv_gem_init(struct prismrv_device *pv);
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file);
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
@@ -231,7 +230,11 @@ int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file);
 int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file);
+
+struct drm_device;
 struct drm_gem_object;
+struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
+						 size_t size);
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);

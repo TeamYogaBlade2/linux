@@ -111,35 +111,28 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	struct sg_table *sgt;
 	struct scatterlist *sg;
 	unsigned int i;
+	size_t want = PAGE_ALIGN(shmem->base.size);
 	size_t va_off = 0;
 	int ret;
 
 	if (bo->gpu_va)
 		return 0;
 
-	ret = drm_gem_shmem_pin(shmem);
-	if (ret)
-		return ret;
-
-	sgt = drm_gem_shmem_get_sg_table(shmem);
-	if (IS_ERR(sgt)) {
-		drm_gem_shmem_unpin(shmem);
+	/*
+	 * Pin the backing pages and DMA-map them through the shmem
+	 * helper.  The resulting table is cached in shmem->sgt and
+	 * unmapped/freed by drm_gem_shmem_release(), so the driver must
+	 * not manage its lifetime (a previous version did both here and
+	 * in bo_free, double-unmapping the table).
+	 */
+	sgt = drm_gem_shmem_get_pages_sgt(shmem);
+	if (IS_ERR(sgt))
 		return PTR_ERR(sgt);
-	}
-
-	ret = dma_map_sgtable(pv->drm.dev, sgt, DMA_BIDIRECTIONAL, 0);
-	if (ret) {
-		sg_free_table(sgt);
-		kfree(sgt);
-		drm_gem_shmem_unpin(shmem);
-		return ret;
-	}
 
 	mutex_lock(&va_lock);
 	/* reuse the first freed range large enough, else bump-allocate */
 	{
 		struct prismrv_va_range *range;
-		size_t want = PAGE_ALIGN(shmem->base.size);
 
 		list_for_each_entry(range, &va_free_list, node) {
 			if (range->size >= want) {
@@ -158,8 +151,7 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 			if (want > PRISMRV_VA_SIZE ||
 			    va_next > PRISMRV_VA_BASE + PRISMRV_VA_SIZE - want) {
 				mutex_unlock(&va_lock);
-				ret = -ENOSPC;
-				goto err_unpin;
+				return -ENOSPC;
 			}
 			bo->gpu_va = va_next;
 			va_next += want;
@@ -185,19 +177,36 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 
 err_unmap:
 	prismrv_mmu_unmap(pv, bo->gpu_va, va_off ? va_off : PAGE_SIZE);
-err_unpin:
-	dma_unmap_sgtable(pv->drm.dev, sgt, DMA_BIDIRECTIONAL, 0);
-	sg_free_table(sgt);
-	kfree(sgt);
-	drm_gem_shmem_unpin(shmem);
+	mutex_lock(&va_lock);
+	prismrv_va_free_locked(bo->gpu_va, want);
+	mutex_unlock(&va_lock);
+	bo->gpu_va = 0;
 	return ret;
+}
+
+/*
+ * shmem helper callback: allocate the driver BO wrapper so that the
+ * helper initialises its state inside prismrv_bo (container_of layout).
+ * This replaces a previous open-coded drm_gem_object_init() call that
+ * left the drm_gem_shmem_object state uninitialised.
+ */
+static struct drm_gem_object *
+prismrv_gem_create_object(struct drm_device *dev, size_t size)
+{
+	struct prismrv_bo *bo;
+
+	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
+	if (!bo)
+		return ERR_PTR(-ENOMEM);
+
+	bo->base.base.funcs = &prismrv_gem_funcs;
+	return &bo->base.base;
 }
 
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file)
 {
 	struct drm_prismrv_gem_create *args = data;
-	struct prismrv_bo *bo;
 	struct drm_gem_shmem_object *shmem;
 	int ret;
 
@@ -205,22 +214,12 @@ int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 	args->size = PAGE_ALIGN(args->size);
 
-	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
-	if (!bo)
-		return -ENOMEM;
-
-	/* initialise the shmem wrapper (resv, pages machinery) and the
-	 * base object in one go */
 	shmem = drm_gem_shmem_create(dev, args->size);
-	if (IS_ERR(shmem)) {
-		kfree(bo);
+	if (IS_ERR(shmem))
 		return PTR_ERR(shmem);
-	}
-	bo->base = *shmem;
-	bo->base.base.funcs = &prismrv_gem_funcs;
 
-	ret = drm_gem_handle_create(file, &bo->base.base, &args->handle);
-	drm_gem_object_put(&bo->base.base);
+	ret = drm_gem_handle_create(file, &shmem->base, &args->handle);
+	drm_gem_object_put(&shmem->base);
 	return ret;
 }
 

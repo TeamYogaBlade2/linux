@@ -49,6 +49,7 @@ DEFINE_DRM_GEM_FOPS(prismrv_fops);
 
 static const struct drm_driver prismrv_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ,
+	.gem_create_object = prismrv_gem_create_object,
 	.ioctls = prismrv_ioctls,
 	.num_ioctls = ARRAY_SIZE(prismrv_ioctls),
 	.fops = &prismrv_fops,
