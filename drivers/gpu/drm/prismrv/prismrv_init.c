@@ -186,3 +186,43 @@ out_errata:
 out_fw:
 	return ret;
 }
+
+void prismrv_hw_fini(struct prismrv_device *pv)
+{
+	unsigned int i;
+
+	pv->hw_ready = false;
+
+	/* retire any fences that will never complete */
+	spin_lock(&pv->event_lock);
+	while (!list_empty(&pv->pending_fences)) {
+		struct prismrv_fence *pf =
+			list_first_entry(&pv->pending_fences,
+					 struct prismrv_fence, node);
+		list_del(&pf->node);
+
+		dma_fence_signal(&pf->base);
+		dma_fence_put(&pf->base);
+	}
+	spin_unlock(&pv->event_lock);
+
+	prismrv_ccb_fini(pv);
+
+	if (pv->hostctl) {
+		dma_free_coherent(pv->drm.dev, sizeof(*pv->hostctl),
+				  pv->hostctl, pv->hostctl_dma);
+		pv->hostctl = NULL;
+	}
+
+	prismrv_errata_release(pv);
+	for (i = 0; i < PRISMRV_ERRATA_BUF_COUNT; i++)
+		pv->errata_buf[i].size = 0;
+
+	if (pv->ukernel_cpu) {
+		dma_free_coherent(pv->drm.dev, pv->ukernel_size,
+				  pv->ukernel_cpu, pv->ukernel_dma);
+		pv->ukernel_cpu = NULL;
+	}
+
+	prismrv_mmu_fini(pv);
+}

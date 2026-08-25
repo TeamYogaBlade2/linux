@@ -164,4 +164,9 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 
 void prismrv_devfreq_fini(struct prismrv_device *pv)
 {
+	if (pv->devfreq.devfreq) {
+		devm_devfreq_remove_device(pv->drm.dev,
+					   pv->devfreq.devfreq);
+		pv->devfreq.devfreq = NULL;
+	}
 }
