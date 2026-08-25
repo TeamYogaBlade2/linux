@@ -146,12 +146,14 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	if (ret)
 		return ret;
 
-	/* shared HostCtl block */
-	pv->hostctl = dma_alloc_coherent(pv->drm.dev,
-					 sizeof(*pv->hostctl),
-					 &pv->hostctl_dma, GFP_KERNEL);
-	if (!pv->hostctl)
-		return -ENOMEM;
+	/* shared HostCtl block: allocate once, reuse across hw_init calls */
+	if (!pv->hostctl) {
+		pv->hostctl = dma_alloc_coherent(pv->drm.dev,
+						 sizeof(*pv->hostctl),
+						 &pv->hostctl_dma, GFP_KERNEL);
+		if (!pv->hostctl)
+			return -ENOMEM;
+	}
 
 	ret = prismrv_ccb_init(pv);
 	if (ret)

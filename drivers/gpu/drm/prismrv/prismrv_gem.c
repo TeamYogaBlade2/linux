@@ -34,6 +34,46 @@ struct prismrv_va_range {
 static LIST_HEAD(va_free_list);
 static u32 va_next = PRISMRV_VA_BASE;
 
+/* return a range to the free list, merging adjacent neighbours.
+ * callers hold va_lock. */
+static void prismrv_va_free_locked(u32 base, size_t size)
+{
+	struct prismrv_va_range *range, *next, *new_range;
+
+	/* merge into a lower neighbour that ends exactly at our base */
+	list_for_each_entry(range, &va_free_list, node) {
+		if (range->base + range->size == base) {
+			range->size += size;
+
+			/* and possibly chain into the next free range */
+			if (!list_is_last(&range->node, &va_free_list)) {
+				next = list_next_entry(range, node);
+
+				if (range->base + range->size == next->base) {
+					range->size += next->size;
+					list_del(&next->node);
+					kfree(next);
+				}
+			}
+			return;
+		}
+		if (range->base > base)
+			break;
+	}
+
+	new_range = kmalloc(sizeof(*new_range), GFP_KERNEL);
+	if (!new_range)
+		return; /* VA leak is non-fatal; the space is large */
+	new_range->base = base;
+	new_range->size = size;
+
+	if (&range->node != &va_free_list)
+		/* list_add_tail() inserts before the given head */
+		list_add_tail(&new_range->node, &range->node);
+	else
+		list_add_tail(&new_range->node, &va_free_list);
+}
+
 struct prismrv_bo {
 	struct drm_gem_shmem_object base;
 	u32 gpu_va;
@@ -52,7 +92,8 @@ static void prismrv_bo_free(struct drm_gem_object *obj)
 	if (bo->gpu_va) {
 		prismrv_mmu_unmap(pv, bo->gpu_va, obj->size);
 		mutex_lock(&va_lock);
-		/* simple bump allocator: no reclaim (VA space is 768 MiB) */
+		prismrv_va_free_locked(bo->gpu_va, PAGE_ALIGN(obj->size));
+		bo->gpu_va = 0;
 		mutex_unlock(&va_lock);
 	}
 	drm_gem_shmem_free(&bo->base);
@@ -70,7 +111,7 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	struct sg_table *sgt;
 	struct scatterlist *sg;
 	unsigned int i;
-	dma_addr_t addr;
+	size_t va_off = 0;
 	int ret;
 
 	if (bo->gpu_va)
@@ -114,19 +155,42 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 			}
 		}
 		if (!bo->gpu_va) {
+			if (want > PRISMRV_VA_SIZE ||
+			    va_next > PRISMRV_VA_BASE + PRISMRV_VA_SIZE - want) {
+				mutex_unlock(&va_lock);
+				ret = -ENOSPC;
+				goto err_unpin;
+			}
 			bo->gpu_va = va_next;
 			va_next += want;
 		}
 	}
 	mutex_unlock(&va_lock);
 
+	va_off = 0;
 	for_each_sgtable_dma_sg(sgt, sg, i) {
-		addr = sg_dma_address(sg);
-		prismrv_mmu_map(pv, bo->gpu_va + i * PAGE_SIZE,
-				addr, sg_dma_len(sg));
+		size_t len = sg_dma_len(sg);
+
+		/* one sg entry may span several pages: map its full
+		 * length at the current VA cursor instead of assuming
+		 * page-sized entries */
+		ret = prismrv_mmu_map(pv, bo->gpu_va + va_off,
+				      sg_dma_address(sg), len);
+		if (ret)
+			goto err_unmap;
+		va_off += len;
 	}
 
 	return 0;
+
+err_unmap:
+	prismrv_mmu_unmap(pv, bo->gpu_va, va_off ? va_off : PAGE_SIZE);
+err_unpin:
+	dma_unmap_sgtable(pv->drm.dev, sgt, DMA_BIDIRECTIONAL, 0);
+	sg_free_table(sgt);
+	kfree(sgt);
+	drm_gem_shmem_unpin(shmem);
+	return ret;
 }
 
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
@@ -134,6 +198,7 @@ int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_prismrv_gem_create *args = data;
 	struct prismrv_bo *bo;
+	struct drm_gem_shmem_object *shmem;
 	int ret;
 
 	if (args->size == 0 || args->size > SZ_256M)
@@ -144,11 +209,14 @@ int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 	if (!bo)
 		return -ENOMEM;
 
-	ret = drm_gem_object_init(dev, &bo->base.base, args->size);
-	if (ret) {
+	/* initialise the shmem wrapper (resv, pages machinery) and the
+	 * base object in one go */
+	shmem = drm_gem_shmem_create(dev, args->size);
+	if (IS_ERR(shmem)) {
 		kfree(bo);
-		return ret;
+		return PTR_ERR(shmem);
 	}
+	bo->base = *shmem;
 	bo->base.base.funcs = &prismrv_gem_funcs;
 
 	ret = drm_gem_handle_create(file, &bo->base.base, &args->handle);

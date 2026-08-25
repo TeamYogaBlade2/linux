@@ -50,6 +50,14 @@ int prismrv_ccb_init(struct prismrv_device *pv)
 {
 	spin_lock_init(&pv->ccb_lock);
 
+	/* re-entry (runtime resume after recovery): the shared structures
+	 * were allocated on the first init and are still MMU-mapped */
+	if (pv->ccb) {
+		memset(pv->ccb, 0, sizeof(*pv->ccb));
+		wmb();
+		return 0;
+	}
+
 	pv->ccb = dma_alloc_coherent(pv->drm.dev, sizeof(*pv->ccb),
 				     &pv->ccb_dma, GFP_KERNEL);
 	if (!pv->ccb)
@@ -121,7 +129,7 @@ static void prismrv_ccb_schedule(struct prismrv_device *pv,
 		spin_lock(&pv->ccb_lock);
 	}
 
-	slot = le32_to_cpu(pv->ccb->write_offset) & 255;
+	slot = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
 	cmd = &pv->ccb->commands[slot];
 
 	cmd->service_address =
@@ -135,7 +143,7 @@ static void prismrv_ccb_schedule(struct prismrv_device *pv,
 	 * polls write_offset on the other side of a coherent mapping
 	 */
 	wmb();
-	pv->ccb->write_offset = cpu_to_le32((slot + 1) & 255);
+	WRITE_ONCE(pv->ccb->write_offset, cpu_to_le32((slot + 1) & 255));
 
 	spin_unlock(&pv->ccb_lock);
 
@@ -150,16 +158,23 @@ static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
 {
 	u32 *fds;
 	unsigned int i;
-	long ret = 0;
+	int ret = 0;
 
 	if (!num_fds)
 		return 0;
 
-	fds = kmemdup_array(user_fds, num_fds, sizeof(u32), GFP_KERNEL);
+	/* user_fds is a __user pointer: copy it in with the proper
+	 * accessor instead of handing it to kmemdup_array() */
+	fds = kmalloc_array(num_fds, sizeof(*fds), GFP_KERNEL);
 	if (!fds)
 		return -ENOMEM;
 
-	for (i = 0; i < num_fds && ret == 0; i++) {
+	if (copy_from_user(fds, user_fds, array_size(num_fds, sizeof(u32)))) {
+		kfree(fds);
+		return -EFAULT;
+	}
+
+	for (i = 0; i < num_fds; i++) {
 		struct dma_fence *fence;
 
 		fence = sync_file_get_fence(fds[i]);
@@ -207,8 +222,10 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 	/* slot 0 = command BO, 1..num_bos = user bos */
 	objs = kvcalloc(args->num_bos + 1, sizeof(*objs), GFP_KERNEL);
-	if (!objs)
+	if (!objs) {
+		pm_runtime_put_sync(pv->drm.dev);
 		return -ENOMEM;
+	}
 
 	/* block on explicit dependencies first */
 	in_fds = u64_to_user_ptr(args->in_fences);
@@ -244,10 +261,10 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * out of the 24-byte kernel CCB slot. */
 	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(objs[0]));
 	cmd_data[1] = cpu_to_le32(args->cmd_size);
-	if (args->num_bos >= 1 && objs[2])
-		/* bos array convention: user bos[0] (objs[2]) is the TA
+	if (args->num_bos >= 1 && objs[1])
+		/* bos array convention: user bos[0] (objs[1]) is the TA
 		 * packet-stream BO for draw submissions */
-		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(objs[2]));
+		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(objs[1]));
 
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
 	if (!f) {
@@ -256,7 +273,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	}
 	spin_lock_init(&f->lock);
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
-		       0 /* context */, 1 /* seqno */);
+		       atomic_inc_return(&pv->fence_context),
+		       atomic_inc_return(&pv->fence_seqno));
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
@@ -290,6 +308,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 	/* record the fence so devfreq can see the busy window */
 out_put:
+	pm_runtime_mark_last_busy(pv->drm.dev);
+	pm_runtime_put_autosuspend(pv->drm.dev);
 	/* objects 0..num_bos are referenced (0 = cmd BO) */
 	for (i = 0; i <= args->num_bos && objs; i++)
 		if (objs[i])

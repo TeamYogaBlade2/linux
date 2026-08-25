@@ -81,14 +81,22 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 
 	if (status & PRISMRV_IRQ_COMPLETION_EVENTS)
 		prismrv_handle_completion(pv);
-	else
+	else if (atomic_read(&pv->busy_count) > 0)
+		/*
+		 * An unrelated event arrived while a submission is in
+		 * flight.  Only then does it hint at a wedged uKernel;
+		 * counting SW events while idle used to schedule a
+		 * bogus GPU reset.
+		 */
 		prismrv_check_recovery(pv);
 
-	/* HostCtl flag path (REVIEW R6): the uKernel raises bits in
+	/*
+	 * HostCtl flag path (REVIEW R6): the uKernel raises bits in
 	 * ui32InterruptFlags to request host-side services; the host
 	 * acknowledges by writing the same mask into ui32ClearFlags
 	 * (vendor SGXMKIF_HOST_CTL convention).  Actual service dispatch
-	 * (e.g. PROCESS_QUEUES follow-up) happens through the CCB. */
+	 * (e.g. PROCESS_QUEUES follow-up) happens through the CCB.
+	 */
 	if (pv->hostctl) {
 		u32 flags = le32_to_cpu(READ_ONCE(pv->hostctl->ui32InterruptFlags));
 

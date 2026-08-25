@@ -189,6 +189,8 @@ struct prismrv_device {
 	struct dma_fence *pending_fence; /* signalled by the IRQ handler */
 	unsigned int missed_completions;
 	atomic_t busy_count;
+	atomic_t fence_context;		/* dma_fence context id */
+	atomic_t fence_seqno;		/* per-context sequence number */
 	struct work_struct recovery_work;
 	struct mutex init_mutex;	/* serialises prismrv_hw_init */
 

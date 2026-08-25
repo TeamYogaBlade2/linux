@@ -19,6 +19,23 @@
 
 int prismrv_mmu_init(struct prismrv_device *pv)
 {
+	unsigned int i;
+
+	if (pv->pd_cpu) {
+		for (i = 0; i < PD_ENTRIES; i++) {
+			if (!pv->pd_pts[i])
+				continue;
+			dma_sync_single_for_device(pv->drm.dev,
+						   pv->pd_pt_dma[i],
+						   PT_SIZE,
+						   DMA_TO_DEVICE);
+		}
+		writel(pv->pd_gpu_addr | SGX_MMU_PDE_VALID,
+		       pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+		readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+		return 0;
+	}
+
 	pv->pd_cpu = dma_alloc_coherent(pv->drm.dev, PAGE_SIZE,
 					&pv->pt_dma_addr, GFP_KERNEL);
 	if (!pv->pd_cpu)
