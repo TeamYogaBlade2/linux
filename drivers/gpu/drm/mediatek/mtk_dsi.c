@@ -85,7 +85,7 @@
 #define DSI_SIZE_CON		0x38
 #define DSI_HEIGHT				GENMASK(30, 16)
 #define DSI_WIDTH				GENMASK(14, 0)
-#define DSI_MEM_CONTI		0x3c
+#define DSI_MEM_CONTI		0x90
 #define DSI_WMEM_CONTI			0x3c
 #define DSI_HSA_WC		0x50
 #define DSI_HBP_WC		0x54
