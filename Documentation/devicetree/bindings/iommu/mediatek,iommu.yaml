@@ -107,7 +107,7 @@ properties:
 
   interrupts:
     minItems: 1
-    maxItems: 2  # MT6589 has one IRQ per core
+    maxItems: 4  # MT6589: m4u0, m4u1 and the two L2 IRQs
 
   interrupt-names:
     minItems: 1

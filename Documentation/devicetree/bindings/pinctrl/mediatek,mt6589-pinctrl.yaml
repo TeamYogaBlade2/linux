@@ -47,9 +47,11 @@ properties:
   interrupt-controller: true
 
   interrupts:
-    maxItems: 1
-    description:
-      Specifies the summary IRQ.
+    items:
+      - description: EINT summary IRQ
+      - description: EINT IRQ for the second group of GPIOs
+      - description: Direct EINT IRQ
+    minItems: 1
 
   "#interrupt-cells":
     const: 2
@@ -65,12 +67,12 @@ required:
   - "#interrupt-cells"
 
 patternProperties:
-  '-[0-9]*$':
+  '^(.*)?_pins(_default|_uhs)?$':
     type: object
     additionalProperties: false
 
     patternProperties:
-      '-pins*$':
+      '.*pins.*$|^pin-':
         type: object
         description:
           A pinctrl node should contain at least one subnodes representing the
@@ -106,7 +108,7 @@ patternProperties:
           input-schmitt-disable: true
 
           drive-strength:
-            enum: [2, 4, 8, 10, 12, 14, 16, 20, 24, 28, 32]
+            enum: [2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
 
           slew-rate:
             enum: [0, 1]

@@ -319,7 +319,7 @@
 				reg = <0x0 0x4>;
 			};
 
-			chip-ver@ {
+			chip-ver@4 {
 				reg = <0x4 0x4>;
 			};
 		};

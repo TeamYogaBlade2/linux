@@ -140,6 +140,16 @@ properties:
     $ref: /schemas/iio/adc/mediatek,mt6359-auxadc.yaml#
     unevaluatedProperties: false
 
+  efuse:
+    type: object
+    description:
+      eFuse support with MT6320.
+    additionalProperties: false
+
+    properties:
+      compatible:
+        const: mediatek,mt6320-efuse
+
   audio-codec:
     type: object
     description:
