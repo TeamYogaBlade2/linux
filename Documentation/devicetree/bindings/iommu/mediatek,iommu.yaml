@@ -293,19 +293,19 @@ examples:
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>
 
-    iommu@10208000 {
+    iommu@10205000 {
         compatible = "mediatek,mt6589-m4u";
-        reg = <0x10205000 0x200>,
+        reg = <0x10205000 0x100>,
               <0x10205200 0x600>,
               <0x10205800 0x600>,
               <0x10205100 0x100>;
         reg-names = "global", "m4u0", "m4u1", "l2cache";
-        interrupts = <GIC_SPI 141 IRQ_TYPE_LEVEL_LOW>,
-                     <GIC_SPI 142 IRQ_TYPE_LEVEL_LOW>;
+        interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>,
+                     <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>;
         interrupt-names = "m4u0", "m4u1";
         clocks = <&infracfg CLK_INFRA_M4U>;
         clock-names = "bclk";
         mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
-                         <&larb3>, <&larb4>, <&larb5>;
+                         <&larb3>, <&larb4>;
         #iommu-cells = <1>;
     };

@@ -29,9 +29,11 @@ properties:
     maxItems: 1
 
   clocks:
+    minItems: 1
     maxItems: 2
 
   clock-names:
+    minItems: 1
     items:
       - const: jpgenc-smi
       - const: jpgenc
