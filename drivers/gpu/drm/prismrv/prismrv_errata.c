@@ -130,7 +130,14 @@ int prismrv_errata_apply(struct prismrv_device *pv)
 	};
 	bool need_cc = pv->errata & PRISMRV_BRN_36513;
 	unsigned int i;
-	u32 va = ERRATA_VA_BASE;
+	u32 va;
+
+	/* re-entry (runtime resume after recovery): buffers are already
+	 * allocated and still MMU-mapped */
+	if (pv->errata_buf[0].cpu || pv->errata_buf[1].cpu)
+		return 0;
+
+	va = ERRATA_VA_BASE;
 
 	for (i = 0; i < PRISMRV_ERRATA_BUF_COUNT; i++) {
 		bool need = false;

@@ -31,11 +31,6 @@
 
 #define HWRTDATA_SIZE		496
 
-struct prismrv_fence {
-	struct dma_fence base;
-	spinlock_t lock;
-};
-
 static const char *prismrv_fence_name(struct dma_fence *f)
 {
 	return "prismrv";
@@ -272,6 +267,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		goto out_put;
 	}
 	spin_lock_init(&f->lock);
+	INIT_LIST_HEAD(&f->node);
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
 		       atomic_inc_return(&pv->fence_context),
 		       atomic_inc_return(&pv->fence_seqno));
@@ -298,7 +294,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	/* record the fence so the IRQ handler can signal it on completion */
 	dma_fence_get(&f->base);
 	spin_lock(&pv->event_lock);
-	pv->pending_fence = &f->base;
+	list_add_tail(&f->node, &pv->pending_fences);
 	spin_unlock(&pv->event_lock);
 
 	atomic_inc(&pv->busy_count);

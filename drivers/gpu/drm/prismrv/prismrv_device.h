@@ -123,6 +123,13 @@ struct prismrv_devfreq {
 	spinlock_t lock;
 };
 
+/* submission fence, signalled by the IRQ handler on completion */
+struct prismrv_fence {
+	struct dma_fence base;
+	spinlock_t lock;
+	struct list_head node;
+};
+
 struct prismrv_device {
 	struct drm_device drm;		/* must be first */
 	struct platform_device *pdev;
@@ -186,7 +193,7 @@ struct prismrv_device {
 	struct prismrv_devfreq devfreq;
 
 	spinlock_t event_lock;		/* protects kicker + event masks */
-	struct dma_fence *pending_fence; /* signalled by the IRQ handler */
+	struct list_head pending_fences; /* completed in order by the IRQ */
 	unsigned int missed_completions;
 	atomic_t busy_count;
 	atomic_t fence_context;		/* dma_fence context id */

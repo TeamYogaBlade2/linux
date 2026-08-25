@@ -24,18 +24,27 @@
 static void prismrv_handle_completion(struct prismrv_device *pv)
 {
 	struct dma_fence *fence;
+	LIST_HEAD(signalled);
 
 	spin_lock(&pv->event_lock);
-	fence = pv->pending_fence;
-	pv->pending_fence = NULL;
+	list_splice_init(&pv->pending_fences, &signalled);
 	spin_unlock(&pv->event_lock);
 
-	if (fence) {
+	/* signal every submission the uKernel finished; a single
+	 * completion event can retire several queued commands */
+	while (!list_empty(&signalled)) {
+		struct prismrv_fence *pf;
+
+		pf = list_first_entry(&signalled, struct prismrv_fence, node);
+		list_del(&pf->node);
+
+		fence = &pf->base;
 		dma_fence_signal(fence);
 		dma_fence_put(fence);
-		pv->missed_completions = 0;
+		atomic_dec(&pv->busy_count);
 	}
-	atomic_dec(&pv->busy_count);
+
+	pv->missed_completions = 0;
 }
 
 static void prismrv_check_recovery(struct prismrv_device *pv)
