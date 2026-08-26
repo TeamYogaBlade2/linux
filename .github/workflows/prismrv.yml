@@ -76,20 +76,37 @@ jobs:
 
       - name: Configure kernel
         run: |
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 multi_v7_defconfig
-          # force-set with scripts/config: it writes the lines verbatim;
-          # olddefconfig then keeps them because multi_v7_defconfig
-          # already satisfies ARCH_MULTI_V7/OF etc.
-          ./scripts/config --file "$KSRCDIR/.config" \
-            -e ARCH_MEDIATEK -e MACH_MT6589 \
-            -e MTK_INFRACFG -e COMMON_CLK_MT6589 \
-            -e COMMON_CLK_MT6589_MFGSYS -e MTK_SCPSYS_PM_DOMAINS \
-            -e DRM -m DRM_PRISMRV
+          # allnoconfig builds in a fraction of multi_v7_defconfig time;
+          # the fragment enables exactly what the driver needs
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 allnoconfig
+          cat >> "$KSRCDIR/.config" <<'FRAG'
+          CONFIG_MMU=y
+          CONFIG_ARCH_MULTIPLATFORM=y
+          CONFIG_ARCH_MULTI_V6_V7=y
+          CONFIG_ARCH_MULTI_V7=y
+          CONFIG_ARCH_MEDIATEK=y
+          CONFIG_MACH_MT6589=y
+          CONFIG_OF=y
+          CONFIG_COMMON_CLK=y
+          CONFIG_REGULATOR=y
+          CONFIG_MTK_INFRACFG=y
+          CONFIG_COMMON_CLK_MT6589=y
+          CONFIG_COMMON_CLK_MT6589_MFGSYS=y
+          CONFIG_MTK_SCPSYS_PM_DOMAINS=y
+          CONFIG_DRM=m
+          CONFIG_DRM_GEM_SHMEM_HELPER=m
+          CONFIG_PM_DEVFREQ=m
+          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=m
+          CONFIG_PM_OPP=y
+          CONFIG_DRM_PRISMRV=m
+          FRAG
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
           make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV=m not set"; exit 1; }
-          # full modules build: generates asm-offsets.h, runs modpost
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) modules
+          # M= build is enough now that prepare generated asm-offsets;
+          # modpost runs as part of it for external-module style builds.
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
         run: |
