@@ -62,15 +62,26 @@ jobs:
 
       - name: Configure kernel
         run: |
+          cat > /tmp/prismrv.config <<'FRAG'
+          CONFIG_COMPILE_TEST=y
+          CONFIG_DRM=y
+          CONFIG_DRM_GEM_SHMEM_HELPER=y
+          CONFIG_PM_DEVFREQ=y
+          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y
+          CONFIG_PM_OPP=y
+          CONFIG_DRM_PRISMRV=m
+          FRAG
           make -C "$KSRCDIR" LLVM=1 defconfig
-          ./scripts/config -e COMPILE_TEST -e DRM -e DRM_GEM_SHMEM_HELPER \
-            -e PM_DEVFREQ -e DEVFREQ_GOV_SIMPLE_ONDEMAND -e PM_OPP
-          make -C "$KSRCDIR" LLVM=1 olddefconfig
-          echo 'CONFIG_DRM_PRISMRV=m' >> "$KSRCDIR/.config"
-          make -C "$KSRCDIR" LLVM=1 olddefconfig
+          # merge_config resolves dependencies properly (unlike raw appends)
+          ./scripts/kconfig/merge_config.sh -m "$KSRCDIR/.config" /tmp/prismrv.config
           make -C "$KSRCDIR" LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
-            echo "::error::CONFIG_DRM_PRISMRV not set"; exit 1; }
+            echo "::error::CONFIG_DRM_PRISMRV not set"
+            echo "--- Kconfig source line:"
+            grep -n prismrv "$KSRCDIR/drivers/gpu/drm/Kconfig" || true
+            echo "--- relevant config:"
+            grep -E 'CONFIG_(DRM|COMPILE_TEST|OF|MMU)[= ]' "$KSRCDIR/.config" || true
+            exit 1; }
           make -C "$KSRCDIR" LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
