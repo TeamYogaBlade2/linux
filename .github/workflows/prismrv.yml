@@ -79,12 +79,12 @@ jobs:
             -e ARCH_MEDIATEK -e MACH_MT6589 \
             -e MTK_INFRACFG -e COMMON_CLK_MT6589 \
             -e COMMON_CLK_MT6589_MFGSYS -e MTK_SCPSYS_PM_DOMAINS \
-            -e DRM -e DRM_PRISMRV
+            -e DRM -m DRM_PRISMRV
           make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
-          # built-in (=y) or module (=m) both count as a successful enable
-          grep -qE 'CONFIG_DRM_PRISMRV=[ym]' "$KSRCDIR/.config" || {
-            echo "::error::CONFIG_DRM_PRISMRV not set"
-            exit 1; }
+          grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
+            echo "::error::CONFIG_DRM_PRISMRV=m not set"; exit 1; }
+          # full modules build: generates asm-offsets.h, runs modpost
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) modules
 
       - name: Build driver (clang)
         run: |
