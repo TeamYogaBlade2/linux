@@ -22,17 +22,30 @@
  * and back to 0x00 (= 4/4, i.e. no division) afterwards.
  */
 /*
- * Only the integer divisions can be expressed through the common
- * divider ops; the fractional encodings (e.g. 3/4) are left out --
- * the CPU DVFS path only ever uses 4/4 (= bypass) and 2/4 (= /2)
- * anyway.
+ * The field encodes a fraction n/d with d picked by bits [4:3]
+ * (0b01 -> 4, 0b10 -> 5, 0b11 -> 6) and n - 1 in bits [2:0].  The
+ * table below lists every encoding with its divisor (d / n); the
+ * fractional ones are exposed as their reciprocal denominator so that
+ * rate = parent_rate / div still holds for the common divider ops
+ * (the CPU DVFS path only ever uses 4/4 (= bypass) and 2/4 (= /2),
+ * the rest is there for completeness).
  */
 static const struct clk_div_table mt6589_armdiv1_table[] = {
 	{ .val = 0x08, .div = 1 },	/* 4/4 */
+	{ .val = 0x09, .div = 4 },	/* 3/4 */
 	{ .val = 0x0a, .div = 2 },	/* 2/4 */
+	{ .val = 0x0b, .div = 4 },	/* 1/4 */
+	{ .val = 0x10, .div = 1 },	/* 5/5 */
+	{ .val = 0x11, .div = 5 },	/* 4/5 */
+	{ .val = 0x12, .div = 5 },	/* 3/5 */
+	{ .val = 0x13, .div = 5 },	/* 2/5 */
+	{ .val = 0x14, .div = 5 },	/* 1/5 */
 	{ .val = 0x18, .div = 1 },	/* 6/6 */
-	{ .val = 0x1b, .div = 2 },	/* 3/6 */
-	{ .val = 0x13, .div = 2 },	/* 2/5 */
+	{ .val = 0x19, .div = 6 },	/* 5/6 */
+	{ .val = 0x1a, .div = 6 },	/* 4/6 */
+	{ .val = 0x1b, .div = 6 },	/* 3/6 */
+	{ .val = 0x1c, .div = 6 },	/* 2/6 */
+	{ .val = 0x1d, .div = 6 },	/* 1/6 */
 	{ }
 };
 #define INFRA_RST0	0x0030

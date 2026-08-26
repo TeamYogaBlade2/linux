@@ -1058,7 +1058,14 @@ out_clk_unprepare:
 		}
 	}
 
-	// clk_disable_unprepare(data->bclk);
+	/*
+	 * The bclk is marked CLK_IS_CRITICAL, so the clock core keeps it
+	 * running even when this (possibly deferred) probe drops its
+	 * reference here -- stopping the M4U clock while the larbs are
+	 * still being brought up hangs the system.  The disable only
+	 * takes effect once the hardware has really gone away (remove).
+	 */
+	clk_disable_unprepare(data->bclk);
 	return ret;
 }
 
