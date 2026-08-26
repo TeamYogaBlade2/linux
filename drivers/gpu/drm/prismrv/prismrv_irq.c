@@ -11,6 +11,7 @@
  *     uKernel stopped making progress
  */
 #include <linux/interrupt.h>
+#include <linux/pm_runtime.h>
 
 #include "prismrv_device.h"
 
@@ -67,11 +68,25 @@ void prismrv_recovery_work(struct work_struct *work)
 {
 	struct prismrv_device *pv =
 		container_of(work, struct prismrv_device, recovery_work);
+	int ret;
+
+	/*
+	 * Hold a runtime PM reference for the whole re-init: hw_init
+	 * touches registers and must not race a suspend halfway through.
+	 */
+	ret = pm_runtime_resume_and_get(pv->drm.dev);
+	if (ret) {
+		dev_err(pv->drm.dev, "recovery: resume failed (%d)\n", ret);
+		return;
+	}
 
 	mutex_lock(&pv->init_mutex);
 	pv->hw_ready = false;
 	prismrv_hw_init(pv);
 	mutex_unlock(&pv->init_mutex);
+
+	pm_runtime_mark_last_busy(pv->drm.dev);
+	pm_runtime_put_autosuspend(pv->drm.dev);
 }
 
 irqreturn_t prismrv_irq_handler(int irq, void *data)

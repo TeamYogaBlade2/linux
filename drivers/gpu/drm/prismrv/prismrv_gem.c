@@ -218,6 +218,15 @@ int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 	if (IS_ERR(shmem))
 		return PTR_ERR(shmem);
 
+	/*
+	 * Write-combine mapping for streaming buffers (vertex arrays,
+	 * command streams): CPU writes bypass the cache so the GPU sees
+	 * them without an explicit flush.  Must be set before the first
+	 * vmap (drm_gem_shmem_vmap honours it when creating the pgprot).
+	 */
+	if (args->flags & PRISMRV_BO_UNCACHED)
+		shmem->map_wc = true;
+
 	ret = drm_gem_handle_create(file, &shmem->base, &args->handle);
 	drm_gem_object_put(&shmem->base);
 	return ret;

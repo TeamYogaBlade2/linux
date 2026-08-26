@@ -116,6 +116,14 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 	if (grade < 0)
 		return grade;
 
+	/*
+	 * The eFuse cell is 4 bits wide but be defensive: a bogus value
+	 * (corrupt fuse readout, bad nvmem driver) must not shift into
+	 * UB territory.  Clamp to the documented 1..7 range and treat
+	 * anything else as unfused.
+	 */
+	if (grade < 0 || grade > 7)
+		grade = 0;
 	version = BIT(grade);
 	if (grade == 0)
 		dev_info(pv->drm.dev,

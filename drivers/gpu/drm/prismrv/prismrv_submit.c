@@ -30,6 +30,7 @@
 #include "prismrv_device.h"
 
 #define HWRTDATA_SIZE		496
+#define PRISMRV_CCB_DRAIN_TIMEOUT_MS	2000
 #define PRISMRV_MAX_SUBMIT_BOS	256
 #define PRISMRV_MAX_IN_FENCES	64
 
@@ -108,22 +109,52 @@ static bool prismrv_ccb_full(struct prismrv_device *pv)
 		 le32_to_cpu(pv->ccb->read_offset)) & 255) == 0;
 }
 
-static void prismrv_ccb_schedule(struct prismrv_device *pv,
-				 enum prismrv_cmd_type type,
-				 const __le32 data[6])
+/* returns 0 on success, -ETIMEDOUT when the uKernel stopped draining;
+ * the caller must undo the fence/busy_count bookkeeping on error */
+static int prismrv_ccb_schedule(struct prismrv_device *pv,
+				enum prismrv_cmd_type type,
+				const __le32 data[6],
+				struct prismrv_fence *pf)
 {
 	struct prismrv_ccb_cmd *cmd;
 	u32 slot;
 
 	spin_lock(&pv->ccb_lock);
 
-	while (prismrv_ccb_full(pv)) {
+	/*
+	 * Wait for a free slot with a hard timeout.  If the uKernel is
+	 * wedged (never drains), spinning forever here would hang the
+	 * submitting task with runtime PM held.  After the timeout we
+	 * schedule recovery and return -ETIMEDOUT; userspace resubmits.
+	 */
+	if (prismrv_ccb_full(pv)) {
+		unsigned long deadline = jiffies +
+			msecs_to_jiffies(PRISMRV_CCB_DRAIN_TIMEOUT_MS);
+
 		spin_unlock(&pv->ccb_lock);
-		/* nudge the uKernel main loop so it drains the CCB */
-		writel(EUR_CR_EVENT_KICK_NOW_MASK,
-		       pv->regs + EUR_CR_EVENT_KICK);
-		usleep_range(50, 100);
-		spin_lock(&pv->ccb_lock);
+		do {
+			/* nudge the uKernel main loop so it drains */
+			writel(EUR_CR_EVENT_KICK_NOW_MASK,
+			       pv->regs + EUR_CR_EVENT_KICK);
+			usleep_range(500, 1000);
+			if (time_after(jiffies, deadline)) {
+				dev_err(pv->drm.dev,
+					"CCB full for %dms — scheduling recovery\n",
+					PRISMRV_CCB_DRAIN_TIMEOUT_MS);
+				schedule_work(&pv->recovery_work);
+				/* retire the fence so userspace's sync_file
+				 * doesn't wait forever; the submit ioctl
+				 * still returns -ETIMEDOUT */
+				spin_lock(&pv->event_lock);
+				list_del(&pf->node);
+				spin_unlock(&pv->event_lock);
+				dma_fence_set_error(&pf->base, -ETIMEDOUT);
+				dma_fence_signal(&pf->base);
+				dma_fence_put(&pf->base);
+				return -ETIMEDOUT;
+			}
+			spin_lock(&pv->ccb_lock);
+		} while (prismrv_ccb_full(pv));
 	}
 
 	slot = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
@@ -145,6 +176,7 @@ static void prismrv_ccb_schedule(struct prismrv_device *pv,
 	spin_unlock(&pv->ccb_lock);
 
 	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
+	return 0;
 }
 
 /*
@@ -301,8 +333,23 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	list_add_tail(&f->node, &pv->pending_fences);
 	spin_unlock(&pv->event_lock);
 
-	atomic_inc(&pv->busy_count);
-	prismrv_ccb_schedule(pv, args->cmd_type, cmd_data);
+	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
+	if (!ret) {
+		atomic_inc(&pv->busy_count);
+		goto out_objs;
+	}
+
+	/*
+	 * The CCB never drained: the fence has been retired with an
+	 * error, undo the bookkeeping that assumed success.  out_fence_fd
+	 * is already installed, userspace learns about the failure via
+	 * both the ioctl return and the signalled fence.
+	 */
+	atomic_dec(&pv->busy_count);
+	spin_lock(&pv->event_lock);
+	pv->missed_completions++;
+	spin_unlock(&pv->event_lock);
+	goto out_objs;
 
 	/* success: the PM reference is released here; the error path
 	 * below must not run again (it used to fall through and put

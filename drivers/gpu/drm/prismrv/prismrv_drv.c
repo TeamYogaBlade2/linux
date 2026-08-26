@@ -142,20 +142,32 @@ static void prismrv_remove(struct platform_device *pdev)
 {
 	struct prismrv_device *pv = platform_get_drvdata(pdev);
 
+	/*
+	 * Unplug first: drm_dev_unplug() makes drm_dev_enter() fail for
+	 * every new ioctl, so no new submissions can start.  In-flight
+	 * ioctls keep the device alive through their own references.
+	 */
 	drm_dev_unplug(&pv->drm);
 
-	/* readers may still be inside the ioctl paths: wait for them */
+	/* stop accepting recovery re-inits before tearing down hw */
+	cancel_work_sync(&pv->recovery_work);
+
 	mutex_lock(&pv->init_mutex);
 	pv->hw_ready = false;
 	mutex_unlock(&pv->init_mutex);
 
-	cancel_work_sync(&pv->recovery_work);
+	/*
+	 * Retire pending fences BEFORE disabling runtime PM: hw_fini
+	 * signals them (with the device still awake), so waiters see an
+	 * error instead of hanging, and nobody can touch pv afterwards
+	 * through a fence callback.
+	 */
+	pm_runtime_get_sync(&pdev->dev);
+	mutex_lock(&pv->init_mutex);
+	prismrv_hw_fini(pv);   /* retires pending fences */
+	mutex_unlock(&pv->init_mutex);
 	pm_runtime_disable(&pdev->dev);
 	prismrv_devfreq_fini(pv);
-
-	mutex_lock(&pv->init_mutex);
-	prismrv_hw_fini(pv);
-	mutex_unlock(&pv->init_mutex);
 }
 
 static int prismrv_runtime_suspend(struct device *dev)
