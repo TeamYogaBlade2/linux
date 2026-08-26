@@ -72,8 +72,26 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 	return sent == frame_len ? len : -EIO;
 }
 
+/*
+ * The gnss core calls ops->open/close unconditionally on first/last
+ * file open.  The chip is powered up by the WMT owner before this
+ * device is probed, so there is nothing to do here yet; the hooks are
+ * where WMT FUNC_ON/OFF will be wired once the arbitration between the
+ * BT/FM/GPS functions sharing this control channel is settled.
+ */
+static int mtk_gnss_open(struct gnss_device *gdev)
+{
+	return 0;
+}
+
+static void mtk_gnss_close(struct gnss_device *gdev)
+{
+}
+
 static const struct gnss_operations mtk_gnss_ops = {
-	.write_raw = mtk_gnss_write_raw,
+	.open		= mtk_gnss_open,
+	.close		= mtk_gnss_close,
+	.write_raw	= mtk_gnss_write_raw,
 };
 
 static int mtk_gnss_sdio_probe(struct sdio_func *func,
@@ -109,10 +127,10 @@ static int mtk_gnss_sdio_probe(struct sdio_func *func,
 	sdio_set_drvdata(func, priv);
 
 	/*
-	 * The control channel has no out-of-band interrupt wired to this
-	 * driver; NMEA output is drained by userspace reads through the
-	 * GNSS core, and the chip only emits data while the position
-	 * engine is running.
+	 * The receive path (draining STP frames of the GPS task into
+	 * gnss_insert_raw) is not implemented yet: the control channel
+	 * has no out-of-band interrupt wired to this driver and the
+	 * polling design still needs to be validated on hardware.
 	 */
 	dev_info(&func->dev, "MT6628 GNSS registered\n");
 
@@ -135,7 +153,8 @@ static void mtk_gnss_sdio_remove(struct sdio_func *func)
 }
 
 static const struct sdio_device_id mtk_gnss_sdio_ids[] = {
-	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, 0x6628) },
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK,
+		      SDIO_DEVICE_ID_MEDIATEK_MT6628) },
 	{ }
 };
 MODULE_DEVICE_TABLE(sdio, mtk_gnss_sdio_ids);
