@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config WLAN_VENDOR_MEDIATEK_MT6628
+	bool "MediaTek MT6628 WMT support"
+	depends on MMC
+	help
+	  This enables the control driver for the MediaTek MT6628
+	  Wi-Fi/Bluetooth/FM/GPS combo chip.  The driver powers the chip on,
+	  downloads the patch firmware over the SDIO control channel and
+	  exposes it to the individual subsystem drivers.

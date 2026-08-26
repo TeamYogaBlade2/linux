@@ -1,0 +1,1 @@
+obj-$(CONFIG_WLAN_VENDOR_MEDIATEK_MT6628) += mtk-wmt.o
