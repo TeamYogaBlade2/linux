@@ -57,6 +57,11 @@ jobs:
         run: |
           test ! -e "$KSRCDIR/drivers/gpu/drm/prismrv"
           cp -r drivers/gpu/drm/prismrv "$KSRCDIR/drivers/gpu/drm/"
+          # the driver includes <uapi/drm/prismrv_drm.h>; expose it via
+          # the kernel's include/uapi tree (same as an in-tree build)
+          mkdir -p "$KSRCDIR/include/uapi/drm"
+          cp include/uapi/drm/prismrv_drm.h \
+             "$KSRCDIR/include/uapi/drm/prismrv_drm.h"
           grep -q prismrv "$KSRCDIR/drivers/gpu/drm/Makefile" ||             echo 'obj-$(CONFIG_DRM_PRISMRV) += prismrv/' \
               >> "$KSRCDIR/drivers/gpu/drm/Makefile"
           # append at the END of Kconfig (a 'source' before menuconfig DRM

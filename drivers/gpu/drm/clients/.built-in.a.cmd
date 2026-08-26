@@ -1,0 +1,1 @@
+savedcmd_drivers/gpu/drm/clients/built-in.a := rm -f drivers/gpu/drm/clients/built-in.a;  printf "drivers/gpu/drm/clients/%s " drm_client_setup.o drm_fbdev_client.o | xargs llvm-ar cDPrST drivers/gpu/drm/clients/built-in.a
