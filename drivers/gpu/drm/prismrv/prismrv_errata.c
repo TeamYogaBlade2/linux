@@ -118,6 +118,14 @@ void prismrv_errata_init(struct prismrv_device *pv)
  * services reference, above the HWRTData pair */
 #define ERRATA_VA_BASE		(PRISMRV_HWRTDATA_VADDR + SZ_1K)
 
+/* HWRTData occupies 2*496 bytes from PRISMRV_HWRTDATA_VADDR; the +SZ_1K
+ * gap above is the only thing keeping these apart — fail the build if
+ * someone changes the sizes so they collide */
+#define HWRTDATA_TOTAL		(2 * 496)
+#if (ERRATA_VA_BASE - PRISMRV_HWRTDATA_VADDR) < HWRTDATA_TOTAL
+#error "errata VA region overlaps HWRTData"
+#endif
+
 int prismrv_errata_apply(struct prismrv_device *pv)
 {
 	static const size_t desc[PRISMRV_ERRATA_BUF_COUNT] = {

@@ -84,7 +84,8 @@ static int prismrv_devfreq_get_dev_status(struct device *dev,
 	spin_lock_irqsave(&df->lock, irqflags);
 	prismrv_devfreq_update_utilization(pv);
 	status->current_frequency = clk_get_rate(pv->clocks[0].clk);
-	prismrv_devfreq_update_utilization(pv);
+	/* a single utilization update: calling it twice double-counted
+	 * the elapsed interval and skewed the reported load */
 	status->busy_time = df->busy_time;
 	status->total_time = df->busy_time + df->idle_time;
 

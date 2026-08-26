@@ -166,8 +166,17 @@ static void prismrv_remove(struct platform_device *pdev)
 	mutex_lock(&pv->init_mutex);
 	prismrv_hw_fini(pv);   /* retires pending fences */
 	mutex_unlock(&pv->init_mutex);
-	pm_runtime_disable(&pdev->dev);
+
+	/*
+	 * Balance the reference taken above (and the one probe held)
+	 * BEFORE disabling runtime PM, otherwise the usage count leaks
+	 * and the module unload warns.  devfreq is unregistered first so
+	 * its 50ms poll can no longer touch the clocks we are about to
+	 * gate.
+	 */
 	prismrv_devfreq_fini(pv);
+	pm_runtime_put_sync(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 }
 
 static int prismrv_runtime_suspend(struct device *dev)
@@ -197,10 +206,18 @@ static int prismrv_runtime_resume(struct device *dev)
 
 	if (!pv->hw_ready) {
 		mutex_lock(&pv->init_mutex);
+		/*
+		 * Retry the firmware load: the first attempt at probe
+		 * may have run before the rootfs mounted.  Without this
+		 * a probe-time failure is permanent despite the probe
+		 * message claiming a retry.
+		 */
+		if (!pv->ukernel_cpu)
+			prismrv_fw_load(pv);
 		if (pv->ukernel_cpu)
 			ret = prismrv_hw_init(pv);
 		else
-			ret = 0;   /* firmware never loaded: stay idle */
+			ret = 0;   /* firmware still unavailable: idle */
 		mutex_unlock(&pv->init_mutex);
 		if (ret) {
 			clk_bulk_disable_unprepare(pv->nr_clocks,

@@ -176,7 +176,12 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	return 0;
 
 err_unmap:
-	prismrv_mmu_unmap(pv, bo->gpu_va, va_off ? va_off : PAGE_SIZE);
+	/*
+	 * Unwind exactly what was mapped (va_off bytes), not the whole
+	 * VA reservation — unmapping reserved-but-unmapped pages would
+	 * leave stale PTEs behind for the next user of this range.
+	 */
+	prismrv_mmu_unmap(pv, bo->gpu_va, va_off);
 	mutex_lock(&va_lock);
 	prismrv_va_free_locked(bo->gpu_va, want);
 	mutex_unlock(&va_lock);

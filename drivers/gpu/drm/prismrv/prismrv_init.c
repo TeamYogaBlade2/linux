@@ -157,20 +157,22 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
 			      pv->ukernel_dma, pv->ukernel_size);
 	if (ret)
-		return ret;
+		goto out_errata;
 
 	/* shared HostCtl block: allocate once, reuse across hw_init calls */
 	if (!pv->hostctl) {
 		pv->hostctl = dma_alloc_coherent(pv->drm.dev,
 						 sizeof(*pv->hostctl),
 						 &pv->hostctl_dma, GFP_KERNEL);
-		if (!pv->hostctl)
-			return -ENOMEM;
+		if (!pv->hostctl) {
+			ret = -ENOMEM;
+			goto out_errata;
+		}
 	}
 
 	ret = prismrv_ccb_init(pv);
 	if (ret)
-		return ret;
+		goto out_errata;
 
 	pv->hostctl->ui32HostClock = cpu_to_le32(jiffies_to_usecs(jiffies));
 	pv->hostctl->ui32InitStatus = 0;

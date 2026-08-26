@@ -194,7 +194,7 @@ struct prismrv_device {
 
 	spinlock_t event_lock;		/* protects kicker + event masks */
 	struct list_head pending_fences; /* completed in order by the IRQ */
-	unsigned int missed_completions;
+	atomic_t missed_completions;
 	atomic_t busy_count;
 	atomic_t fence_context;		/* dma_fence context id */
 	atomic_t fence_seqno;		/* per-context sequence number */

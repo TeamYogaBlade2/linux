@@ -102,11 +102,20 @@ void prismrv_ccb_fini(struct prismrv_device *pv)
  * write offset would swallow an unconsumed command.  Wait for the
  * uKernel to drain it instead of corrupting the ring.
  */
-/* ring-full test: caller holds ccb_lock or otherwise serialises */
+/*
+ * Ring-full test: caller holds ccb_lock or otherwise serialises.
+ *
+ * Both offsets are always in [0,255] (they are stored masked), so the
+ * u32 subtraction can never wrap through 32 bits — the expression is
+ * equivalent to ((write + 1 - read) mod 256 == 0), i.e. 255 slots in
+ * use.  Keep the operands masked if this ever changes.
+ */
 static bool prismrv_ccb_full(struct prismrv_device *pv)
 {
-	return ((le32_to_cpu(pv->ccb->write_offset) + 1 -
-		 le32_to_cpu(pv->ccb->read_offset)) & 255) == 0;
+	u32 w = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
+	u32 r = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
+
+	return ((w + 1 - r) & 255) == 0;
 }
 
 /* returns 0 on success, -ETIMEDOUT when the uKernel stopped draining;
@@ -142,15 +151,25 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 					"CCB full for %dms — scheduling recovery\n",
 					PRISMRV_CCB_DRAIN_TIMEOUT_MS);
 				schedule_work(&pv->recovery_work);
-				/* retire the fence so userspace's sync_file
-				 * doesn't wait forever; the submit ioctl
-				 * still returns -ETIMEDOUT */
+
+				/*
+				 * Retire the fence under event_lock: the
+				 * IRQ completion handler splices this same
+				 * list and may already have signalled+put
+				 * it (recovery can complete during the
+				 * spin).  The empty check makes the retire
+				 * idempotent against that; the refcount
+				 * taken at enqueue keeps the put safe.
+				 */
 				spin_lock(&pv->event_lock);
-				list_del(&pf->node);
+				if (!list_empty_careful(&pf->node)) {
+					list_del_init(&pf->node);
+					dma_fence_set_error(&pf->base,
+							    -ETIMEDOUT);
+					dma_fence_signal_locked(&pf->base);
+					dma_fence_put(&pf->base);
+				}
 				spin_unlock(&pv->event_lock);
-				dma_fence_set_error(&pf->base, -ETIMEDOUT);
-				dma_fence_signal(&pf->base);
-				dma_fence_put(&pf->base);
 				return -ETIMEDOUT;
 			}
 			spin_lock(&pv->ccb_lock);
@@ -271,6 +290,11 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_put;
 	}
+	if (args->cmd_size > objs[0]->size) {
+		ret = -EINVAL;
+		drm_gem_object_put(objs[0]);
+		goto out_put;
+	}
 
 	/* pin + DMA-map + MMU-map every referenced BO */
 	{
@@ -281,6 +305,22 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	}
 	if (ret)
 		goto out_put;
+
+	/*
+	 * Implicit sync: wait for any exclusive fence other drivers
+	 * left on the buffers we are about to read/write (PRIME-shared
+	 * camera/display/v4l2 buffers).  Without this the GPU can read
+	 * a scanout buffer mid-write.
+	 */
+	for (i = 0; i <= args->num_bos; i++) {
+		struct dma_resv *resv = objs[i]->resv;
+		long ret2 = dma_resv_wait_timeout(resv, DMA_RESV_USAGE_READ,
+						  true, MAX_SCHEDULE_TIMEOUT);
+		if (ret2 < 0) {
+			ret = ret2;
+			goto out_put;
+		}
+	}
 	ret = prismrv_gem_populate(pv, objs, args->num_bos + 1);
 	if (ret)
 		goto out_put;

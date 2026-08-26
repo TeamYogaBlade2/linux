@@ -105,8 +105,17 @@ int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
 
 			pt = dma_alloc_coherent(pv->drm.dev, PT_SIZE,
 						&pt_dma, GFP_KERNEL);
-			if (!pt)
+			if (!pt) {
+				/*
+				 * Roll back the PTEs written for this
+				 * request so callers that don't unmap
+				 * (init/errata paths) don't leave valid
+				 * mappings pointing at nothing.
+				 */
+				prismrv_mmu_unmap(pv, vaddr,
+						  (u32)i * PAGE_SIZE);
 				return -ENOMEM;
+			}
 			memset(pt, 0, PT_SIZE);
 			pv->pd_pts[pd_idx] = pt;
 			pv->pd_pt_dma[pd_idx] = pt_dma;

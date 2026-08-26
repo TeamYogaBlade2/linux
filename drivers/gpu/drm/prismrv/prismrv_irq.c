@@ -45,15 +45,16 @@ static void prismrv_handle_completion(struct prismrv_device *pv)
 		atomic_dec(&pv->busy_count);
 	}
 
-	pv->missed_completions = 0;
+	atomic_set(&pv->missed_completions, 0);
 }
 
 static void prismrv_check_recovery(struct prismrv_device *pv)
 {
-	if (++pv->missed_completions < PRISMRV_RECOVERY_THRESHOLD)
+	if (atomic_inc_return(&pv->missed_completions) <
+	    PRISMRV_RECOVERY_THRESHOLD)
 		return;
 
-	pv->missed_completions = 0;
+	atomic_set(&pv->missed_completions, 0);
 	dev_err(pv->drm.dev,
 		"%d completions without progress, resetting GPU\n",
 		PRISMRV_RECOVERY_THRESHOLD);
