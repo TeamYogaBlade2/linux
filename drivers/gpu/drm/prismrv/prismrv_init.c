@@ -72,9 +72,18 @@ static void prismrv_bif_reset(struct prismrv_device *pv)
 	writel(0, pv->regs + EUR_CR_BIF_DIR_LIST_BASE1);
 }
 
-/* part1 / part2 split of the firmware script is encoded as two HALT-
- * terminated sections; run_script stops at the first HALT, so we expose a
- * resume entry that continues after it. */
+/*
+ * Run the init script from start_rec to the end (or a HALT record).
+ *
+ * The MT6589 script is a single-shot sequence with no HALT records:
+ * it programs the BIF bank window, event enables, USE_CODE_BASE_0..15
+ * and the bank-switched USE private registers in one pass.  Offsets
+ * are BYTE offsets into the register page, including the switched
+ * banks (0x4000+, 0x8000+, 0x22000+).
+ *
+ * Returns the index of the next unexecuted record (== n when the whole
+ * script ran), or a negative errno.
+ */
 static int prismrv_run_script_range(struct prismrv_device *pv,
 				    const struct firmware *fw,
 				    size_t start_rec)
@@ -100,14 +109,14 @@ static int prismrv_run_script_range(struct prismrv_device *pv,
 			return i + 1;
 		}
 	}
-	return -EINVAL;
+	return n;
 }
 
 int prismrv_hw_init(struct prismrv_device *pv)
 {
 	const struct firmware *fw = NULL;
 	unsigned int i;
-	int ret, next;
+	int ret;
 
 	ret = request_firmware(&fw, "mediatek/mt6589-sgx544-init.bin",
 			       pv->drm.dev);
@@ -116,18 +125,25 @@ int prismrv_hw_init(struct prismrv_device *pv)
 		return ret;
 	}
 
-	/* part 1: before reset */
-	next = prismrv_run_script_range(pv, fw, 0);
-	if (next < 0) {
-		release_firmware(fw);
-		return next;
-	}
+	/*
+	 * Run the whole init script once, before the soft reset.  The
+	 * MT6589 capture has no part1/part2 HALT split — the vendor
+	 * sequence programs BIF windows, event enables and
+	 * USE_CODE_BASE_0..15 in a single pass, and every register it
+	 * touches survives the soft reset (only the USE pipeline is
+	 * reset; BIF keeps its dir-list programming).
+	 */
+	ret = prismrv_run_script_range(pv, fw, 0);
+	release_firmware(fw);
+	fw = NULL;
+	if (ret < 0)
+		goto out_fw;
 
 	prismrv_read_revision(pv);	/* revision stable after clocks on */
 	prismrv_errata_init(pv);
 	ret = prismrv_errata_apply(pv);
 	if (ret)
-		goto out_fw;
+		goto out_errata;
 
 	prismrv_soft_reset(pv);
 
@@ -136,13 +152,6 @@ int prismrv_hw_init(struct prismrv_device *pv)
 
 	prismrv_bif_reset(pv);
 	prismrv_mmu_init(pv);
-
-	/* part 2: after reset */
-	ret = prismrv_run_script_range(pv, fw, next);
-	release_firmware(fw);
-	fw = NULL;
-	if (ret < 0)
-		goto out_errata;
 
 	/* upload the uKernel into GPU address space */
 	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
