@@ -11,4 +11,9 @@ prismrv-y := \
 	prismrv_irq.o \
 	prismrv_devfreq.o
 
+# the driver includes its uapi header as <uapi/drm/prismrv_drm.h>;
+# point the search path at include/ so that resolves in external/M=
+# builds as well
+ccflags-y += -I$(srctree)/$(src)
+
 obj-$(CONFIG_DRM_PRISMRV) += prismrv.o
