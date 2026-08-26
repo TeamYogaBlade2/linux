@@ -52,6 +52,13 @@ static const struct btmtksdio_data mt7663_data = {
 	.pm_runtime_supported = true,
 };
 
+static const struct btmtksdio_data mt6628_data = {
+	.fwname = FIRMWARE_MT6628,
+	.chipid = 0x6628,
+	.lp_mbox_supported = false,
+	.pm_runtime_supported = false,
+};
+
 static const struct btmtksdio_data mt7668_data = {
 	.fwname = FIRMWARE_MT7668,
 	.chipid = 0x7668,
@@ -74,6 +81,8 @@ static const struct btmtksdio_data mt7902_data = {
 };
 
 static const struct sdio_device_id btmtksdio_table[] = {
+	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT6628),
+	 .driver_data = (kernel_ulong_t)&mt6628_data },
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT7663),
 	 .driver_data = (kernel_ulong_t)&mt7663_data },
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT7668),
@@ -1169,6 +1178,7 @@ static int btmtksdio_setup(struct hci_dev *hdev)
 		break;
 	case 0x7663:
 	case 0x7668:
+	case 0x6628:
 		err = mt76xx_setup(hdev, bdev->data->fwname);
 		if (err < 0)
 			return err;
