@@ -1382,6 +1382,16 @@ static int btmtksdio_probe(struct sdio_func *func,
 	if (!bdev->data)
 		return -ENODEV;
 
+	/*
+	 * The combo chip exposes several SDIO functions with identical
+	 * vendor/device ids.  The BT/WMT control function is number 2 on
+	 * the MT6628 generation (function 1 is the WLAN data path); the
+	 * newer chips only implement one function.  Skip anything that is
+	 * not ours so that the WLAN driver can claim its own function.
+	 */
+	if (bdev->data->chipid == 0x6628 && func->num != 2)
+		return -ENODEV;
+
 	bdev->dev = &func->dev;
 	bdev->func = func;
 

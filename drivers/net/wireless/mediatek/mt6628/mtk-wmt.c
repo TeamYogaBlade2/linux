@@ -5,31 +5,25 @@
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
  * The MT6628 is a Wi-Fi / Bluetooth / FM / GPS combo chip attached over
- * SDIO (two functions: func 1 carries the WMT/BT/FM/GPS control channel,
- * func 2 the WLAN data path).
+ * SDIO.  Function 1 is the WLAN data path; function 2 carries the STP
+ * control channel shared by WMT/Bluetooth (and FM/GPS on this
+ * generation).
  *
  * Control traffic uses STP (Serial Transport Protocol) framing over the
- * SDIO packet ports:
+ * SDIO packet ports CTDR/CRDR:
  *
  *   STP header (4 bytes)
  *     [0] = 0x80
- *     [1] = (type << 4) | ((len >> 8) & 0x0f)   type: 0=wmt,1=bt,...
+ *     [1] = (type << 4) | ((len >> 8) & 0x0f)
  *     [2] = len & 0xff
  *     [3] = 0x00
  *   payload (len bytes)
- *   CRC (2 bytes, always zero on this generation)
+ *   CRC (2 bytes, zero on this generation)
  *
- * The WMT protocol runs as type 0 payloads: a 4-byte WMT header
- * [direction][opcode][length_lo][length_hi] followed by parameters.
- *
- * Bring-up sequence:
- *   1. optional vmmc regulator + ramp delay
- *   2. in-band reset (5 x 0x7f) to sync the STP state machines
- *   3. HOST_AWAKE so the chip accepts commands
- *   4. patch download from "mediatek/mt6628_patch_e2_hdr.bin"
+ * The WMT protocol runs as type 4 (WMT_TASK) payloads: a 4-byte WMT
+ * header [dir][opcode][len_lo][len_hi] followed by parameters.
  */
 
-#include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/module.h>
@@ -39,29 +33,47 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
-/* SDIO packet ports of the control function */
-#define MTK_SDIO_FMR_BASE		0x000	/* host -> chip */
-#define MTK_SDIO_RFR_BASE		0x100	/* chip -> host */
+/* Common HIF register addresses (same layout as btmtksdio). */
+#define MTK_SDIO_CTDR			0x18	/* host -> chip data */
+#define MTK_SDIO_CRDR			0x1c	/* chip -> host data */
+#define MTK_SDIO_CHISR			0x10	/* interrupt status */
+#define RX_PKT_LEN_MASK			GENMASK(31, 16)
 
-/* STP channel types */
-#define STP_TYPE_WMT			0
-#define STP_TYPE_BT			1
+/* STP channel types (downstream stp_exp.h numbering). */
+#define STP_TASK_BT			0
+#define STP_TASK_FM			1
+#define STP_TASK_GPS			2
+#define STP_TASK_WIFI			3
+#define STP_TASK_WMT			4
 
 #define STP_HEADER_SIZE			4
 #define STP_CRC_SIZE			2
-#define STP_SYNC_BYTE			0x7f
+#define WMT_HDR_LEN			4
 
-/* WMT opcodes */
+/* WMT packet direction bytes. */
+#define WMT_DIR_HOST_TO_CHIP		0x01
+#define WMT_DIR_CHIP_TO_HOST		0x02
+
+/* WMT opcodes (downstream ENUM_OPCODE). */
 enum wmt_opcode {
-	WMT_OP_SLEEP		= 0x01,	/* sub-opcode in payload */
-	WMT_OP_HOST_AWAKE	= 0x02,
-	WMT_OP_PATCH_DL		= 0x0d,
+	WMT_OP_HOST_AWAKE		= 0x03,
+	WMT_OP_PATCH			= 0x01,
+	WMT_OP_FUNC_CTRL		= 0x06,
+	WMT_OP_RESET			= 0x07,
+	WMT_OP_REG_RW			= 0x08,
+};
+
+/*
+ * In-band reset payload from mtk_wcn_stp_inband_reset(); sent as a plain
+ * STP frame after eight sync bytes.
+ */
+static const u8 inband_reset_payload[] = {
+	0xc0, 0x01, 0xc0, 0xde, 0x3e, 0xd1, 0xa7, 0xef
 };
 
 struct mtk_wmt {
 	struct sdio_func *func;
 	struct regulator *vmmc;
-	u8 tx_seq;
 	bool fw_ready;
 };
 
@@ -72,8 +84,7 @@ static int mtk_wmt_write(struct mtk_wmt *wmt, const void *buf, size_t len)
 	int ret;
 
 	sdio_claim_host(wmt->func);
-	ret = sdio_memcpy_toio(wmt->func, MTK_SDIO_FMR_BASE,
-			       (void *)buf, len);
+	ret = sdio_memcpy_toio(wmt->func, MTK_SDIO_CTDR, (void *)buf, len);
 	sdio_release_host(wmt->func);
 	return ret;
 }
@@ -83,9 +94,22 @@ static int mtk_wmt_read(struct mtk_wmt *wmt, void *buf, size_t len)
 	int ret;
 
 	sdio_claim_host(wmt->func);
-	ret = sdio_memcpy_fromio(wmt->func, buf, MTK_SDIO_RFR_BASE, len);
+	ret = sdio_memcpy_fromio(wmt->func, buf, MTK_SDIO_CRDR, len);
 	sdio_release_host(wmt->func);
 	return ret;
+}
+
+static int mtk_wmt_rx_len(struct mtk_wmt *wmt, u16 *len)
+{
+	u32 isr;
+	int ret;
+
+	ret = sdio_memcpy_fromio(wmt->func, &isr, MTK_SDIO_CHISR, sizeof(isr));
+	if (ret)
+		return ret;
+
+	*len = FIELD_GET(RX_PKT_LEN_MASK, isr);
+	return 0;
 }
 
 /* ---- STP framing ---- */
@@ -93,20 +117,24 @@ static int mtk_wmt_read(struct mtk_wmt *wmt, void *buf, size_t len)
 static int mtk_stp_send(struct mtk_wmt *wmt, u8 type,
 			const u8 *payload, size_t len)
 {
-	u8 frame[STP_HEADER_SIZE + 512];
+	u8 *frame;
 	size_t frame_len = STP_HEADER_SIZE + len + STP_CRC_SIZE;
+	int ret;
 
-	if (len > sizeof(frame) - STP_HEADER_SIZE - STP_CRC_SIZE)
-		return -EINVAL;
+	frame = kzalloc(frame_len, GFP_KERNEL);
+	if (!frame)
+		return -ENOMEM;
 
 	frame[0] = 0x80;
 	frame[1] = (type << 4) | ((len >> 8) & 0x0f);
 	frame[2] = len & 0xff;
 	frame[3] = 0x00;
 	memcpy(frame + STP_HEADER_SIZE, payload, len);
-	memset(frame + STP_HEADER_SIZE + len, 0, STP_CRC_SIZE);
 
-	return mtk_wmt_write(wmt, frame, frame_len);
+	ret = mtk_wmt_write(wmt, frame, frame_len);
+	kfree(frame);
+
+	return ret;
 }
 
 static int mtk_stp_recv(struct mtk_wmt *wmt, u8 type,
@@ -116,12 +144,19 @@ static int mtk_stp_recv(struct mtk_wmt *wmt, u8 type,
 	u16 plen;
 	int ret;
 
+	ret = mtk_wmt_rx_len(wmt, &plen);
+	if (ret)
+		return ret;
+	if (!plen)
+		return -EAGAIN;
+	plen -= STP_CRC_SIZE;		/* header + crc are included in CHISR */
+
 	ret = mtk_wmt_read(wmt, hdr, sizeof(hdr));
 	if (ret)
 		return ret;
 
-	if (hdr[0] != 0x80 || ((hdr[1] >> 4) & 0xf) != type)
-		return -EAGAIN;		/* not our packet */
+	if ((hdr[1] >> 4) != type)
+		return -EAGAIN;
 
 	plen = ((u16)(hdr[1] & 0x0f) << 8) | hdr[2];
 	if (plen > max_len)
@@ -134,39 +169,43 @@ static int mtk_stp_recv(struct mtk_wmt *wmt, u8 type,
 
 static int mtk_wmt_cmd(struct mtk_wmt *wmt, u8 opcode,
 		       const u8 *param, size_t plen,
-		       u8 *evt, size_t elen_max)
+		       u8 *evt, size_t elen_max, size_t *elen)
 {
-	u8 wmt_pkt[4 + 16];
-	size_t wmt_len = 4 + plen;
+	u8 pkt[WMT_HDR_LEN + 24];
 	unsigned int tries = 10;
+	size_t pkt_len = WMT_HDR_LEN + plen;
+	size_t got;
 	int ret;
 
-	if (plen > sizeof(wmt_pkt) - 4)
+	if (plen > sizeof(pkt) - WMT_HDR_LEN)
 		return -EINVAL;
 
-	wmt_pkt[0] = 0x01;	/* direction: host -> chip */
-	wmt_pkt[1] = opcode;
-	wmt_pkt[2] = plen & 0xff;
-	wmt_pkt[3] = plen >> 8;
-	memcpy(wmt_pkt + 4, param, plen);
+	pkt[0] = WMT_DIR_HOST_TO_CHIP;
+	pkt[1] = opcode;
+	pkt[2] = plen & 0xff;
+	pkt[3] = plen >> 8;
+	memcpy(pkt + WMT_HDR_LEN, param, plen);
 
 	while (tries--) {
-		ret = mtk_stp_send(wmt, STP_TYPE_WMT, wmt_pkt, wmt_len);
+		ret = mtk_stp_send(wmt, STP_TASK_WMT, pkt, pkt_len);
 		if (ret)
 			return ret;
 
 		msleep(20);
 
-		ret = mtk_stp_recv(wmt, STP_TYPE_WMT, evt, elen_max);
-		if (ret == -EAGAIN)
+		memset(evt, 0, elen_max);
+		ret = mtk_stp_recv(wmt, STP_TASK_WMT, evt, elen_max - 1);
+		if (ret == -EAGAIN || ret == -ENOENT)
 			continue;
 		if (ret < 0)
 			return ret;
 
-		/* evt[0]=dir evt[1]=opcode evt[2..3]=len */
-		if (elen_max >= 2 && evt[0] == 0x02 && evt[1] == opcode &&
-		    evt[(evt[2] | (evt[3] << 8)) >= 6 ? 6 : elen_max - 1])
+		got = ret;
+		if (got >= 2 && evt[0] == WMT_DIR_CHIP_TO_HOST &&
+		    evt[1] == opcode) {
+			*elen = got;
 			return 0;
+		}
 	}
 
 	dev_err(&wmt->func->dev, "no valid event for WMT opcode 0x%02x\n",
@@ -178,36 +217,91 @@ static int mtk_wmt_cmd(struct mtk_wmt *wmt, u8 opcode,
 
 static int mtk_wmt_inband_reset(struct mtk_wmt *wmt)
 {
-	const u8 sync[5] = { STP_SYNC_BYTE, STP_SYNC_BYTE, STP_SYNC_BYTE,
-			     STP_SYNC_BYTE, STP_SYNC_BYTE };
+	u8 sync[8];
 	int ret;
 
+	memset(sync, 0x7f, sizeof(sync));
 	ret = mtk_wmt_write(wmt, sync, sizeof(sync));
 	if (ret)
 		return ret;
 
 	usleep_range(10, 50);
 
+	/* resync frame: magic payload inside a plain STP/WMT frame */
+	ret = mtk_stp_send(wmt, STP_TASK_WMT, inband_reset_payload,
+			   sizeof(inband_reset_payload));
+	if (ret)
+		return ret;
+
+	msleep(20);
+
 	return 0;
 }
 
+/*
+ * HOST_AWAKE tells the chip that the host is awake so it accepts WMT
+ * commands: [dir=3? no -- opcode 0x03 with sub-op 0x02].
+ */
 static int mtk_wmt_host_awake(struct mtk_wmt *wmt)
 {
-	/*
-	 * HOST_AWAKE carries no parameter; the event repeats the opcode and
-	 * result byte.  Send an empty-parameter command.
-	 */
-	static const u8 param[] = { };
-	u8 evt[32];
+	/* downstream WMT_HOST_AWAKE_CMD = {01,03,01,00,02} */
+	static const u8 param[] = { 0x02 };
+	u8 evt[16];
+	size_t elen;
+	int ret;
 
-	return mtk_wmt_cmd(wmt, WMT_OP_HOST_AWAKE, param, sizeof(param),
-			   evt, sizeof(evt));
+	ret = mtk_wmt_cmd(wmt, WMT_OP_HOST_AWAKE, param, sizeof(param),
+			  evt, sizeof(evt), &elen);
+	if (ret)
+		return ret;
+
+	return 0;
 }
+
+/* ---- patch download ---- */
+
+/*
+ * Patch image layout (WMT_PATCH):
+ *   [0x00] date/time string (16 bytes)
+ *   [0x10] platform name ("ALPS", 4 bytes)
+ *   [0x14] hardware version (BE swapped on display)
+ *   [0x16] software version
+ *   [0x18] patch version (4 bytes)
+ *   [0x1c] section table / body
+ */
+#define MT6620_PATCH_HDR_SIZE		28
+
+/* SET_REG command targeting the patch download address register. */
+static const u8 patch_address_cmd[] = {
+	0x01, 0x08, 0x10, 0x00,		/* dir, op REG_RW, len 16 */
+	0x01,				/* write */
+	0x01,				/* config space */
+	0x00,				/* reserved */
+	0x01,				/* one register */
+	0xd4, 0x01, 0x09, 0xf0,		/* address 0xF001D4 */
+	0x00, 0x00, 0x00, 0x00,		/* value (filled later) */
+	0xff, 0xff, 0xff, 0xff,		/* mask */
+};
+
+static const u8 patch_frag_cmd_hdr[] = {
+	0x01, 0x01, 0x00, 0x00, 0x00,
+};
+
+#define PATCH_FRAG_FIRST		1
+#define PATCH_FRAG_MID			2
+#define PATCH_FRAG_LAST			3
 
 static int mtk_wmt_download_firmware(struct mtk_wmt *wmt)
 {
 	const struct firmware *fw;
 	static const char name[] = "mediatek/mt6628_patch_e2_hdr.bin";
+	const u8 *body;
+	size_t body_len, frag_size, offset;
+	unsigned int frag_seq, frag_num;
+	const u16 frag_size_max = 1024;
+	u8 evt[64];
+	size_t elen;
+	u8 cmd[WMT_HDR_LEN + frag_size_max];
 	int ret;
 
 	ret = firmware_request_nowarn(&fw, name, &wmt->func->dev);
@@ -216,29 +310,66 @@ static int mtk_wmt_download_firmware(struct mtk_wmt *wmt)
 		return ret;
 	}
 
+	if (fw->size <= MT6620_PATCH_HDR_SIZE) {
+		dev_err(&wmt->func->dev, "patch %s too small (%zu)\n",
+			name, fw->size);
+		release_firmware(fw);
+		return -EINVAL;
+	}
+
 	dev_info(&wmt->func->dev, "patch %s (%zu bytes)\n", name, fw->size);
 
-	/*
-	 * Patch image layout (from the downstream WMT_PATCH struct):
-	 *   [0x00] date/time string (16 bytes)
-	 *   [0x10] platform name ("ALPS")
-	 *   [0x14] hardware version (must match the chip's HVR)
-	 *   [0x16] software version
-	 *   [0x18] section table, then patch sections
-	 *
-	 * Sections are pushed with WMT_OP_PATCH_DL commands carrying one
-	 * chunk each; the final chunk commits and resets the MCU.
-	 * TODO: implement the per-section transfer once it can be verified
-	 * against real hardware.
-	 */
+	/* point the chip at the patch download buffer */
+	BUILD_BUG_ON(sizeof(patch_address_cmd) != 20);
+	ret = mtk_wmt_cmd(wmt, WMT_OP_REG_RW, patch_address_cmd + 4,
+			  sizeof(patch_address_cmd) - 4, evt, sizeof(evt),
+			  &elen);
+	if (ret) {
+		dev_err(&wmt->func->dev, "patch address command failed\n");
+		goto out;
+	}
 
+	body = fw->data + MT6620_PATCH_HDR_SIZE;
+	body_len = fw->size - MT6620_PATCH_HDR_SIZE;
+
+	frag_num = DIV_ROUND_UP(body_len, frag_size_max);
+
+	for (frag_seq = 0; frag_seq < frag_num; frag_seq++) {
+		frag_size = min_t(size_t, body_len - frag_seq * frag_size_max,
+				  frag_size_max);
+		offset = frag_seq * frag_size_max;
+
+		cmd[0] = WMT_DIR_HOST_TO_CHIP;
+		cmd[1] = WMT_OP_PATCH;
+		cmd[2] = (frag_size + 1) & 0xff;
+		cmd[3] = (frag_size + 1) >> 8;
+		cmd[4] = frag_seq == 0 ? PATCH_FRAG_FIRST :
+			 frag_seq == frag_num - 1 ? PATCH_FRAG_LAST :
+			 PATCH_FRAG_MID;
+		memcpy(cmd + WMT_HDR_LEN + 1, body + offset, frag_size);
+
+		ret = mtk_stp_send(wmt, STP_TASK_WMT, cmd,
+				   WMT_HDR_LEN + 1 + frag_size);
+		if (ret)
+			goto out;
+
+		msleep(20);
+
+		ret = mtk_stp_recv(wmt, STP_TASK_WMT, evt, sizeof(evt) - 1);
+		if (ret < 0 && ret != -EAGAIN)
+			goto out;
+	}
+
+	wmt->fw_ready = true;
+	dev_info(&wmt->func->dev, "patch download done (%zu bytes)\n",
+		 body_len);
+
+out:
 	release_firmware(fw);
-
-	wmt->fw_ready = false;
-	return 0;
+	return ret;
 }
 
-/* ---- probe/remove ---- */
+/* ---- probe / remove ---- */
 
 static int mtk_wmt_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
@@ -246,8 +377,11 @@ static int mtk_wmt_sdio_probe(struct sdio_func *func,
 	struct mtk_wmt *wmt;
 	int ret;
 
-	if (func->num != 1) {
-		/* func 2 belongs to the WLAN data path */
+	if (func->num != 2) {
+		/*
+		 * Function 1 is the WLAN data path; the STP control
+		 * channel shared by WMT/BT/FM/GPS lives on function 2.
+		 */
 		dev_dbg(&func->dev, "ignoring function %d\n", func->num);
 		return -ENODEV;
 	}
@@ -289,10 +423,12 @@ static int mtk_wmt_sdio_probe(struct sdio_func *func,
 		dev_warn(&func->dev, "inband reset failed: %d\n", ret);
 
 	ret = mtk_wmt_host_awake(wmt);
-	if (ret)
+	if (ret) {
 		dev_warn(&func->dev,
 			 "chip did not answer HOST_AWAKE (%d); bring-up incomplete\n",
 			 ret);
+		goto err_disable;
+	}
 
 	ret = mtk_wmt_download_firmware(wmt);
 	if (ret)
@@ -314,12 +450,17 @@ static void mtk_wmt_sdio_remove(struct sdio_func *func)
 {
 	struct mtk_wmt *wmt = sdio_get_drvdata(func);
 
+	if (!wmt)
+		return;
+
 	sdio_claim_host(func);
 	sdio_disable_func(func);
 	sdio_release_host(func);
 
-	if (wmt && wmt->vmmc)
+	if (wmt->vmmc)
 		regulator_disable(wmt->vmmc);
+
+	sdio_set_drvdata(func, NULL);
 }
 
 static const struct sdio_device_id mtk_wmt_sdio_ids[] = {
