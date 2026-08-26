@@ -1,1 +1,0 @@
-savedcmd_drivers/gpu/drm/prismrv/built-in.a := rm -f drivers/gpu/drm/prismrv/built-in.a;  printf "drivers/gpu/drm/prismrv/%s " prismrv_drv.o prismrv_device.o prismrv_errata.o prismrv_fw.o prismrv_init.o prismrv_mmu.o prismrv_gem.o prismrv_submit.o prismrv_irq.o prismrv_devfreq.o | xargs llvm-ar cDPrST drivers/gpu/drm/prismrv/built-in.a

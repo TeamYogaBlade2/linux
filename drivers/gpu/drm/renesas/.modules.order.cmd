@@ -1,1 +1,0 @@
-savedcmd_drivers/gpu/drm/renesas/modules.order := {   cat drivers/gpu/drm/renesas/rcar-du/modules.order;   cat drivers/gpu/drm/renesas/rz-du/modules.order; :; } > drivers/gpu/drm/renesas/modules.order
