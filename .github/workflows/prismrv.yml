@@ -1,0 +1,80 @@
+name: prismrv-driver-build
+
+# Build the PrismRV DRM driver against a recent vanilla kernel to catch
+# API drift and compile errors early.  The full arm64/arm zImage build
+# stays local (too heavy for CI); here we only need the driver object.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dev/v7.1/prismrv-drm'
+    paths:
+      - 'drivers/gpu/drm/prismrv/**'
+      - 'include/uapi/drm/prismrv_drm.h'
+      - '.github/workflows/prismrv.yml'
+  pull_request:
+    branches:
+      - 'dev/v7.1/prismrv-drm'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prismrv-kbuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kbuild-vanilla:
+    name: build vs ${{ matrix.kernel }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # latest LTS + previous LTS: catches API drift both ways
+        kernel: ['6.12', '6.6']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison flex libelf-dev libssl-dev llvm clang lld
+
+      - name: Fetch vanilla kernel
+        run: |
+          KVER=${{ matrix.kernel }}
+          curl -sL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" \
+            | tar xJ --wildcards 'linux-${KVER}/*' --strip-components=1
+
+      - name: Prepare kernel tree
+        run: |
+          make LLVM=1 defconfig
+          ./scripts/config -e DRM -e DRM_PRISMRV
+          ./scripts/config -e DRM_GEM_SHMEM_HELPER -e PM_DEVFREQ \
+            -e DEVFREQ_GOV_SIMPLE_ONDEMAND -e PM_OPP -e OF -e ARM_GIC
+          make LLVM=1 olddefconfig
+          grep -q 'CONFIG_DRM_PRISMRV=m' .config || {
+            echo "::error::CONFIG_DRM_PRISMRV not set"; exit 1; }
+          make LLVM=1 -j$(nproc) prepare modules_prepare
+
+      - name: Build driver (clang)
+        run: |
+          make LLVM=1 -j$(nproc) M=drivers/gpu/drm/prismrv \
+            KBUILD_EXTRA_SYMBOLS= modules 2>&1 | tee build.log
+          test -f drivers/gpu/drm/prismrv/prismrv.ko || {
+            echo "::error::prismrv.ko was not produced"; exit 1; }
+          grep -E "warning:" build.log && {
+            echo "::error::warnings present (treated as errors by policy)"
+            exit 1; } || true
+
+      - name: Check uapi header installs cleanly
+        run: |
+          mkdir -p /tmp/uapi
+          install -D include/uapi/drm/prismrv_drm.h \
+            /tmp/uapi/drm/prismrv_drm.h
+          gcc -fsyntax-only -I/tmp/uapi -x c - <<'EOF'
+          #include <drm/prismrv_drm.h>
+          int main(void) { return PRISMRV_UAPI_VERSION == 1 ? 0 : 1; }
+          EOF
