@@ -33,6 +33,8 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
+#include "mtk-wmt.h"
+
 /* Common HIF register addresses (same layout as btmtksdio). */
 #define MTK_SDIO_CTDR			0x18	/* host -> chip data */
 #define MTK_SDIO_CRDR			0x1c	/* chip -> host data */
@@ -164,6 +166,28 @@ static int mtk_stp_recv(struct mtk_wmt *wmt, u8 type,
 
 	return mtk_wmt_read(wmt, payload, plen);
 }
+
+static struct mtk_wmt *g_mtk_wmt;
+
+struct mtk_wmt *mtk_wmt_find(void)
+{
+	return g_mtk_wmt;
+}
+EXPORT_SYMBOL_GPL(mtk_wmt_find);
+
+int mtk_wmt_send(struct mtk_wmt *wmt, u8 type,
+		 const u8 *payload, size_t len)
+{
+	return mtk_stp_send(wmt, type, payload, len);
+}
+EXPORT_SYMBOL_GPL(mtk_wmt_send);
+
+int mtk_wmt_recv(struct mtk_wmt *wmt, u8 type,
+		 u8 *payload, size_t max_len)
+{
+	return mtk_stp_recv(wmt, type, payload, max_len);
+}
+EXPORT_SYMBOL_GPL(mtk_wmt_recv);
 
 /* ---- WMT command/event ---- */
 
@@ -392,6 +416,7 @@ static int mtk_wmt_sdio_probe(struct sdio_func *func,
 
 	wmt->func = func;
 	sdio_set_drvdata(func, wmt);
+	g_mtk_wmt = wmt;
 
 	wmt->vmmc = devm_regulator_get_optional(&func->dev, "vmmc");
 	if (IS_ERR(wmt->vmmc)) {
@@ -460,6 +485,7 @@ static void mtk_wmt_sdio_remove(struct sdio_func *func)
 	if (wmt->vmmc)
 		regulator_disable(wmt->vmmc);
 
+	g_mtk_wmt = NULL;
 	sdio_set_drvdata(func, NULL);
 }
 
