@@ -5,6 +5,7 @@
 
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/mt6320-pinfunc.h>
+#include <dt-bindings/clock/mediatek,mt6320-clk.h>
 
 &pwrap {
 	pmic: mt6320 {
@@ -52,6 +53,8 @@
 
 		sound {
 			compatible = "mediatek,mt6320-sound";
+			clocks = <&mt6320clock MT6320_TOPCKPDN_AUD_26M>;
+			clock-names = "aud26m";
 		};
 
 		mt6320_adc: adc {

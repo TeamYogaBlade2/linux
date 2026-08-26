@@ -74,7 +74,7 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
 };
 
-/* Codec master clock gating handled by CCF (aud26m gate in mt6320-clk). */
+/* Codec master clock gating handled by CCF (top-aud26m gate in mt6320-clk). */
 static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 			    struct snd_kcontrol *kcontrol, int event)
 {
@@ -214,10 +214,10 @@ static int mt6320_codec_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, priv);
 
 	/*
-	 * Codec master clock through the CCF: aud26m is provided by
-	 * mt6320-clk and gates the TOP_CKPDN AUD_26M bit internally.
+	 * Codec master clock through the CCF: the top-aud26m gate of
+	 * mt6320-clk (TOP_CKPDN bit 0), fed by the aud26m fixed clock.
 	 */
-	priv->clk_aud26m = devm_clk_get_enabled(&pdev->dev, "aud26m");
+	priv->clk_aud26m = devm_clk_get_enabled(&pdev->dev, "top-aud26m");
 	if (IS_ERR(priv->clk_aud26m))
 		return dev_err_probe(&pdev->dev, PTR_ERR(priv->clk_aud26m),
 				     "failed to get aud26m clock\n");

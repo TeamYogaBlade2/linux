@@ -170,6 +170,11 @@ properties:
                   - mediatek,mt6366-sound
               - const: mediatek,mt6358-sound
 
+      clocks:
+        minItems: 1
+
+      clock-names: true
+
     required:
       - compatible
 
