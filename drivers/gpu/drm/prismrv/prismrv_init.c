@@ -53,7 +53,11 @@ static void prismrv_soft_reset(struct prismrv_device *pv)
 	    EUR_CR_SOFT_RESET_VDM_RESET_MASK |
 	    EUR_CR_SOFT_RESET_DCU_L2_RESET_MASK |
 	    EUR_CR_SOFT_RESET_DCU_L0L1_RESET_MASK |
-	    EUR_CR_SOFT_RESET_ITR_RESET_MASK;
+	    EUR_CR_SOFT_RESET_ITR_RESET_MASK |
+	    /* BIF reset (hwdoc SGX544 register list bit0): flush the MMU
+	     * state along with the rest; the dir-list base is reprogrammed
+	     * right after in prismrv_mmu_init() */
+	    EUR_CR_SOFT_RESET_BIF_RESET_MASK;
 	writel(v, pv->regs + EUR_CR_SOFT_RESET);
 	writel(0, pv->regs + EUR_CR_SOFT_RESET);
 	udelay(100);
