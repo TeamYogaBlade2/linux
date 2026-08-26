@@ -236,10 +236,6 @@ int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file);
 
-struct drm_device;
-struct drm_gem_object;
-struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
-						 size_t size);
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);

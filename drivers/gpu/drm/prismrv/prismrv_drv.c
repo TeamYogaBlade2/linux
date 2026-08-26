@@ -4,6 +4,7 @@
  */
 #include <linux/clk.h>
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/mod_devicetable.h>
@@ -20,6 +21,11 @@
 #include <drm/drm_of.h>
 
 #include <uapi/drm/prismrv_drm.h>
+
+struct drm_device;
+struct drm_gem_object;
+struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
+					 size_t size);
 #include "prismrv_device.h"
 
 static const struct prismrv_chip_info prismrv_sgx544_info = {
@@ -62,6 +68,7 @@ static const struct drm_driver prismrv_drm_driver = {
 	.minor = 0,
 };
 
+static int prismrv_runtime_suspend(struct device *dev);
 static int prismrv_runtime_resume(struct device *dev);
 
 static int prismrv_probe(struct platform_device *pdev)
@@ -143,7 +150,13 @@ err_devfreq:
 	return ret;
 }
 
-static void prismrv_remove(struct platform_device *pdev)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+#define PRISMRV_REMOVE_RET void
+#else
+#define PRISMRV_REMOVE_RET int
+#endif
+
+static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
 {
 	struct prismrv_device *pv = platform_get_drvdata(pdev);
 
@@ -164,24 +177,19 @@ static void prismrv_remove(struct platform_device *pdev)
 	/*
 	 * Retire pending fences BEFORE disabling runtime PM: hw_fini
 	 * signals them (with the device still awake), so waiters see an
-	 * error instead of hanging, and nobody can touch pv afterwards
-	 * through a fence callback.
+	 * error instead of hanging.
 	 */
 	pm_runtime_get_sync(&pdev->dev);
 	mutex_lock(&pv->init_mutex);
 	prismrv_hw_fini(pv);   /* retires pending fences */
 	mutex_unlock(&pv->init_mutex);
 
-	/*
-	 * Balance the reference taken above (and the one probe held)
-	 * BEFORE disabling runtime PM, otherwise the usage count leaks
-	 * and the module unload warns.  devfreq is unregistered first so
-	 * its 50ms poll can no longer touch the clocks we are about to
-	 * gate.
-	 */
 	prismrv_devfreq_fini(pv);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
+	return 0;
+#endif
 }
 
 static int prismrv_runtime_suspend(struct device *dev)
@@ -189,7 +197,6 @@ static int prismrv_runtime_suspend(struct device *dev)
 	struct prismrv_device *pv = dev_get_drvdata(dev);
 
 	pv->hw_ready = false;
-
 	/* assert the G3D reset line before gating the clocks */
 	reset_control_assert(pv->rstc);
 	clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
@@ -211,12 +218,6 @@ static int prismrv_runtime_resume(struct device *dev)
 
 	if (!pv->hw_ready) {
 		mutex_lock(&pv->init_mutex);
-		/*
-		 * Retry the firmware load: the first attempt at probe
-		 * may have run before the rootfs mounted.  Without this
-		 * a probe-time failure is permanent despite the probe
-		 * message claiming a retry.
-		 */
 		if (!pv->ukernel_cpu)
 			prismrv_fw_load(pv);
 		if (pv->ukernel_cpu)
