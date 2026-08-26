@@ -195,7 +195,7 @@ err_unmap:
  * This replaces a previous open-coded drm_gem_object_init() call that
  * left the drm_gem_shmem_object state uninitialised.
  */
-static struct drm_gem_object *
+struct drm_gem_object *
 prismrv_gem_create_object(struct drm_device *dev, size_t size)
 {
 	struct prismrv_bo *bo;
