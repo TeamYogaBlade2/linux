@@ -1070,6 +1070,11 @@ static void mtk_iommu_v1_remove(struct platform_device *pdev)
 	iommu_device_sysfs_remove(&data->iommu);
 	iommu_device_unregister(&data->iommu);
 
+	/*
+	 * The bclk is marked CLK_IS_CRITICAL so it stays enabled for as
+	 * long as the IOMMU is registered; dropping it here is safe
+	 * because the hardware has just been taken away from the system.
+	 */
 	clk_disable_unprepare(data->bclk);
 	for (i = 0; i < data->soc->num_cores; i++)
 		devm_free_irq(&pdev->dev, data->cores[i].irq, &data->cores[i]);

@@ -68,7 +68,14 @@ static const struct mtk_gate infra_clks[] = {
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
 	GATE_MTK(CLK_INFRA_CEC, "infra_cec", "axi_sel", &infra_cg_regs, 6, &mtk_clk_gate_ops_setclr_inv), /* or devapc */
 	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* mt8135 */
-	GATE_INFRA(CLK_INFRA_M4U, "infra_m4u", "mem_sel", 8), /* mt8135 */
+	/*
+	 * The M4U clock is critical: stopping it while the IOMMU is
+	 * attached hangs the whole system (any outstanding translation
+	 * never completes).  Keep it on from boot.
+	 */
+	GATE_MTK_FLAGS(CLK_INFRA_M4U, "infra_m4u", "mem_sel",
+		       &infra_cg_regs, 8, &mtk_clk_gate_ops_setclr,
+		       CLK_IS_CRITICAL),
 	GATE_INFRA(CLK_INFRA_MD1MCUAXI, "infra_md1mcuaxi", "axi_sel", 9), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD1HWMIXAXI, "infra_md1hwmixaxi", "axi_sel", 10), /* maybe */
 	GATE_INFRA(CLK_INFRA_MD1AHB, "infra_md1ahb", "axi_sel", 11), /* maybe */
