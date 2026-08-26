@@ -40,7 +40,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison flex libelf-dev libssl-dev llvm clang lld
+            bc bison flex libelf-dev libssl-dev llvm clang lld \
+            gcc-arm-linux-gnueabihf
+          # the driver targets ARM SoCs: build against an arm multi_v7
+          # config so OF/MMU dependencies resolve naturally
 
       - name: Fetch vanilla kernel
         run: |
@@ -60,10 +63,11 @@ jobs:
             "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             sed -i '1isource "drivers/gpu/drm/prismrv/Kconfig"' \
               "$KSRCDIR/drivers/gpu/drm/Kconfig"
 
-      - name: Configure kernel
+      - name: Configure kernel (arm multi_v7, the real target)
         run: |
           cat > /tmp/prismrv.config <<'FRAG'
-          CONFIG_COMPILE_TEST=y
+          CONFIG_ARCH_MEDIATEK=y
+          CONFIG_MACH_MT6589=y
           CONFIG_DRM=y
           CONFIG_DRM_GEM_SHMEM_HELPER=y
           CONFIG_PM_DEVFREQ=y
@@ -71,22 +75,18 @@ jobs:
           CONFIG_PM_OPP=y
           CONFIG_DRM_PRISMRV=m
           FRAG
-          make -C "$KSRCDIR" LLVM=1 defconfig
-          # merge_config resolves dependencies properly (unlike raw appends)
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 multi_v7_defconfig
           ./scripts/kconfig/merge_config.sh -m "$KSRCDIR/.config" /tmp/prismrv.config
-          make -C "$KSRCDIR" LLVM=1 olddefconfig
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV not set"
-            echo "--- Kconfig source line:"
-            grep -n prismrv "$KSRCDIR/drivers/gpu/drm/Kconfig" || true
-            echo "--- relevant config:"
-            grep -E 'CONFIG_(DRM|COMPILE_TEST|OF|MMU)[= ]' "$KSRCDIR/.config" || true
+            grep -E 'CONFIG_(ARCH_MT6589|ARCH_MULTI_V7|DRM)[= ]' "$KSRCDIR/.config" | head
             exit 1; }
-          make -C "$KSRCDIR" LLVM=1 -j$(nproc) prepare modules_prepare
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
         run: |
-          make -C "$KSRCDIR" LLVM=1 M=drivers/gpu/drm/prismrv -j$(nproc) \
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 M=drivers/gpu/drm/prismrv -j$(nproc) \
             modules 2>&1 | tee build.log
           test -f "$KSRCDIR/drivers/gpu/drm/prismrv/prismrv.ko" || {
             echo "::error::prismrv.ko was not produced"; exit 1; }
