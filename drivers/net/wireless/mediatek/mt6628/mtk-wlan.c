@@ -35,7 +35,10 @@
 #include "mtk-wlan-hif.h"
 
 #define MT6628_FW_NAME			"mediatek/mt6628_wifi_fw.bin"
-#define MT6628_FW_DL_CHUNK		4096
+#define MT6628_FW_DL_CHUNK		2048
+/* CFG_FW_LOAD_ADDRESS / CFG_FW_START_ADDRESS of the downstream config.h */
+#define MT6628_FW_LOAD_ADDRESS		0x00060000
+#define MT6628_FW_START_ADDRESS		0x00060000
 
 struct mt6628_wlan {
 	struct sdio_func *func;
@@ -88,21 +91,25 @@ static int mt6628_poll_ready(struct mt6628_wlan *wl)
 
 static int mt6628_driver_own(struct mt6628_wlan *wl)
 {
+	unsigned int tries = 100;
 	u32 val;
-	int ret, i;
+	int ret;
 
-	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR, MT6628_FW_OWN_REQ_CLR);
-	if (ret)
-		return ret;
+	do {
+		ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+				     MT6628_FW_OWN_REQ_CLR);
+		if (ret)
+			return ret;
 
-	for (i = 0; i < 100; i++) {
 		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
 		if (ret)
 			return ret;
+
 		if (val & MT6628_IS_DRIVER_OWN)
 			return 0;
-		usleep_range(10, 50);
-	}
+
+		usleep_range(50, 200);	/* downstream polls up to 8 s */
+	} while (--tries);
 
 	dev_err(&wl->func->dev, "timed out waiting for driver ownership\n");
 	return -ETIMEDOUT;
@@ -146,7 +153,11 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	if (sent != pkt_len)
 		return -EIO;
 
-	/* wait for the command-done interrupt */
+	/*
+	 * Wait for the command-done interrupt.  An ABNORMAL indication here
+	 * means the firmware rejected the chunk (CRC error etc.), so do
+	 * not silently ignore it.
+	 */
 	{
 		unsigned int tries = 100;
 		u32 isr;
@@ -155,10 +166,15 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 			ret = mt6628_read32(wl, MT6628_MCR_WHISR, &isr);
 			if (ret)
 				return ret;
+			if (isr & MT6628_WHISR_ABNORMAL) {
+				dev_err(&wl->func->dev,
+					"firmware reported abnormal status (isr %#x)\n",
+					isr);
+				return -EIO;
+			}
 			if (isr & MT6628_WHISR_TX_DONE)
 				return 0;
-			usleep_range(10 * USEC_PER_MSEC / 10,
-				     15 * USEC_PER_MSEC / 10);
+			usleep_range(1000, 1500);
 		}
 		dev_err(&wl->func->dev, "timeout waiting for cmd done\n");
 		return -ETIMEDOUT;
@@ -196,9 +212,14 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 		size_t chunk = min_t(size_t, fw->size - offset,
 				     MT6628_FW_DL_CHUNK);
 		struct mt6628_init_cmd_download_buf dl;
-		u32 crc = crc32(0, fw->data + offset, chunk);
+		u32 crc;
 
-		dl.address = cpu_to_le32(offset);
+		/* the chip counts in 4-byte units */
+		chunk = ALIGN(chunk, 4);
+
+		crc = crc32(0, fw->data + offset, chunk);
+
+		dl.address = cpu_to_le32(MT6628_FW_LOAD_ADDRESS + offset);
 		dl.length = cpu_to_le32(chunk);
 		dl.crc32 = cpu_to_le32(crc);
 		/* ACK requested, no encryption */
@@ -215,11 +236,23 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 		}
 	}
 
-	ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_WIFI_START,
-			      NULL, 0, NULL, 0);
-	if (ret) {
-		dev_err(&wl->func->dev, "WIFI_START failed: %d\n", ret);
-		goto out_restore_seq;
+	{
+		/* INIT_CMD_WIFI_START { u4Override, u4Address } */
+		struct {
+			__le32 override;
+			__le32 address;
+		} __packed start = {
+			.override = cpu_to_le32(0),	/* no override */
+			.address = cpu_to_le32(MT6628_FW_START_ADDRESS),
+		};
+
+		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_WIFI_START,
+				      &start, sizeof(start), NULL, 0);
+		if (ret) {
+			dev_err(&wl->func->dev, "WIFI_START failed: %d\n",
+				ret);
+			goto out_restore_seq;
+		}
 	}
 
 	wl->fw_running = true;
@@ -249,7 +282,17 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	wl->func = func;
 	sdio_set_drvdata(func, wl);
 
-	/* wait for the firmware ROM to come up after power-on */
+	/* enable the SDIO function; MMC core does not do it for us */
+	sdio_claim_host(func);
+	ret = sdio_enable_func(func);
+	sdio_release_host(func);
+	if (ret)
+		return dev_err_probe(&func->dev, ret,
+				     "failed to enable function\n");
+
+	msleep(50);		/* let the ROM come up */
+
+	/* wait for the firmware ROM to report ready */
 	ret = mt6628_poll_ready(wl);
 	if (ret)
 		return dev_err_probe(&func->dev, ret,
