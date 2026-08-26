@@ -333,23 +333,18 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	list_add_tail(&f->node, &pv->pending_fences);
 	spin_unlock(&pv->event_lock);
 
-	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
-	if (!ret) {
-		atomic_inc(&pv->busy_count);
-		goto out_objs;
-	}
-
 	/*
-	 * The CCB never drained: the fence has been retired with an
-	 * error, undo the bookkeeping that assumed success.  out_fence_fd
-	 * is already installed, userspace learns about the failure via
-	 * both the ioctl return and the signalled fence.
+	 * Increment BEFORE scheduling: if the CCB times out,
+	 * ccb_schedule() has already retired the fence (removed from the
+	 * pending list, signalled with -ETIMEDOUT) and the IRQ path can
+	 * no longer touch it — so busy_count must come back down here.
 	 */
-	atomic_dec(&pv->busy_count);
-	spin_lock(&pv->event_lock);
-	pv->missed_completions++;
-	spin_unlock(&pv->event_lock);
-	goto out_objs;
+	atomic_inc(&pv->busy_count);
+	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
+	if (ret)
+		atomic_dec(&pv->busy_count);
+	else
+		goto out_objs;
 
 	/* success: the PM reference is released here; the error path
 	 * below must not run again (it used to fall through and put
