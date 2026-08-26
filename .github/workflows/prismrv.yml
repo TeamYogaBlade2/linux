@@ -59,9 +59,15 @@ jobs:
           cp -r drivers/gpu/drm/prismrv "$KSRCDIR/drivers/gpu/drm/"
           grep -q prismrv "$KSRCDIR/drivers/gpu/drm/Makefile" ||             echo 'obj-$(CONFIG_DRM_PRISMRV) += prismrv/' \
               >> "$KSRCDIR/drivers/gpu/drm/Makefile"
-          grep -q 'source "drivers/gpu/drm/prismrv/Kconfig"' \
-            "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             sed -i '1isource "drivers/gpu/drm/prismrv/Kconfig"' \
-              "$KSRCDIR/drivers/gpu/drm/Kconfig"
+          # append at the END of Kconfig (a 'source' before menuconfig DRM
+          # is legal but appending avoids any parser edge cases)
+          grep -q 'prismrv/Kconfig' "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             printf '\nsource "drivers/gpu/drm/prismrv/Kconfig"\n' \
+              >> "$KSRCDIR/drivers/gpu/drm/Kconfig"
+          echo "--- verifying hook lines:"
+          tail -2 "$KSRCDIR/drivers/gpu/drm/Makefile"
+          tail -2 "$KSRCDIR/drivers/gpu/drm/Kconfig"
+          test -f "$KSRCDIR/drivers/gpu/drm/prismrv/Kconfig"
+
 
       - name: Configure kernel
         run: |
