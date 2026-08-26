@@ -85,8 +85,10 @@ jobs:
           make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV not set"
-            grep -E 'CONFIG_(ARCH_MT6589|ARCH_MULTI_V7|DRM)[= ]' "$KSRCDIR/.config" | head
+            grep -E 'CONFIG_(ARCH_|MACH_MT|DRM)' "$KSRCDIR/.config" | head -20
             exit 1; }
+          grep -q 'CONFIG_ARCH_MEDIATEK=y' "$KSRCDIR/.config" || {
+            echo "::error::ARCH_MEDIATEK did not stick"; exit 1; }
           make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
