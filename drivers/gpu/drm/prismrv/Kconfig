@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config DRM_PRISMRV
 	tristate "PrismRV DRM driver for PowerVR SGX GPUs"
-	depends on MMU
-	depends on OF
+	depends on MMU && (OF || COMPILE_TEST)
 	depends on DRM
 	select DRM_GEM_SHMEM_HELPER
 	select PM_DEVFREQ

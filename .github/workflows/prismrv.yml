@@ -63,14 +63,11 @@ jobs:
       - name: Configure kernel
         run: |
           make -C "$KSRCDIR" LLVM=1 defconfig
-          cat >> "$KSRCDIR/.config" <<'FRAG'
-          CONFIG_DRM=y
-          CONFIG_DRM_GEM_SHMEM_HELPER=y
-          CONFIG_PM_DEVFREQ=y
-          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y
-          CONFIG_PM_OPP=y
-          CONFIG_DRM_PRISMRV=m
-          FRAG
+          ./scripts/config -e COMPILE_TEST -e DRM -e DRM_GEM_SHMEM_HELPER \
+            -e PM_DEVFREQ -e DEVFREQ_GOV_SIMPLE_ONDEMAND -e PM_OPP
+          make -C "$KSRCDIR" LLVM=1 olddefconfig
+          echo 'CONFIG_DRM_PRISMRV=m' >> "$KSRCDIR/.config"
+          make -C "$KSRCDIR" LLVM=1 olddefconfig
           make -C "$KSRCDIR" LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV not set"; exit 1; }
