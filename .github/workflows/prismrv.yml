@@ -66,18 +66,25 @@ jobs:
       - name: Configure kernel (arm multi_v7, the real target)
         run: |
           cat > /tmp/prismrv.config <<'FRAG'
-          # dependency order matters: merge_config drops symbols whose
-          # dependencies are not yet resolved, so enable from the top
-          CONFIG_ARCH_MULTIPLATFORM=y
-          CONFIG_ARCH_MULTI_V6_V7=y
-          CONFIG_ARCH_MULTI_V7=y
+          # taken from arch/arm/configs/lenovo-blade_defconfig (the real
+          # device config) — these are the symbols the driver needs
+          CONFIG_ARM=y
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MACH_MT6589=y
+          CONFIG_SMP=y
+          CONFIG_VFP=y
+          CONFIG_NEON=y
+          CONFIG_OF=y
+          CONFIG_MTK_INFRACFG=y
+          CONFIG_COMMON_CLK=y
+          CONFIG_COMMON_CLK_MT6589=y
+          CONFIG_COMMON_CLK_MT6589_MFGSYS=y
+          CONFIG_MTK_SCPSYS_PM_DOMAINS=y
+          CONFIG_MTK_PMIC_WRAP=y
+          CONFIG_REGULATOR=y
+          CONFIG_REGULATOR_FIXED_VOLTAGE=y
+          CONFIG_REGULATOR_MT6320=y
           CONFIG_DRM=y
-          CONFIG_DRM_GEM_SHMEM_HELPER=y
-          CONFIG_PM_DEVFREQ=y
-          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y
-          CONFIG_PM_OPP=y
           CONFIG_DRM_PRISMRV=m
           FRAG
           make -C "$KSRCDIR" ARCH=arm LLVM=1 multi_v7_defconfig
