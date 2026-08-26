@@ -66,6 +66,11 @@ jobs:
       - name: Configure kernel (arm multi_v7, the real target)
         run: |
           cat > /tmp/prismrv.config <<'FRAG'
+          # dependency order matters: merge_config drops symbols whose
+          # dependencies are not yet resolved, so enable from the top
+          CONFIG_ARCH_MULTIPLATFORM=y
+          CONFIG_ARCH_MULTI_V6_V7=y
+          CONFIG_ARCH_MULTI_V7=y
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MACH_MT6589=y
           CONFIG_DRM=y
