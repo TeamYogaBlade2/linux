@@ -30,6 +30,8 @@
 #include "prismrv_device.h"
 
 #define HWRTDATA_SIZE		496
+#define PRISMRV_MAX_SUBMIT_BOS	256
+#define PRISMRV_MAX_IN_FENCES	64
 
 static const char *prismrv_fence_name(struct dma_fence *f)
 {
@@ -210,7 +212,9 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		pm_runtime_put_sync(pv->drm.dev);
 		return -ENODEV;
 	}
-	if (args->cmd_type >= PRISMRV_CMD_COUNT) {
+	if (args->cmd_type >= PRISMRV_CMD_COUNT ||
+	    args->num_bos > PRISMRV_MAX_SUBMIT_BOS ||
+	    args->num_in_fences > PRISMRV_MAX_IN_FENCES) {
 		pm_runtime_put_sync(pv->drm.dev);
 		return -EINVAL;
 	}
@@ -299,13 +303,15 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 	atomic_inc(&pv->busy_count);
 	prismrv_ccb_schedule(pv, args->cmd_type, cmd_data);
-	pm_runtime_mark_last_busy(pv->drm.dev);
-	pm_runtime_put_autosuspend(pv->drm.dev);
 
-	/* record the fence so devfreq can see the busy window */
+	/* success: the PM reference is released here; the error path
+	 * below must not run again (it used to fall through and put
+	 * twice, underflowing the usage count on every submission) */
+	goto out_objs;
 out_put:
 	pm_runtime_mark_last_busy(pv->drm.dev);
 	pm_runtime_put_autosuspend(pv->drm.dev);
+out_objs:
 	/* objects 0..num_bos are referenced (0 = cmd BO) */
 	for (i = 0; i <= args->num_bos && objs; i++)
 		if (objs[i])

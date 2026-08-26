@@ -129,13 +129,28 @@ void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size)
 {
 	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
 	unsigned long i;
+	bool flushed = false;
 
 	for (i = 0; i < n_pages; i++) {
 		u32 va = vaddr + i * PAGE_SIZE;
 		u32 pd_idx = va >> 22;
 		u32 pt_idx = (va >> 12) & 0x3ff;
 
-		if (pv->pd_pts[pd_idx])
+		if (pv->pd_pts[pd_idx]) {
 			pv->pd_pts[pd_idx][pt_idx] = 0;
+			flushed = true;
+		}
+	}
+
+	/*
+	 * Flush the BIF TLB after unmapping.  Without this a stale
+	 * translation survives and the next BO allocated over the same
+	 * VA range can be read through the old mapping (data leak across
+	 * GEM clients).  FLUSH is self-clearing.
+	 */
+	if (flushed) {
+		writel(EUR_CR_BIF_CTRL_FLUSH_MASK,
+		       pv->regs + EUR_CR_BIF_CTRL);
+		readl(pv->regs + EUR_CR_BIF_CTRL);
 	}
 }
