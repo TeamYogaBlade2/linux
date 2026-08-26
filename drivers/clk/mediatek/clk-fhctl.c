@@ -41,12 +41,11 @@ static const struct fhctl_offset fhctl_offset_v2 = {
 };
 
 /*
- * MT6572 / MT6589: the per-channel registers are laid out as
- * FHCTLx_CFG (0x4c + i * 0x10), UPDNLMT, DDS, MON with no DVFS
- * register; hopping is triggered through DDS bit 31.  The global
- * "handoff permission" register is PLL_HP_CON0 at apmixed offset
- * 0x14 and the two slope values live in the hopping SRAM at 0x20 /
- * 0x24.
+ * MT6589: the per-channel registers are laid out as FHCTLx_CFG
+ * (0x4c + i * 0x10), UPDNLMT, DDS, MON with no DVFS register; hopping
+ * is triggered through DDS bit 31.  The global "handoff permission"
+ * register is PLL_HP_CON0 at apmixed offset 0x14 and the two slope
+ * values live in the hopping SRAM at 0x20 / 0x24.
  */
 static const struct fhctl_offset fhctl_offset_v3 = {
 	.offset_hp_en = 0x14,
