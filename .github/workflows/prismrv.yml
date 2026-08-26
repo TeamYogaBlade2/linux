@@ -81,6 +81,18 @@ jobs:
             exit 1; }
           grep -q 'CONFIG_ARCH_MEDIATEK=y' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_ARCH_MEDIATEK did not stick"; exit 1; }
+          echo "--- driver dir:"
+          ls "$KSRCDIR/drivers/gpu/drm/prismrv/" | head -5
+          echo "--- Kconfig head:"
+          head -5 "$KSRCDIR/drivers/gpu/drm/Kconfig"
+          echo "--- Makefile tail:"
+          tail -3 "$KSRCDIR/drivers/gpu/drm/Makefile"
+          echo "--- direct olddefconfig probe:"
+          ./scripts/config --file "$KSRCDIR/.config" -e DRM_PRISMRV
+          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
+          grep DRM_PRISMRV "$KSRCDIR/.config" || {
+            echo "::error::DRM_PRISMRV still missing after second attempt"
+            exit 1; }
           make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
