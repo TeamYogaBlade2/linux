@@ -59,6 +59,16 @@
 			#io-channel-cells = <1>;
 		};
 
+		/*
+		 * Expose the PMIC's own junction temperature sensor (AUXADC
+		 * channel 4) as a hardware monitoring device so that the
+		 * thermal framework can pick it up.
+		 */
+		pmic-temp {
+			compatible = "iio-hwmon";
+			io-channels = <&mt6320_adc 4>;
+		};
+
 		efuse {
 			compatible = "mediatek,mt6320-efuse";
 		};

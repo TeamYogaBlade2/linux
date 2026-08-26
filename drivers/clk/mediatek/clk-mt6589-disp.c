@@ -54,12 +54,12 @@ static const struct mtk_gate disp_clks[] = {
 	GATE_DISP0(CLK_DISP0_WDMA1_SMI, "disp0_wdma1_smi", "smi_sel", 12), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_RDMA0_ENGINE, "disp0_rdma0_engine", "disp_sel", 13),
 	GATE_DISP0(CLK_DISP0_RDMA0_SMI, "disp0_rdma0_smi", "smi_sel", 14), /* mt8135 */
-	GATE_DISP0(CLK_DISP0_RDMA0_OUTPUT, "disp0_rdma0_output", "clk_null", 15), /* mt8135 */
+	GATE_DISP0(CLK_DISP0_RDMA0_OUTPUT, "disp0_rdma0_output", "disp_sel", 15),
 	GATE_DISP0(CLK_DISP0_RDMA1_ENGINE, "disp0_rdma1_engine", "disp_sel", 16),
 	GATE_DISP0(CLK_DISP0_RDMA1_SMI, "disp0_rdma1_smi", "smi_sel", 17), /* mt8135 */
-	GATE_DISP0(CLK_DISP0_RDMA1_OUTPUT, "disp0_rdma1_output", "clk_null", 18), /* mt8135 */
+	GATE_DISP0(CLK_DISP0_RDMA1_OUTPUT, "disp0_rdma1_output", "disp_sel", 18),
 	GATE_DISP0(CLK_DISP0_GAMMA_ENGINE, "disp0_gamma_engine", "disp_sel", 19),
-	GATE_DISP0(CLK_DISP0_GAMMA_PIXEL, "disp0_gamma_pixel", "clk_null", 20), /* mt8135 */
+	GATE_DISP0(CLK_DISP0_GAMMA_PIXEL, "disp0_gamma_pixel", "disp_sel", 20),
 	GATE_DISP0(CLK_DISP0_CMDQ_ENGINE, "disp0_cmdq_engine", "disp_sel", 21),
 	GATE_DISP0(CLK_DISP0_CMDQ_SMI, "disp0_cmdq_smi", "smi_sel", 22), /* mt8135 */
 	GATE_DISP0(CLK_DISP0_G2D_ENGINE, "disp0_g2d_engine", "disp_sel", 23),
