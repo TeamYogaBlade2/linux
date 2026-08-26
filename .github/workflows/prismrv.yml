@@ -63,39 +63,24 @@ jobs:
             "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             sed -i '1isource "drivers/gpu/drm/prismrv/Kconfig"' \
               "$KSRCDIR/drivers/gpu/drm/Kconfig"
 
-      - name: Configure kernel (arm multi_v7, the real target)
+      - name: Configure kernel
         run: |
-          cat > /tmp/prismrv.config <<'FRAG'
-          # taken from arch/arm/configs/lenovo-blade_defconfig (the real
-          # device config) — these are the symbols the driver needs
-          CONFIG_ARM=y
-          CONFIG_ARCH_MEDIATEK=y
-          CONFIG_MACH_MT6589=y
-          CONFIG_SMP=y
-          CONFIG_VFP=y
-          CONFIG_NEON=y
-          CONFIG_OF=y
-          CONFIG_MTK_INFRACFG=y
-          CONFIG_COMMON_CLK=y
-          CONFIG_COMMON_CLK_MT6589=y
-          CONFIG_COMMON_CLK_MT6589_MFGSYS=y
-          CONFIG_MTK_SCPSYS_PM_DOMAINS=y
-          CONFIG_MTK_PMIC_WRAP=y
-          CONFIG_REGULATOR=y
-          CONFIG_REGULATOR_FIXED_VOLTAGE=y
-          CONFIG_REGULATOR_MT6320=y
-          CONFIG_DRM=y
-          CONFIG_DRM_PRISMRV=m
-          FRAG
           make -C "$KSRCDIR" ARCH=arm LLVM=1 multi_v7_defconfig
-          ./scripts/kconfig/merge_config.sh -m "$KSRCDIR/.config" /tmp/prismrv.config
+          # force-set with scripts/config: it writes the lines verbatim;
+          # olddefconfig then keeps them because multi_v7_defconfig
+          # already satisfies ARCH_MULTI_V7/OF etc.
+          ./scripts/config --file "$KSRCDIR/.config" \
+            -e ARCH_MEDIATEK -e MACH_MT6589 \
+            -e MTK_INFRACFG -e COMMON_CLK_MT6589 \
+            -e COMMON_CLK_MT6589_MFGSYS -e MTK_SCPSYS_PM_DOMAINS \
+            -e DRM -e DRM_PRISMRV
           make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV not set"
-            grep -E 'CONFIG_(ARCH_|MACH_MT|DRM)' "$KSRCDIR/.config" | head -20
+            grep -E 'CONFIG_(ARCH_MEDIATEK|MACH_MT6589|DRM)[= ]' "$KSRCDIR/.config"
             exit 1; }
           grep -q 'CONFIG_ARCH_MEDIATEK=y' "$KSRCDIR/.config" || {
-            echo "::error::ARCH_MEDIATEK did not stick"; exit 1; }
+            echo "::error::CONFIG_ARCH_MEDIATEK did not stick"; exit 1; }
           make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
 
       - name: Build driver (clang)
