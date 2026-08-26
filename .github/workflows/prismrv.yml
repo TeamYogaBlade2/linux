@@ -80,7 +80,11 @@ jobs:
             -e MTK_INFRACFG -e COMMON_CLK_MT6589 \
             -e COMMON_CLK_MT6589_MFGSYS -e MTK_SCPSYS_PM_DOMAINS \
             -e DRM -e DRM_PRISMRV
+          echo "--- .config before olddefconfig:"
+          grep DRM_PRISMRV "$KSRCDIR/.config" || echo "(PRISMRV not in .config!)"
           make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
+          echo "--- .config after olddefconfig:"
+          grep DRM_PRISMRV "$KSRCDIR/.config" || echo "(dropped by olddefconfig)"
           grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
             echo "::error::CONFIG_DRM_PRISMRV not set"
             grep -E 'CONFIG_(ARCH_MEDIATEK|MACH_MT6589|DRM)[= ]' "$KSRCDIR/.config"
