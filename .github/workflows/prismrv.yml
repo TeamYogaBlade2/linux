@@ -45,8 +45,11 @@ jobs:
       - name: Fetch vanilla kernel
         run: |
           KVER=${{ matrix.kernel }}
-          curl -sL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" \
-            | tar xJ --wildcards 'linux-${KVER}/*' --strip-components=1
+          curl -sL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" -o /tmp/k.tar.xz
+          mkdir /tmp/ksrc
+          tar xJf /tmp/k.tar.xz -C /tmp/ksrc --strip-components=1
+          shopt -s dotglob
+          mv /tmp/ksrc/* .
 
       - name: Prepare kernel tree
         run: |
