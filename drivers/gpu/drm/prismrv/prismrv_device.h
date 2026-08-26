@@ -211,8 +211,6 @@ static inline struct prismrv_device *to_prismrv(struct drm_device *d)
 }
 
 int prismrv_hw_init(struct prismrv_device *pv);
-struct device;
-int prismrv_runtime_resume(struct device *dev);
 void prismrv_hw_fini(struct prismrv_device *pv);
 int prismrv_fw_load(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);

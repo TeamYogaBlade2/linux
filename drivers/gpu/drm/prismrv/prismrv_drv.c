@@ -4,8 +4,11 @@
  */
 #include <linux/clk.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/pm_runtime.h>
 #include <linux/delay.h>
 
@@ -58,6 +61,8 @@ static const struct drm_driver prismrv_drm_driver = {
 	.major = 1,
 	.minor = 0,
 };
+
+static int prismrv_runtime_resume(struct device *dev);
 
 static int prismrv_probe(struct platform_device *pdev)
 {
