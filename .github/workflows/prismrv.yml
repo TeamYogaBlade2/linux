@@ -50,12 +50,19 @@ jobs:
           tar xJf /tmp/k.tar.xz -C /tmp/ksrc --strip-components=1
           echo "KSRCDIR=/tmp/ksrc" >> "$GITHUB_ENV"
 
-      - name: Prepare kernel tree
+      - name: Drop in the prismrv driver
+        run: |
+          test ! -e "$KSRCDIR/drivers/gpu/drm/prismrv"
+          cp -r drivers/gpu/drm/prismrv "$KSRCDIR/drivers/gpu/drm/"
+          grep -q prismrv "$KSRCDIR/drivers/gpu/drm/Makefile" ||             echo 'obj-$(CONFIG_DRM_PRISMRV) += prismrv/' \
+              >> "$KSRCDIR/drivers/gpu/drm/Makefile"
+          grep -q 'source "drivers/gpu/drm/prismrv/Kconfig"' \
+            "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             sed -i '1isource "drivers/gpu/drm/prismrv/Kconfig"' \
+              "$KSRCDIR/drivers/gpu/drm/Kconfig"
+
+      - name: Configure kernel
         run: |
           make -C "$KSRCDIR" LLVM=1 defconfig
-          make -C "$KSRCDIR" LLVM=1 olddefconfig \
-            DRIVER_PRISMRV="" 2>/dev/null || true
-          # enable DRM + our driver as a module via fragments
           cat >> "$KSRCDIR/.config" <<'FRAG'
           CONFIG_DRM=y
           CONFIG_DRM_GEM_SHMEM_HELPER=y
@@ -71,17 +78,6 @@ jobs:
 
       - name: Build driver (clang)
         run: |
-          # copy our sources over the kernel's prismrv dir (the vanilla
-          # tree has none, so this is a clean drop-in)
-          test ! -e "$KSRCDIR/drivers/gpu/drm/prismrv"
-          cp -r drivers/gpu/drm/prismrv "$KSRCDIR/drivers/gpu/drm/"
-          grep -q prismrv "$KSRCDIR/drivers/gpu/drm/Makefile" || {
-            echo 'obj-$(CONFIG_DRM_PRISMRV) += prismrv/' \
-              >> "$KSRCDIR/drivers/gpu/drm/Makefile"; }
-          grep -q 'source "drivers/gpu/drm/prismrv/Kconfig"' \
-            "$KSRCDIR/drivers/gpu/drm/Kconfig" || {
-            sed -i '4isource "drivers/gpu/drm/prismrv/Kconfig"' \
-              "$KSRCDIR/drivers/gpu/drm/Kconfig"; }
           make -C "$KSRCDIR" LLVM=1 M=drivers/gpu/drm/prismrv -j$(nproc) \
             modules 2>&1 | tee build.log
           test -f "$KSRCDIR/drivers/gpu/drm/prismrv/prismrv.ko" || {
@@ -90,16 +86,6 @@ jobs:
             echo "::error::warnings present (project policy treats them as errors)"
             exit 1
           fi
-
-      - name: Build driver (clang)
-        run: |
-          make LLVM=1 -j$(nproc) M=drivers/gpu/drm/prismrv \
-            KBUILD_EXTRA_SYMBOLS= modules 2>&1 | tee build.log
-          test -f drivers/gpu/drm/prismrv/prismrv.ko || {
-            echo "::error::prismrv.ko was not produced"; exit 1; }
-          grep -E "warning:" build.log && {
-            echo "::error::warnings present (treated as errors by policy)"
-            exit 1; } || true
 
       - name: Check uapi header installs cleanly
         run: |
