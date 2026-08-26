@@ -11,6 +11,30 @@
 #include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
 #define TOP_CKMUXSEL	0x0000
+#define TOP_CKDIV1	0x0008
+
+/*
+ * TOP_CKDIV1 (armdiv1) encodes the ARM PLL divider as a fraction.  The
+ * field is 5 bits wide: bits [4:3] pick the denominator (0b01 -> 4,
+ * 0b10 -> 5, 0b11 -> 6) and bits [2:0] the numerator minus one, so
+ * e.g. 0x0a is 2/4, 0x12 is 3/5 and 0x1d is 1/6.  The downstream CPU
+ * DVFS driver switches through 0x0a (2/4) while reprogramming ARMPLL
+ * and back to 0x00 (= 4/4, i.e. no division) afterwards.
+ */
+/*
+ * Only the integer divisions can be expressed through the common
+ * divider ops; the fractional encodings (e.g. 3/4) are left out --
+ * the CPU DVFS path only ever uses 4/4 (= bypass) and 2/4 (= /2)
+ * anyway.
+ */
+static const struct clk_div_table mt6589_armdiv1_table[] = {
+	{ .val = 0x08, .div = 1 },	/* 4/4 */
+	{ .val = 0x0a, .div = 2 },	/* 2/4 */
+	{ .val = 0x18, .div = 1 },	/* 6/6 */
+	{ .val = 0x1b, .div = 2 },	/* 3/6 */
+	{ .val = 0x13, .div = 2 },	/* 2/5 */
+	{ }
+};
 #define INFRA_RST0	0x0030
 #define INFRA_RST1	0x0034
 #define INFRA_PDN_SET	0x0040
@@ -67,11 +91,30 @@ static const struct mtk_clk_rst_desc infra_clk_rst_desc = {
 	.rst_bank_nr = ARRAY_SIZE(infrasys_rst_ofs),
 };
 
+/*
+ * The CPU DVFS path divides ARMPLL through this field while
+ * reprogramming the PLL; exposing it as a clock lets cpufreq switch
+ * through it instead of poking the register directly.
+ */
+static const struct mtk_clk_divider infra_dividers[] = {
+	{
+		.id = CLK_INFRA_ARMDIV1,
+		.name = "armdiv1",
+		.parent_name = "infra_mux1_sel",
+		.div_reg = TOP_CKDIV1,
+		.div_shift = 0,
+		.div_width = 5,
+		.clk_div_table = mt6589_armdiv1_table,
+	},
+};
+
 static const struct mtk_clk_desc infra_desc = {
 	.clks = infra_clks,
 	.num_clks = ARRAY_SIZE(infra_clks),
 	.cpumuxes = cpu_muxes,
 	.num_cpumuxes = ARRAY_SIZE(cpu_muxes),
+	.divider_clks = infra_dividers,
+	.num_divider_clks = ARRAY_SIZE(infra_dividers),
 	.rst_desc = &infra_clk_rst_desc,
 };
 
