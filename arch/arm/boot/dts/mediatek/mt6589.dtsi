@@ -327,7 +327,7 @@
 		};
 
 		scpsys: syscon@10006000 {
-			compatible = "syscon", "simple-mfd";
+			compatible = "mediatek,mt6589-scpsys", "syscon", "simple-mfd";
 			reg = <0x10006000 0x1000>;
 			#power-domain-cells = <1>;
 
