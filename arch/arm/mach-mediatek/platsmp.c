@@ -26,6 +26,9 @@
 #define SPM_SLEEP_TIMER_STA	0x0720
 #define CPU_SLEEP(n)		BIT(15 + n)
 
+#define SPM_POWERON_CONFIG_SET	0x0000
+#define SPM_PROJECT_CODE	0xb16
+
 #define L1RSTDISABLE1		BIT(1)
 
 #define BOOT_SLAVE_CONFIG	0x0000
@@ -45,6 +48,7 @@ struct mtk_hotplug_info {
 	unsigned int spm_pwr_status_bits[MTK_MAX_CPU - 1];
 	unsigned int spm_l1_pdn_bits[MTK_MAX_CPU - 1];
 	unsigned int spm_l1_pdn_ack_bits[MTK_MAX_CPU - 1];
+	bool mt6589_seq;
 };
 
 static const struct mtk_hotplug_info mtk_mt6572_hotplug = {
@@ -54,6 +58,16 @@ static const struct mtk_hotplug_info mtk_mt6572_hotplug = {
 	.spm_pwr_status_bits = { BIT(11) },
 	.spm_l1_pdn_bits = { BIT(0) },
 	.spm_l1_pdn_ack_bits = { BIT(8) },
+};
+
+static const struct mtk_hotplug_info mtk_mt6589_hotplug = {
+	.spm_compat = "mediatek,mt6589-scpsys",
+	.mcusys_compat = "mediatek,mt6589-mcusys",
+	.spm_pwr_con = { 0x218, 0x21c, 0x220 },
+	.spm_pwr_status_bits = { BIT(17), BIT(16), BIT(15) },
+	.spm_l1_pdn_bits = { 0xFFFF, 0xFFFF, 0xFFFF },
+	.spm_l1_pdn_ack_bits = { 0, 0, 0 },
+	.mt6589_seq = true,
 };
 #endif
 
@@ -86,6 +100,9 @@ static const struct mtk_smp_boot_info mtk_mt6589_boot = {
 	0x10002000, 0x34,
 	{ 0x534c4131, 0x4c415332, 0x41534c33 },
 	{ 0x38, 0x3c, 0x40 },
+#ifdef CONFIG_HOTPLUG_CPU
+	.hotplug = &mtk_mt6589_hotplug,
+#endif
 };
 
 static const struct mtk_smp_boot_info mtk_mt7623_boot = {
@@ -140,6 +157,8 @@ static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 	u32 val, pwr_con = mtk_smp_info->hotplug->spm_pwr_con[cpu - 1],
 		 l1_pdn_bits = mtk_smp_info->hotplug->spm_l1_pdn_bits[cpu - 1];
 
+	writel(SPM_PROJECT_CODE << 16 | BIT(0), spm_base + SPM_POWERON_CONFIG_SET);
+
 	switch (state) {
 	case POWER_DOWN:
 		while (!(readl(spm_base + SPM_SLEEP_TIMER_STA) &
@@ -156,7 +175,8 @@ static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 		val = readl(spm_base + SPM_L1_PDN(cpu));
 		val |= l1_pdn_bits;
 		writel(val, spm_base + SPM_L1_PDN(cpu));
-		spm_l1_wait_busy(state, cpu);
+		if (mtk_smp_info->hotplug->spm_l1_pdn_ack_bits[cpu - 1])
+			spm_l1_wait_busy(state, cpu);
 
 		val = readl(spm_base + pwr_con);
 		val &= ~PWR_ON_BIT;
@@ -184,40 +204,68 @@ static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 
 		spm_cpu_wait_busy(state, cpu);
 
-		val = readl(spm_base + SPM_L1_PDN(cpu));
-		val &= ~l1_pdn_bits;
-		writel(val, spm_base + SPM_L1_PDN(cpu));
-		udelay(1);
-		spm_l1_wait_busy(state, cpu);
+		if (mtk_smp_info->hotplug->mt6589_seq) {
+			val = readl(spm_base + pwr_con);
+			val &= ~PWR_CLK_DIS_BIT;
+			writel(val, spm_base + pwr_con);
 
-		val = readl(spm_base + pwr_con);
-		val |= PWR_SRAM_ISOINT_B_BIT;
-		writel(val, spm_base + pwr_con);
+			val = readl(spm_base + SPM_L1_PDN(cpu));
+			val &= ~l1_pdn_bits;
+			writel(val, spm_base + SPM_L1_PDN(cpu));
+			udelay(1);
 
-		val = readl(spm_base + pwr_con);
-		val &= ~(PWR_CLK_DIS_BIT | PWR_ISO_BIT);
-		writel(val, spm_base + pwr_con);
+			val = readl(spm_base + pwr_con);
+			val |= PWR_SRAM_ISOINT_B_BIT;
+			writel(val, spm_base + pwr_con);
 
-		val = readl(spm_base + pwr_con);
-		val |= PWR_CLK_DIS_BIT;
-		writel(val, spm_base + pwr_con);
+			val = readl(spm_base + pwr_con);
+			val &= ~PWR_SRAM_CLKISO_BIT;
+			writel(val, spm_base + pwr_con);
 
-		val = readl(spm_base + pwr_con);
-		val &= ~PWR_SRAM_CLKISO_BIT;
-		writel(val, spm_base + pwr_con);
+			val = readl(spm_base + pwr_con);
+			val &= ~PWR_ISO_BIT;
+			writel(val, spm_base + pwr_con);
 
-		val = readl(mcusys_base);
-		writel(val | L1RSTDISABLE1, mcusys_base);
-		dsb();
+			val = readl(spm_base + pwr_con);
+			val |= PWR_RST_B_BIT;
+			writel(val, spm_base + pwr_con);
+		} else {
+			val = readl(spm_base + SPM_L1_PDN(cpu));
+			val &= ~l1_pdn_bits;
+			writel(val, spm_base + SPM_L1_PDN(cpu));
+			udelay(1);
+			if (mtk_smp_info->hotplug->spm_l1_pdn_ack_bits[cpu - 1])
+				spm_l1_wait_busy(state, cpu);
 
-		val = readl(spm_base + pwr_con);
-		val &= ~PWR_CLK_DIS_BIT;
-		writel(val, spm_base + pwr_con);
-		dsb();
+			val = readl(spm_base + pwr_con);
+			val |= PWR_SRAM_ISOINT_B_BIT;
+			writel(val, spm_base + pwr_con);
 
-		val = readl(spm_base + pwr_con);
-		val |= PWR_RST_B_BIT;
-		writel(val, spm_base + pwr_con);
+			val = readl(spm_base + pwr_con);
+			val &= ~(PWR_CLK_DIS_BIT | PWR_ISO_BIT);
+			writel(val, spm_base + pwr_con);
+
+			val = readl(spm_base + pwr_con);
+			val |= PWR_CLK_DIS_BIT;
+			writel(val, spm_base + pwr_con);
+
+			val = readl(spm_base + pwr_con);
+			val &= ~PWR_SRAM_CLKISO_BIT;
+			writel(val, spm_base + pwr_con);
+
+			val = readl(mcusys_base);
+			writel(val | L1RSTDISABLE1, mcusys_base);
+			dsb();
+
+			val = readl(spm_base + pwr_con);
+			val &= ~PWR_CLK_DIS_BIT;
+			writel(val, spm_base + pwr_con);
+			dsb();
+
+			val = readl(spm_base + pwr_con);
+			val |= PWR_RST_B_BIT;
+			writel(val, spm_base + pwr_con);
+		}
 
 		break;
 	}
@@ -246,8 +294,8 @@ static int mtk_boot_secondary(unsigned int cpu, struct task_struct *idle)
 		return -EINVAL;
 
 	if (mtk_hotplug_is_available() && mtk_hotplug_is_off(cpu)) {
-		val = readl(mcusys_base);
-		writel(val & ~L1RSTDISABLE1, mcusys_base);
+			val = readl(mcusys_base);
+			writel(val & ~BIT(cpu), mcusys_base);
 
 		writel(BOOT_SLAVE_KEY | 1, mtk_smp_base + BOOT_SLAVE_CONFIG);
 		writel(__pa_symbol(secondary_startup_arm),
