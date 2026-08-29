@@ -351,7 +351,7 @@
 		};
 
 		scpsys: syscon@10006000 {
-			compatible = "syscon", "simple-mfd";
+			compatible = "mediatek,mt6589-scpsys", "syscon", "simple-mfd";
 			reg = <0x10006000 0x1000>;
 			#power-domain-cells = <1>;
 
@@ -636,6 +636,11 @@
 			clocks = <&infracfg CLK_INFRA_KP>;
 			clock-names = "kpd";
 			status = "disabled";
+		};
+
+		mcusys: syscon@10200000 {
+			compatible = "mediatek,mt6589-mcusys", "syscon";
+			reg = <0x10200000 0x1000>;
 		};
 
 		mfgsys: syscon@10206000 {
