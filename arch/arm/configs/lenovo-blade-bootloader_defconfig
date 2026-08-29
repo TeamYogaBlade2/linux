@@ -3,7 +3,8 @@
 CONFIG_ARM=y
 CONFIG_ARCH_MEDIATEK=y
 CONFIG_MACH_MT6589=y
-CONFIG_SMP=y
+# needs hotplug, arch/arm/kernel/machine_kexec.c
+#CONFIG_SMP=y
 CONFIG_VFP=y
 CONFIG_NEON=y
 # auto select
