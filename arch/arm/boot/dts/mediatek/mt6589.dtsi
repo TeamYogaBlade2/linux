@@ -614,6 +614,11 @@
 			status = "disabled";
 		};
 
+		mcusys: syscon@10200000 {
+			compatible = "mediatek,mt6589-mcusys", "syscon";
+			reg = <0x10200000 0x1000>;
+		};
+
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
