@@ -124,13 +124,16 @@ static unsigned long mt6589_pll_rate(const struct mt6589_pll_config *cfg)
 	unsigned int div1 = div_factor(cfg->txdiv0);
 	unsigned int div2 = div_factor(cfg->txdiv1);
 	/*
-	 * Lane data rate [Mbps] = 26 * (fbk_div + 1) * fbk_sel /
+	 * Lane data rate [Mbps] = 26 * (fbk_div + 1) * fbk_sel * 2 /
 	 *                         (txdiv0 * txdiv1 * pre_div)
 	 *
-	 * With this the table entries reproduce the downstream
-	 * LCM_DSI_6589_PLL_CLOCK_* enumeration (201.5 + 6.5 * i MHz).
+	 * The *2 accounts for DDR (differential) signalling: each clock edge
+	 * carries one bit, so the full bit rate is twice the PLL output clock.
+	 * The downstream LCM_DSI_6589_PLL_CLOCK_* enum values (201.5, 208 ...)
+	 * are HS clock frequencies (half the bit rate); the full lane data rates
+	 * produced by this table are 403, 416 ... Mbps.
 	 */
-	unsigned int mbps = 26 * fbk * fbk_sel / (div1 * div2 * pre);
+	unsigned int mbps = 26 * fbk * fbk_sel * 2 / (div1 * div2 * pre);
 
 	return mbps * 1000000UL;
 }
