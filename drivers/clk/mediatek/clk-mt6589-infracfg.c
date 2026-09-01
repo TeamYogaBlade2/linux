@@ -14,38 +14,46 @@
 #define TOP_CKDIV1	0x0008
 
 /*
- * TOP_CKDIV1 (armdiv1) encodes the ARM PLL divider as a fraction.  The
- * field is 5 bits wide: bits [4:3] pick the denominator (0b01 -> 4,
- * 0b10 -> 5, 0b11 -> 6) and bits [2:0] the numerator minus one, so
- * e.g. 0x0a is 2/4, 0x12 is 3/5 and 0x1d is 1/6.  The downstream CPU
- * DVFS driver switches through 0x0a (2/4) while reprogramming ARMPLL
- * and back to 0x00 (= 4/4, i.e. no division) afterwards.
- */
-/*
- * The field encodes a fraction n/d with d picked by bits [4:3]
- * (0b01 -> 4, 0b10 -> 5, 0b11 -> 6) and n - 1 in bits [2:0].  The
- * table below lists every encoding with its divisor (d / n); the
- * fractional ones are exposed as their reciprocal denominator so that
- * rate = parent_rate / div still holds for the common divider ops
- * (the CPU DVFS path only ever uses 4/4 (= bypass) and 2/4 (= /2),
- * the rest is there for completeness).
+ * TOP_CKDIV1 (armdiv1) encodes the ARM clock as a fraction n/d of the
+ * ARMPLL output.  The 5-bit field clkdiv1_sel[4:0] encodes:
+ *
+ *   bits[4:3]  denominator: 0b01 -> /4, 0b10 -> /5, 0b11 -> /6
+ *   bits[2:0]  numerator directly (NOT numerator-1): 0b100=4, 0b011=3 ...
+ *
+ * Full encoding per the hardware manual:
+ *   01000=4/4  01001=3/4  01010=2/4  01011=1/4
+ *   10000=5/5  10001=4/5  10010=3/5  10011=2/5  10100=1/5
+ *   11000=6/6  11001=5/6  11010=4/6  11011=3/6  11100=2/6  11101=1/6
+ *   00000 (and anything with bits[4:3]=00) = bypass (full ARMPLL rate)
+ *
+ * clk_div_table only supports integer divisors (rate = parent/div).
+ * Entries where d/n is not an integer cannot be represented exactly;
+ * for those the .div field is set to the nearest integer >= d/n so
+ * that the CCF never programmes a rate exceeding the hardware output.
+ *
+ * The downstream CPU DVFS driver only ever uses 0x0a (2/4, real /2)
+ * to park the ARM clock while reprogramming ARMPLL, then 0x08 (4/4,
+ * bypass) afterwards; all other entries are listed for completeness.
  */
 static const struct clk_div_table mt6589_armdiv1_table[] = {
-	{ .val = 0x08, .div = 1 },	/* 4/4 */
-	{ .val = 0x09, .div = 4 },	/* 3/4 */
-	{ .val = 0x0a, .div = 2 },	/* 2/4 */
-	{ .val = 0x0b, .div = 4 },	/* 1/4 */
-	{ .val = 0x10, .div = 1 },	/* 5/5 */
-	{ .val = 0x11, .div = 5 },	/* 4/5 */
-	{ .val = 0x12, .div = 5 },	/* 3/5 */
-	{ .val = 0x13, .div = 5 },	/* 2/5 */
-	{ .val = 0x14, .div = 5 },	/* 1/5 */
-	{ .val = 0x18, .div = 1 },	/* 6/6 */
-	{ .val = 0x19, .div = 6 },	/* 5/6 */
-	{ .val = 0x1a, .div = 6 },	/* 4/6 */
-	{ .val = 0x1b, .div = 6 },	/* 3/6 */
-	{ .val = 0x1c, .div = 6 },	/* 2/6 */
-	{ .val = 0x1d, .div = 6 },	/* 1/6 */
+	/* denominator = 4 */
+	{ .val = 0x08, .div = 1 },	/* 4/4 = /1   (exact) */
+	{ .val = 0x09, .div = 2 },	/* 3/4 ≈ /1.33 -> /2 approx (conservative) */
+	{ .val = 0x0a, .div = 2 },	/* 2/4 = /2   (exact) */
+	{ .val = 0x0b, .div = 4 },	/* 1/4 = /4   (exact) */
+	/* denominator = 5 */
+	{ .val = 0x10, .div = 1 },	/* 5/5 = /1   (exact) */
+	{ .val = 0x11, .div = 2 },	/* 4/5 ≈ /1.25 -> /2 approx (conservative) */
+	{ .val = 0x12, .div = 2 },	/* 3/5 ≈ /1.67 -> /2 approx (conservative) */
+	{ .val = 0x13, .div = 3 },	/* 2/5 = /2.5  -> /3 approx (conservative) */
+	{ .val = 0x14, .div = 5 },	/* 1/5 = /5   (exact) */
+	/* denominator = 6 */
+	{ .val = 0x18, .div = 1 },	/* 6/6 = /1   (exact) */
+	{ .val = 0x19, .div = 2 },	/* 5/6 ≈ /1.2  -> /2 approx (conservative) */
+	{ .val = 0x1a, .div = 2 },	/* 4/6 ≈ /1.5  -> /2 approx (conservative) */
+	{ .val = 0x1b, .div = 2 },	/* 3/6 = /2   (exact) */
+	{ .val = 0x1c, .div = 3 },	/* 2/6 = /3   (exact) */
+	{ .val = 0x1d, .div = 6 },	/* 1/6 = /6   (exact) */
 	{ }
 };
 #define INFRA_RST0	0x0030
