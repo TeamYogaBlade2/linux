@@ -140,13 +140,27 @@ static const struct clk_ops mt6589_fixed_lc_pll_ops = {
  * channel's DDS register, which the common code does through the
  * dvfs register alias.
  */
+/*
+ * MT6589 FHCTL channel mapping (from mt_freqhopping.h / mt_fhreg.h):
+ *
+ *   CH0  offset 0x4c  PLL_HP_CON0 bit 0  ARMPLL
+ *   CH1  offset 0x5c  PLL_HP_CON0 bit 1  MAINPLL
+ *   CH2  offset 0x6c  PLL_HP_CON0 bit 2  MEMPLL  (not an SDM PLL, not registered)
+ *   CH3  offset 0x7c  PLL_HP_CON0 bit 3  MSDCPLL
+ *   CH4  offset 0x8c  PLL_HP_CON0 bit 4  TVDPLL
+ *   CH5  offset 0x9c  PLL_HP_CON0 bit 5  LVDSPLL
+ *
+ * MEMPLL occupies CH2 but is not registered here, so MSDCPLL/TVDPLL/LVDSPLL
+ * start at CH3/CH4/CH5.  fh_id is the PLL_HP_CON0 bit index; fhx_offset is
+ * the byte offset of FHCTLn_CFG within the FHCTL MMIO window.
+ */
 enum fh_pll_id {
-	FH_ARMPLL,
-	FH_MAINPLL,
-	FH_MSDCPLL,
-	FH_TVDPLL,
-	FH_LVDSPLL,
-	FH_NR_FH,
+	FH_ARMPLL  = 0,
+	FH_MAINPLL = 1,
+	/* CH2 = MEMPLL, not registered */
+	FH_MSDCPLL = 3,
+	FH_TVDPLL  = 4,
+	FH_LVDSPLL = 5,
 };
 
 #define _FH(_pllid, _fhid, _offset) {					\
@@ -173,11 +187,12 @@ enum fh_pll_id {
 	}
 
 static struct mtk_pllfh_data pllfhs[] = {
-	_FH(CLK_APMIXED_ARMPLL, FH_ARMPLL, 0x4c),
-	_FH(CLK_APMIXED_MAINPLL, FH_MAINPLL, 0x5c),
-	_FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x6c),
-	_FH(CLK_APMIXED_TVDPLL, FH_TVDPLL, 0x7c),
-	_FH(CLK_APMIXED_LVDSPLL, FH_LVDSPLL, 0x8c),
+	_FH(CLK_APMIXED_ARMPLL,  FH_ARMPLL,  0x4c),	/* CH0 */
+	_FH(CLK_APMIXED_MAINPLL, FH_MAINPLL, 0x5c),	/* CH1 */
+	/* CH2 = MEMPLL, not registered */
+	_FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x7c),	/* CH3 */
+	_FH(CLK_APMIXED_TVDPLL,  FH_TVDPLL,  0x8c),	/* CH4 */
+	_FH(CLK_APMIXED_LVDSPLL, FH_LVDSPLL, 0x9c),	/* CH5 */
 };
 
 
