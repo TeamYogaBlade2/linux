@@ -25,8 +25,19 @@
 
 #define DISP_REG_TDSHP_EN			0x0000
 #define  DISP_TDSHP_TDS_EN			BIT(31)
-#define DISP_REG_TDSHP_CFG			0x0350	/* DTDS_CONFIG */
-#define  DISP_TDSHP_CFG_BYPASS_OFF		6	/* R2Y|Y2R enable */
+/*
+ * 0x0350: PBC/misc bypass register.  The downstream kernel clears this
+ * to zero ("bypass off") during init; it is NOT DTDS_CONFIG.
+ */
+#define DISP_REG_TDSHP_PBC_BYPASS		0x0350
+/*
+ * 0x0f10: DTDS_CONFIG -- enables the RGB->YUV (R2Y) and YUV->RGB (Y2R)
+ * colour-matrix wrappers inside the TDSHP block.  bit[2]=R2Y_EN,
+ * bit[1]=Y2R_EN; the downstream kernel writes 0x6 = both enabled.
+ */
+#define DISP_REG_TDSHP_DTDS_CONFIG		0x0f10
+#define  DISP_TDSHP_R2Y_EN			BIT(2)
+#define  DISP_TDSHP_Y2R_EN			BIT(1)
 #define DISP_REG_TDSHP_INPUT_SIZE		0x0f40
 #define DISP_REG_TDSHP_OUTPUT_SIZE		0x0f44
 #define DISP_REG_TDSHP_START			0x0f00
@@ -48,9 +59,14 @@ void mtk_tdshp_config(struct device *dev, unsigned int w,
 	mtk_ddp_write(cmdq_pkt, h, &tdshp->cmdq_reg,
 		      tdshp->regs, DISP_REG_TDSHP_OUTPUT_SIZE);
 
-	/* Enable the R2Y/Y2R color matrices in the wrapper (bypass off) */
-	mtk_ddp_write(cmdq_pkt, BIT(DISP_TDSHP_CFG_BYPASS_OFF),
-		      &tdshp->cmdq_reg, tdshp->regs, DISP_REG_TDSHP_CFG);
+	/*
+	 * Clear the PBC/misc bypass register (0x350) as the downstream does.
+	 * Then enable the R2Y and Y2R colour-matrix wrappers via DTDS_CONFIG.
+	 */
+	mtk_ddp_write(cmdq_pkt, 0,
+		      &tdshp->cmdq_reg, tdshp->regs, DISP_REG_TDSHP_PBC_BYPASS);
+	mtk_ddp_write(cmdq_pkt, DISP_TDSHP_R2Y_EN | DISP_TDSHP_Y2R_EN,
+		      &tdshp->cmdq_reg, tdshp->regs, DISP_REG_TDSHP_DTDS_CONFIG);
 }
 
 static void mtk_tdshp_matrix_init(struct mtk_disp_tdshp *tdshp)
