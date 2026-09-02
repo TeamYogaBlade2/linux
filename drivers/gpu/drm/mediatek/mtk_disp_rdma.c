@@ -36,6 +36,10 @@
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
 #define DISP_RDMA_MEM_CON			0x0024
+
+#define MEM_MODE_INPUT_FORMAT_RGB565_MT65XX		(0x004 << 4)
+#define MEM_MODE_INPUT_FORMAT_RGB888_MT65XX		(0x008 << 4)
+
 #define MEM_MODE_INPUT_FORMAT_RGB565			(0x000 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGB888			(0x001 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGBA8888			(0x002 << 4)
@@ -45,6 +49,7 @@
 #define MEM_MODE_INPUT_SWAP				BIT(8)
 #define DISP_RDMA_MEM_SRC_PITCH			0x002c
 #define DISP_RDMA_MEM_GMC_SETTING_0		0x0030
+#define DISP_REG_RDMA_MEM_GMC_SETTING_1		0x0038
 #define DISP_REG_RDMA_FIFO_CON			0x0040
 #define RDMA_FIFO_UNDERFLOW_EN				BIT(31)
 #define RDMA_FIFO_PSEUDO_SIZE(bytes)			(((bytes) / 16) << 16)
@@ -53,6 +58,15 @@
 #define DISP_RDMA_MEM_START_ADDR		0x0f00
 
 #define RDMA_MEM_GMC				0x40402020
+
+static const u32 mt6589_formats[] = {
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_XRGB8888,
+	DRM_FORMAT_RGB888,
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_UYVY,
+	DRM_FORMAT_YUYV,
+};
 
 static const u32 mt8173_formats[] = {
 	DRM_FORMAT_XRGB8888,
@@ -68,10 +82,18 @@ static const u32 mt8173_formats[] = {
 	DRM_FORMAT_YUYV,
 };
 
+struct mtk_disp_rdma;
+
 struct mtk_disp_rdma_data {
 	unsigned int fifo_size;
 	const u32 *formats;
 	size_t num_formats;
+	u32 size_con0;
+	u32 size_con1;
+	unsigned int (*fmt_convert)(unsigned int fmt);
+	u32 mem_start_addr_reg;
+	u32 mem_gmc_val;
+	void (*reset)(struct mtk_disp_rdma *rdma);
 };
 
 /*
@@ -191,9 +213,9 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	u32 rdma_fifo_size;
 
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_0, 0xfff);
+			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_1, 0xfffff);
+			   DISP_REG_RDMA_SIZE_CON_1, rdma->data->size_con1);
 
 	if (rdma->fifo_size)
 		rdma_fifo_size = rdma->fifo_size;
@@ -213,8 +235,62 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	mtk_ddp_write(cmdq_pkt, reg, &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_FIFO_CON);
 }
 
-static unsigned int rdma_fmt_convert(struct mtk_disp_rdma *rdma,
-				     unsigned int fmt)
+static unsigned int rdma_fmt_convert_mt65xx(unsigned int fmt)
+{
+	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
+	 * is defined in mediatek HW data sheet.
+	 * The alphabet order in XXX is no relation to data
+	 * arrangement in memory.
+	 */
+	switch (fmt) {
+	default:
+	case DRM_FORMAT_RGB565:
+		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX;
+	case DRM_FORMAT_BGR565:
+		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_RGB888:
+		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX;
+	case DRM_FORMAT_BGR888:
+		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_RGBA8888:
+		return MEM_MODE_INPUT_FORMAT_ARGB8888;
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_BGRA8888:
+		return MEM_MODE_INPUT_FORMAT_ARGB8888 | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		return MEM_MODE_INPUT_FORMAT_RGBA8888;
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888:
+		return MEM_MODE_INPUT_FORMAT_RGBA8888 | MEM_MODE_INPUT_SWAP;
+	case DRM_FORMAT_UYVY:
+		return MEM_MODE_INPUT_FORMAT_UYVY;
+	case DRM_FORMAT_YUYV:
+		return MEM_MODE_INPUT_FORMAT_YUYV;
+	}
+}
+
+static unsigned int rdma_fmt_convert_mt6589(unsigned int fmt)
+{
+	switch (fmt) {
+	case DRM_FORMAT_YUYV:
+		return (0 << 4);
+	case DRM_FORMAT_UYVY:
+		return (1 << 4);
+	case DRM_FORMAT_RGB565:
+		return (4 << 4);
+	case DRM_FORMAT_RGB888:
+		return (8 << 4);
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		return (16 << 4);
+	default:
+		return (16 << 4);
+	}
+}
+
+static unsigned int rdma_fmt_convert(unsigned int fmt)
 {
 	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
 	 * is defined in mediatek HW data sheet.
@@ -250,6 +326,37 @@ static unsigned int rdma_fmt_convert(struct mtk_disp_rdma *rdma,
 	}
 }
 
+static void mtk_rdma_reset_mt6589(struct mtk_disp_rdma *rdma)
+{
+	void __iomem *regs = rdma->regs;
+	unsigned int delay_cnt = 0;
+
+	writel(0x10, regs + DISP_REG_RDMA_GLOBAL_CON);
+	while ((readl(regs + DISP_REG_RDMA_GLOBAL_CON) & 0x700) == 0x100) {
+		if (++delay_cnt > 10000) {
+			pr_warn("RDMA reset stage 1 timeout\n");
+			break;
+		}
+	}
+
+	writel(0x00, regs + DISP_REG_RDMA_GLOBAL_CON);
+	delay_cnt = 0;
+	while ((readl(regs + DISP_REG_RDMA_GLOBAL_CON) & 0x700) != 0x100) {
+		if (++delay_cnt > 10000) {
+			pr_warn("RDMA reset stage 2 timeout\n");
+			break;
+		}
+	}
+
+	writel(0x00, regs + DISP_REG_RDMA_SIZE_CON_0);
+	writel(0x00, regs + DISP_REG_RDMA_SIZE_CON_1);
+	writel(0x00, regs + DISP_RDMA_MEM_CON);
+	writel(0x00, regs + rdma->data->mem_start_addr_reg);
+	writel(0x00, regs + DISP_RDMA_MEM_SRC_PITCH);
+	writel(0x20, regs + DISP_REG_RDMA_MEM_GMC_SETTING_1);
+	writel(0x80f00008, regs + DISP_REG_RDMA_FIFO_CON);
+}
+
 unsigned int mtk_rdma_layer_nr(struct device *dev)
 {
 	return 1;
@@ -266,7 +373,7 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	unsigned int fmt = pending->format;
 	unsigned int con;
 
-	con = rdma_fmt_convert(rdma, fmt);
+	con = rdma->data->fmt_convert(fmt);
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
 
 	if (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV) {
@@ -282,10 +389,10 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 				   RDMA_MATRIX_ENABLE);
 	}
 	mtk_ddp_write_relaxed(cmdq_pkt, addr, &rdma->cmdq_reg, rdma->regs,
-			      DISP_RDMA_MEM_START_ADDR);
+			      rdma->data->mem_start_addr_reg);
 	mtk_ddp_write_relaxed(cmdq_pkt, pitch, &rdma->cmdq_reg, rdma->regs,
 			      DISP_RDMA_MEM_SRC_PITCH);
-	mtk_ddp_write(cmdq_pkt, RDMA_MEM_GMC, &rdma->cmdq_reg, rdma->regs,
+	mtk_ddp_write(cmdq_pkt, rdma->data->mem_gmc_val, &rdma->cmdq_reg, rdma->regs,
 		      DISP_RDMA_MEM_GMC_SETTING_0);
 	mtk_ddp_write_mask(cmdq_pkt, RDMA_MODE_MEMORY, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
@@ -360,6 +467,17 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0) {
+		pm_runtime_disable(dev);
+		return dev_err_probe(dev, ret, "Failed to enable power\n");
+	}
+
+	if (priv->data->reset)
+		priv->data->reset(priv);
+
+	pm_runtime_put_sync(dev);
+
 	ret = component_add(dev, &mtk_disp_rdma_component_ops);
 	if (ret) {
 		pm_runtime_disable(dev);
@@ -380,29 +498,67 @@ static const struct mtk_disp_rdma_data mt2701_rdma_driver_data = {
 	.fifo_size = SZ_4K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
+};
+
+static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
+	.fifo_size = 3840,
+	.formats = mt6589_formats,
+	.num_formats = ARRAY_SIZE(mt6589_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert_mt6589,
+	.mem_start_addr_reg = 0x0028,			/* MT6589 のアドレスレジスタ */
+	.mem_gmc_val = 0x00000000,				/* GMC は 0 クリア */
+	.reset = mtk_rdma_reset_mt6589,
 };
 
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
 	.fifo_size = SZ_8K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct mtk_disp_rdma_data mt8183_rdma_driver_data = {
 	.fifo_size = 5 * SZ_1K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 	.fifo_size = 1920,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-rdma",
 	  .data = &mt2701_rdma_driver_data},
+	{ .compatible = "mediatek,mt6589-disp-rdma",
+	  .data = &mt6589_rdma_driver_data },
 	{ .compatible = "mediatek,mt8173-disp-rdma",
 	  .data = &mt8173_rdma_driver_data},
 	{ .compatible = "mediatek,mt8183-disp-rdma",

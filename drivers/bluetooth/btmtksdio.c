@@ -52,6 +52,13 @@ static const struct btmtksdio_data mt7663_data = {
 	.pm_runtime_supported = true,
 };
 
+static const struct btmtksdio_data mt6628_data = {
+	.fwname = FIRMWARE_MT6628,
+	.chipid = 0x6628,
+	.lp_mbox_supported = false,
+	.pm_runtime_supported = false,
+};
+
 static const struct btmtksdio_data mt7668_data = {
 	.fwname = FIRMWARE_MT7668,
 	.chipid = 0x7668,
@@ -74,6 +81,8 @@ static const struct btmtksdio_data mt7902_data = {
 };
 
 static const struct sdio_device_id btmtksdio_table[] = {
+	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT6628),
+	 .driver_data = (kernel_ulong_t)&mt6628_data },
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT7663),
 	 .driver_data = (kernel_ulong_t)&mt7663_data },
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT7668),
@@ -1169,6 +1178,7 @@ static int btmtksdio_setup(struct hci_dev *hdev)
 		break;
 	case 0x7663:
 	case 0x7668:
+	case 0x6628:
 		err = mt76xx_setup(hdev, bdev->data->fwname);
 		if (err < 0)
 			return err;
@@ -1370,6 +1380,16 @@ static int btmtksdio_probe(struct sdio_func *func,
 
 	bdev->data = (void *)id->driver_data;
 	if (!bdev->data)
+		return -ENODEV;
+
+	/*
+	 * The combo chip exposes several SDIO functions with identical
+	 * vendor/device ids.  The BT/WMT control function is number 2 on
+	 * the MT6628 generation (function 1 is the WLAN data path); the
+	 * newer chips only implement one function.  Skip anything that is
+	 * not ours so that the WLAN driver can claim its own function.
+	 */
+	if (bdev->data->chipid == 0x6628 && func->num != 2)
 		return -ENODEV;
 
 	bdev->dev = &func->dev;

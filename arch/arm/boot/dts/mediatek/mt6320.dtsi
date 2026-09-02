@@ -5,6 +5,7 @@
 
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/pinctrl/mt6320-pinfunc.h>
+#include <dt-bindings/clock/mediatek,mt6320-clk.h>
 
 &pwrap {
 	pmic: mt6320 {
@@ -48,6 +49,31 @@
 		mt6320clock: mt6320clock {
 			compatible = "mediatek,mt6320-clk";
 			#clock-cells = <1>;
+		};
+
+		sound {
+			compatible = "mediatek,mt6320-sound";
+			clocks = <&mt6320clock MT6320_TOPCKPDN_AUD_26M>;
+			clock-names = "aud26m";
+		};
+
+		mt6320_adc: adc {
+			compatible = "mediatek,mt6320-auxadc";
+			#io-channel-cells = <1>;
+		};
+
+		/*
+		 * Expose the PMIC's own junction temperature sensor (AUXADC
+		 * channel 4) as a hardware monitoring device so that the
+		 * thermal framework can pick it up.
+		 */
+		pmic-temp {
+			compatible = "iio-hwmon";
+			io-channels = <&mt6320_adc 4>;
+		};
+
+		efuse {
+			compatible = "mediatek,mt6320-efuse";
 		};
 
 		mt6320regulator: mt6320regulator {

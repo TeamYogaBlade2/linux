@@ -15,6 +15,8 @@
 
 #include "clk-pll.h"
 #include "clk-gate.h"
+#include "clk-pllfh.h"
+#include "clk-fhctl.h"
 #include "clk-mtk.h"
 
 #include <dt-bindings/clock/mediatek,mt6589-clk.h>
@@ -128,6 +130,72 @@ static const struct clk_ops mt6589_fixed_lc_pll_ops = {
 	/* no .set_rate */
 };
 
+/*
+ * MT6589 frequency hopping / spread spectrum controller.
+ *
+ * The FHCTL lives in its own address range (see the "mediatek,
+ * mt6589-fhctl" node); it can take over five of the SDM PLLs
+ * (ARMPLL, MAINPLL, MSDCPLL, TVDPLL and LVDSPLL).  Hopping is
+ * started by writing the target NCPO with bit 31 set into the
+ * channel's DDS register, which the common code does through the
+ * dvfs register alias.
+ */
+/*
+ * MT6589 FHCTL channel mapping (from mt_freqhopping.h / mt_fhreg.h):
+ *
+ *   CH0  offset 0x4c  PLL_HP_CON0 bit 0  ARMPLL
+ *   CH1  offset 0x5c  PLL_HP_CON0 bit 1  MAINPLL
+ *   CH2  offset 0x6c  PLL_HP_CON0 bit 2  MEMPLL  (not an SDM PLL, not registered)
+ *   CH3  offset 0x7c  PLL_HP_CON0 bit 3  MSDCPLL
+ *   CH4  offset 0x8c  PLL_HP_CON0 bit 4  TVDPLL
+ *   CH5  offset 0x9c  PLL_HP_CON0 bit 5  LVDSPLL
+ *
+ * MEMPLL occupies CH2 but is not registered here, so MSDCPLL/TVDPLL/LVDSPLL
+ * start at CH3/CH4/CH5.  fh_id is the PLL_HP_CON0 bit index; fhx_offset is
+ * the byte offset of FHCTLn_CFG within the FHCTL MMIO window.
+ */
+enum fh_pll_id {
+	FH_ARMPLL  = 0,
+	FH_MAINPLL = 1,
+	/* CH2 = MEMPLL, not registered */
+	FH_MSDCPLL = 3,
+	FH_TVDPLL  = 4,
+	FH_LVDSPLL = 5,
+};
+
+#define _FH(_pllid, _fhid, _offset) {					\
+		.data = {						\
+			.pll_id = _pllid,				\
+			.fh_id = _fhid,					\
+			.fh_ver = FHCTL_PLLFH_V3,			\
+			.fhx_offset = _offset,				\
+			.dds_mask = GENMASK(20, 0),			\
+			.slope0_value = 0x6003c97,			\
+			.slope1_value = 0x6003c97,			\
+			.sfstrx_en = BIT(2),				\
+			.frddsx_en = BIT(1),				\
+			.fhctlx_en = BIT(0),				\
+			.tgl_org = BIT(31),				\
+			.dvfs_tri = BIT(31),				\
+			.pcwchg = BIT(31),				\
+			.dt_val = 0x0,					\
+			.df_val = 0x9,					\
+			.updnlmt_shft = 16,				\
+			.msk_frddsx_dys = GENMASK(23, 20),		\
+			.msk_frddsx_dts = GENMASK(19, 16),		\
+		},							\
+	}
+
+static struct mtk_pllfh_data pllfhs[] = {
+	_FH(CLK_APMIXED_ARMPLL,  FH_ARMPLL,  0x4c),	/* CH0 */
+	_FH(CLK_APMIXED_MAINPLL, FH_MAINPLL, 0x5c),	/* CH1 */
+	/* CH2 = MEMPLL, not registered */
+	_FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x7c),	/* CH3 */
+	_FH(CLK_APMIXED_TVDPLL,  FH_TVDPLL,  0x8c),	/* CH4 */
+	_FH(CLK_APMIXED_LVDSPLL, FH_LVDSPLL, 0x9c),	/* CH5 */
+};
+
+
 static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_ARMPLL, "armpll", ARMPLL_CON0, ARMPLL_PWR_CON0, 0x80000001,
 		PLL_AO, 21, ARMPLL_CON1, 24, ARMPLL_CON1, 0, NULL, 1508 * MHZ),
@@ -177,28 +245,73 @@ static const struct mtk_fixed_factor pll_divs[] = {
 	FACTOR(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m", "lvdspll", 1, 8),
 };
 
-static const struct mtk_clk_desc apmixed_desc = {
-	.plls = plls,
-	.num_plls = ARRAY_SIZE(plls),
-	.factor_clks = pll_divs,
-	.num_factor_clks = ARRAY_SIZE(pll_divs),
-};
+
+static int clk_mt6589_apmixed_probe(struct platform_device *pdev)
+{
+	const u8 *fhctl_node = "mediatek,mt6589-fhctl";
+	struct clk_hw_onecell_data *clk_data;
+	struct device *dev = &pdev->dev;
+	int r;
+
+	clk_data = mtk_alloc_clk_data(CLK_APMIXED_NR_CLK);
+	if (!clk_data)
+		return -ENOMEM;
+
+	fhctl_parse_dt(fhctl_node, pllfhs, ARRAY_SIZE(pllfhs));
+	r = mtk_clk_register_pllfhs(dev, plls, ARRAY_SIZE(plls), pllfhs,
+				    ARRAY_SIZE(pllfhs), clk_data);
+	if (r)
+		goto free_clk_data;
+
+	r = mtk_clk_register_factors(pll_divs,
+				     ARRAY_SIZE(pll_divs), clk_data);
+	if (r)
+		goto unregister_plls;
+
+	r = of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get,
+				   clk_data);
+	if (r)
+		goto unregister_factors;
+
+	platform_set_drvdata(pdev, clk_data);
+
+	return 0;
+
+unregister_factors:
+	mtk_clk_unregister_factors(pll_divs, ARRAY_SIZE(pll_divs), clk_data);
+unregister_plls:
+	mtk_clk_unregister_pllfhs(plls, ARRAY_SIZE(plls), pllfhs,
+				  ARRAY_SIZE(pllfhs), clk_data);
+free_clk_data:
+	mtk_free_clk_data(clk_data);
+	return r;
+}
+
+static void clk_mt6589_apmixed_remove(struct platform_device *pdev)
+{
+	struct device_node *node = pdev->dev.of_node;
+	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
+
+	of_clk_del_provider(node);
+	mtk_clk_unregister_factors(pll_divs, ARRAY_SIZE(pll_divs), clk_data);
+	mtk_clk_unregister_pllfhs(plls, ARRAY_SIZE(plls), pllfhs,
+				  ARRAY_SIZE(pllfhs), clk_data);
+	mtk_free_clk_data(clk_data);
+}
 
 static const struct of_device_id of_match_clk_mt6589_apmixed[] = {
-	{ .compatible = "mediatek,mt6589-apmixedsys", .data = &apmixed_desc },
+	{ .compatible = "mediatek,mt6589-apmixedsys" },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt6589_apmixed);
 
 static struct platform_driver clk_mt6589_apmixed_drv = {
-	.probe = mtk_clk_simple_probe,
-	.remove = mtk_clk_simple_remove,
+	.probe = clk_mt6589_apmixed_probe,
+	.remove = clk_mt6589_apmixed_remove,
 	.driver = {
 		.name = "clk-mt6589-apmixed",
 		.of_match_table = of_match_clk_mt6589_apmixed,
 	},
 };
 module_platform_driver(clk_mt6589_apmixed_drv);
-
 MODULE_DESCRIPTION("MediaTek MT6589 apmixedsys clocks driver");
 MODULE_LICENSE("GPL");

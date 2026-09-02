@@ -72,6 +72,7 @@ properties:
       - enum:
           - mediatek,mt2701-m4u  # generation one
           - mediatek,mt2712-m4u  # generation two
+          - mediatek,mt6589-m4u  # generation one (dual core)
           - mediatek,mt6779-m4u  # generation two
           - mediatek,mt6795-m4u  # generation two
           - mediatek,mt6893-iommu-mm         # generation two
@@ -97,10 +98,20 @@ properties:
           - const: mediatek,mt2701-m4u
 
   reg:
-    maxItems: 1
+    minItems: 1
+    maxItems: 4  # MT6589 needs 4 regions (global, m4u0, m4u1, l2cache)
+
+  reg-names:
+    minItems: 1
+    maxItems: 4
 
   interrupts:
-    maxItems: 1
+    minItems: 1
+    maxItems: 4  # MT6589: m4u0, m4u1 and the two L2 IRQs
+
+  interrupt-names:
+    minItems: 1
+    maxItems: 2
 
   clocks:
     items:
@@ -133,6 +144,7 @@ properties:
       dt-binding/memory/mediatek,mt8188-memory-port.h for mt8188,
       dt-binding/memory/mediatek,mt8189-memory-port.h for mt8189,
       dt-binding/memory/mt2701-larb-port.h for mt2701 and mt7623,
+      dt-binding/memory/mt6589-larb-port.h for mt6589,
       dt-binding/memory/mt2712-larb-port.h for mt2712,
       dt-binding/memory/mt6779-larb-port.h for mt6779,
       dt-binding/memory/mt6795-larb-port.h for mt6795,
@@ -158,10 +170,47 @@ allOf:
   - if:
       properties:
         compatible:
+          not:
+            contains:
+              const: mediatek,mt6589-m4u
+    then:
+      properties:
+        reg:
+          maxItems: 1
+        interrupts:
+          maxItems: 1
+      required:
+        - reg
+    else:
+      properties:
+        reg:
+          minItems: 4
+          maxItems: 4
+        interrupts:
+          minItems: 2
+          maxItems: 2
+        reg-names:
+          items:
+            - const: global
+            - const: m4u0
+            - const: m4u1
+            - const: l2cache
+        interrupt-names:
+          items:
+            - const: m4u0
+            - const: m4u1
+      required:
+        - reg-names
+        - interrupt-names
+
+  - if:
+      properties:
+        compatible:
           contains:
             enum:
               - mediatek,mt2701-m4u
               - mediatek,mt2712-m4u
+              - mediatek,mt6589-m4u
               - mediatek,mt6795-m4u
               - mediatek,mt6893-iommu-mm
               - mediatek,mt8173-m4u
@@ -239,4 +288,24 @@ examples:
             mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
                              <&larb3>, <&larb4>, <&larb5>;
             #iommu-cells = <1>;
+    };
+
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    iommu@10205000 {
+        compatible = "mediatek,mt6589-m4u";
+        reg = <0x10205000 0x100>,
+              <0x10205200 0x600>,
+              <0x10205800 0x600>,
+              <0x10205100 0x100>;
+        reg-names = "global", "m4u0", "m4u1", "l2cache";
+        interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>,
+                     <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>;
+        interrupt-names = "m4u0", "m4u1";
+        clocks = <&infracfg CLK_INFRA_M4U>;
+        clock-names = "bclk";
+        mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
+                         <&larb3>, <&larb4>;
+        #iommu-cells = <1>;
     };

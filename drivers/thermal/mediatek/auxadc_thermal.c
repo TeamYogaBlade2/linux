@@ -180,6 +180,7 @@ enum {
 
 enum mtk_thermal_version {
 	MTK_THERMAL_V1 = 1,
+	MTK_THERMAL_V1_5,
 	MTK_THERMAL_V2,
 	MTK_THERMAL_V3,
 };
@@ -188,6 +189,25 @@ enum mtk_thermal_version {
 #define MT2701_TS1	0
 #define MT2701_TS2	1
 #define MT2701_TSABB	2
+
+/* MT6589 thermal sensors */
+#define MT6589_TS1	0
+#define MT6589_TSABB	1
+
+/* AUXADC channel 11 is used for the temperature sensors */
+#define MT6589_TEMP_AUXADC_CHANNEL	11
+
+/* The total number of temperature sensors in the MT6589 */
+#define MT6589_NUM_SENSORS		2
+
+/* The number of sensing points per bank */
+#define MT6589_NUM_SENSORS_PER_ZONE	2
+
+/* The number of controller in the MT6589 */
+#define MT6589_NUM_CONTROLLER		1
+
+/* The calibration coefficient of sensor */
+#define MT6589_CALIBRATION		165
 
 /* AUXADC channel 11 is used for the temperature sensors */
 #define MT2701_TEMP_AUXADC_CHANNEL	11
@@ -325,6 +345,7 @@ struct mtk_thermal_data {
 	u32 apmixed_buffer_ctl_reg;
 	u32 apmixed_buffer_ctl_mask;
 	u32 apmixed_buffer_ctl_set;
+	int (*extract_efuse)(struct mtk_thermal *mt, u32 *buf);
 };
 
 struct mtk_thermal {
@@ -349,6 +370,8 @@ struct mtk_thermal {
 
 	int (*raw_to_mcelsius)(struct mtk_thermal *mt, int sensno, s32 raw);
 };
+
+static int mtk_thermal_extract_efuse_mt6589(struct mtk_thermal *mt, u32 *buf);
 
 /* MT8183 thermal sensor data */
 static const int mt8183_bank_data[MT8183_NUM_SENSORS] = {
@@ -412,6 +435,26 @@ static const int mt2701_tc_offset[MT2701_NUM_CONTROLLER] = { 0x0, };
 
 static const int mt2701_vts_index[MT2701_NUM_SENSORS] = {
 	VTS1, VTS2, VTS3
+};
+
+/* MT6589 thermal sensor data */
+static const int mt6589_bank_data[MT6589_NUM_SENSORS] = {
+	MT6589_TS1, MT6589_TSABB
+};
+
+static const int mt6589_msr[MT6589_NUM_SENSORS_PER_ZONE] = {
+	TEMP_MSR0, TEMP_MSR1
+};
+
+static const int mt6589_adcpnp[MT6589_NUM_SENSORS_PER_ZONE] = {
+	TEMP_ADCPNP0, TEMP_ADCPNP1
+};
+
+static const int mt6589_mux_values[MT6589_NUM_SENSORS] = { 0, 1 };
+static const int mt6589_tc_offset[MT6589_NUM_CONTROLLER] = { 0x0 };
+
+static const int mt6589_vts_index[MT6589_NUM_SENSORS] = {
+	VTS1, VTSABB
 };
 
 /* MT2712 thermal sensor data */
@@ -608,6 +651,33 @@ static const struct mtk_thermal_data mt2712_thermal_data = {
 };
 
 /*
+ * The MT6589 thermal controller has one bank, which can read up to
+ * three temperature sensors simultaneously.  The MT6589 has a total of
+ * two temperature sensors: the CPU sensor (TS1) and the ABB sensor.
+ */
+static const struct mtk_thermal_data mt6589_thermal_data = {
+	.auxadc_channel = MT6589_TEMP_AUXADC_CHANNEL,
+	.num_banks = 1,
+	.num_sensors = MT6589_NUM_SENSORS,
+	.vts_index = mt6589_vts_index,
+	.cali_val = MT6589_CALIBRATION,
+	.num_controller = MT6589_NUM_CONTROLLER,
+	.controller_offset = mt6589_tc_offset,
+	.need_switch_bank = false,
+	.bank_data = {
+		{
+			.num_sensors = 2,
+			.sensors = mt6589_bank_data,
+		},
+	},
+	.msr = mt6589_msr,
+	.adcpnp = mt6589_adcpnp,
+	.sensor_mux_values = mt6589_mux_values,
+	.version = MTK_THERMAL_V1_5,
+	.extract_efuse = mtk_thermal_extract_efuse_mt6589,
+};
+
+/*
  * MT7622 have only one sensing point which uses AUXADC Channel 11 for raw data
  * access.
  */
@@ -722,6 +792,42 @@ static int raw_to_mcelsius_v1(struct mtk_thermal *mt, int sensno, s32 raw)
 	tmp >>= 3;
 
 	return mt->degc_cali * 500 - tmp;
+}
+
+/*
+ * raw_to_mcelsius_v1_5 - convert a raw ADC value to mcelsius on
+ * platforms whose calibration layout matches the MT6572/MT6589 one.
+ * The formula follows the downstream mt65xx thermal driver.
+ */
+static int raw_to_mcelsius_v1_5(struct mtk_thermal *mt, int sensno, s32 raw)
+{
+	s32 format_1;
+	s32 format_2;
+	s32 g_oe;
+	s32 g_gain;
+	s32 g_x_roomt;
+	s32 tmp;
+
+	if (raw == 0)
+		return 0;
+
+	raw &= 0xfff;
+	g_gain = 10000 + (((mt->adc_ge - 512) * 10000) >> 12);
+	g_oe = mt->adc_oe - 512;
+	format_1 = mt->vts[sensno] + 3350 - g_oe;
+	format_2 = (mt->degc_cali * 10) >> 1;
+	g_x_roomt = (((format_1 * 10000) >> 12) * 10000) / g_gain;
+
+	tmp = (((((raw - g_oe) * 10000) >> 12) * 10000) / g_gain) - g_x_roomt;
+	tmp = tmp * 15 / 18;
+
+	if (mt->o_slope_sign == 0)
+		tmp = (tmp * 1000) / (1528 + mt->o_slope * 10);
+	else
+		tmp = (tmp * 1000) / (1528 - mt->o_slope * 10);
+
+	tmp = tmp - (tmp << 1);
+	return (format_2 + tmp) * 100;
 }
 
 static int raw_to_mcelsius_v2(struct mtk_thermal *mt, int sensno, s32 raw)
@@ -930,7 +1036,8 @@ static void mtk_thermal_init_bank(struct mtk_thermal *mt, int num,
 	writel(auxadc_phys_base + AUXADC_CON1_CLR_V,
 	       controller_base + TEMP_ADCMUXADDR);
 
-	if (mt->conf->version == MTK_THERMAL_V1) {
+	if (mt->conf->version == MTK_THERMAL_V1 ||
+	    mt->conf->version == MTK_THERMAL_V1_5) {
 		/* AHB address for pnp sensor mux selection */
 		writel(apmixed_phys_base + APMIXED_SYS_TS_CON1,
 		       controller_base + TEMP_PNPMUXADDR);
@@ -1070,6 +1177,39 @@ static int mtk_thermal_extract_efuse_v3(struct mtk_thermal *mt, u32 *buf)
 	return 0;
 }
 
+/*
+ * MT6589 efuse layout: the thermal words live at efuse offsets 0x100,
+ * 0x104 and 0x108 (buf[0..2]).  The ADC gain/offset are split over the
+ * second and third word and a corner flag selects the base used by the
+ * conversion formula.
+ */
+static int mtk_thermal_extract_efuse_mt6589(struct mtk_thermal *mt, u32 *buf)
+{
+	mt->adc_ge = ((buf[1] & 0xFF000000) >> 24) |
+		     (((buf[2] & 0x000C0000) >> 18) << 8);
+	mt->adc_oe = ((buf[1] & 0x00FF0000) >> 16) |
+		     (((buf[2] & 0x00030000) >> 16) << 8);
+
+	mt->vts[VTS1] = (buf[0] & 0x03FE0000) >> 17;
+	mt->vts[VTSABB] = (buf[1] & 0x0000FF80) >> 7;
+
+	mt->degc_cali = (buf[0] & 0x0000007E) >> 1;
+	mt->o_slope = (buf[0] & 0xFC000000) >> 26;
+	/* The MT6589 always uses the TSMC slope table. */
+	mt->o_slope_sign = 0;
+
+	if (!(buf[0] & 0x00000001)) {
+		/* not calibrated, fall back to defaults */
+		mt->adc_ge = 128;
+		mt->adc_oe = 128;
+		mt->degc_cali = 40;
+		mt->o_slope = 0;
+		mt->vts[VTSABB] = 272;
+	}
+
+	return 0;
+}
+
 static int mtk_thermal_get_calibration_data(struct device *dev,
 					    struct mtk_thermal *mt)
 {
@@ -1110,6 +1250,9 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 	case MTK_THERMAL_V1:
 		ret = mtk_thermal_extract_efuse_v1(mt, buf);
 		break;
+	case MTK_THERMAL_V1_5:
+		ret = mt->conf->extract_efuse(mt, buf);
+		break;
 	case MTK_THERMAL_V2:
 		ret = mtk_thermal_extract_efuse_v2(mt, buf);
 		break;
@@ -1144,6 +1287,10 @@ static const struct of_device_id mtk_thermal_of_match[] = {
 	{
 		.compatible = "mediatek,mt2712-thermal",
 		.data = (void *)&mt2712_thermal_data,
+	},
+	{
+		.compatible = "mediatek,mt6589-thermal",
+		.data = (void *)&mt6589_thermal_data,
 	},
 	{
 		.compatible = "mediatek,mt7622-thermal",
@@ -1270,11 +1417,14 @@ static int mtk_thermal_probe(struct platform_device *pdev)
 
 	mtk_thermal_turn_on_buffer(mt, apmixed_base);
 
-	if (mt->conf->version != MTK_THERMAL_V1)
+	if (mt->conf->version != MTK_THERMAL_V1 &&
+	    mt->conf->version != MTK_THERMAL_V1_5)
 		mtk_thermal_release_periodic_ts(mt, auxadc_base);
 
 	if (mt->conf->version == MTK_THERMAL_V1)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v1;
+	else if (mt->conf->version == MTK_THERMAL_V1_5)
+		mt->raw_to_mcelsius = raw_to_mcelsius_v1_5;
 	else if (mt->conf->version == MTK_THERMAL_V2)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v2;
 	else

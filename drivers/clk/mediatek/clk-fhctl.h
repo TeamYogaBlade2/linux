@@ -12,6 +12,7 @@
 enum fhctl_variant {
 	FHCTL_PLLFH_V1,
 	FHCTL_PLLFH_V2,
+	FHCTL_PLLFH_V3,	/* MT6589: per-channel regs at 0x4c + i * 0x10 */
 };
 
 struct fhctl_offset {

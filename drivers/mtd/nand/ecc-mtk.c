@@ -469,6 +469,22 @@ static const struct mtk_ecc_caps mtk_ecc_caps_mt2701 = {
 	.pg_irq_sel = 0,
 };
 
+/*
+ * The MT6589 ECC engine is the same block as on MT2701; the
+ * downstream kernel only ever configures 4, 8 or 12 bit strength but
+ * the register layout and strength table are identical.
+ */
+static const struct mtk_ecc_caps mtk_ecc_caps_mt6589 = {
+	.err_mask = ECC_ERRMASK_MT2701,
+	.err_shift = 8,
+	.ecc_strength = ecc_strength_mt2701,
+	.ecc_regs = mt2701_ecc_regs,
+	.num_ecc_strength = 20,
+	.ecc_mode_shift = 5,
+	.parity_bits = 14,
+	.pg_irq_sel = 0,
+};
+
 static const struct mtk_ecc_caps mtk_ecc_caps_mt2712 = {
 	.err_mask = ECC_ERRMASK_MT2712,
 	.err_shift = 8,
@@ -506,6 +522,9 @@ static const struct of_device_id mtk_ecc_dt_match[] = {
 	{
 		.compatible = "mediatek,mt2701-ecc",
 		.data = &mtk_ecc_caps_mt2701,
+	}, {
+		.compatible = "mediatek,mt6589-ecc",
+		.data = &mtk_ecc_caps_mt6589,
 	}, {
 		.compatible = "mediatek,mt2712-ecc",
 		.data = &mtk_ecc_caps_mt2712,
