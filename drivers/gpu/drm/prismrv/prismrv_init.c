@@ -18,6 +18,7 @@
 #include <linux/firmware.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
+#include <linux/pm_runtime.h>
 
 #include "prismrv_device.h"
 
@@ -118,7 +119,16 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	unsigned int i;
 	int ret;
 
-	ret = request_firmware(&fw, "mediatek/mt6589-sgx544-init.bin",
+	/*
+	 * Use the init-script name derived by prismrv_fw_load() from the DT
+	 * "firmware-name" property (or the compile-time default if the
+	 * property is absent).  If fw_init_name is empty (first boot before
+	 * fw_load ran) fall back to the MT6589 default so that the probe
+	 * path from prismrv_runtime_resume() still works.
+	 */
+	ret = request_firmware(&fw,
+			       pv->fw_init_name[0] ? pv->fw_init_name
+						   : "mediatek/mt6589-sgx544-init.bin",
 			       pv->drm.dev);
 	if (ret) {
 		dev_err(pv->drm.dev, "init script load failed (%d)\n", ret);
@@ -151,13 +161,15 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	writel(0, pv->regs + EUR_CR_POWER);
 
 	prismrv_bif_reset(pv);
-	prismrv_mmu_init(pv);
+	ret = prismrv_mmu_init(pv);
+	if (ret)
+		goto out_errata;
 
 	/* upload the uKernel into GPU address space */
 	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
 			      pv->ukernel_dma, pv->ukernel_size);
 	if (ret)
-		goto out_errata;
+		goto out_mmu;
 
 	/* shared HostCtl block: allocate once, reuse across hw_init calls */
 	if (!pv->hostctl) {
@@ -166,13 +178,13 @@ int prismrv_hw_init(struct prismrv_device *pv)
 						 &pv->hostctl_dma, GFP_KERNEL);
 		if (!pv->hostctl) {
 			ret = -ENOMEM;
-			goto out_errata;
+			goto out_mmu;
 		}
 	}
 
 	ret = prismrv_ccb_init(pv);
 	if (ret)
-		goto out_errata;
+		goto out_hostctl;
 
 	pv->hostctl->ui32HostClock = cpu_to_le32(jiffies_to_usecs(jiffies));
 	pv->hostctl->ui32InitStatus = 0;
@@ -196,6 +208,15 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	dev_err(pv->drm.dev, "uKernel init timeout\n");
 	ret = -ETIMEDOUT;
 
+	prismrv_ccb_fini(pv);
+out_hostctl:
+	if (pv->hostctl) {
+		dma_free_coherent(pv->drm.dev, sizeof(*pv->hostctl),
+				  pv->hostctl, pv->hostctl_dma);
+		pv->hostctl = NULL;
+	}
+out_mmu:
+	prismrv_mmu_fini(pv);
 out_errata:
 	prismrv_errata_release(pv);
 out_fw:
@@ -216,8 +237,19 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 					 struct prismrv_fence, node);
 		list_del(&pf->node);
 
+		dma_fence_set_error(&pf->base, -EIO);
 		dma_fence_signal(&pf->base);
 		dma_fence_put(&pf->base);
+		atomic_dec(&pv->busy_count);
+
+		/*
+		 * Release the runtime PM reference that submit_ioctl()
+		 * held for the lifetime of this command.  Each pending
+		 * fence holds exactly one PM reference; release it here
+		 * so the usage count stays balanced even on teardown.
+		 */
+		pm_runtime_mark_last_busy(pv->drm.dev);
+		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
 	spin_unlock(&pv->event_lock);
 

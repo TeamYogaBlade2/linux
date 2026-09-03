@@ -128,6 +128,14 @@ struct prismrv_fence {
 	struct dma_fence base;
 	spinlock_t lock;
 	struct list_head node;
+	/*
+	 * CCB slot index (0..255) at which this command was written.
+	 * prismrv_handle_completion() uses the uKernel's read_offset to
+	 * determine which slots have been consumed and signals only those
+	 * fences.  Set to 0xFFFF if the slot is not yet known (pre-schedule)
+	 * or during hw_fini unconditional retirement.
+	 */
+	u16 ccb_slot;
 };
 
 struct prismrv_device {
@@ -162,6 +170,13 @@ struct prismrv_device {
 	dma_addr_t ukernel_dma;
 	void *ukernel_cpu;
 	u32 ukernel_vaddr;
+	/*
+	 * Init-script firmware name derived at fw_load time from the
+	 * DT "firmware-name" property (or the compile-time default).
+	 * prismrv_hw_init() uses this so the file name stays consistent
+	 * across runtime-resume calls.
+	 */
+	char fw_init_name[128];
 
 	/* shared HostCtl block */
 	dma_addr_t hostctl_dma;

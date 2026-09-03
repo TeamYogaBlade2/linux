@@ -168,7 +168,26 @@ int prismrv_errata_apply(struct prismrv_device *pv)
 			return -ENOMEM;
 		}
 		pv->errata_buf[i].vaddr = va;
-		prismrv_mmu_map(pv, va, pv->errata_buf[i].dma, desc[i]);
+		{
+			int mret = prismrv_mmu_map(pv, va,
+						   pv->errata_buf[i].dma,
+						   desc[i]);
+			if (mret) {
+				/*
+				 * MMU mapping failed: free the DMA buffer we
+				 * just allocated (the slot's .cpu is set so
+				 * errata_release will not free it again —
+				 * clear it first to avoid a double-free).
+				 */
+				dma_free_coherent(pv->drm.dev, desc[i],
+						  pv->errata_buf[i].cpu,
+						  pv->errata_buf[i].dma);
+				pv->errata_buf[i].cpu = NULL;
+				pv->errata_buf[i].size = 0;
+				prismrv_errata_release(pv);
+				return mret;
+			}
+		}
 		va += PAGE_ALIGN(desc[i]);
 	}
 

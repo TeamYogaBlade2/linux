@@ -22,14 +22,28 @@ int prismrv_mmu_init(struct prismrv_device *pv)
 	unsigned int i;
 
 	if (pv->pd_cpu) {
+		/*
+		 * Recovery path: the page directory already exists but the GPU
+		 * hung with stale PTEs in place.  Zero every allocated page
+		 * table so the next hw_init starts with a completely clean MMU
+		 * state.  Leaving old PTEs would cause the re-initialised GPU
+		 * to walk invalid physical addresses and hang again immediately.
+		 *
+		 * Also zero the page directory itself so freed PD entries that
+		 * still point at freed PT DMA buffers are no longer valid.
+		 */
 		for (i = 0; i < PD_ENTRIES; i++) {
 			if (!pv->pd_pts[i])
 				continue;
+			memset(pv->pd_pts[i], 0, PT_SIZE);
 			dma_sync_single_for_device(pv->drm.dev,
 						   pv->pd_pt_dma[i],
 						   PT_SIZE,
 						   DMA_TO_DEVICE);
 		}
+		memset(pv->pd_cpu, 0, PAGE_SIZE);
+		/* Reprogram the BIF DIR_LIST register (may have been cleared
+		 * by the soft reset in prismrv_hw_init). */
 		writel(pv->pd_gpu_addr | SGX_MMU_PDE_VALID,
 		       pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
 		readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);

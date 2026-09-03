@@ -24,25 +24,69 @@
 
 static void prismrv_handle_completion(struct prismrv_device *pv)
 {
-	struct dma_fence *fence;
 	LIST_HEAD(signalled);
+	u32 read_off;
+
+	/*
+	 * Read the uKernel's CCB read_offset: every slot up to (but not
+	 * including) this offset has been consumed.  We retire exactly those
+	 * fences whose CCB slot lies before the current read_offset, in
+	 * submission order.
+	 *
+	 * The CCB is a power-of-2 ring (256 entries) so we compare slot
+	 * numbers modulo 256.  A slot is "done" when the distance from the
+	 * fence's slot to read_offset (mod 256) is less than 128 — i.e. the
+	 * read pointer has advanced past it without wrapping twice.
+	 *
+	 * If the driver has no CCB yet (very early IRQ before init) treat
+	 * read_offset as 0 and retire nothing.
+	 */
+	if (pv->ccb)
+		read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
+	else
+		read_off = 0;
 
 	spin_lock(&pv->event_lock);
-	list_splice_init(&pv->pending_fences, &signalled);
+	while (!list_empty(&pv->pending_fences)) {
+		struct prismrv_fence *pf =
+			list_first_entry(&pv->pending_fences,
+					 struct prismrv_fence, node);
+
+		/*
+		 * Check whether pf->ccb_slot has been consumed by the uKernel.
+		 * Slot s is done when ((read_off - s - 1) & 255) < 128, which
+		 * is equivalent to "read_off is strictly ahead of s (mod 256)".
+		 * If no slot was recorded (ccb_slot == 0xFFFF) retire it
+		 * unconditionally — this handles the pre-CCB-slot era fences
+		 * and hw_fini retirement.
+		 */
+		if (pf->ccb_slot != 0xFFFF &&
+		    ((read_off - pf->ccb_slot - 1) & 255) >= 128)
+			break;	/* this and all later slots are still pending */
+
+		list_del(&pf->node);
+		list_add_tail(&pf->node, &signalled);
+	}
 	spin_unlock(&pv->event_lock);
 
-	/* signal every submission the uKernel finished; a single
-	 * completion event can retire several queued commands */
+	/* signal completed fences outside the spinlock */
 	while (!list_empty(&signalled)) {
-		struct prismrv_fence *pf;
+		struct prismrv_fence *pf =
+			list_first_entry(&signalled, struct prismrv_fence, node);
+		list_del_init(&pf->node);
 
-		pf = list_first_entry(&signalled, struct prismrv_fence, node);
-		list_del(&pf->node);
-
-		fence = &pf->base;
-		dma_fence_signal(fence);
-		dma_fence_put(fence);
+		dma_fence_signal(&pf->base);
+		dma_fence_put(&pf->base);
 		atomic_dec(&pv->busy_count);
+
+		/*
+		 * Release the runtime PM reference that was taken (and
+		 * intentionally held) by prismrv_submit_ioctl() for the
+		 * lifetime of this command.  One get per submit, one put
+		 * per completion.
+		 */
+		pm_runtime_mark_last_busy(pv->drm.dev);
+		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
 
 	atomic_set(&pv->missed_completions, 0);
@@ -82,7 +126,15 @@ void prismrv_recovery_work(struct work_struct *work)
 	}
 
 	mutex_lock(&pv->init_mutex);
-	pv->hw_ready = false;
+	/*
+	 * Fully tear down the old hardware state before re-initialising.
+	 * hw_fini() retires any pending fences (signalling them with an
+	 * error so waiters unblock), frees the CCB, HostCtl and errata
+	 * DMA buffers, and tears down the MMU page tables — leaving a
+	 * completely clean slate for hw_init().  Skipping this step would
+	 * cause double-allocation of DMA buffers and stale MMU mappings.
+	 */
+	prismrv_hw_fini(pv);
 	prismrv_hw_init(pv);
 	mutex_unlock(&pv->init_mutex);
 

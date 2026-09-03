@@ -46,6 +46,8 @@ const struct dma_fence_ops prismrv_fence_ops = {
 
 int prismrv_ccb_init(struct prismrv_device *pv)
 {
+	int ret;
+
 	spin_lock_init(&pv->ccb_lock);
 
 	/* re-entry (runtime resume after recovery): the shared structures
@@ -73,14 +75,39 @@ int prismrv_ccb_init(struct prismrv_device *pv)
 	}
 
 	/* expose the shared structures to the uKernel through the MMU */
-	prismrv_mmu_map(pv, PRISMRV_HOSTCTL_VADDR,
-			pv->hostctl_dma, sizeof(*pv->hostctl));
-	prismrv_mmu_map(pv, PRISMRV_CCB_VADDR,
-			pv->ccb_dma, sizeof(*pv->ccb));
-	prismrv_mmu_map(pv, PRISMRV_HWRTDATA_VADDR,
-			pv->hwrt_dma, 2 * HWRTDATA_SIZE);
+	ret = prismrv_mmu_map(pv, PRISMRV_HOSTCTL_VADDR,
+			      pv->hostctl_dma, sizeof(*pv->hostctl));
+	if (ret)
+		goto err_mmu_hostctl;
+
+	ret = prismrv_mmu_map(pv, PRISMRV_CCB_VADDR,
+			      pv->ccb_dma, sizeof(*pv->ccb));
+	if (ret)
+		goto err_mmu_ccb;
+
+	ret = prismrv_mmu_map(pv, PRISMRV_HWRTDATA_VADDR,
+			      pv->hwrt_dma, 2 * HWRTDATA_SIZE);
+	if (ret)
+		goto err_mmu_hwrt;
 
 	return 0;
+
+err_mmu_hwrt:
+	prismrv_mmu_unmap(pv, PRISMRV_CCB_VADDR, sizeof(*pv->ccb));
+err_mmu_ccb:
+	prismrv_mmu_unmap(pv, PRISMRV_HOSTCTL_VADDR, sizeof(*pv->hostctl));
+err_mmu_hostctl:
+	if (pv->hwrt) {
+		dma_free_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE, pv->hwrt,
+				  pv->hwrt_dma);
+		pv->hwrt = NULL;
+	}
+	if (pv->ccb) {
+		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
+				  pv->ccb_dma);
+		pv->ccb = NULL;
+	}
+	return ret;
 }
 
 void prismrv_ccb_fini(struct prismrv_device *pv)
@@ -118,8 +145,11 @@ static bool prismrv_ccb_full(struct prismrv_device *pv)
 	return ((w + 1 - r) & 255) == 0;
 }
 
-/* returns 0 on success, -ETIMEDOUT when the uKernel stopped draining;
- * the caller must undo the fence/busy_count bookkeeping on error */
+/*
+ * returns 0 on success (pf->ccb_slot is set to the written slot),
+ * or -ETIMEDOUT when the uKernel stopped draining.
+ * The caller must undo the fence/busy_count bookkeeping on error.
+ */
 static int prismrv_ccb_schedule(struct prismrv_device *pv,
 				enum prismrv_cmd_type type,
 				const __le32 data[6],
@@ -150,7 +180,15 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 				dev_err(pv->drm.dev,
 					"CCB full for %dms — scheduling recovery\n",
 					PRISMRV_CCB_DRAIN_TIMEOUT_MS);
-				schedule_work(&pv->recovery_work);
+				/*
+				 * Only schedule recovery if the hardware was
+				 * still marked ready: if hw_ready is already
+				 * false a previous recovery is already in
+				 * progress (protected by init_mutex) and
+				 * scheduling another would race with it.
+				 */
+				if (READ_ONCE(pv->hw_ready))
+					schedule_work(&pv->recovery_work);
 
 				/*
 				 * Retire the fence under event_lock: the
@@ -184,6 +222,15 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 			    prismrv_hostkick_instr[type] * 8);
 	cmd->cache_control = 0;
 	memcpy(cmd->data, data, sizeof(cmd->data));
+
+	/*
+	 * Record the slot before publishing: prismrv_handle_completion()
+	 * reads pf->ccb_slot under event_lock to decide whether this fence
+	 * can be signalled.  The assignment must happen before write_offset
+	 * is bumped so the IRQ path (which fires after the kick) always
+	 * sees a valid slot.
+	 */
+	pf->ccb_slot = (u16)slot;
 
 	/*
 	 * publish the command before bumping write_offset; the uKernel
@@ -344,6 +391,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	}
 	spin_lock_init(&f->lock);
 	INIT_LIST_HEAD(&f->node);
+	f->ccb_slot = 0xFFFF;	/* not yet assigned; set by ccb_schedule() */
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
 		       atomic_inc_return(&pv->fence_context),
 		       atomic_inc_return(&pv->fence_seqno));
@@ -378,17 +426,27 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * ccb_schedule() has already retired the fence (removed from the
 	 * pending list, signalled with -ETIMEDOUT) and the IRQ path can
 	 * no longer touch it — so busy_count must come back down here.
+	 *
+	 * The runtime PM reference taken at the top of this function is
+	 * intentionally NOT released here on the success path.  Instead it
+	 * is transferred to the fence and released by prismrv_handle_completion()
+	 * (or prismrv_hw_fini() on teardown) once the GPU actually finishes
+	 * the submitted command.  This keeps the device awake until the work
+	 * is done, satisfying the autosuspend contract.
 	 */
 	atomic_inc(&pv->busy_count);
 	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
-	if (ret)
+	if (ret) {
+		/* CCB schedule failed (timeout): fence already retired by
+		 * ccb_schedule(), busy_count was pre-incremented so undo it,
+		 * and release the PM reference we held. */
 		atomic_dec(&pv->busy_count);
-	else
-		goto out_objs;
-
-	/* success: the PM reference is released here; the error path
-	 * below must not run again (it used to fall through and put
-	 * twice, underflowing the usage count on every submission) */
+		pm_runtime_mark_last_busy(pv->drm.dev);
+		pm_runtime_put_autosuspend(pv->drm.dev);
+	}
+	/* Both success and CCB-timeout fall through to out_objs to clean up
+	 * the object references.  The PM put on the success path happens later
+	 * in prismrv_handle_completion(). */
 	goto out_objs;
 out_put:
 	pm_runtime_mark_last_busy(pv->drm.dev);
