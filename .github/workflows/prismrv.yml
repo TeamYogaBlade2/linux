@@ -1,8 +1,10 @@
 name: prismrv-driver-build
 
-# Build the PrismRV DRM driver against a recent vanilla kernel to catch
-# API drift and compile errors early.  The full arm64/arm zImage build
-# stays local (too heavy for CI); here we only need the driver object.
+# Build the PrismRV DRM driver in-tree against the repository's own
+# kernel source (dev/v7.1/prismrv-drm branch) using lenovo-blade_defconfig.
+# This guarantees that MT6589-specific Kconfig symbols, platform drivers,
+# and clock drivers resolve correctly — vanilla kernel.org sources do not
+# carry any of these.
 
 on:
   workflow_dispatch:
@@ -12,6 +14,7 @@ on:
     paths:
       - 'drivers/gpu/drm/prismrv/**'
       - 'include/uapi/drm/prismrv_drm.h'
+      - 'arch/arm/configs/lenovo-blade_defconfig'
       - '.github/workflows/prismrv.yml'
   pull_request:
     branches:
@@ -25,113 +28,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  kbuild-vanilla:
-    name: build vs ${{ matrix.kernel }}
+  kbuild-intree:
+    name: in-tree build (lenovo-blade_defconfig)
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        # latest LTS + previous LTS: catches API drift both ways
-        kernel: ['6.12', '6.6']
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # Full clone: the Makefile needs the git tree to embed the
+        # version string; a shallow clone would give a wrong LOCALVERSION.
+        with:
+          fetch-depth: 0
 
-      - name: Install toolchain
+      - name: Install ARM cross-toolchain and build deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            bc bison flex libelf-dev libssl-dev llvm clang lld \
-            gcc-arm-linux-gnueabihf
-          # the driver targets ARM SoCs: build against an arm multi_v7
-          # config so OF/MMU dependencies resolve naturally
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev \
+            gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+            llvm clang lld \
+            make python3
 
-      - name: Fetch vanilla kernel
+      - name: Configure (lenovo-blade_defconfig)
         run: |
-          KVER=${{ matrix.kernel }}
-          curl -sL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" -o /tmp/k.tar.xz
-          mkdir /tmp/ksrc
-          tar xJf /tmp/k.tar.xz -C /tmp/ksrc --strip-components=1
-          echo "KSRCDIR=/tmp/ksrc" >> "$GITHUB_ENV"
+          make ARCH=arm \
+               CROSS_COMPILE=arm-linux-gnueabihf- \
+               lenovo-blade_defconfig
+          # Confirm the driver is enabled before spending time building
+          grep -q 'CONFIG_DRM_PRISMRV=y' .config || {
+            echo "::error::CONFIG_DRM_PRISMRV=y not set by lenovo-blade_defconfig"
+            exit 1
+          }
 
-      - name: Drop in the prismrv driver
+      - name: Build kernel + driver (clang cross)
         run: |
-          test ! -e "$KSRCDIR/drivers/gpu/drm/prismrv"
-          cp -r drivers/gpu/drm/prismrv "$KSRCDIR/drivers/gpu/drm/"
-          # the driver includes <uapi/drm/prismrv_drm.h>; expose it via
-          # the kernel's include/uapi tree (same as an in-tree build)
-          mkdir -p "$KSRCDIR/include/uapi/drm"
-          cp include/uapi/drm/prismrv_drm.h \
-             "$KSRCDIR/include/uapi/drm/prismrv_drm.h"
-          grep -q prismrv "$KSRCDIR/drivers/gpu/drm/Makefile" ||             echo 'obj-$(CONFIG_DRM_PRISMRV) += prismrv/' \
-              >> "$KSRCDIR/drivers/gpu/drm/Makefile"
-          # append at the END of Kconfig (a 'source' before menuconfig DRM
-          # is legal but appending avoids any parser edge cases)
-          grep -q 'prismrv/Kconfig' "$KSRCDIR/drivers/gpu/drm/Kconfig" ||             printf '\nsource "drivers/gpu/drm/prismrv/Kconfig"\n' \
-              >> "$KSRCDIR/drivers/gpu/drm/Kconfig"
-          echo "--- verifying hook lines:"
-          tail -2 "$KSRCDIR/drivers/gpu/drm/Makefile"
-          tail -2 "$KSRCDIR/drivers/gpu/drm/Kconfig"
-          test -f "$KSRCDIR/drivers/gpu/drm/prismrv/Kconfig"
-
-
-      - name: Configure kernel
-        run: |
-          # allnoconfig builds in a fraction of multi_v7_defconfig time;
-          # the fragment enables exactly what the driver needs
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 allnoconfig
-          # phase 1: platform bits first so the mach-* Kconfigs exist
-          cat >> "$KSRCDIR/.config" <<'FRAG'
-          CONFIG_MMU=y
-          CONFIG_ARCH_MULTIPLATFORM=y
-          CONFIG_ARCH_MULTI_V6_V7=y
-          CONFIG_ARCH_MULTI_V7=y
-          CONFIG_ARCH_MEDIATEK=y
-          CONFIG_MACH_MT6589=y
-          FRAG
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
-          # phase 2: now that ARCH_MEDIATEK exists, enable the rest
-          cat >> "$KSRCDIR/.config" <<'FRAG2'
-          CONFIG_OF=y
-          CONFIG_COMMON_CLK=y
-          CONFIG_REGULATOR=y
-          CONFIG_MTK_INFRACFG=y
-          CONFIG_COMMON_CLK_MT6589=y
-          CONFIG_COMMON_CLK_MT6589_MFGSYS=y
-          CONFIG_MTK_SCPSYS_PM_DOMAINS=y
-          CONFIG_DRM=m
-          CONFIG_DRM_GEM_SHMEM_HELPER=m
-          CONFIG_PM_DEVFREQ=m
-          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=m
-          CONFIG_PM_OPP=y
-          CONFIG_DRM_PRISMRV=m
-          FRAG2
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 olddefconfig
-          grep -q 'CONFIG_DRM_PRISMRV=m' "$KSRCDIR/.config" || {
-            echo "::error::CONFIG_DRM_PRISMRV=m not set"; exit 1; }
-          # M= build is enough now that prepare generated asm-offsets;
-          # modpost runs as part of it for external-module style builds.
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 -j$(nproc) prepare modules_prepare
-
-      - name: Build driver (clang)
-        run: |
-          make -C "$KSRCDIR" ARCH=arm LLVM=1 M=drivers/gpu/drm/prismrv -j$(nproc) \
-            modules 2>&1 | tee build.log
-          # accept either a module (.ko) or built-in object
-          ls "$KSRCDIR/drivers/gpu/drm/prismrv/" | grep -qE '\.ko$|prismrv\.o' || {
-            echo "::error::driver objects were not produced"; exit 1; }
-          if grep -E 'warning:' build.log; then
-            echo "::error::warnings present (project policy treats them as errors)"
+          make ARCH=arm \
+               CROSS_COMPILE=arm-linux-gnueabihf- \
+               LLVM=1 LLVM_IAS=1 \
+               -j$(nproc) \
+               2>&1 | tee build.log
+          # Fail on any compiler warning emitted for prismrv sources
+          if grep -E 'drivers/gpu/drm/prismrv/.*warning:' build.log; then
+            echo "::error::warnings in prismrv driver (policy: warnings are errors)"
             exit 1
           fi
 
-      - name: Check uapi header installs cleanly
+      - name: Verify driver object was produced
         run: |
-          mkdir -p /tmp/uapi
-          install -D include/uapi/drm/prismrv_drm.h \
-            /tmp/uapi/drm/prismrv_drm.h
-          gcc -fsyntax-only -I/tmp/uapi -x c - <<'EOF'
+          # DRM_PRISMRV=y → built-in; look for the linked object or module
+          ls drivers/gpu/drm/prismrv/*.o 2>/dev/null | grep -v '\.mod\.o' \
+            || ls drivers/gpu/drm/prismrv/*.ko 2>/dev/null \
+            || { echo "::error::no prismrv driver objects found"; exit 1; }
+
+      - name: Check uapi header installs cleanly (host gcc)
+        run: |
+          mkdir -p /tmp/uapi/drm
+          install include/uapi/drm/prismrv_drm.h /tmp/uapi/drm/
+          gcc -fsyntax-only -I/tmp/uapi -x c - <<'HDREOF'
           #include <drm/prismrv_drm.h>
           int main(void) { return PRISMRV_UAPI_VERSION == 1 ? 0 : 1; }
-          EOF
+          HDREOF
