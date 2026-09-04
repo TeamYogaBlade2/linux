@@ -427,6 +427,12 @@
 				bits = <0 3>;
 			};
 
+			/* GPU speed grade: devinfo index 3, bits[31:28] */
+			gpu_grade: gpu-grade@c {
+				reg = <0xc 0x4>;
+				bits = <28 4>;
+			};
+
 			core_count_flag: core-count@40 {
 				reg = <0x40 0x4>;
 				bits = <24 4>;
@@ -623,6 +629,7 @@
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		apmixedsys: syscon@10209000 {
@@ -765,14 +772,75 @@
 			status = "disabled";
 		};
 
+		gpu_opp_table: opp-table {
+			compatible = "operating-points-v2";
+
+			/*
+			 * Frequencies are the mt_gpufreq clock-tree outputs
+			 * (GPU_DVFS_F1..F8); voltages are the VRF18_2 PMIC
+			 * steps programmed by mt_gpu_volt_switch() (25 mV
+			 * granularity, 1.05..1.20 V).  Each eFuse speed grade
+			 * certifies up to one of them; grade 0 (unfused) runs
+			 * the vendor default of GPU_DVFS_F5 without DVFS.
+			 */
+			opp-156000000 {
+				opp-hz = /bits/ 64 <156000000>;
+				opp-microvolt = <1050000>;
+				opp-supported-hw = <0x02>; /* grade 1 */
+			};
+			opp-238333000 {
+				opp-hz = /bits/ 64 <238333000>;
+				opp-microvolt = <1050000>;
+				opp-supported-hw = <0xfc>; /* grades 2-7 */
+			};
+			opp-268666000 {
+				opp-hz = /bits/ 64 <268666000>;
+				opp-microvolt = <1050000>;
+				opp-supported-hw = <0xf8>; /* grades 3-7 */
+			};
+			opp-286000000 {
+				opp-hz = /bits/ 64 <286000000>;
+				opp-microvolt = <1050000>;
+				/* unfused default + grades 4-7 */
+				opp-supported-hw = <0xf1>;
+			};
+			opp-312000000 {
+				opp-hz = /bits/ 64 <312000000>;
+				opp-microvolt = <1100000>;
+				opp-supported-hw = <0xf0>; /* grades 4-7 */
+			};
+			opp-357500000 {
+				opp-hz = /bits/ 64 <357500000>;
+				opp-microvolt = <1150000>;
+				opp-supported-hw = <0xe0>; /* grades 5-7 */
+			};
+			opp-403000000 {
+				opp-hz = /bits/ 64 <403000000>;
+				opp-microvolt = <1150000>;
+				opp-supported-hw = <0xc0>; /* grades 6-7 */
+			};
+			opp-476666000 {
+				opp-hz = /bits/ 64 <476666000>;
+				opp-microvolt = <1150000>;
+				opp-supported-hw = <0x80>; /* grade 7 */
+			};
+		};
+
 		gpu: gpu@13000000 {
 			compatible = "mediatek,mt6589-gpu", "img,powervr-sgx544";
 			reg = <0x13000000 0x10000>;
 			interrupts = <GIC_SPI 188 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&mfgsys CLK_MFG_G3D>,
 				 <&mfgsys CLK_MFG_MEM>,
-				 <&mfgsys CLK_MFG_AXI>;
-			clock-names = "core", "mem", "sys";
+				 <&mfgsys CLK_MFG_AXI>,
+				 <&mfgsys CLK_MFG_HYD>;
+			clock-names = "core", "mem", "sys", "hyd";
+			operating-points-v2 = <&gpu_opp_table>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
+			resets = <&mfgsys MT6589_MFG_G3D_RESET>;
+			reset-names = "g3d";
+			nvmem-cells = <&gpu_grade>;
+			nvmem-cell-names = "gpu_grade";
 		};
 
 		dispsys: syscon@14000000 {

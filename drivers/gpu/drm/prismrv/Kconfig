@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config DRM_PRISMRV
+	tristate "PrismRV DRM driver for PowerVR SGX GPUs"
+	depends on MMU && (OF || COMPILE_TEST)
+	depends on DRM
+	select DRM_GEM_SHMEM_HELPER
+	select PM_DEVFREQ
+	select DEVFREQ_GOV_SIMPLE_ONDEMAND
+	select PM_OPP
+	help
+	  Say Y here to enable a DRM render node for Imagination
+	  PowerVR SGX GPUs as found in several ARM SoCs (e.g. the
+	  MediaTek MT6589).  The core type and RTL revision are probed
+	  at runtime, errata workarounds are applied per revision and
+	  the microkernel firmware is loaded from userspace.
+
+	  Firmware blobs go under prismrv/ in the firmware tree.
+
+	  If unsure, say N.
