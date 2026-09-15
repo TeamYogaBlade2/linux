@@ -76,8 +76,7 @@
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
-		
+		.sram_pdn_ack_bits = GENMASK(12, 12),
 	},
 	[MT6582_POWER_DOMAIN_ISP] = {
 		.name = "isp",
@@ -86,7 +85,7 @@
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		.sram_pdn_ack_bits = GENMASK(13, 12),
 	},
 	[MT6582_POWER_DOMAIN_VDE] = {
 		.name = "vde",
@@ -95,7 +94,7 @@
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		.sram_pdn_ack_bits = GENMASK(12, 12),
 	},
 
 };
