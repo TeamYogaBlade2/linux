@@ -57,6 +57,28 @@
 		};
 	};
 
+	/*
+	 * Mali-400 MP2 OPP table.
+	 */
+	gpu_opp_table: opp-table-gpu {
+		compatible = "operating-points-v2";
+
+		opp-26000000 {
+			opp-hz = /bits/ 64 <26000000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-364000000 {
+			opp-hz = /bits/ 64 <364000000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-416000000 {
+			opp-hz = /bits/ 64 <416000000>;
+			opp-microvolt = <1150000>;
+		};
+	};
+
 	cpus {
 		#size-cells = <0>;
 		#address-cells = <1>;
@@ -500,43 +522,43 @@
 			nvmem-cell-names = "calibration-data";
 		};
 
-		// usb: usb@11200000 {
-		// 	compatible = "mediatek,mt2701-musb",
-		// 		     "mediatek,mtk-musb";
-		// 	reg = <0x11200000 0x1000>;
-		// 	#address-cells = <1>;
-		// 	#size-cells = <1>;
-		// 	interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_LOW>;
-		// 	interrupt-names = "mc";
-		// 	phys = <&u2port0 PHY_TYPE_USB2>;
-		// 	dr_mode = "otg";
-		// 	clocks = <&pericfg CLK_PERI_USB0>,
-		// 		 <&pericfg CLK_PERI_USB0>,
-		// 		 <&apmixedsys CLK_APMIXED_UNIV48M>;
-		// 	clock-names = "main", "mcu", "univpll";
+		usb: usb@11200000 {
+			compatible = "mediatek,mt2701-musb",
+				     "mediatek,mtk-musb";
+			reg = <0x11200000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "mc";
+			phys = <&u2port0 PHY_TYPE_USB2>;
+			dr_mode = "otg";
+			clocks = <&pericfg CLK_PERI_USB0>,
+				 <&pericfg CLK_PERI_USB0>,
+				 <&apmixedsys CLK_APMIXED_UNIV48M>;
+			clock-names = "main", "mcu", "univpll";
 			
-		// 	status = "disabled";
-		// };
+			status = "disabled";
+		};
 
-		// u2phy0: t-phy@11210000 {
-		// 	compatible = "mediatek,mt6582-u2phy";
-		// 		//      "mediatek,generic-tphy-v1";
-		// 	reg = <0x11210000 0x0800>;
-		// 	ranges;
-		// 	#address-cells = <1>;
-		// 	#size-cells = <1>;
-		// 	status = "disabled";
+		u2phy0: t-phy@11210000 {
+			compatible = "mediatek,mt6582-u2phy";
+				//      "mediatek,generic-tphy-v1";
+			reg = <0x11210000 0x0800>;
+			ranges;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			status = "disabled";
 			
 
-		// 	u2port0: usb-phy@11210800 {
-		// 		reg = <0x11210800 0x0100>;
-		// 		clocks = <&apmixedsys CLK_APMIXED_UNIV48M>;
-		// 		clock-names = "ref";
-		// 		#phy-cells = <1>;
-		// 		phy_type = <PHY_TYPE_USB2>;
+			u2port0: usb-phy@11210800 {
+				reg = <0x11210800 0x0100>;
+				clocks = <&apmixedsys CLK_APMIXED_UNIV48M>;
+				clock-names = "ref";
+				#phy-cells = <1>;
+				phy_type = <PHY_TYPE_USB2>;
 				
-		// 	};
-		// };
+			};
+		};
 
 		mmc0: mmc@11230000 {
 			compatible = "mediatek,mt6582-mmc";
@@ -571,7 +593,7 @@
 			#clock-cells = <1>;
 			#reset-cells = <1>;
 		};
-		/* mali does not work yet. */
+
 		mali: gpu@13010000 {
 			compatible = "mediatek,mt6582-mali", "arm,mali-400";
 			reg = <0x13010000 0x30000>;
@@ -583,12 +605,15 @@
 				<GIC_SPI 175 IRQ_TYPE_LEVEL_LOW>;
 			interrupt-names = "gp", "gpmmu", "pp0", "ppmmu0", "pp1",
 					"ppmmu1";
-			clocks = 
+			clocks =
 				<&mfg CLK_MFG_BG3D>,
 				<&mfg CLK_MFG_BG3D>;
 			clock-names = "bus", "core";
 			power-domains = <&spm MT6582_POWER_DOMAIN_MFG>;
 			resets = <&mfg MFG_G3D_RESET>;
+			operating-points-v2 = <&gpu_opp_table>;
+			// assigned-clocks = <&topckgen CLK_TOP_MFG_SEL>;
+			// assigned-clock-parents = <&topckgen CLK_TOP_SYSPLL_D3>;
 			status = "disabled";
 		};
 

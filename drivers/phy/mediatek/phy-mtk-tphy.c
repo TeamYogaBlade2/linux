@@ -294,6 +294,7 @@ struct mtk_phy_pdata {
 	u8 slew_ref_clock_mhz;
 	u8 slew_rate_coefficient;
 	enum mtk_phy_version version;
+	u32 fmreg_offset;
 };
 
 struct u2phy_banks {
@@ -929,15 +930,28 @@ static void u2_phy_instance_set_mode(struct mtk_tphy *tphy,
 {
 	struct u2phy_banks *u2_banks = &instance->u2_banks;
 	u32 tmp;
-
+	dev_info( tphy->dev, "%s(%d), mode:%d\n", __func__, instance->index, mode);
 	tmp = readl(u2_banks->com + U3P_U2PHYDTM1);
 	switch (mode) {
 	case PHY_MODE_USB_DEVICE:
 		tmp |= P2C_FORCE_IDDIG | P2C_RG_IDDIG;
+		mtk_phy_clear_bits(u2_banks->com + U3P_U2PHYDTM0, P2C_RG_DMPULLDOWN | P2C_RG_DPPULLDOWN);
+		mtk_phy_clear_bits(u2_banks->com + 0x6c, 0x10);
+		mtk_phy_set_bits(u2_banks->com + 0x6c, 0x3e2e);
+		// mtk_phy_set_bits(u2_banks->com + 0x6d, 0x3e);
 		break;
 	case PHY_MODE_USB_HOST:
 		tmp |= P2C_FORCE_IDDIG;
 		tmp &= ~P2C_RG_IDDIG;
+		mtk_phy_set_bits(u2_banks->com + U3P_U2PHYDTM0, P2C_RG_DMPULLDOWN | P2C_RG_DPPULLDOWN);
+		msleep(100);
+		mtk_phy_clear_bits(u2_banks->com + 0x6c, 0x3eff);
+		mtk_phy_set_bits(u2_banks->com + 0x6c, 0x3e10);
+		udelay(5);
+		mtk_phy_clear_bits(u2_banks->com + 0x6c, 0x3eff);
+		mtk_phy_set_bits(u2_banks->com + 0x6c, 0x3c2e);
+		// mtk_phy_clear_bits(u2_banks->com + 0x6d, 0x3e);
+		msleep(150);
 		break;
 	case PHY_MODE_USB_OTG:
 		tmp &= ~(P2C_FORCE_IDDIG | P2C_RG_IDDIG);
@@ -1077,7 +1091,8 @@ static void phy_v1_banks_init(struct mtk_tphy *tphy,
 	switch (instance->type) {
 	case PHY_TYPE_USB2:
 		u2_banks->misc = NULL;
-		u2_banks->fmreg = tphy->sif_base + SSUSB_SIFSLV_V1_U2FREQ;
+		u2_banks->fmreg = tphy->sif_base + tphy->pdata->fmreg_offset; //tphy->sif_base + SSUSB_SIFSLV_V1_U2FREQ;
+		
 		u2_banks->com = instance->port_base + SSUSB_SIFSLV_V1_U2PHY_COM;
 		break;
 	case PHY_TYPE_USB3:
@@ -1523,6 +1538,7 @@ static const struct mtk_phy_pdata tphy_v1_pdata = {
 	.slew_ref_clock_mhz = 26,
 	.slew_rate_coefficient = 28,
 	.version = MTK_PHY_V1,
+	.fmreg_offset = SSUSB_SIFSLV_V1_U2FREQ,
 };
 
 static const struct mtk_phy_pdata tphy_v2_pdata = {
@@ -1538,6 +1554,14 @@ static const struct mtk_phy_pdata tphy_v3_pdata = {
 	.version = MTK_PHY_V3,
 };
 
+static const struct mtk_phy_pdata mt6582_pdata = {
+	.avoid_rx_sen_degradation = false,
+	.slew_ref_clock_mhz = 48,
+	.slew_rate_coefficient = 28,
+	.version = MTK_PHY_V1,
+	.fmreg_offset = 0xf00,
+};
+
 static const struct mtk_phy_pdata mt8173_pdata = {
 	.avoid_rx_sen_degradation = true,
 	.slew_ref_clock_mhz = 26,
@@ -1549,10 +1573,12 @@ static const struct mtk_phy_pdata mt8195_pdata = {
 	.sw_pll_48m_to_26m = true,
 	.sw_efuse_supported = true,
 	.version = MTK_PHY_V3,
+	
 };
 
 static const struct of_device_id mtk_tphy_id_table[] = {
 	{ .compatible = "mediatek,mt2701-u3phy", .data = &tphy_v1_pdata },
+	{ .compatible = "mediatek,mt6582-u2phy", .data = &mt6582_pdata },
 	{ .compatible = "mediatek,mt2712-u3phy", .data = &tphy_v2_pdata },
 	{ .compatible = "mediatek,mt8173-u3phy", .data = &mt8173_pdata },
 	{ .compatible = "mediatek,mt8195-tphy", .data = &mt8195_pdata },
