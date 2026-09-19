@@ -513,8 +513,8 @@ static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
 	.size_con0 = 0xfff,
 	.size_con1 = 0xfffff,
 	.fmt_convert = rdma_fmt_convert_mt6589,
-	.mem_start_addr_reg = 0x0028,			/* MT6589 のアドレスレジスタ */
-	.mem_gmc_val = 0x00000000,				/* GMC は 0 クリア */
+	.mem_start_addr_reg = 0x0028,
+	.mem_gmc_val = 0x00000000,
 	.reset = mtk_rdma_reset_mt6589,
 };
 
