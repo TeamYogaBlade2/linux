@@ -703,6 +703,44 @@ static int mt6628_wmt_set_fm_strap(struct mt6628_wmt *wmt, u8 mode)
 			      NULL, NULL);
 }
 
+static int mt6628_wmt_init(struct mt6628_wmt *wmt)
+{
+	u16 hw_ver;
+	u16 rom_ver;
+	int ret;
+
+	ret = mt6628_wmt_read_versions(wmt, &hw_ver, &rom_ver);
+	if (ret)
+		return ret;
+
+	dev_info(&wmt->func->dev,
+		 "MT6628 WMT hardware %#x ROM %#x\n",
+		 hw_ver, rom_ver);
+
+	/*
+	 * The downstream performs patch download before this reset.
+	 * Do not pretend that reset + merge configuration is a complete
+	 * WMT firmware bring-up until the multi-patch path is implemented.
+	 */
+	ret = mt6628_wmt_reset(wmt);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_merge_if_init(wmt);
+	if (ret)
+		return ret;
+
+	/*
+	 * MT6589 downstream is configured for FM communication mode
+	 * (WMT_FM_COMM == 2) when the merge interface is used.
+	 */
+	ret = mt6628_wmt_set_fm_strap(wmt, 2);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
 /*
  * MT6628 merge-interface setup used by the MT6589 downstream BSP.
  *
