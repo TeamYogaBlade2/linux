@@ -38,7 +38,7 @@
 
 /* FM packet types on the STP control channel */
 #define FM_TASK_COMMAND_PKT_TYPE	0x1
-#define FM_TASK_EVENT_PKT_TYPE		0x2
+#define FM_TASK_EVENT_PKT_TYPE		0x4
 #define FM_ENABLE_OPCODE		0x07
 #define FM_FSPI_READ_OPCODE		0x03
 #define FM_FSPI_WRITE_OPCODE		0x04
@@ -609,8 +609,12 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	tuner->type = V4L2_TUNER_RADIO;
 	tuner->capability = V4L2_TUNER_CAP_LOW |
 			    V4L2_TUNER_CAP_STEREO;
-	tuner->rangelow = 76 * 16;
-	tuner->rangehigh = 108 * 16;
+	/*
+	 * With V4L2_TUNER_CAP_LOW, frequency units are 62.5 Hz.
+	 * MT6628 internally uses 10 kHz units.
+	 */
+	tuner->rangelow = 76 * 16000;
+	tuner->rangehigh = 108 * 16000;
 	tuner->rxsubchans = V4L2_TUNER_SUB_MONO |
 			    V4L2_TUNER_SUB_STEREO;
 	tuner->audmode = V4L2_TUNER_MODE_STEREO;
@@ -655,7 +659,7 @@ static int mtk_fm_g_frequency(struct file *file, void *priv,
 		return -EINVAL;
 
 	frequency->type = V4L2_TUNER_RADIO;
-	frequency->frequency = DIV_ROUND_CLOSEST(fm->freq * 4, 25);
+	frequency->frequency = fm->freq * 160;
 
 	return 0;
 }
@@ -669,11 +673,11 @@ static int mtk_fm_s_frequency(struct file *file, void *priv,
 	if (frequency->tuner)
 		return -EINVAL;
 
-	if (frequency->frequency < 76 * 16 ||
-	    frequency->frequency > 108 * 16)
+	if (frequency->frequency < 76 * 16000 ||
+	    frequency->frequency > 108 * 16000)
 		return -ERANGE;
 
-	freq = DIV_ROUND_CLOSEST(frequency->frequency * 25, 4);
+	freq = DIV_ROUND_CLOSEST(frequency->frequency, 160);
 
 	return mtk_fm_tune(fm, freq);
 }
