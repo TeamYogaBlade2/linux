@@ -102,6 +102,8 @@ struct mtk_nfc_caps {
 	const u8 *spare_size;
 	u8 num_spare_size;
 	u8 pageformat_spare_shift;
+	bool pageformat_sec_sel_512;
+	u8 pageformat_init;
 	u8 nfi_clk_div;
 	u8 max_sector;
 	u32 max_sector_size;
@@ -164,6 +166,10 @@ struct mtk_nfc {
  */
 static const u8 spare_size_mt2701[] = {
 	16, 26, 27, 28, 32, 36, 40, 44,	48, 49, 50, 51, 52, 62, 63, 64
+};
+
+static const u8 spare_size_mt6589[] = {
+	16, 26, 27, 28
 };
 
 static const u8 spare_size_mt2712[] = {
@@ -321,31 +327,38 @@ static int mtk_nfc_hw_runtime_config(struct mtd_info *mtd)
 	struct mtk_nfc_nand_chip *mtk_nand = to_mtk_nand(chip);
 	struct mtk_nfc *nfc = nand_get_controller_data(chip);
 	u32 fmt, spare, i;
+	u32 sec_sel_512;
 
 	if (!mtd->writesize)
 		return 0;
 
+	if (mtd->writesize >
+	    nfc->caps->max_sector * nfc->caps->max_sector_size)
+		return -EINVAL;
+
 	spare = mtk_nand->spare_per_sector;
+	sec_sel_512 = nfc->caps->pageformat_sec_sel_512 ?
+		PAGEFMT_SEC_SEL_512 : 0;
 
 	switch (mtd->writesize) {
 	case 512:
-		fmt = PAGEFMT_512_2K | PAGEFMT_SEC_SEL_512;
+		fmt = PAGEFMT_512_2K | sec_sel_512;
 		break;
 	case KB(2):
 		if (chip->ecc.size == 512)
-			fmt = PAGEFMT_2K_4K | PAGEFMT_SEC_SEL_512;
+			fmt = PAGEFMT_2K_4K | sec_sel_512;
 		else
 			fmt = PAGEFMT_512_2K;
 		break;
 	case KB(4):
 		if (chip->ecc.size == 512)
-			fmt = PAGEFMT_4K_8K | PAGEFMT_SEC_SEL_512;
+			fmt = PAGEFMT_4K_8K | sec_sel_512;
 		else
 			fmt = PAGEFMT_2K_4K;
 		break;
 	case KB(8):
 		if (chip->ecc.size == 512)
-			fmt = PAGEFMT_8K_16K | PAGEFMT_SEC_SEL_512;
+			fmt = PAGEFMT_8K_16K | sec_sel_512;
 		else
 			fmt = PAGEFMT_4K_8K;
 		break;
@@ -1093,7 +1106,7 @@ static inline void mtk_nfc_hw_init(struct mtk_nfc *nfc)
 	 * 0  : poll the status of the busy/ready signal after [7:4]*16 cycles.
 	 */
 	nfi_writew(nfc, 0xf1, NFI_CNRNB);
-	nfi_writel(nfc, PAGEFMT_8K_16K, NFI_PAGEFMT);
+	nfi_writel(nfc, nfc->caps->pageformat_init, NFI_PAGEFMT);
 
 	mtk_nfc_hw_reset(nfc);
 
@@ -1466,6 +1479,8 @@ static const struct mtk_nfc_caps mtk_nfc_caps_mt2701 = {
 	.spare_size = spare_size_mt2701,
 	.num_spare_size = 16,
 	.pageformat_spare_shift = 4,
+	.pageformat_sec_sel_512 = true,
+	.pageformat_init = PAGEFMT_8K_16K,
 	.nfi_clk_div = 1,
 	.max_sector = 16,
 	.max_sector_size = 1024,
@@ -1478,18 +1493,22 @@ static const struct mtk_nfc_caps mtk_nfc_caps_mt2701 = {
  * sectors, as programmed by the downstream mt6589 mtk_nand.c.
  */
 static const struct mtk_nfc_caps mtk_nfc_caps_mt6589 = {
-	.spare_size = spare_size_mt2701,
-	.num_spare_size = 16,
+	.spare_size = spare_size_mt6589,
+	.num_spare_size = ARRAY_SIZE(spare_size_mt6589),
 	.pageformat_spare_shift = 4,
+	.pageformat_sec_sel_512 = false,
+	.pageformat_init = PAGEFMT_512_2K,
 	.nfi_clk_div = 1,
-	.max_sector = 16,
-	.max_sector_size = 1024,
+	.max_sector = 8,
+	.max_sector_size = 512,
 };
 
 static const struct mtk_nfc_caps mtk_nfc_caps_mt2712 = {
 	.spare_size = spare_size_mt2712,
 	.num_spare_size = 19,
 	.pageformat_spare_shift = 16,
+	.pageformat_sec_sel_512 = true,
+	.pageformat_init = PAGEFMT_8K_16K,
 	.nfi_clk_div = 2,
 	.max_sector = 16,
 	.max_sector_size = 1024,
@@ -1499,6 +1518,8 @@ static const struct mtk_nfc_caps mtk_nfc_caps_mt7622 = {
 	.spare_size = spare_size_mt7622,
 	.num_spare_size = 4,
 	.pageformat_spare_shift = 4,
+	.pageformat_sec_sel_512 = true,
+	.pageformat_init = PAGEFMT_8K_16K,
 	.nfi_clk_div = 1,
 	.max_sector = 8,
 	.max_sector_size = 512,
