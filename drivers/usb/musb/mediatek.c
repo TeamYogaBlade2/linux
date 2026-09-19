@@ -39,6 +39,9 @@
 #define DMA_INTR_STATUS_MSK	GENMASK(7, 0)
 #define DMA_INTR_UNMASK_SET_MSK	GENMASK(31, 24)
 
+#define MTK_MUSB_L1INT_MASK	(TX_INT_STATUS | RX_INT_STATUS | \
+				 USBCOM_INT_STATUS | DMA_INT_STATUS)
+
 #define MTK_MUSB_CLKS_NUM	3
 
 struct mtk_glue {
@@ -308,8 +311,7 @@ static int mtk_musb_init(struct musb *musb)
 	musb_writel(musb->mregs, MUSB_HSDMA_INTR,
 		    DMA_INTR_STATUS_MSK | DMA_INTR_UNMASK_SET_MSK);
 #endif
-	musb_writel(musb->mregs, USB_L1INTM, TX_INT_STATUS | RX_INT_STATUS |
-		    USBCOM_INT_STATUS | DMA_INT_STATUS);
+	musb_writel(musb->mregs, USB_L1INTM, MTK_MUSB_L1INT_MASK);
 	return 0;
 
 err_phy_power_on:
@@ -318,6 +320,17 @@ err_phy_init:
 	if (musb->port_mode == MUSB_OTG)
 		mtk_otg_switch_exit(glue);
 	return ret;
+}
+
+static void mtk_musb_enable(struct musb *musb)
+{
+	musb_writel(musb->mregs, USB_L1INTM, MTK_MUSB_L1INT_MASK);
+}
+
+static void mtk_musb_disable(struct musb *musb)
+{
+	musb_writel(musb->mregs, USB_L1INTM, 0);
+	(void)musb_readl(musb->mregs, USB_L1INTM);
 }
 
 static u16 mtk_musb_get_toggle(struct musb_qh *qh, int is_out)
@@ -355,10 +368,16 @@ static int mtk_musb_exit(struct musb *musb)
 {
 	struct device *dev = musb->controller;
 	struct mtk_glue *glue = dev_get_drvdata(dev->parent);
+	int ret;
 
 	mtk_otg_switch_exit(glue);
 	phy_power_off(glue->phy);
 	phy_exit(glue->phy);
+
+	ret = reset_control_assert(glue->rstc);
+	if (ret)
+		dev_warn(glue->dev, "failed to assert USB reset: %d\n", ret);
+
 	clk_bulk_disable_unprepare(MTK_MUSB_CLKS_NUM, glue->clks);
 
 	pm_runtime_put_sync(dev);
@@ -369,6 +388,8 @@ static int mtk_musb_exit(struct musb *musb)
 static const struct musb_platform_ops mtk_musb_ops = {
 	.quirks = MUSB_DMA_INVENTRA,
 	.init = mtk_musb_init,
+	.enable = mtk_musb_enable,
+	.disable = mtk_musb_disable,
 	.get_toggle = mtk_musb_get_toggle,
 	.set_toggle = mtk_musb_set_toggle,
 	.exit = mtk_musb_exit,
