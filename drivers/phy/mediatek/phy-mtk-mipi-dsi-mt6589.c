@@ -198,16 +198,21 @@ static int mt6589_mipi_tx_pll_prepare(struct clk_hw *hw)
 		(unsigned long)mipi_tx->data_rate,
 		(unsigned long)mt6589_pll_rate(cfg));
 
-	/* Step 1: Enable bandgap and LDO core */
-	writel(0x3, base + MIPITX_DSI_BG_CON);	/* BG_CORE_EN | BG_CKEN */
-	writel(0x3, base + MIPITX_DSI_CON);	/* LDOCORE_EN | CKG_LDOOUT_EN */
-	usleep_range(30, 100);
+	/* Keep the analog PHY under software control while initializing it. */
+	mtk_phy_set_bits(base + MIPITX_DSI_SW_CTRL, BIT(0));
 
-	/* Step 2: PLL power-up sequence (mimic downstream 0x400 -> PLL setup -> 0x600) */
-	writel(0x400, base + MIPITX_DSI_PLL_PWR);
+	/* Step 1: Enable bandgap and LDO core */
+	mtk_phy_update_bits(base + MIPITX_DSI_BG_CON, 0x3, 0x3);
+	mtk_phy_update_bits(base + MIPITX_DSI_CON, 0x3, 0x3);
+	usleep_range(1000, 1100);
+	usleep_range(1000, 1100);
+
+	/* Step 2: PLL power-up sequence. */
+	mtk_phy_update_bits(base + MIPITX_DSI_PLL_PWR, 0x600, 0x400);
 	mt6589_mipi_tx_set_pll(mipi_tx, cfg);
-	msleep(100);
-	writel(0x600, base + MIPITX_DSI_PLL_PWR);
+	usleep_range(1000, 1100);
+	mtk_phy_update_bits(base + MIPITX_DSI_PLL_PWR, 0x600, 0x600);
+	usleep_range(1000, 1100);
 
 	return 0;
 }
@@ -219,15 +224,23 @@ static void mt6589_mipi_tx_pll_unprepare(struct clk_hw *hw)
 
 	dev_dbg(mipi_tx->dev, "PLL unprepare\n");
 
-	/* Restore default divider settings (mask 0xF0FE, value 0x26) */
+	/* Make sure the analog block remains under software control. */
+	mtk_phy_set_bits(base + MIPITX_DSI_SW_CTRL, BIT(0));
+
+	/* Power down the PLL block first. */
+	mtk_phy_update_bits(base + MIPITX_DSI_PLL_PWR, 0x600, 0);
+
+	/* Restore default divider settings. */
 	mtk_phy_update_bits(base + MIPITX_DSI_PLL_CON0, 0xF0FE, 0x26);
+
 	/* Disable PLL */
 	mtk_phy_clear_bits(base + MIPITX_DSI_PLL_CON0, BIT(0));
+	usleep_range(1000, 1100);
 
-	/* Power down analog blocks */
-	writel(0, base + MIPITX_DSI_PLL_PWR);
-	writel(0, base + MIPITX_DSI_CON);
-	writel(0, base + MIPITX_DSI_BG_CON);
+	/* Power down analog blocks. */
+	mtk_phy_update_bits(base + MIPITX_DSI_CON, 0x3, 0);
+	mtk_phy_update_bits(base + MIPITX_DSI_BG_CON, 0x3, 0);
+	usleep_range(1000, 1100);
 }
 
 static int mt6589_mipi_tx_pll_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -269,27 +282,25 @@ static void mt6589_mipi_tx_power_on_signal(struct phy *phy)
 	struct mtk_mipi_tx *mipi_tx = phy_get_drvdata(phy);
 	void __iomem *base = mipi_tx->regs;
 
-	/* Enable software control over PHY lanes */
-	writel(1, base + MIPITX_DSI_SW_CTRL);
-
 	/* Enable LDO output on all data lanes and clock lane */
-	writel(1, base + MIPITX_DSI_LANE0);
-	writel(1, base + MIPITX_DSI_LANE1);
-	writel(1, base + MIPITX_DSI_LANE2);
-	writel(1, base + MIPITX_DSI_LANE3);
-	writel(1, base + MIPITX_DSI_CLK_LANE);
+	mtk_phy_set_bits(base + MIPITX_DSI_LANE0, BIT(0));
+	mtk_phy_set_bits(base + MIPITX_DSI_LANE1, BIT(0));
+	mtk_phy_set_bits(base + MIPITX_DSI_LANE2, BIT(0));
+	mtk_phy_set_bits(base + MIPITX_DSI_LANE3, BIT(0));
+	mtk_phy_set_bits(base + MIPITX_DSI_CLK_LANE, BIT(0));
 
 	/* Enable HS bias */
-	writel(0x2, base + MIPITX_DSI_TOP_CON);	/* BIT(1) */
-	usleep_range(20, 100);
+	mtk_phy_set_bits(base + MIPITX_DSI_TOP_CON, BIT(1));
+	usleep_range(1000, 1100);
 
-	/* Clear an unknown TOP_CON bit (BIT(11) in downstream) */
+	/* Clear the downstream TOP_CON bit 11. */
 	mtk_phy_clear_bits(base + MIPITX_DSI_TOP_CON, BIT(11));
 
 	/* Set DP/DN to mark-1 state: first 0x200, then 0x600 */
 	writel(0x200, base + MIPITX_DSI_SW_CTRL_CON0);
-	usleep_range(20, 100);
+	usleep_range(1000, 1100);
 	writel(0x600, base + MIPITX_DSI_SW_CTRL_CON0);
+	usleep_range(1000, 1100);
 
 	/* Return control to DSI host */
 	writel(0, base + MIPITX_DSI_SW_CTRL);
@@ -300,28 +311,26 @@ static void mt6589_mipi_tx_power_off_signal(struct phy *phy)
 	struct mtk_mipi_tx *mipi_tx = phy_get_drvdata(phy);
 	void __iomem *base = mipi_tx->regs;
 
-	/* Take software control */
-	writel(1, base + MIPITX_DSI_SW_CTRL);
-
-	/* Disable all lane LDOs */
-	writel(0, base + MIPITX_DSI_LANE0);
-	writel(0, base + MIPITX_DSI_LANE1);
-	writel(0, base + MIPITX_DSI_LANE2);
-	writel(0, base + MIPITX_DSI_LANE3);
-	writel(0, base + MIPITX_DSI_CLK_LANE);
-
-	/* Disable HS bias */
-	writel(0, base + MIPITX_DSI_TOP_CON);
-
-	/* Clear SW control registers (including HS TX data ready / data) */
+	/* Clear the software-controlled lane state first. */
 	writel(0, base + MIPITX_DSI_SW_CTRL_CON0);
 	writel(0, base + MIPITX_DSI_SW_CTRL_CON1);
 
-	/* Power down PLL block */
-	writel(0, base + MIPITX_DSI_PLL_PWR);
+	/* Take software control. */
+	writel(1, base + MIPITX_DSI_SW_CTRL);
 
-	/* Release software control */
-	writel(0, base + MIPITX_DSI_SW_CTRL);
+	/* Match downstream shutdown ordering. */
+	mtk_phy_set_bits(base + MIPITX_DSI_TOP_CON, BIT(11));
+
+	/* Disable all lane LDOs */
+	mtk_phy_clear_bits(base + MIPITX_DSI_LANE0, BIT(0));
+	mtk_phy_clear_bits(base + MIPITX_DSI_LANE1, BIT(0));
+	mtk_phy_clear_bits(base + MIPITX_DSI_LANE2, BIT(0));
+	mtk_phy_clear_bits(base + MIPITX_DSI_LANE3, BIT(0));
+	mtk_phy_clear_bits(base + MIPITX_DSI_CLK_LANE, BIT(0));
+
+	/* Disable HS bias */
+	mtk_phy_clear_bits(base + MIPITX_DSI_TOP_CON, BIT(1));
+	usleep_range(1000, 1100);
 }
 
 /* Platform data exported for binding */
