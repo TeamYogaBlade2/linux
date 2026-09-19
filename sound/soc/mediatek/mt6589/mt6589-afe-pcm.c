@@ -287,9 +287,9 @@ static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 {
 	size_t size = mt6589_afe_hardware.buffer_bytes_max;
 
-	snd_pcm_set_managed_buffer_all(rtd->pcm, SNDRV_DMA_TYPE_DEV_IRAM, comp->dev,
-				       size, size);
-	return 0;
+	return snd_pcm_set_managed_buffer_all(rtd->pcm,
+					      SNDRV_DMA_TYPE_DEV_IRAM,
+					      comp->dev, size, size);
 }
 
 static const DECLARE_TLV_DB_LINEAR(dl_gain_tlv, TLV_DB_GAIN_MUTE, 0);

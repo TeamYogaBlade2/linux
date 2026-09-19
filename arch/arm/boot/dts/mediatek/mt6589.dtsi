@@ -714,6 +714,15 @@
 				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
 		};
 
+		afe_sram: sram@12004000 {
+			compatible = "mmio-sram";
+			reg = <0x12004000 0x4000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0 0x12004000 0x4000>;
+			no-memory-wc;
+		};
+
 		audsys: syscon@12070000 {
 			compatible = "mediatek,mt6589-audsys", "syscon",
 				     "simple-mfd";
@@ -725,6 +734,7 @@
 			clocks = <&audsys CLK_AUDIO_AFE>,
 				 <&audsys CLK_AUDIO_I2S>;
 			clock-names = "afe", "i2s";
+			iram = <&afe_sram>;
 			interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
 		};
 		};
