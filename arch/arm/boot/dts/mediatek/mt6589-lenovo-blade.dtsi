@@ -34,6 +34,11 @@
 			no-map;
 		};
 	};
+
+	sound {
+		compatible = "mediatek,mt6589-mt6320-sound";
+		mediatek,platform = <&afe>;
+	};
 };
 
 &cpu0 {
@@ -452,11 +457,6 @@
 	keypad,num-rows = <1>;
 	keypad,num-columns = <3>;
 	debounce-delay-ms = <32>;
-};
-
-sound {
-	compatible = "mediatek,mt6589-mt6320-sound";
-	mediatek,platform = <&afe>;
 };
 
 &pwm {
