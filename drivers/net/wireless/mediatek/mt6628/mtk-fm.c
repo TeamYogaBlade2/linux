@@ -17,8 +17,10 @@
 #include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/completion.h>
+#include <linux/kernel.h>
 #include <linux/mfd/mt6628.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/unaligned.h>
@@ -38,14 +40,28 @@
 #define FM_TASK_COMMAND_PKT_TYPE	0x1
 #define FM_TASK_EVENT_PKT_TYPE		0x2
 #define FM_ENABLE_OPCODE		0x07
+#define FM_FSPI_READ_OPCODE		0x03
+#define FM_FSPI_WRITE_OPCODE		0x04
+#define FM_PATCH_DOWNLOAD_OPCODE	0x12
+#define FM_COEFF_DOWNLOAD_OPCODE	0x13
+
+#define FM_REG_CHIP_ID			0x62
+#define FM_REG_ROM_VERSION		0x83
+#define FM_REG_ROM_CTRL			0x61
+
+#define FM_PATCH_SEG_LEN		512
+#define FM_CMD_TIMEOUT_MS		3000
 
 struct mtk_fm {
 	struct v4l2_device v4l2_dev;
 	struct video_device vdev;
 	struct mt6628_wmt *wmt;
 	struct completion cmd_done;
+	struct mutex cmd_lock;
 	u8 waiting_opcode;
 	int cmd_status;
+	u8 cmd_data[4];
+	size_t cmd_data_len;
 	u32 freq;			/* in 10 kHz units */
 };
 
@@ -64,12 +80,9 @@ static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
 	if (buf[1] != fm->waiting_opcode)
 		return;
 
-	/*
-	 * Firmware-download / enable commands use an event with no
-	 * opcode-specific result payload.  Reception of the matching
-	 * opcode is the success indication used by the downstream
-	 * fm_cmd_tx()/fm_event_parser() path.
-	 */
+	fm->cmd_data_len = min_t(size_t, payload_len,
+				 sizeof(fm->cmd_data));
+	memcpy(fm->cmd_data, buf + 4, fm->cmd_data_len);
 	fm->cmd_status = 0;
 	complete(&fm->cmd_done);
 }
@@ -80,20 +93,28 @@ static int mtk_fm_send_cmd(struct mtk_fm *fm, const u8 *buf, size_t len,
 	unsigned long timeout;
 	int ret;
 
+	mutex_lock(&fm->cmd_lock);
 	reinit_completion(&fm->cmd_done);
 	fm->waiting_opcode = opcode;
 	fm->cmd_status = -ETIMEDOUT;
+	fm->cmd_data_len = 0;
 
 	ret = mt6628_stp_send(fm->wmt, MT6628_STP_TASK_FM, buf, len);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	timeout = wait_for_completion_timeout(&fm->cmd_done,
 					     msecs_to_jiffies(timeout_ms));
-	if (!timeout)
-		return -ETIMEDOUT;
+	if (!timeout) {
+		ret = -ETIMEDOUT;
+		goto out;
+	}
 
-	return fm->cmd_status;
+	ret = fm->cmd_status;
+out:
+	fm->waiting_opcode = 0xff;
+	mutex_unlock(&fm->cmd_lock);
+	return ret;
 }
 
 /* ---- BOP buffer construction ---- */
@@ -144,6 +165,143 @@ static int fm_bop_udelay(u32 us, u8 *buf, int size)
 	return 6;
 }
 
+static int fm_bop_rd_until(u8 addr, u16 mask, u16 value,
+			   u8 *buf, int size)
+{
+	if (size < 7)
+		return -1;
+
+	buf[0] = FM_BOP_RD_UNTIL;
+	buf[1] = 5;
+	buf[2] = addr;
+	buf[3] = mask & 0xff;
+	buf[4] = mask >> 8;
+	buf[5] = value & 0xff;
+	buf[6] = value >> 8;
+
+	return 7;
+}
+
+static int mtk_fm_read_reg(struct mtk_fm *fm, u8 addr, u16 *value)
+{
+	u8 cmd[5] = {
+		FM_TASK_COMMAND_PKT_TYPE,
+		FM_FSPI_READ_OPCODE,
+		0x01, 0x00, addr,
+	};
+	int ret;
+
+	ret = mtk_fm_send_cmd(fm, cmd, sizeof(cmd),
+			      FM_FSPI_READ_OPCODE, FM_CMD_TIMEOUT_MS);
+	if (ret)
+		return ret;
+
+	if (fm->cmd_data_len < 2)
+		return -EPROTO;
+
+	*value = get_unaligned_le16(fm->cmd_data);
+	return 0;
+}
+
+static int mtk_fm_write_reg(struct mtk_fm *fm, u8 addr, u16 value)
+{
+	u8 cmd[7] = {
+		FM_TASK_COMMAND_PKT_TYPE,
+		FM_FSPI_WRITE_OPCODE,
+		0x03, 0x00,
+		addr,
+		value & 0xff,
+		value >> 8,
+	};
+
+	return mtk_fm_send_cmd(fm, cmd, sizeof(cmd),
+			       FM_FSPI_WRITE_OPCODE, FM_CMD_TIMEOUT_MS);
+}
+
+static int mtk_fm_download(struct mtk_fm *fm, u8 opcode,
+			   const char *name)
+{
+	const struct firmware *fw;
+	u8 *cmd;
+	unsigned int seg_num, seg_id;
+	size_t offset = 0;
+	int ret;
+
+	ret = request_firmware(&fw, name, &fm->vdev.dev);
+	if (ret)
+		return ret;
+
+	seg_num = DIV_ROUND_UP(fw->size, FM_PATCH_SEG_LEN);
+	if (!seg_num || seg_num > U8_MAX) {
+		ret = -EFBIG;
+		goto out_release;
+	}
+
+	cmd = kmalloc(4 + 2 + FM_PATCH_SEG_LEN, GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto out_release;
+	}
+
+	for (seg_id = 0; seg_id < seg_num; seg_id++) {
+		size_t seg_len = min_t(size_t, FM_PATCH_SEG_LEN,
+				       fw->size - offset);
+
+		cmd[0] = FM_TASK_COMMAND_PKT_TYPE;
+		cmd[1] = opcode;
+		put_unaligned_le16(seg_len + 2, cmd + 2);
+		cmd[4] = seg_num;
+		cmd[5] = seg_id;
+		memcpy(cmd + 6, fw->data + offset, seg_len);
+
+		ret = mtk_fm_send_cmd(fm, cmd, 6 + seg_len,
+				      opcode, FM_CMD_TIMEOUT_MS);
+		if (ret)
+			break;
+
+		offset += seg_len;
+	}
+
+	kfree(cmd);
+out_release:
+	release_firmware(fw);
+	return ret;
+}
+
+static int mtk_fm_get_rom_version(struct mtk_fm *fm, u8 *rom)
+{
+	u16 val;
+	int ret;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_ROM_CTRL, &val);
+	if (ret)
+		return ret;
+
+	val |= BIT(15);
+	ret = mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
+	if (ret)
+		return ret;
+
+	val |= BIT(1);
+	val &= ~BIT(0);
+	ret = mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
+	if (ret)
+		return ret;
+
+	udelay(1000);
+
+	ret = mtk_fm_read_reg(fm, FM_REG_ROM_VERSION, &val);
+	if (ret)
+		return ret;
+
+	*rom = val >> 8;
+
+	val &= ~BIT(15);
+	val &= ~0x3;
+	val |= 0x1;
+	return mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
+}
+
 /* Power-up step 1: enable the FM digital clock. */
 static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 {
@@ -180,6 +338,10 @@ static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 static int mtk_fm_power_up(struct mtk_fm *fm)
 {
 	u8 *buf;
+	char patch[64];
+	char coeff[64];
+	u16 chip_id, val;
+	u8 rom;
 	int pkt, ret;
 
 	buf = kzalloc(512, GFP_KERNEL);
@@ -189,8 +351,72 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 	pkt = fm_pwrup_clock_on(fm, buf, 512);
 
 	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 3000);
-	kfree(buf);
+	if (ret)
+		goto out_free;
 
+	ret = mtk_fm_read_reg(fm, FM_REG_CHIP_ID, &chip_id);
+	if (ret)
+		goto out_free;
+	if (chip_id != 0x6628) {
+		ret = -ENODEV;
+		goto out_free;
+	}
+
+	ret = mtk_fm_get_rom_version(fm, &rom);
+	if (ret)
+		goto out_free;
+	if (rom >= 5) {
+		ret = -EINVAL;
+		goto out_free;
+	}
+
+	snprintf(patch, sizeof(patch),
+		 "mediatek/mt6628/mt6628_fm_v%u_patch.bin", rom + 1);
+	snprintf(coeff, sizeof(coeff),
+		 "mediatek/mt6628/mt6628_fm_v%u_coeff.bin", rom + 1);
+
+	ret = mtk_fm_download(fm, FM_PATCH_DOWNLOAD_OPCODE, patch);
+	if (ret)
+		goto out_free;
+
+	ret = mtk_fm_download(fm, FM_COEFF_DOWNLOAD_OPCODE, coeff);
+	if (ret)
+		goto out_free;
+
+	ret = mtk_fm_write_reg(fm, 0x90, 0x0040);
+	if (ret)
+		goto out_free;
+
+	ret = mtk_fm_write_reg(fm, 0x90, 0x0000);
+	if (ret)
+		goto out_free;
+
+	pkt = 4;
+	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
+	buf[1] = FM_ENABLE_OPCODE;
+	buf[2] = 0;
+	buf[3] = 0;
+
+	pkt += fm_bop_write(0x6a, 0x2100, buf + pkt, 512 - pkt);
+	pkt += fm_bop_write(0x6b, 0x2100, buf + pkt, 512 - pkt);
+	pkt += fm_bop_modify(0x60, 0xfff7, 0x0008,
+			     buf + pkt, 512 - pkt);
+	pkt += fm_bop_modify(0x61, 0xfffd, 0x0002,
+			     buf + pkt, 512 - pkt);
+	pkt += fm_bop_modify(0x61, 0xfffe, 0x0000,
+			     buf + pkt, 512 - pkt);
+	pkt += fm_bop_udelay(200000, buf + pkt, 512 - pkt);
+	pkt += fm_bop_rd_until(0x64, 0x001f, 0x0002,
+			       buf + pkt, 512 - pkt);
+
+	put_unaligned_le16(pkt - 4, buf + 2);
+
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 5000);
+	if (!ret)
+		fm->freq = 87500;
+
+out_free:
+	kfree(buf);
 	return ret;
 }
 
@@ -233,6 +459,8 @@ static int mtk_fm_probe(struct platform_device *pdev)
 
 	fm->wmt = wmt;
 	init_completion(&fm->cmd_done);
+	mutex_init(&fm->cmd_lock);
+	fm->waiting_opcode = 0xff;
 
 	fm->freq = 87500;	/* 87.5 MHz in 10kHz units */
 
