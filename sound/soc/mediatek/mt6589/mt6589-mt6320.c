@@ -114,9 +114,11 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 		dai_link->platforms->of_node = platform_node;
 	}
 
-	ret = snd_soc_of_parse_audio_routing(card, "audio-routing");
-	if (ret)
-		goto put_node;
+	if (of_property_present(pdev->dev.of_node, "audio-routing")) {
+		ret = snd_soc_of_parse_audio_routing(card, "audio-routing");
+		if (ret)
+			goto put_node;
+	}
 
 	/* Optional external speaker amplifier(s) via "aux-devs". */
 	ret = snd_soc_of_parse_aux_devs(card, "aux-devs");
