@@ -24,8 +24,10 @@
 #include <linux/mfd/mt6320/registers.h>
 
 #define AUXADC_CON2_IDLE	BIT(0)
-#define AUXADC_READY		BIT(12)
-#define AUXADC_DATA_MASK	GENMASK(11, 0)
+#define AUXADC_READY		BIT(15)
+#define AUXADC_DATA_MASK	GENMASK(9, 0)
+#define AUXADC_FULL_SCALE_MV	1200
+#define AUXADC_RESOLUTION	1024
 
 /* Channel indices == CON1 bit position == ADC register index. */
 #define MT6320_AUXADC_BATSNS		0
@@ -63,13 +65,13 @@ struct mt6320_auxadc {
 
 static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
 				  const struct iio_chan_spec *chan,
-				  int *val, int *val2, long mask)
+	int *val, int *val2, long mask)
 {
 	struct mt6320_auxadc *auxadc = iio_priv(indio_dev);
 	unsigned int reg = MT6320_AUXADC_ADC0 + chan->channel * 2;
 	unsigned int val32;
 	u32 val16;
-	int ret, mult;
+	int ret;
 
 	if (mask != IIO_CHAN_INFO_RAW && mask != IIO_CHAN_INFO_SCALE)
 		return -EINVAL;
@@ -77,17 +79,11 @@ static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
 	guard(mutex)(&auxadc->lock);
 
 	if (mask == IIO_CHAN_INFO_SCALE) {
-		if (chan->channel == MT6320_AUXADC_ISENSE ||
-		    chan->channel == MT6320_AUXADC_BATSNS)
-			mult = 4;
-		else
-			mult = 1;
+		/* MT6320 ADC: 1.2V full-scale, 10-bit conversion. */
+		*val = AUXADC_FULL_SCALE_MV;
+		*val2 = AUXADC_RESOLUTION;
 
-		/* 1800mV full range with 12-bit resolution. */
-		*val = mult * 1800;
-		*val2 = 12;
-
-		return IIO_VAL_FRACTIONAL_LOG2;
+		return IIO_VAL_FRACTIONAL;
 	}
 
 	{
