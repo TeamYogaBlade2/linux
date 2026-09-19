@@ -33,7 +33,7 @@
 
 #include "mtk-wlan-hif.h"
 
-#define MT6628_FW_NAME			"mediatek/mt6628_wifi_fw.bin"
+#define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
 #define MT6628_FW_DL_CHUNK		2048
 /* CFG_FW_LOAD_ADDRESS of the downstream config.h */
 #define MT6628_FW_LOAD_ADDRESS		0x00060000
@@ -512,10 +512,11 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	/* enable the SDIO function; MMC core does not do it for us */
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
+	if (!ret)
+		ret = sdio_set_block_size(func, 512);
 	sdio_release_host(func);
 	if (ret)
-		return dev_err_probe(&func->dev, ret,
-				     "failed to enable function\n");
+		goto err_disable;
 
 	msleep(50);		/* let the ROM come up */
 
