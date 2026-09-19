@@ -36,7 +36,7 @@ config SND_SOC_MT6589
 
 config SND_SOC_MT6589_MT6320
 	tristate "ASoC machine driver for MT6589 with the MT6320 codec"
-	depends on SND_SOC_MT6572
+	depends on SND_SOC_MT6589
 	select SND_SOC_MT6320
 	help
 	  This adds the ASoC machine driver for a MediaTek MT6589 board with
