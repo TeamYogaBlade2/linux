@@ -94,6 +94,7 @@ struct mt6589_bls_pwm {
 	void __iomem *base;
 	struct clk *clk_main;
 	unsigned int max_level;
+	bool clk_enabled;
 };
 
 static inline struct mt6589_bls_pwm *to_mt6589_bls_pwm(struct pwm_chip *chip)
@@ -140,9 +141,9 @@ static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
 	}
 
 	/* Last point (index 256) boundary register */
-	val = ((256 << 2) & 0x3FF) << 20 |
-	      ((256 << 2) & 0x3FF) << 10 |
-	      ((256 << 2) & 0x3FF);
+	val = (0x3FF << 20) |
+	      (0x3FF << 10) |
+	      0x3FF;
 	writel(val, bls->base + BLS_GAMMA_BOUNDARY);
 
 	/* Enable gamma table (bit 0 of BLS_GAMMA_SETTING) */
@@ -199,15 +200,21 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		return -EINVAL;
 
 	if (state->enabled) {
-		/* Ensure clocks are on */
-		ret = clk_prepare_enable(bls->clk_main);
-		if (ret)
-			return ret;
+		if (!bls->clk_enabled) {
+			ret = clk_prepare_enable(bls->clk_main);
+			if (ret)
+				return ret;
+
+			bls->clk_enabled = true;
+		}
 
 		level = duty_to_level(state, bls->max_level);
 
-		/* Set PWM duty: register format is (min_level << 19) | duty_value */
-		reg = PWM_DUTY_MIN_LEVEL | (level & 0x3FF);
+		if (!level)
+			reg = 0;
+		else
+			reg = PWM_DUTY_MIN_LEVEL | (level & 0x3FF);
+
 		writel(reg, bls->base + BLS_PWM_DUTY);
 
 		/* Enable PWM (only PWM, keep BLS engine off) */
@@ -216,7 +223,10 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		/* Disable PWM output */
 		writel(0x0, bls->base + BLS_EN);
 
-		clk_disable_unprepare(bls->clk_main);
+		if (bls->clk_enabled) {
+			clk_disable_unprepare(bls->clk_main);
+			bls->clk_enabled = false;
+		}
 	}
 
 	return 0;
