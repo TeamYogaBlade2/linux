@@ -296,9 +296,22 @@ static int mtk_fm_get_rom_version(struct mtk_fm *fm, u8 *rom)
 
 	*rom = val >> 8;
 
+	ret = mtk_fm_read_reg(fm, FM_REG_ROM_CTRL, &val);
+	if (ret)
+		return ret;
+
 	val &= ~BIT(15);
+	ret = mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
+	if (ret)
+		return ret;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_ROM_CTRL, &val);
+	if (ret)
+		return ret;
+
 	val &= ~0x3;
 	val |= 0x1;
+
 	return mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
 }
 
@@ -413,10 +426,51 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 
 	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 5000);
 	if (!ret)
-		fm->freq = 87500;
+		fm->freq = 8750;
 
 out_free:
 	kfree(buf);
+	return ret;
+}
+
+static int mtk_fm_power_down(struct mtk_fm *fm)
+{
+	u8 buf[128] = {};
+	int pkt = 4;
+	int ret;
+
+	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
+	buf[1] = FM_ENABLE_OPCODE;
+
+	/* Disable HW clock control. */
+	pkt += fm_bop_write(0x60, 0x330f,
+			    buf + pkt, sizeof(buf) - pkt);
+
+	/* Reset ASIP. */
+	pkt += fm_bop_write(0x61, 0x0001,
+			    buf + pkt, sizeof(buf) - pkt);
+
+	/* Reset the digital core and digital RGF. */
+	pkt += fm_bop_modify(0x6e, 0xfff8, 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x6e, 0xfff8, 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x6e, 0xfff8, 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x6e, 0xfff8, 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	/* Disable all clocks and reset RGF/RF. */
+	pkt += fm_bop_write(0x60, 0x0000,
+			    buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_write(0x60, 0x4000,
+			    buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_write(0x60, 0x0000,
+			    buf + pkt, sizeof(buf) - pkt);
+
+	put_unaligned_le16(pkt - 4, buf + 2);
+
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 3000);
 	return ret;
 }
 
@@ -462,7 +516,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	mutex_init(&fm->cmd_lock);
 	fm->waiting_opcode = 0xff;
 
-	fm->freq = 87500;	/* 87.5 MHz in 10kHz units */
+	fm->freq = 8750;	/* 87.5 MHz in 10kHz units */
 
 	ret = mt6628_stp_register_rx(wmt, MT6628_STP_TASK_FM,
 				     mtk_fm_rx, fm);
@@ -480,6 +534,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	ret = mtk_fm_power_up(fm);
 	if (ret) {
 		dev_err(&pdev->dev, "FM power-up failed: %d\n", ret);
+		mtk_fm_power_down(fm);
 		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
 		goto err_v4l2;
 	}
@@ -498,6 +553,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	ret = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
 	if (ret) {
 		v4l2_err(&fm->v4l2_dev, "failed to register radio: %d\n", ret);
+		mtk_fm_power_down(fm);
 		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
 		v4l2_device_unregister(&fm->v4l2_dev);
 		goto err_unregister_rx;
@@ -523,6 +579,7 @@ static void mtk_fm_remove(struct platform_device *pdev)
 		return;
 
 	video_unregister_device(&fm->vdev);
+	mtk_fm_power_down(fm);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	mt6628_wmt_func_ctrl(fm->wmt, MT6628_WMT_FUNC_FM, false);
 	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
