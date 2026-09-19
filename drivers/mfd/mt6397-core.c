@@ -55,6 +55,10 @@ static const struct resource mt6320_rtc_resources[] = {
 	DEFINE_RES_IRQ(MT6320_IRQ_RTC),
 };
 
+static const struct resource mt6320_pwrc_resources[] = {
+	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
+};
+
 static const struct resource mt6323_rtc_resources[] = {
 	DEFINE_RES_MEM(MT6323_RTC_BASE, MT6323_RTC_SIZE),
 	DEFINE_RES_IRQ(MT6323_IRQ_STATUS_RTC),
@@ -160,8 +164,8 @@ static const struct mfd_cell mt6320_devs[] = {
 		.of_compatible = "mediatek,mt6320-keys",
 	}, {
 		.name = "mt6320-pwrc",
-		.num_resources = ARRAY_SIZE(mt6323_pwrc_resources),
-		.resources = mt6323_pwrc_resources,
+		.num_resources = ARRAY_SIZE(mt6320_pwrc_resources),
+		.resources = mt6320_pwrc_resources,
 		.of_compatible = "mediatek,mt6320-pwrc",
 	},
 };
