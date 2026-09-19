@@ -865,6 +865,7 @@
 				 <&mfgsys CLK_MFG_MEM>,
 				 <&mfgsys CLK_MFG_AXI>;
 			clock-names = "core", "mem", "sys";
+			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
 		};
 
 		dispsys: syscon@14000000 {
@@ -880,7 +881,7 @@
 			#pwm-cells = <2>;
 			clocks = <&dispsys CLK_DISP0_BLS>;
 			clock-names = "main";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 			status = "disabled";
 		};
 
@@ -889,6 +890,7 @@
 			reg = <0x1400a000 0x1000>;
 			interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP0_COLOR>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		tdshp: tdshp@1400b000 {
@@ -896,6 +898,7 @@
 			reg = <0x1400b000 0x1000>;
 			interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP0_2DSHP>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		/* NAND flash controller */
@@ -1002,7 +1005,7 @@
 			clocks = <&infracfg CLK_INFRA_SMI>,
 				 <&infracfg CLK_INFRA_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_IFR>;
 		};
 
 		iommu: iommu@10205000 {
@@ -1023,7 +1026,7 @@
 			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
 					 <&larb3>, <&larb4>;
 			#iommu-cells = <1>;
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_IFR>;
 		};
 
 		gic: interrupt-controller@10211000 {
@@ -1215,7 +1218,7 @@
 				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		rdma0: rdma@14006000 {
@@ -1226,7 +1229,7 @@
 				 <&dispsys CLK_DISP0_RDMA0_SMI>,
 				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		rdma1: rdma@14007000 {
@@ -1237,7 +1240,7 @@
 				 <&dispsys CLK_DISP0_RDMA1_SMI>,
 				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		mutex: mutex@14011000 {
@@ -1246,7 +1249,7 @@
 			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
 			/* not found in clock list */
 			clocks = <&clk26m>;
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		dsi: dsi@1400d000 {
@@ -1259,7 +1262,7 @@
 			clock-names = "engine", "digital", "hs";
 			phys = <&mipi_tx0>;
 			phy-names = "dphy";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 			status = "disabled";
 		};
 
@@ -1293,7 +1296,7 @@
 			clocks = <&dispsys CLK_DISP0_LARB2_SMI>,
 				 <&dispsys CLK_DISP0_LARB2_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		larb3: larb@15001000 {
