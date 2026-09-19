@@ -74,7 +74,7 @@
 #define AFE_ADDA_PREDIS_CON0	0x0260		/* ADDA downlink pre-distortion */
 #define AFE_ADDA_PREDIS_CON1	0x0264
 #define AFE_ADDA_NEWIF_CFG0	0x0138		/* AFE<->PMIC serial link (NEWIF) */
-#define AFE_ADDA_NEWIF_CFG0_VAL	0x03f87200
+#define AFE_ADDA_NEWIF_CFG0_VAL	0x03f87201	/* up8x TXIF saturation on */
 #define AFE_ADDA_NEWIF_CFG1	0x013c
 #define AFE_ADDA_NEWIF_CFG1_VAL	0x03117180
 
