@@ -522,7 +522,8 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 	unsigned long timeout;
 	int ret;
 
-	if (!wmt || (func != MT6628_WMT_FUNC_FM &&
+	if (!wmt || (func != MT6628_WMT_FUNC_BT &&
+			     func != MT6628_WMT_FUNC_FM &&
 			     func != MT6628_WMT_FUNC_GPS))
 		return -EINVAL;
 
