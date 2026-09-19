@@ -4,6 +4,7 @@
  */
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
+#include <linux/math64.h>
 
 #include "clk-mtk.h"
 #include "clk-gate.h"
@@ -13,48 +14,134 @@
 #define TOP_CKMUXSEL	0x0000
 #define TOP_CKDIV1	0x0008
 
-/*
- * TOP_CKDIV1 (armdiv1) encodes the ARM clock as a fraction n/d of the
- * ARMPLL output.  The 5-bit field clkdiv1_sel[4:0] encodes:
- *
- *   bits[4:3]  denominator: 0b01 -> /4, 0b10 -> /5, 0b11 -> /6
- *   bits[2:0]  numerator directly (NOT numerator-1): 0b100=4, 0b011=3 ...
- *
- * Full encoding per the hardware manual:
- *   01000=4/4  01001=3/4  01010=2/4  01011=1/4
- *   10000=5/5  10001=4/5  10010=3/5  10011=2/5  10100=1/5
- *   11000=6/6  11001=5/6  11010=4/6  11011=3/6  11100=2/6  11101=1/6
- *   00000 (and anything with bits[4:3]=00) = bypass (full ARMPLL rate)
- *
- * clk_div_table only supports integer divisors (rate = parent/div).
- * Entries where d/n is not an integer cannot be represented exactly;
- * for those the .div field is set to the nearest integer >= d/n so
- * that the CCF never programmes a rate exceeding the hardware output.
- *
- * The downstream CPU DVFS driver only ever uses 0x0a (2/4, real /2)
- * to park the ARM clock while reprogramming ARMPLL, then 0x08 (4/4,
- * bypass) afterwards; all other entries are listed for completeness.
- */
-static const struct clk_div_table mt6589_armdiv1_table[] = {
-	/* denominator = 4 */
-	{ .val = 0x08, .div = 1 },	/* 4/4 = /1   (exact) */
-	{ .val = 0x09, .div = 2 },	/* 3/4 ≈ /1.33 -> /2 approx (conservative) */
-	{ .val = 0x0a, .div = 2 },	/* 2/4 = /2   (exact) */
-	{ .val = 0x0b, .div = 4 },	/* 1/4 = /4   (exact) */
-	/* denominator = 5 */
-	{ .val = 0x10, .div = 1 },	/* 5/5 = /1   (exact) */
-	{ .val = 0x11, .div = 2 },	/* 4/5 ≈ /1.25 -> /2 approx (conservative) */
-	{ .val = 0x12, .div = 2 },	/* 3/5 ≈ /1.67 -> /2 approx (conservative) */
-	{ .val = 0x13, .div = 3 },	/* 2/5 = /2.5  -> /3 approx (conservative) */
-	{ .val = 0x14, .div = 5 },	/* 1/5 = /5   (exact) */
-	/* denominator = 6 */
-	{ .val = 0x18, .div = 1 },	/* 6/6 = /1   (exact) */
-	{ .val = 0x19, .div = 2 },	/* 5/6 ≈ /1.2  -> /2 approx (conservative) */
-	{ .val = 0x1a, .div = 2 },	/* 4/6 ≈ /1.5  -> /2 approx (conservative) */
-	{ .val = 0x1b, .div = 2 },	/* 3/6 = /2   (exact) */
-	{ .val = 0x1c, .div = 3 },	/* 2/6 = /3   (exact) */
-	{ .val = 0x1d, .div = 6 },	/* 1/6 = /6   (exact) */
-	{ }
+struct mt6589_armdiv_ratio {
+	u8 val;
+	u8 num;
+	u8 den;
+};
+
+static const struct mt6589_armdiv_ratio mt6589_armdiv_ratios[] = {
+	{ 0x00, 1, 1 },
+	{ 0x08, 4, 4 },
+	{ 0x09, 3, 4 },
+	{ 0x0a, 2, 4 },
+	{ 0x0b, 1, 4 },
+	{ 0x10, 5, 5 },
+	{ 0x11, 4, 5 },
+	{ 0x12, 3, 5 },
+	{ 0x13, 2, 5 },
+	{ 0x14, 1, 5 },
+	{ 0x18, 6, 6 },
+	{ 0x19, 5, 6 },
+	{ 0x1a, 4, 6 },
+	{ 0x1b, 3, 6 },
+	{ 0x1c, 2, 6 },
+	{ 0x1d, 1, 6 },
+};
+
+static const struct mt6589_armdiv_ratio *
+mt6589_armdiv_find_val(unsigned int val)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mt6589_armdiv_ratios); i++)
+		if (mt6589_armdiv_ratios[i].val == val)
+			return &mt6589_armdiv_ratios[i];
+
+	return NULL;
+}
+
+static const struct mt6589_armdiv_ratio *
+mt6589_armdiv_find_rate(unsigned long rate, unsigned long parent_rate)
+{
+	const struct mt6589_armdiv_ratio *best = NULL;
+	u64 best_diff = ~0ULL;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mt6589_armdiv_ratios); i++) {
+		const struct mt6589_armdiv_ratio *ratio =
+			&mt6589_armdiv_ratios[i];
+		u64 candidate;
+		u64 diff;
+
+		candidate = div_u64((u64)parent_rate * ratio->num,
+				    ratio->den);
+		diff = candidate > rate ? candidate - rate : rate - candidate;
+
+		if (diff < best_diff) {
+			best_diff = diff;
+			best = ratio;
+		}
+	}
+
+	return best;
+}
+
+static unsigned long mt6589_armdiv_recalc_rate(struct clk_hw *hw,
+						unsigned long parent_rate)
+{
+	struct clk_divider *div = to_clk_divider(hw);
+	const struct mt6589_armdiv_ratio *ratio;
+	u32 val;
+
+	val = readl(div->reg) >> div->shift;
+	val &= GENMASK(div->width - 1, 0);
+
+	ratio = mt6589_armdiv_find_val(val);
+	if (!ratio)
+		return parent_rate;
+
+	return div_u64((u64)parent_rate * ratio->num, ratio->den);
+}
+
+static int mt6589_armdiv_determine_rate(struct clk_hw *hw,
+					struct clk_rate_request *req)
+{
+	const struct mt6589_armdiv_ratio *ratio;
+
+	ratio = mt6589_armdiv_find_rate(req->rate, req->best_parent_rate);
+	if (!ratio)
+		return -EINVAL;
+
+	req->rate = div_u64((u64)req->best_parent_rate * ratio->num,
+			    ratio->den);
+
+	return 0;
+}
+
+static int mt6589_armdiv_set_rate(struct clk_hw *hw, unsigned long rate,
+				  unsigned long parent_rate)
+{
+	struct clk_divider *div = to_clk_divider(hw);
+	const struct mt6589_armdiv_ratio *ratio;
+	unsigned long flags;
+	u32 val;
+	u32 mask;
+
+	ratio = mt6589_armdiv_find_rate(rate, parent_rate);
+	if (!ratio)
+		return -EINVAL;
+
+	mask = GENMASK(div->width - 1, 0);
+
+	if (div->lock)
+		spin_lock_irqsave(div->lock, flags);
+
+	val = readl(div->reg);
+	val &= ~(mask << div->shift);
+	val |= (u32)ratio->val << div->shift;
+	writel(val, div->reg);
+
+	if (div->lock)
+		spin_unlock_irqrestore(div->lock, flags);
+
+	return 0;
+}
+
+static const struct clk_ops mt6589_armdiv_ops = {
+	.recalc_rate = mt6589_armdiv_recalc_rate,
+	.determine_rate = mt6589_armdiv_determine_rate,
+	.set_rate = mt6589_armdiv_set_rate,
 };
 #define INFRA_RST0	0x0030
 #define INFRA_RST1	0x0034
@@ -132,7 +219,7 @@ static const struct mtk_clk_divider infra_dividers[] = {
 		.div_reg = TOP_CKDIV1,
 		.div_shift = 0,
 		.div_width = 5,
-		.clk_div_table = mt6589_armdiv1_table,
+		.ops = &mt6589_armdiv_ops,
 	},
 };
 
