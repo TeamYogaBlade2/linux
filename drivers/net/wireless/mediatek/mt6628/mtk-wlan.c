@@ -87,7 +87,7 @@ static int mt6628_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 
 static int mt6628_poll_ready(struct mt6628_wlan *wl)
 {
-	unsigned int tries = 50;
+	unsigned int tries = 512;
 	u32 val = 0;
 	int ret;
 
@@ -99,7 +99,7 @@ static int mt6628_poll_ready(struct mt6628_wlan *wl)
 			dev_info(&wl->func->dev, "WLAN ready\n");
 			return 0;
 		}
-		msleep(20);
+		msleep(10);
 	}
 
 	dev_err(&wl->func->dev, "timed out waiting for WLAN_READY\n");
