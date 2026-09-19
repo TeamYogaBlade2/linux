@@ -146,8 +146,12 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 static int mtk_fm_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
+	struct video_device *vdev = video_devdata(file);
+
 	strscpy(cap->driver, KBUILD_MODNAME, sizeof(cap->driver));
 	strscpy(cap->card, "MediaTek MT6628 FM Radio", sizeof(cap->card));
+	cap->device_caps = vdev->device_caps;
+	cap->capabilities = vdev->device_caps | V4L2_CAP_DEVICE_CAPS;
 	return 0;
 }
 
@@ -197,7 +201,11 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
 	fm->vdev.ioctl_ops = &mtk_fm_ioctl_ops;
-	fm->vdev.device_caps = V4L2_CAP_RADIO | V4L2_CAP_TUNER;
+	/*
+	 * Tuner/frequency ioctls are not implemented yet.  Do not advertise
+	 * V4L2_CAP_TUNER until VIDIOC_{G,S}_TUNER/FREQUENCY exist.
+	 */
+	fm->vdev.device_caps = V4L2_CAP_RADIO;
 	fm->vdev.release = video_device_release_empty;
 	video_set_drvdata(&fm->vdev, fm);
 
