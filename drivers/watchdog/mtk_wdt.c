@@ -239,15 +239,19 @@ static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
 
 	wdt_base = mtk_wdt->wdt_base;
 
-	/* Enable reset in order to issue a system reset instead of an IRQ */
 	reg = readl(wdt_base + WDT_MODE);
-	reg &= ~WDT_MODE_IRQ_EN;
+	reg &= ~(WDT_MODE_EN |
+		 WDT_MODE_IRQ_EN |
+		 WDT_MODE_DUAL_EN |
+		 WDT_MODE_AUTO_START);
+	reg |= WDT_MODE_EXRST_EN;
 	writel(reg | WDT_MODE_KEY, wdt_base + WDT_MODE);
 
-	while (1) {
-		writel(WDT_SWRST_KEY, wdt_base + WDT_SWRST);
-		mdelay(5);
-	}
+	udelay(100);
+	writel(WDT_SWRST_KEY, wdt_base + WDT_SWRST);
+
+	while (1)
+		cpu_relax();
 
 	return 0;
 }

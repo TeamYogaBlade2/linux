@@ -5,6 +5,7 @@
 
 /dts-v1/;
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
 
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
@@ -33,6 +34,11 @@
 			reg = <0xbf600000 0xa00000>;
 			no-map;
 		};
+	};
+
+	sound {
+		compatible = "mediatek,mt6589-mt6320-sound";
+		mediatek,platform = <&afe>;
 	};
 };
 
@@ -88,6 +94,12 @@
 			output-high;
 		};
 	};
+};
+
+&mt6320_accdet {
+	detect-gpios = <&pio 115 GPIO_ACTIVE_LOW>;
+	io-channels = <&mt6320_adc 5>;
+	io-channel-names = "key";
 };
 
 &mt6320_ldo_vgp4 {
@@ -455,5 +467,9 @@
 };
 
 &pwm {
+	status = "okay";
+};
+
+&bls {
 	status = "okay";
 };

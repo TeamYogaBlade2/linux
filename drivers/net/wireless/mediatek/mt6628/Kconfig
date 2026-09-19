@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config WLAN_VENDOR_MEDIATEK_MT6628
+	tristate "MediaTek MT6628 support"
+	depends on MMC
+	help
+	  Enable support for the MediaTek MT6628 combo chip.
+
+	  WLAN bring-up and the shared WMT/BGF/STP transport are provided
+	  as separate function drivers.
+
+if WLAN_VENDOR_MEDIATEK_MT6628
+
+config MTK_MT6628_WLAN
+	tristate "MediaTek MT6628 WLAN support"
+	depends on MMC
+	help
+	  This enables the WLAN function of the MediaTek MT6628 combo chip.
+	  The driver performs the firmware bring-up.  The cfg80211/netdev
+	  data path is not wired up yet.
+
+
+config MTK_MT6628_FM
+	tristate "MediaTek MT6628 FM radio support"
+	depends on VIDEO_DEV
+	select MTK_MT6628_STP
+	select VIDEO_V4L2
+	help
+	  This enables the FM radio receiver of the MediaTek MT6628 combo
+	  chip through the shared function-2 WMT/STP transport.
+
+endif
+
+config MTK_MT6628_STP
+	tristate
+	depends on MMC
+	select MFD_CORE

@@ -1,0 +1,778 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * MediaTek MT6628 shared WMT/STP SDIO transport
+ *
+ * SDIO function 2 is a shared transport for BT/FM/GPS/WMT.  It must have
+ * exactly one SDIO owner; the functional drivers are MFD/platform children.
+ */
+
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/bitfield.h>
+#include <linux/jiffies.h>
+#include <linux/mfd/core.h>
+#include <linux/module.h>
+#include <linux/mmc/sdio_func.h>
+#include <linux/mmc/sdio_ids.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/unaligned.h>
+#include <linux/wait.h>
+#include <linux/workqueue.h>
+
+#include <linux/mfd/mt6628.h>
+
+#define MT6628_STP_CHLPCR		0x0004
+#define MT6628_STP_CHISR		0x0010
+#define MT6628_STP_CHIER		0x0014
+#define MT6628_STP_CTDR			0x0018
+#define MT6628_STP_CRDR			0x001c
+
+#define MT6628_STP_FW_OWN_REQ_CLR	BIT(9)
+#define MT6628_STP_FW_OWN_REQ_SET	BIT(8)
+#define MT6628_STP_INT_EN_CLR		BIT(1)
+#define MT6628_STP_INT_EN_SET		BIT(0)
+
+#define MT6628_STP_RX_LEN		GENMASK(31, 16)
+#define MT6628_STP_FIRMWARE_INT		GENMASK(15, 9)
+#define MT6628_STP_TX_FIFO_OVERFLOW	BIT(8)
+#define MT6628_STP_FW_INT_IND_INDICATOR	BIT(7)
+#define MT6628_STP_RX_DONE		BIT(1)
+#define MT6628_STP_TX_UNDER_THOLD	BIT(3)
+#define MT6628_STP_TX_EMPTY		BIT(2)
+#define MT6628_STP_TX_COMPLETE_COUNT	GENMASK(6, 4)
+
+#define MT6628_STP_TX_FIFO_SIZE		2080
+#define MT6628_STP_RX_FIFO_SIZE		2304
+#define MT6628_STP_SDIO_HDR_SIZE	4
+#define MT6628_STP_BLK_SIZE		512
+#define MT6628_STP_HEADER_SIZE		4
+#define MT6628_STP_CRC_SIZE		2
+
+/* stp_core.c rejects payload lengths >= 2000 on MT6628. */
+#define MT6628_STP_MAX_PAYLOAD_LEN	1999
+
+#define MT6628_STP_RX_BUF_SIZE		2560
+#define MT6628_STP_TX_MAX_PENDING	7
+#define MT6628_STP_TX_TIMEOUT_MS		1000
+
+struct mt6628_stp_endpoint {
+	mt6628_stp_rx_cb cb;
+	void *priv;
+};
+
+struct mt6628_wmt {
+	struct sdio_func *func;
+	struct work_struct rx_work;
+
+	struct mutex tx_lock;
+	struct mutex rx_lock;
+	struct mutex wmt_lock;
+	struct completion wmt_done;
+	spinlock_t tx_state_lock;
+	wait_queue_head_t tx_waitq;
+	u16 tx_sizes[MT6628_STP_TX_MAX_PENDING];
+	u8 tx_head;
+	u8 tx_tail;
+	u8 tx_pending;
+	u16 tx_fifo_free;
+
+	struct mt6628_stp_endpoint endpoint[MT6628_STP_TASK_MAX];
+	u8 rx_buf[MT6628_STP_RX_BUF_SIZE];
+
+	bool driver_owned;
+	bool irq_claimed;
+	bool stopping;
+	bool wmt_waiting;
+	u8 wmt_wait_opcode;
+	int wmt_status;
+};
+
+static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
+{
+	unsigned long flags;
+	bool ready;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	ready = !wmt->stopping &&
+		wmt->tx_pending < MT6628_STP_TX_MAX_PENDING &&
+		wmt->tx_fifo_free >= frame_len;
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	return ready;
+}
+
+static int mt6628_stp_tx_reserve(struct mt6628_wmt *wmt,
+				 size_t frame_len, u8 *slot)
+{
+	unsigned long flags;
+	int ret = -EAGAIN;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (!wmt->stopping &&
+	    wmt->tx_pending < MT6628_STP_TX_MAX_PENDING &&
+	    wmt->tx_fifo_free >= frame_len) {
+		*slot = wmt->tx_tail;
+		wmt->tx_sizes[wmt->tx_tail] = frame_len;
+		wmt->tx_tail =
+			(wmt->tx_tail + 1) % MT6628_STP_TX_MAX_PENDING;
+		wmt->tx_pending++;
+		wmt->tx_fifo_free -= frame_len;
+		ret = 0;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	return ret;
+}
+
+static void mt6628_stp_tx_cancel(struct mt6628_wmt *wmt,
+				 size_t frame_len, u8 slot)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (wmt->tx_pending &&
+	    wmt->tx_tail == (u8)((slot + 1) % MT6628_STP_TX_MAX_PENDING)) {
+		wmt->tx_tail = slot;
+		wmt->tx_pending--;
+		wmt->tx_fifo_free += frame_len;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+	wake_up_all(&wmt->tx_waitq);
+}
+
+static void mt6628_stp_tx_complete(struct mt6628_wmt *wmt, u32 chisr)
+{
+	unsigned int count = FIELD_GET(MT6628_STP_TX_COMPLETE_COUNT, chisr);
+	unsigned long flags;
+	bool changed = false;
+
+	if (!count)
+		return;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (count > wmt->tx_pending) {
+		dev_warn(&wmt->func->dev,
+			 "invalid STP TX completion count %u (pending %u)\n",
+			 count, wmt->tx_pending);
+		count = wmt->tx_pending;
+	}
+
+	while (count--) {
+		wmt->tx_fifo_free += wmt->tx_sizes[wmt->tx_head];
+		wmt->tx_head =
+			(wmt->tx_head + 1) % MT6628_STP_TX_MAX_PENDING;
+		wmt->tx_pending--;
+		changed = true;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	if (changed)
+		wake_up_all(&wmt->tx_waitq);
+}
+
+static int mt6628_stp_write32(struct mt6628_wmt *wmt, unsigned int reg,
+			      u32 val)
+{
+	int ret;
+
+	sdio_claim_host(wmt->func);
+	sdio_writel(wmt->func, val, reg, &ret);
+	sdio_release_host(wmt->func);
+
+	return ret;
+}
+
+/*
+ * MT6628 requires CMD52 accesses for CHLPCR ownership/interrupt
+ * control.  The downstream driver carries this workaround as
+ * COHEC_00006052.
+ */
+static int mt6628_stp_write8(struct mt6628_wmt *wmt, unsigned int reg,
+			     u8 val)
+{
+	int ret;
+
+	sdio_claim_host(wmt->func);
+	sdio_writeb(wmt->func, val, reg, &ret);
+	sdio_release_host(wmt->func);
+
+	return ret;
+}
+
+static int mt6628_stp_driver_own(struct mt6628_wmt *wmt)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
+	int ret;
+	u32 val;
+
+	ret = mt6628_stp_write8(wmt, MT6628_STP_CHLPCR + 1,
+				MT6628_STP_FW_OWN_REQ_CLR >> 8);
+	if (ret)
+		return ret;
+
+	while (time_before(jiffies, timeout)) {
+		sdio_claim_host(wmt->func);
+		val = sdio_readl(wmt->func, MT6628_STP_CHLPCR, &ret);
+		sdio_release_host(wmt->func);
+		if (ret)
+			return ret;
+
+		if (val & MT6628_STP_FW_OWN_REQ_SET)
+			return 0;
+
+		usleep_range(500, 1000);
+	}
+
+	return -ETIMEDOUT;
+}
+
+static int mt6628_stp_fw_own(struct mt6628_wmt *wmt)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
+	int ret;
+	u32 val;
+
+	ret = mt6628_stp_write8(wmt, MT6628_STP_CHLPCR + 1,
+				MT6628_STP_FW_OWN_REQ_SET >> 8);
+	if (ret)
+		return ret;
+
+	while (time_before(jiffies, timeout)) {
+		sdio_claim_host(wmt->func);
+		val = sdio_readl(wmt->func, MT6628_STP_CHLPCR, &ret);
+		sdio_release_host(wmt->func);
+		if (ret)
+			return ret;
+
+		if (!(val & MT6628_STP_FW_OWN_REQ_SET))
+			return 0;
+
+		usleep_range(500, 1000);
+	}
+
+	return -ETIMEDOUT;
+}
+
+static int mt6628_stp_irq_enable(struct mt6628_wmt *wmt)
+{
+	int ret;
+
+	return mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+				 MT6628_STP_INT_EN_SET);
+}
+
+static void mt6628_stp_irq_disable_in_irq(struct mt6628_wmt *wmt)
+{
+	int ret;
+
+	/* SDIO invokes the callback with the host already claimed. */
+	sdio_writeb(wmt->func, MT6628_STP_INT_EN_CLR,
+		    MT6628_STP_CHLPCR, &ret);
+}
+
+static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
+				 enum mt6628_stp_task task,
+				 const u8 *buf, size_t len)
+{
+	mt6628_stp_rx_cb cb;
+	void *priv;
+
+	if (task == MT6628_STP_TASK_WMT) {
+		u16 payload_len;
+
+		if (len < 4 || buf[0] != 0x02)
+			return;
+
+		payload_len = get_unaligned_le16(buf + 2);
+		if (!payload_len || payload_len > len - 4)
+			return;
+
+		mutex_lock(&wmt->wmt_lock);
+		if (wmt->wmt_waiting &&
+		    buf[1] == wmt->wmt_wait_opcode) {
+			wmt->wmt_status = buf[4] ? -EIO : 0;
+			wmt->wmt_waiting = false;
+			complete(&wmt->wmt_done);
+		}
+		mutex_unlock(&wmt->wmt_lock);
+		return;
+	}
+
+	if (task >= MT6628_STP_TASK_MAX)
+		return;
+
+	mutex_lock(&wmt->rx_lock);
+	cb = wmt->endpoint[task].cb;
+	priv = wmt->endpoint[task].priv;
+	if (cb)
+		cb(priv, buf, len);
+	mutex_unlock(&wmt->rx_lock);
+}
+
+static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
+{
+	size_t pos = MT6628_STP_SDIO_HDR_SIZE;
+	size_t end = bus_len;
+
+	while (pos + MT6628_STP_HEADER_SIZE + MT6628_STP_CRC_SIZE <= end) {
+		u16 len;
+		u8 task;
+		size_t frame_len;
+		size_t padded_len;
+
+		if (!(wmt->rx_buf[pos] & BIT(7)))
+			break;
+
+		task = (wmt->rx_buf[pos + 1] >> 4) & 0x07;
+		len = ((wmt->rx_buf[pos + 1] & 0x0f) << 8) |
+			wmt->rx_buf[pos + 2];
+		if (len >= 2000)
+			break;
+
+		frame_len = MT6628_STP_HEADER_SIZE + len +
+			MT6628_STP_CRC_SIZE;
+		if (frame_len > end - pos)
+			break;
+
+		mt6628_stp_dispatch(wmt, task, wmt->rx_buf + pos +
+				    MT6628_STP_HEADER_SIZE, len);
+
+		padded_len = ALIGN(frame_len, 4);
+		if (padded_len > end - pos)
+			break;
+		pos += padded_len;
+	}
+}
+
+static void mt6628_stp_rx_work(struct work_struct *work)
+{
+	struct mt6628_wmt *wmt = container_of(work, struct mt6628_wmt,
+					     rx_work);
+	u32 chisr;
+	u16 rx_len;
+	size_t bus_len;
+	bool have_rx = false;
+	int ret;
+
+	sdio_claim_host(wmt->func);
+	chisr = sdio_readl(wmt->func, MT6628_STP_CHISR, &ret);
+	if (!ret && (chisr & (MT6628_STP_TX_EMPTY |
+			     MT6628_STP_TX_UNDER_THOLD)))
+		mt6628_stp_tx_complete(wmt, chisr);
+	if (!ret && (chisr & MT6628_STP_RX_DONE)) {
+		rx_len = FIELD_GET(MT6628_STP_RX_LEN, chisr);
+		if (rx_len >= MT6628_STP_SDIO_HDR_SIZE &&
+			rx_len <= MT6628_STP_RX_FIFO_SIZE) {
+			bus_len = ALIGN(rx_len, 4);
+			if (bus_len > MT6628_STP_BLK_SIZE)
+				bus_len = ALIGN(bus_len, MT6628_STP_BLK_SIZE);
+			if (bus_len <= sizeof(wmt->rx_buf)) {
+				ret = sdio_readsb(wmt->func, wmt->rx_buf,
+						  MT6628_STP_CRDR, bus_len);
+				if (!ret &&
+				    get_unaligned_le16(wmt->rx_buf) == rx_len &&
+				    !wmt->rx_buf[2] && !wmt->rx_buf[3])
+					have_rx = true;
+			}
+		}
+	}
+	sdio_release_host(wmt->func);
+
+	if (have_rx)
+		mt6628_stp_parse_rx(wmt, rx_len);
+
+	if (!READ_ONCE(wmt->stopping) && mt6628_stp_irq_enable(wmt))
+		dev_warn(&wmt->func->dev, "failed to re-enable STP IRQ\n");
+}
+
+static void mt6628_stp_irq(struct sdio_func *func)
+{
+	struct mt6628_wmt *wmt = sdio_get_drvdata(func);
+
+	if (!wmt)
+		return;
+	if (READ_ONCE(wmt->stopping))
+		return;
+
+	mt6628_stp_irq_disable_in_irq(wmt);
+	schedule_work(&wmt->rx_work);
+}
+
+static int __mt6628_stp_send(struct mt6628_wmt *wmt,
+				    enum mt6628_stp_task task,
+				    const void *buf, size_t len)
+{
+	u8 *frame;
+	size_t stp_len;
+	size_t bus_len;
+	size_t fifo_len;
+	size_t frame_len;
+	int ret;
+
+	if (task >= MT6628_STP_TASK_MAX || len > MT6628_STP_MAX_PAYLOAD_LEN)
+		return -EMSGSIZE;
+
+	stp_len = MT6628_STP_HEADER_SIZE + len + MT6628_STP_CRC_SIZE;
+	bus_len = MT6628_STP_SDIO_HDR_SIZE + stp_len;
+	fifo_len = ALIGN(bus_len, 4);
+	frame_len = fifo_len;
+	if (frame_len > MT6628_STP_BLK_SIZE)
+		frame_len = ALIGN(frame_len, MT6628_STP_BLK_SIZE);
+	if (fifo_len > MT6628_STP_TX_FIFO_SIZE)
+		return -EMSGSIZE;
+
+	frame = kzalloc(frame_len, GFP_KERNEL);
+	if (!frame)
+		return -ENOMEM;
+
+	put_unaligned_le16(bus_len, frame);
+	frame[2] = 0;
+	frame[3] = 0;
+	frame[4] = 0x80;
+	frame[5] = (task << 4) | ((len >> 8) & 0x0f);
+	frame[6] = len & 0xff;
+	frame[7] = 0;
+	memcpy(frame + MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE,
+	       buf, len);
+
+	ret = wait_event_interruptible_timeout(
+		wmt->tx_waitq,
+		READ_ONCE(wmt->stopping) || mt6628_stp_tx_ready(wmt, fifo_len),
+		msecs_to_jiffies(MT6628_STP_TX_TIMEOUT_MS));
+	if (ret < 0)
+		goto out_free;
+	if (READ_ONCE(wmt->stopping)) {
+		ret = -ESHUTDOWN;
+		goto out_free;
+	}
+	if (!ret) {
+		ret = -ETIMEDOUT;
+		goto out_free;
+	}
+
+	{
+		u8 tx_slot;
+
+		ret = mt6628_stp_tx_reserve(wmt, fifo_len, &tx_slot);
+		if (ret)
+			goto out_free;
+
+		sdio_claim_host(wmt->func);
+		ret = sdio_writesb(wmt->func, MT6628_STP_CTDR, frame,
+					frame_len);
+		sdio_release_host(wmt->func);
+
+		if (ret)
+			mt6628_stp_tx_cancel(wmt, fifo_len, tx_slot);
+	}
+
+out_free:
+	kfree(frame);
+	return ret;
+}
+
+int mt6628_stp_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
+			const void *buf, size_t len)
+{
+	int ret;
+
+	if (!wmt || !buf && len)
+		return -EINVAL;
+
+	mutex_lock(&wmt->tx_lock);
+	ret = __mt6628_stp_send(wmt, task, buf, len);
+	mutex_unlock(&wmt->tx_lock);
+
+	return ret ? ret : len;
+}
+EXPORT_SYMBOL_GPL(mt6628_stp_send);
+
+int mt6628_stp_register_rx(struct mt6628_wmt *wmt,
+				 enum mt6628_stp_task task,
+				 mt6628_stp_rx_cb cb, void *priv)
+{
+	if (!wmt || task >= MT6628_STP_TASK_MAX || !cb)
+		return -EINVAL;
+
+	mutex_lock(&wmt->rx_lock);
+	if (wmt->endpoint[task].cb) {
+		mutex_unlock(&wmt->rx_lock);
+		return -EBUSY;
+	}
+	wmt->endpoint[task].cb = cb;
+	wmt->endpoint[task].priv = priv;
+	mutex_unlock(&wmt->rx_lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mt6628_stp_register_rx);
+
+void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
+				      enum mt6628_stp_task task,
+				      mt6628_stp_rx_cb cb, void *priv)
+{
+	if (!wmt || task >= MT6628_STP_TASK_MAX)
+		return;
+
+	mutex_lock(&wmt->rx_lock);
+	if (wmt->endpoint[task].cb == cb &&
+	    wmt->endpoint[task].priv == priv) {
+		wmt->endpoint[task].cb = NULL;
+		wmt->endpoint[task].priv = NULL;
+	}
+	mutex_unlock(&wmt->rx_lock);
+}
+EXPORT_SYMBOL_GPL(mt6628_stp_unregister_rx);
+
+static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
+			  const u8 *cmd, size_t len, u8 opcode,
+			  unsigned int timeout_ms)
+{
+	unsigned long timeout;
+	int ret;
+
+	mutex_lock(&wmt->tx_lock);
+	reinit_completion(&wmt->wmt_done);
+
+	mutex_lock(&wmt->wmt_lock);
+	wmt->wmt_waiting = true;
+	wmt->wmt_wait_opcode = opcode;
+	wmt->wmt_status = -ETIMEDOUT;
+	mutex_unlock(&wmt->wmt_lock);
+
+	ret = __mt6628_stp_send(wmt, MT6628_STP_TASK_WMT, cmd, len);
+	if (ret) {
+		mutex_lock(&wmt->wmt_lock);
+		wmt->wmt_waiting = false;
+		mutex_unlock(&wmt->wmt_lock);
+		mutex_unlock(&wmt->tx_lock);
+		return ret;
+	}
+
+	timeout = wait_for_completion_timeout(&wmt->wmt_done,
+					     msecs_to_jiffies(timeout_ms));
+
+	mutex_lock(&wmt->wmt_lock);
+	if (!timeout && wmt->wmt_waiting) {
+		wmt->wmt_waiting = false;
+		ret = -ETIMEDOUT;
+	} else {
+		ret = wmt->wmt_status;
+	}
+	wmt->wmt_wait_opcode = 0xff;
+	mutex_unlock(&wmt->wmt_lock);
+
+	mutex_unlock(&wmt->tx_lock);
+	return ret;
+}
+
+static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
+				u32 addr, u32 value, u32 mask)
+{
+	u8 cmd[20] = {
+		0x01, 0x08, 0x10, 0x00,
+		0x01, 0x01, 0x00, 0x01,
+	};
+
+	put_unaligned_le32(addr, cmd + 8);
+	put_unaligned_le32(value, cmd + 12);
+	put_unaligned_le32(mask, cmd + 16);
+
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000);
+}
+
+/*
+ * MT6628 merge-interface setup used by the MT6589 downstream BSP.
+ *
+ * These are the exact three entries from wmt_ic_6628.c's
+ * merge_pcm_table:
+ *   I2S_Slave
+ *   DAI_PAD
+ *   DAI_EVT
+ */
+static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
+{
+	int ret;
+
+	ret = mt6628_wmt_reg_write(wmt, 0x80050078,
+				   0x11010000, 0x07770000);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_reg_write(wmt, 0x80050074,
+				   0x00004444, 0x00007777);
+	if (ret)
+		return ret;
+
+	return mt6628_wmt_reg_write(wmt, 0x800500a0,
+				    0x00000004, 0x00000004);
+}
+
+int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
+				enum mt6628_wmt_func func, bool on)
+{
+	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
+
+	if (!wmt || (func != MT6628_WMT_FUNC_BT &&
+			     func != MT6628_WMT_FUNC_FM &&
+			     func != MT6628_WMT_FUNC_GPS))
+		return -EINVAL;
+
+	return mt6628_wmt_cmd(wmt, cmd, ARRAY_SIZE(cmd), 0x06, 1000);
+}
+EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
+
+static const struct mfd_cell mt6628_stp_cells[] = {
+	{ .name = "mt6628-bt" },
+	{ .name = "mt6628-fm" },
+	{ .name = "mt6628-gnss" },
+};
+
+static int mt6628_stp_probe(struct sdio_func *func,
+				const struct sdio_device_id *id)
+{
+	struct mt6628_wmt *wmt;
+	int ret;
+
+	if (func->num != 2)
+		return -ENODEV;
+
+	wmt = devm_kzalloc(&func->dev, sizeof(*wmt), GFP_KERNEL);
+	if (!wmt)
+		return -ENOMEM;
+
+	wmt->func = func;
+	mutex_init(&wmt->tx_lock);
+	mutex_init(&wmt->rx_lock);
+	mutex_init(&wmt->wmt_lock);
+	spin_lock_init(&wmt->tx_state_lock);
+	init_waitqueue_head(&wmt->tx_waitq);
+	init_completion(&wmt->wmt_done);
+	wmt->wmt_wait_opcode = 0xff;
+	wmt->tx_fifo_free = MT6628_STP_TX_FIFO_SIZE;
+	INIT_WORK(&wmt->rx_work, mt6628_stp_rx_work);
+	sdio_set_drvdata(func, wmt);
+
+	sdio_claim_host(func);
+	ret = sdio_enable_func(func);
+	if (!ret)
+		ret = sdio_set_block_size(func, MT6628_STP_BLK_SIZE);
+	sdio_release_host(func);
+	if (ret)
+		goto err_drvdata;
+
+	ret = mt6628_stp_driver_own(wmt);
+	if (ret)
+		goto err_disable;
+	wmt->driver_owned = true;
+
+	/* RX plus TX-completion indications are consumed by this transport. */
+	ret = mt6628_stp_write32(wmt, MT6628_STP_CHIER,
+				 MT6628_STP_FIRMWARE_INT |
+				 MT6628_STP_TX_FIFO_OVERFLOW |
+				 MT6628_STP_FW_INT_IND_INDICATOR |
+				 MT6628_STP_RX_DONE |
+				 MT6628_STP_TX_UNDER_THOLD |
+				 MT6628_STP_TX_EMPTY |
+				 MT6628_STP_TX_COMPLETE_COUNT);
+	if (ret)
+		goto err_fw_own;
+
+	sdio_claim_host(func);
+	ret = sdio_claim_irq(func, mt6628_stp_irq);
+	sdio_release_host(func);
+	if (ret)
+		goto err_fw_own;
+	wmt->irq_claimed = true;
+
+	ret = mt6628_stp_irq_enable(wmt);
+	if (ret)
+		goto err_irq;
+
+	ret = mfd_add_devices(&func->dev, PLATFORM_DEVID_AUTO,
+			      mt6628_stp_cells,
+			      ARRAY_SIZE(mt6628_stp_cells), NULL, 0, NULL);
+	if (ret)
+		goto err_irq_disable;
+
+	dev_info(&func->dev, "MT6628 shared STP transport ready\n");
+	return 0;
+
+err_irq_disable:
+	mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+			  MT6628_STP_INT_EN_CLR);
+err_irq:
+	sdio_claim_host(func);
+	sdio_release_irq(func);
+	sdio_release_host(func);
+	wmt->irq_claimed = false;
+err_fw_own:
+	if (wmt->driver_owned && !mt6628_stp_fw_own(wmt))
+		wmt->driver_owned = false;
+err_disable:
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+err_drvdata:
+	sdio_set_drvdata(func, NULL);
+	return ret;
+}
+
+static void mt6628_stp_remove(struct sdio_func *func)
+{
+	struct mt6628_wmt *wmt = sdio_get_drvdata(func);
+
+	if (!wmt)
+		return;
+
+	/* Children may need FUNC_OFF, so keep transport/IRQ alive first. */
+	mfd_remove_devices(&func->dev);
+	WRITE_ONCE(wmt->stopping, true);
+	wake_up_all(&wmt->tx_waitq);
+
+	mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+			  MT6628_STP_INT_EN_CLR);
+
+	if (wmt->irq_claimed) {
+		sdio_claim_host(func);
+		sdio_release_irq(func);
+		sdio_release_host(func);
+		wmt->irq_claimed = false;
+	}
+
+	cancel_work_sync(&wmt->rx_work);
+
+	if (wmt->driver_owned) {
+		if (mt6628_stp_fw_own(wmt))
+			dev_warn(&func->dev,
+				 "failed to return STP firmware ownership\n");
+		else
+			wmt->driver_owned = false;
+	}
+
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
+}
+
+static const struct sdio_device_id mt6628_stp_ids[] = {
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK,
+		      SDIO_DEVICE_ID_MEDIATEK_MT6628) },
+	{ }
+};
+MODULE_DEVICE_TABLE(sdio, mt6628_stp_ids);
+
+static struct sdio_driver mt6628_stp_driver = {
+	.name = "mt6628-stp",
+	.probe = mt6628_stp_probe,
+	.remove = mt6628_stp_remove,
+	.id_table = mt6628_stp_ids,
+};
+module_sdio_driver(mt6628_stp_driver);
+
+MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
+MODULE_DESCRIPTION("MediaTek MT6628 shared WMT/STP SDIO transport");
+MODULE_LICENSE("GPL");

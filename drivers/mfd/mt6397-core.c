@@ -47,16 +47,15 @@
 #define MT6397_RTC_BASE		0xe000
 #define MT6397_RTC_SIZE		0x3e
 
+#define MT6320_PWRC_BASE	MT6320_RTC_BASE
+#define MT6320_PWRC_SIZE	MT6320_RTC_SIZE
+
 #define MT6323_PWRC_BASE	0x8000
 #define MT6323_PWRC_SIZE	0x40
 
 static const struct resource mt6320_rtc_resources[] = {
 	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
 	DEFINE_RES_IRQ(MT6320_IRQ_RTC),
-};
-
-static const struct resource mt6320_pwrc_resources[] = {
-	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
 };
 
 static const struct resource mt6323_rtc_resources[] = {
@@ -87,6 +86,10 @@ static const struct resource mt6397_rtc_resources[] = {
 static const struct resource mt6320_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_PWRKEY, "powerkey"),
 	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_HOMEKEY, "homekey"),
+};
+
+static const struct resource mt6320_accdet_resources[] = {
+	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_ACCDET, "accdet_irq"),
 };
 
 static const struct resource mt6358_keys_resources[] = {
@@ -138,6 +141,10 @@ static const struct resource mt6397_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6397_IRQ_HOMEKEY, "homekey"),
 };
 
+static const struct resource mt6320_pwrc_resources[] = {
+	DEFINE_RES_MEM(MT6320_PWRC_BASE, MT6320_PWRC_SIZE),
+};
+
 static const struct resource mt6323_pwrc_resources[] = {
 	DEFINE_RES_MEM(MT6323_PWRC_BASE, MT6323_PWRC_SIZE),
 };
@@ -167,11 +174,31 @@ static const struct mfd_cell mt6320_devs[] = {
 		.num_resources = ARRAY_SIZE(mt6320_pwrc_resources),
 		.resources = mt6320_pwrc_resources,
 		.of_compatible = "mediatek,mt6320-pwrc",
+	}, {
+		.name = "mt6320-auxadc",
+		.of_compatible = "mediatek,mt6320-auxadc"
+	}, {
+		.name = "mt6320-efuse",
+		.of_compatible = "mediatek,mt6320-efuse"
+	}, {
+		.name = "mt6320-accdet",
+		.num_resources = ARRAY_SIZE(mt6320_accdet_resources),
+		.resources = mt6320_accdet_resources,
+		.of_compatible = "mediatek,mt6320-accdet"
+	}, {
+		.name = "mt6320-sound",
+		.of_compatible = "mediatek,mt6320-sound"
 	},
 };
 
 static const struct mfd_cell mt6323_devs[] = {
 	{
+		.name = "mt6323-accdet",
+		.of_compatible = "mediatek,mt6323-accdet",
+	}, {
+		.name = "mt6323-auxadc",
+		.of_compatible = "mediatek,mt6323-auxadc",
+	}, {
 		.name = "mt6323-rtc",
 		.num_resources = ARRAY_SIZE(mt6323_rtc_resources),
 		.resources = mt6323_rtc_resources,
@@ -192,6 +219,9 @@ static const struct mfd_cell mt6323_devs[] = {
 		.num_resources = ARRAY_SIZE(mt6323_pwrc_resources),
 		.resources = mt6323_pwrc_resources,
 		.of_compatible = "mediatek,mt6323-pwrc"
+	}, {
+		.name = "mt6323-sound",
+		.of_compatible = "mediatek,mt6323-sound"
 	},
 };
 

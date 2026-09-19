@@ -85,6 +85,8 @@
 #define DSI_SIZE_CON		0x38
 #define DSI_HEIGHT				GENMASK(30, 16)
 #define DSI_WIDTH				GENMASK(14, 0)
+#define DSI_MEM_CONTI		0x90
+#define DSI_WMEM_CONTI			0x3c
 #define DSI_HSA_WC		0x50
 #define DSI_HBP_WC		0x54
 #define DSI_HFP_WC		0x58
@@ -736,6 +738,8 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	mtk_dsi_reset_engine(dsi);
 	mtk_dsi_phy_timconfig(dsi);
 
+	writel(DSI_WMEM_CONTI, dsi->regs + DSI_MEM_CONTI);
+
 	mtk_dsi_ps_control(dsi, true);
 	mtk_dsi_set_vm_cmd(dsi);
 	mtk_dsi_config_vdo_timing(dsi);
@@ -1277,6 +1281,11 @@ static const struct mtk_dsi_driver_data mt2701_dsi_driver_data = {
 	.reg_shadow_dbg_off = 0x190
 };
 
+static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
+	.reg_cmdq_off = 0x180,
+	.reg_vm_cmd_off = 0x130,
+};
+
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
@@ -1305,6 +1314,7 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 
 static const struct of_device_id mtk_dsi_of_match[] = {
 	{ .compatible = "mediatek,mt2701-dsi", .data = &mt2701_dsi_driver_data },
+	{ .compatible = "mediatek,mt6589-dsi", .data = &mt6589_dsi_driver_data },
 	{ .compatible = "mediatek,mt8173-dsi", .data = &mt8173_dsi_driver_data },
 	{ .compatible = "mediatek,mt8183-dsi", .data = &mt8183_dsi_driver_data },
 	{ .compatible = "mediatek,mt8186-dsi", .data = &mt8186_dsi_driver_data },

@@ -10,14 +10,24 @@ maintainers:
   - Akari Tsuyukusa <akkun11.open@gmail.com>
 
 description:
-  Regulator function of MT6320 PMIC.
+  Regulator function of the MT6320 PMIC.  The regulators are children
+  of the "regulators" node; each child carries the standard regulator
+  properties.
 
 properties:
   compatible:
-    items:
-      - const: mediatek,mt6320-regulator
+    const: mediatek,mt6320-regulator
 
 patternProperties:
+  "^(buck_vproc|buck_vsram|buck_vcore|buck_vm|buck_vio18|buck_vpa|buck_vrf18|buck_vrf18_2)$":
+    type: object
+    $ref: /schemas/regulator/regulator.yaml#
+    unevaluatedProperties: false
+
+  "^ldo_(vrf28|va|va28|vcama|vrf28_2|vtcxo|vtcxo_2|vmc1|vmch1|vemc_3v3|vemc_1v8|vgp1|vgp2|vgp3|vgp4|vgp5|vgp6|vsim1|vsim2|vibr|vast)$":
+    type: object
+    $ref: /schemas/regulator/regulator.yaml#
+    unevaluatedProperties: false
 
 required:
   - compatible
@@ -26,8 +36,17 @@ additionalProperties: false
 
 examples:
   - |
-    #include <dt-bindings/interrupt-controller/arm-gic.h>
-
-    mt6320_regulators: regulators {
+    regulators {
         compatible = "mediatek,mt6320-regulator";
+
+        buck_vproc {
+            regulator-name = "vproc";
+            regulator-min-microvolt = <700000>;
+            regulator-max-microvolt = <1493750>;
+        };
+
+        ldo_vtcxo {
+            regulator-name = "vtcxo";
+            regulator-always-on;
+        };
     };

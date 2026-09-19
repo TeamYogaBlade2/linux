@@ -1859,6 +1859,7 @@ dec_end:
 }
 
 static struct clk_bulk_data mtk_jpeg_clocks[] = {
+	{ .id = "jpgenc-smi" },
 	{ .id = "jpgenc" },
 };
 
@@ -1931,6 +1932,10 @@ static const struct of_device_id mtk_jpeg_match[] = {
 	},
 	{
 		.compatible = "mediatek,mt2701-jpgdec",
+		.data = &mt8173_jpeg_drvdata,
+	},
+	{
+		.compatible = "mediatek,mt6589-jpgdec",
 		.data = &mt8173_jpeg_drvdata,
 	},
 	{

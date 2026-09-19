@@ -41,6 +41,7 @@
 #define ECC_CTL_REG(op)		((op) == ECC_ENCODE ? ECC_ENCCON : ECC_DECCON)
 
 #define ECC_ERRMASK_MT7622	GENMASK(4, 0)
+#define ECC_ERRMASK_MT6589	GENMASK(4, 0)
 #define ECC_ERRMASK_MT2701	GENMASK(5, 0)
 #define ECC_ERRMASK_MT2712	GENMASK(6, 0)
 
@@ -83,6 +84,10 @@ static const u8 ecc_strength_mt7622[] = {
 	4, 6, 8, 10, 12
 };
 
+static const u8 ecc_strength_mt6589[] = {
+	4, 6, 8, 10, 12
+};
+
 static const u8 ecc_strength_mt7986[] = {
 	4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24
 };
@@ -115,6 +120,15 @@ static int mt2712_ecc_regs[] = {
 };
 
 static int mt7622_ecc_regs[] = {
+	[ECC_ENCPAR00] =        0x10,
+	[ECC_ENCIRQ_EN] =       0x30,
+	[ECC_ENCIRQ_STA] =      0x34,
+	[ECC_DECDONE] =         0x11c,
+	[ECC_DECIRQ_EN] =       0x140,
+	[ECC_DECIRQ_STA] =      0x144,
+};
+
+static int mt6589_ecc_regs[] = {
 	[ECC_ENCPAR00] =        0x10,
 	[ECC_ENCIRQ_EN] =       0x30,
 	[ECC_ENCIRQ_STA] =      0x34,
@@ -469,6 +483,17 @@ static const struct mtk_ecc_caps mtk_ecc_caps_mt2701 = {
 	.pg_irq_sel = 0,
 };
 
+static const struct mtk_ecc_caps mtk_ecc_caps_mt6589 = {
+	.err_mask = ECC_ERRMASK_MT6589,
+	.err_shift = 5,
+	.ecc_strength = ecc_strength_mt6589,
+	.ecc_regs = mt6589_ecc_regs,
+	.num_ecc_strength = ARRAY_SIZE(ecc_strength_mt6589),
+	.ecc_mode_shift = 4,
+	.parity_bits = 13,
+	.pg_irq_sel = 0,
+};
+
 static const struct mtk_ecc_caps mtk_ecc_caps_mt2712 = {
 	.err_mask = ECC_ERRMASK_MT2712,
 	.err_shift = 8,
@@ -506,6 +531,9 @@ static const struct of_device_id mtk_ecc_dt_match[] = {
 	{
 		.compatible = "mediatek,mt2701-ecc",
 		.data = &mtk_ecc_caps_mt2701,
+	}, {
+		.compatible = "mediatek,mt6589-ecc",
+		.data = &mtk_ecc_caps_mt6589,
 	}, {
 		.compatible = "mediatek,mt2712-ecc",
 		.data = &mtk_ecc_caps_mt2712,

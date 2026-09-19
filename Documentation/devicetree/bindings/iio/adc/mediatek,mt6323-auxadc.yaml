@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/iio/adc/mediatek,mt6323-auxadc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6320 and MT6323 PMIC Auxiliary ADC
+
+maintainers:
+  - Flora Fu <flora.fu@mediatek.com>
+
+description: |
+  AUXADC is the auxiliary ADC of the PMIC, used for sampling a variety
+  of channels like battery voltage, PMIC internal temperature, accessory
+  detection resistance, and other internal components.
+
+properties:
+  compatible:
+    enum:
+      - mediatek,mt6320-auxadc
+      - mediatek,mt6323-auxadc
+
+  "#io-channel-cells":
+    const: 1
+
+required:
+  - compatible
+  - "#io-channel-cells"
+
+additionalProperties: false
+
+examples:
+  - |
+    pmic {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        adc {
+            compatible = "mediatek,mt6323-auxadc";
+            #io-channel-cells = <1>;
+        };
+    };

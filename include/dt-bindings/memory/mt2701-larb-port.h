@@ -15,14 +15,14 @@
  * But m4u generation 2 like mt8173 have different port number, it use fixed
  * offset for each larb, the first port's id for larb[N] would be (N * 32).
  */
-#define LARB0_PORT_OFFSET		0
-#define LARB1_PORT_OFFSET		11
-#define LARB2_PORT_OFFSET		21
-#define LARB3_PORT_OFFSET		44
+#define MT2701_LARB0_PORT_OFFSET		0
+#define MT2701_LARB1_PORT_OFFSET		11
+#define MT2701_LARB2_PORT_OFFSET		21
+#define MT2701_LARB3_PORT_OFFSET		44
 
-#define MT2701_M4U_ID_LARB0(port)	((port) + LARB0_PORT_OFFSET)
-#define MT2701_M4U_ID_LARB1(port)	((port) + LARB1_PORT_OFFSET)
-#define MT2701_M4U_ID_LARB2(port)	((port) + LARB2_PORT_OFFSET)
+#define MT2701_M4U_ID_LARB0(port)	((port) + MT2701_LARB0_PORT_OFFSET)
+#define MT2701_M4U_ID_LARB1(port)	((port) + MT2701_LARB1_PORT_OFFSET)
+#define MT2701_M4U_ID_LARB2(port)	((port) + MT2701_LARB2_PORT_OFFSET)
 
 /* Port define for larb0 */
 #define MT2701_M4U_PORT_DISP_OVL_0		MT2701_M4U_ID_LARB0(0)
