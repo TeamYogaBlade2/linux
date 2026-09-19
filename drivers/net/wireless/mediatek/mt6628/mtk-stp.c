@@ -583,6 +583,33 @@ static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
 	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000);
 }
 
+/*
+ * MT6628 merge-interface setup used by the MT6589 downstream BSP.
+ *
+ * These are the exact three entries from wmt_ic_6628.c's
+ * merge_pcm_table:
+ *   I2S_Slave
+ *   DAI_PAD
+ *   DAI_EVT
+ */
+static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
+{
+	int ret;
+
+	ret = mt6628_wmt_reg_write(wmt, 0x80050078,
+				   0x11010000, 0x07770000);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_reg_write(wmt, 0x80050074,
+				   0x00004444, 0x00007777);
+	if (ret)
+		return ret;
+
+	return mt6628_wmt_reg_write(wmt, 0x800500a0,
+				    0x00000004, 0x00000004);
+}
+
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 				enum mt6628_wmt_func func, bool on)
 {
@@ -663,6 +690,10 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	ret = mt6628_stp_irq_enable(wmt);
 	if (ret)
 		goto err_irq;
+
+	ret = mt6628_wmt_merge_if_init(wmt);
+	if (ret)
+		goto err_irq_disable;
 
 	ret = mfd_add_devices(&func->dev, PLATFORM_DEVID_AUTO,
 				      mt6628_stp_cells,
