@@ -35,33 +35,10 @@ static struct snd_soc_jack_pin mt6589_mt6320_jack_pins[] = {
 	{ .pin = "Speaker", .mask = SND_JACK_HEADPHONE, .invert = 1 },
 };
 
-static struct snd_soc_jack_gpio mt6589_mt6320_jack_gpio = {
-	.name = "hp-det",
-	.report = SND_JACK_HEADPHONE,
-	/*
-	 * Stock detects the jack through the PMIC ACCDET block rather than a
-	 * GPIO, but debounces that accessory-detect EINT by 256 ms (MTK BSP,
-	 * CUST_EINT_ACCDET_DEBOUNCE_CN) to settle 3.5mm contact bounce on
-	 * insert/removal; mirror that here for the plug-detect GPIO. Units: ms.
-	 */
-	.debounce_time = 256,
-};
-
-static void mt6589_mt6320_jack_free(void *jack)
-{
-	snd_soc_jack_free_gpios(jack, 1, &mt6589_mt6320_jack_gpio);
-}
-
-/*
- * Optional headphone-jack plug detection ("hp-det-gpios"): insert routes audio
- * to the headphones and powers down the speaker amp; removal does the reverse.
- */
 static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 {
+	struct snd_soc_component *accdet;
 	int ret;
-
-	if (!device_property_present(card->dev, "hp-det-gpios"))
-		return 0;
 
 	ret = snd_soc_card_jack_new_pins(card, "Headphone Jack", SND_JACK_HEADPHONE,
 					 &mt6589_mt6320_hp_jack,
@@ -70,14 +47,27 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	if (ret)
 		return ret;
 
-	mt6589_mt6320_jack_gpio.gpiod_dev = card->dev;
-	ret = snd_soc_jack_add_gpios(&mt6589_mt6320_hp_jack, 1,
-				     &mt6589_mt6320_jack_gpio);
+	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
+				   SND_JACK_BTN_0, KEY_PLAYPAUSE);
 	if (ret)
 		return ret;
 
-	return devm_add_action_or_reset(card->dev, mt6589_mt6320_jack_free,
-					&mt6589_mt6320_hp_jack);
+	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
+				   SND_JACK_BTN_1, KEY_PREVIOUSSONG);
+	if (ret)
+		return ret;
+
+	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
+				   SND_JACK_BTN_2, KEY_NEXTSONG);
+	if (ret)
+		return ret;
+
+	accdet = snd_soc_lookup_component_by_name("mt6320-accdet");
+	if (!accdet)
+		return -EPROBE_DEFER;
+
+	return snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack,
+					  NULL);
 }
 
 static struct snd_soc_card mt6589_mt6320_card = {
