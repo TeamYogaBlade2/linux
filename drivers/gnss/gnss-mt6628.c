@@ -121,9 +121,19 @@ static int mtk_gnss_sdio_probe(struct sdio_func *func,
 	gdev->ops = &mtk_gnss_ops;
 	gnss_set_drvdata(gdev, priv);
 
-	ret = gnss_register_device(gdev);
+	sdio_claim_host(func);
+	ret = sdio_enable_func(func);
+	sdio_release_host(func);
 	if (ret)
 		goto err_put;
+
+	ret = gnss_register_device(gdev);
+	if (ret) {
+		sdio_claim_host(func);
+		sdio_disable_func(func);
+		sdio_release_host(func);
+		goto err_put;
+	}
 
 	sdio_set_drvdata(func, priv);
 
@@ -151,6 +161,11 @@ static void mtk_gnss_sdio_remove(struct sdio_func *func)
 
 	gnss_deregister_device(priv->gdev);
 	gnss_put_device(priv->gdev);
+
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
 }
 
 static const struct sdio_device_id mtk_gnss_sdio_ids[] = {

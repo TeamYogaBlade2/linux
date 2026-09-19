@@ -39,12 +39,24 @@
 /* CFG_FW_LOAD_ADDRESS / CFG_FW_START_ADDRESS of the downstream config.h */
 #define MT6628_FW_LOAD_ADDRESS		0x00060000
 #define MT6628_FW_START_ADDRESS		0x00060000
+#define MT6628_FW_SIGNATURE		0x574b544d
+#define MT6628_FW_HEADER_SIZE		16
+#define MT6628_FW_SECTION_SIZE		16
+#define MT6628_INIT_EVENT_CMD_RESULT	1
+#define MT6628_INIT_EVENT_SIZE		8
 
 struct mt6628_wlan {
 	struct sdio_func *func;
 	u8 seq_num;
 	bool fw_running;
 };
+
+struct mt6628_fw_section {
+	__le32 offset;
+	__le32 reserved;
+	__le32 length;
+	__le32 dest_addr;
+} __packed;
 
 static int mt6628_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 {
@@ -115,6 +127,79 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 	return -ETIMEDOUT;
 }
 
+static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
+{
+	unsigned int tries = 1000;
+
+	while (tries--) {
+		u32 isr;
+		u32 rx_len_reg;
+		u16 rx_len;
+		u8 *resp;
+		int ret;
+
+		ret = mt6628_read32(wl, MT6628_MCR_WHISR, &isr);
+		if (ret)
+			return ret;
+
+		if (isr & MT6628_WHISR_ABNORMAL) {
+			dev_err(&wl->func->dev,
+				"firmware reported abnormal status (isr %#x)\n",
+				isr);
+			return -EIO;
+		}
+
+		if (!(isr & MT6628_WHISR_RX0_DONE)) {
+			usleep_range(1000, 1500);
+			continue;
+		}
+
+		ret = mt6628_read32(wl, MT6628_MCR_WRPLR, &rx_len_reg);
+		if (ret)
+			return ret;
+
+		rx_len = (u16)rx_len_reg;
+		if (rx_len < MT6628_INIT_EVENT_SIZE) {
+			dev_err(&wl->func->dev,
+				"short init event: %u bytes\n", rx_len);
+			return -EMSGSIZE;
+		}
+
+		resp = kzalloc(rx_len, GFP_KERNEL);
+		if (!resp)
+			return -ENOMEM;
+
+		sdio_claim_host(wl->func);
+		ret = sdio_readsb(wl->func, resp, MT6628_MCR_WRDR0, rx_len);
+		sdio_release_host(wl->func);
+		if (ret) {
+			kfree(resp);
+			return ret;
+		}
+
+		/*
+		 * INIT_HIF_RX_HEADER:
+		 *   +0: u2RxByteCount
+		 *   +2: ucEID
+		 *   +3: ucSeqNum
+		 *   +4: ucStatus
+		 */
+		if (resp[2] != MT6628_INIT_EVENT_CMD_RESULT ||
+		    resp[3] != seq_num) {
+			kfree(resp);
+			continue;
+		}
+
+		ret = resp[4] ? -EIO : 0;
+		kfree(resp);
+		return ret;
+	}
+
+	dev_err(&wl->func->dev,
+		"timeout waiting for init command result\n");
+	return -ETIMEDOUT;
+}
+
 /* Send one init command with a payload buffer. */
 static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 			   void *extra, size_t extra_len,
@@ -122,7 +207,8 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 {
 	struct sdio_func *func = wl->func;
 	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
-	size_t pkt_len = hdr_len + extra_len + data_len;
+	size_t pkt_len = ALIGN(hdr_len + extra_len + data_len, 4);
+	u8 seq_num;
 	u8 *pkt;
 	int ret;
 
@@ -134,7 +220,8 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	pkt[2] = 0;			/* ether type offset */
 	pkt[3] = 0;			/* checksum flags: none */
 	pkt[4] = cid;
-	pkt[5] = wl->seq_num++;
+	seq_num = wl->seq_num++;
+	pkt[5] = seq_num;
 	put_unaligned_le16(0, pkt + 6);
 
 	if (extra_len)
@@ -151,32 +238,44 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	if (ret)
 		return ret;
 
-	/*
-	 * Wait for the command-done interrupt.  An ABNORMAL indication here
-	 * means the firmware rejected the chunk (CRC error etc.), so do
-	 * not silently ignore it.
-	 */
-	{
-		unsigned int tries = 100;
-		u32 isr;
+	return mt6628_wait_init_cmd_result(wl, seq_num);
+}
 
-		while (tries--) {
-			ret = mt6628_read32(wl, MT6628_MCR_WHISR, &isr);
-			if (ret)
-				return ret;
-			if (isr & MT6628_WHISR_ABNORMAL) {
-				dev_err(&wl->func->dev,
-					"firmware reported abnormal status (isr %#x)\n",
-					isr);
-				return -EIO;
-			}
-			if (isr & MT6628_WHISR_TX_DONE)
-				return 0;
-			usleep_range(1000, 1500);
-		}
-		dev_err(&wl->func->dev, "timeout waiting for cmd done\n");
-		return -ETIMEDOUT;
+static int mt6628_download_blob(struct mt6628_wlan *wl, u32 dest_addr,
+				const u8 *data, size_t len)
+{
+	while (len) {
+		struct mt6628_init_cmd_download_buf dl;
+		size_t chunk = min_t(size_t, len, MT6628_FW_DL_CHUNK);
+		u32 crc;
+		int ret;
+
+		if (chunk > U32_MAX - dest_addr)
+			return -EOVERFLOW;
+
+		/*
+		 * The firmware protocol carries the real section length.
+		 * mt6628_init_cmd() takes care of the 4-byte HIF packet
+		 * alignment and zero padding separately.
+		 */
+		crc = crc32(0, data, chunk);
+
+		dl.address = cpu_to_le32(dest_addr);
+		dl.length = cpu_to_le32(chunk);
+		dl.crc32 = cpu_to_le32(crc);
+		dl.data_mode = cpu_to_le32(BIT(0) | BIT(31));
+
+		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_DOWNLOAD_BUF,
+				      &dl, sizeof(dl), data, chunk);
+		if (ret)
+			return ret;
+
+		dest_addr += chunk;
+		data += chunk;
+		len -= chunk;
 	}
+
+	return 0;
 }
 
 static int mt6628_download_firmware(struct mt6628_wlan *wl)
@@ -184,6 +283,7 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	const struct firmware *fw;
 	char fwname[64];
 	u8 seq_backup;
+	u32 num_sections;
 	unsigned int offset;
 	int ret;
 
@@ -206,32 +306,77 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	dev_info(&wl->func->dev, "firmware %s (%zu bytes)\n", fwname,
 		 fw->size);
 
-	for (offset = 0; offset < fw->size; offset += MT6628_FW_DL_CHUNK) {
-		size_t chunk = min_t(size_t, fw->size - offset,
-				     MT6628_FW_DL_CHUNK);
-		struct mt6628_init_cmd_download_buf dl;
-		u32 crc;
+	/*
+	 * MT6628 uses divided firmware images:
+	 *
+	 *   0x00 signature
+	 *   0x04 whole-file CRC32
+	 *   0x08 section count
+	 *   0x0c reserved
+	 *   0x10 section table
+	 *
+	 * The downstream checks the CRC over everything from u4NumOfEntries
+	 * (offset 8) to the end of the image.
+	 */
+	if (fw->size >= MT6628_FW_HEADER_SIZE &&
+	    get_unaligned_le32(fw->data) == MT6628_FW_SIGNATURE &&
+	    get_unaligned_le32(fw->data + 4) ==
+			crc32(0, fw->data + 8, fw->size - 8)) {
+		num_sections = get_unaligned_le32(fw->data + 8);
 
-		/* the chip counts in 4-byte units */
-		chunk = ALIGN(chunk, 4);
-
-		crc = crc32(0, fw->data + offset, chunk);
-
-		dl.address = cpu_to_le32(MT6628_FW_LOAD_ADDRESS + offset);
-		dl.length = cpu_to_le32(chunk);
-		dl.crc32 = cpu_to_le32(crc);
-		/* ACK requested, no encryption */
-		dl.data_mode = cpu_to_le32(BIT(31));
-
-		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_DOWNLOAD_BUF,
-				      &dl, sizeof(dl),
-				      fw->data + offset, chunk);
-		if (ret) {
+		if (num_sections >
+		    (fw->size - MT6628_FW_HEADER_SIZE) /
+			MT6628_FW_SECTION_SIZE) {
 			dev_err(&wl->func->dev,
-				"DOWNLOAD_BUF at %#zx failed: %d\n",
-				offset, ret);
+				"invalid firmware section count: %u\n",
+				num_sections);
+			ret = -EINVAL;
 			goto out_restore_seq;
 		}
+
+		for (offset = 0; offset < num_sections; offset++) {
+			const struct mt6628_fw_section *section;
+			u32 data_offset;
+			u32 data_len;
+			u32 dest_addr;
+
+			section = (const struct mt6628_fw_section *)
+				(fw->data + MT6628_FW_HEADER_SIZE +
+				 offset * MT6628_FW_SECTION_SIZE);
+
+			data_offset = le32_to_cpu(section->offset);
+			data_len = le32_to_cpu(section->length);
+			dest_addr = le32_to_cpu(section->dest_addr);
+
+			if (data_offset > fw->size ||
+			    data_len > fw->size - data_offset) {
+				dev_err(&wl->func->dev,
+					"invalid firmware section %u: offset %#x length %#x\n",
+					offset, data_offset, data_len);
+				ret = -EINVAL;
+				goto out_restore_seq;
+			}
+
+			ret = mt6628_download_blob(wl, dest_addr,
+						   fw->data + data_offset,
+						   data_len);
+			if (ret) {
+				dev_err(&wl->func->dev,
+					"firmware section %u failed: %d\n",
+					offset, ret);
+				goto out_restore_seq;
+			}
+		}
+	} else {
+		/*
+		 * Keep the downstream fallback for a legacy/raw RAM-code image.
+		 * This path still uses the real unpadded length for CRC/firmware
+		 * metadata and only pads the HIF packet itself.
+		 */
+		ret = mt6628_download_blob(wl, MT6628_FW_LOAD_ADDRESS,
+					   fw->data, fw->size);
+		if (ret)
+			goto out_restore_seq;
 	}
 
 	{
@@ -241,7 +386,7 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 			__le32 address;
 		} __packed start = {
 			.override = cpu_to_le32(0),	/* no override */
-			.address = cpu_to_le32(MT6628_FW_START_ADDRESS),
+			.address = cpu_to_le32(0),
 		};
 
 		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_WIFI_START,

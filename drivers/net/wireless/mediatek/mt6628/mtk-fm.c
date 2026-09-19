@@ -133,7 +133,9 @@ static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 static int mtk_fm_power_up(struct mtk_fm *fm)
 {
 	u8 *buf;
+	u8 *frame;
 	int pkt, ret;
+	size_t frame_len;
 
 	buf = kzalloc(512, GFP_KERNEL);
 	if (!buf)
@@ -142,16 +144,45 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 	pkt = fm_pwrup_clock_on(fm, buf, 512);
 
 	/*
-	 * The power-up BOP program is pushed as a single FM-task STP
-	 * frame; the on-chip firmware executes it sequentially.
+	 * SDIO STP transport:
+	 *   byte 0: STP signature
+	 *   byte 1: task + payload length[11:8]
+	 *   byte 2: payload length[7:0]
+	 *   byte 3: zero on SDIO
+	 *   payload
+	 *   two zero CRC bytes
+	 *
+	 * The downstream stp_core uses exactly this format for SDIO.
 	 */
+	if (pkt > 0xfff) {
+		kfree(buf);
+		return -EMSGSIZE;
+	}
+
+	frame_len = 4 + pkt + 2;
+	frame = kzalloc(frame_len, GFP_KERNEL);
+	if (!frame) {
+		kfree(buf);
+		return -ENOMEM;
+	}
+
+	frame[0] = 0x80;
+	frame[1] = (STP_TASK_FM << 4) | ((pkt >> 8) & 0x0f);
+	frame[2] = pkt & 0xff;
+	frame[3] = 0x00;
+	memcpy(frame + 4, buf, pkt);
+
 	sdio_claim_host(fm->func);
-	ret = sdio_writesb(fm->func, MTK_SDIO_CTDR, buf, pkt);
+	ret = sdio_writesb(fm->func, MTK_SDIO_CTDR, frame, frame_len);
 	sdio_release_host(fm->func);
 
+	kfree(frame);
 	kfree(buf);
 
-	return ret;
+	if (ret)
+		return ret;
+
+	return pkt;
 }
 
 /* ---- V4L2 ---- */
