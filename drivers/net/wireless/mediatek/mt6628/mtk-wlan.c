@@ -47,6 +47,7 @@ struct mt6628_wlan {
 	struct sdio_func *func;
 	u8 seq_num;
 	bool fw_running;
+	bool driver_owned;
 };
 
 struct mt6628_fw_section {
@@ -139,6 +140,37 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 	}
 
 	dev_err(&wl->func->dev, "timed out waiting for driver ownership\n");
+	return -ETIMEDOUT;
+}
+
+static int mt6628_fw_own(struct mt6628_wlan *wl)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
+	u32 val;
+	int ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_SET);
+	if (ret)
+		return ret;
+
+	while (time_before(jiffies, timeout)) {
+		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
+		if (ret)
+			return ret;
+
+		/*
+		 * The request bit is also the driver-own indication.  A
+		 * successful FW ownership transition clears it.
+		 */
+		if (!(val & MT6628_FW_OWN_REQ_SET))
+			return 0;
+
+		usleep_range(500, 1000);
+	}
+
+	dev_err(&wl->func->dev,
+		"timed out waiting for firmware ownership\n");
 	return -ETIMEDOUT;
 }
 
@@ -501,6 +533,7 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	ret = mt6628_driver_own(wl);
 	if (ret)
 		goto err_disable;
+	wl->driver_owned = true;
 
 	ret = mt6628_download_firmware(wl);
 	if (ret)
@@ -509,6 +542,16 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	return 0;
 
 err_disable:
+	if (wl->driver_owned) {
+		ret = mt6628_fw_own(wl);
+		if (ret)
+			dev_warn(&func->dev,
+				 "failed to return firmware ownership: %d\n",
+				 ret);
+		else
+			wl->driver_owned = false;
+	}
+
 	sdio_claim_host(func);
 	sdio_disable_func(func);
 	sdio_release_host(func);
@@ -519,6 +562,22 @@ err_disable:
 
 static void mt6628_wlan_sdio_remove(struct sdio_func *func)
 {
+	struct mt6628_wlan *wl = sdio_get_drvdata(func);
+
+	if (!wl)
+		return;
+
+	if (wl->driver_owned) {
+		int ret = mt6628_fw_own(wl);
+
+		if (ret)
+			dev_warn(&func->dev,
+				 "failed to return firmware ownership: %d\n",
+				 ret);
+		else
+			wl->driver_owned = false;
+	}
+
 	sdio_claim_host(func);
 	sdio_disable_func(func);
 	sdio_release_host(func);
