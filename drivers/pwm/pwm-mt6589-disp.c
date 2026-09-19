@@ -150,31 +150,6 @@ static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
 	writel(0x00000001, bls->base + BLS_GAMMA_SETTING);
 }
 
-/* Initialize PWM LUT with a linear ramp */
-static void mt6589_bls_pwm_lut_init(struct mt6589_bls_pwm *bls)
-{
-	unsigned int i;
-	u32 val;
-
-	/* PWM LUT has 33 entries (indices 0..32).  Program an identity
-	 * where entry[i] = i * (1023 / 32) ~ i * 31.  <unk>: true table
-	 * from downstream is unknown, this should be sufficient for basic
-	 * operation.
-	 */
-	for (i = 0; i <= 32; i++) {
-		val = (i * 31) & 0x3FF;		/* 10-bit value */
-		writel(val, bls->base + BLS_PWM_LUT(i));
-	}
-
-	/* LUT update: select and commit (bits defined in BLS_LUT_UPDATE) */
-	writel(0x4, bls->base + BLS_LUT_UPDATE);	/* PWM LUT update start */
-	for (i = 0; i <= 32; i++) {
-		writel(i, bls->base + BLS_PWM_LUT_SEL);	/* select row */
-		/* dummy read to ensure write? Not needed */
-	}
-	writel(0x0, bls->base + BLS_LUT_UPDATE);	/* PWM LUT update end */
-}
-
 /* Configure dithering registers with downstream magic values */
 static void mt6589_bls_dither_init(struct mt6589_bls_pwm *bls)
 {
@@ -284,9 +259,6 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	/* Initialize gamma LUT (identity) */
 	mt6589_bls_gamma_init(bls);
-
-	/* Initialize PWM LUT (linear ramp) */
-	mt6589_bls_pwm_lut_init(bls);
 
 	/* Initialize dithering */
 	mt6589_bls_dither_init(bls);
