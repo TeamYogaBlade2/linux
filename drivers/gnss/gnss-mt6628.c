@@ -121,6 +121,7 @@ static int mtk_gnss_probe(struct platform_device *pdev)
 
 	priv->gdev = gdev;
 	gdev->ops = &mtk_gnss_ops;
+	gdev->type = GNSS_TYPE_MTK;
 	gnss_set_drvdata(gdev, priv);
 
 	ret = mt6628_stp_register_rx(wmt, MT6628_STP_TASK_GPS,
