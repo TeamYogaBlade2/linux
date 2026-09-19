@@ -343,15 +343,36 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		goto out_put;
 	}
 
-	/* pin + DMA-map + MMU-map every referenced BO */
-	{
-		struct drm_gem_object **lut = objs + 1;
+	/*
+	 * Look up the user BO handles.  drm_gem_objects_lookup() allocates
+	 * a fresh array and writes its address to *objs_out — it does NOT
+	 * fill an existing array.  The previous code passed &(objs+1) as
+	 * the output pointer, which made the function overwrite a stack
+	 * variable while objs[1..] stayed NULL, and then leaked the newly
+	 * allocated array entirely.
+	 *
+	 * Correct approach: receive the new array, copy the pointers into
+	 * our pre-allocated objs[] slot, then free the temporary array.
+	 * The objects themselves are already reference-counted by the lookup.
+	 */
+	if (args->num_bos > 0) {
+		struct drm_gem_object **user_objs = NULL;
 
 		ret = drm_gem_objects_lookup(file,
-			u64_to_user_ptr(args->bos), args->num_bos, &lut);
+			u64_to_user_ptr(args->bos), args->num_bos,
+			&user_objs);
+		if (ret)
+			goto out_put;
+
+		/*
+		 * user_objs is a freshly-allocated array[num_bos].
+		 * Transfer the references into our objs[] layout
+		 * (slot 0 = cmd BO, slots 1..num_bos = user BOs).
+		 */
+		memcpy(objs + 1, user_objs,
+		       args->num_bos * sizeof(*user_objs));
+		kvfree(user_objs);
 	}
-	if (ret)
-		goto out_put;
 
 	/*
 	 * Implicit sync: wait for any exclusive fence other drivers

@@ -244,6 +244,11 @@ void prismrv_recovery_work(struct work_struct *work);
 
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file);
+/* shmem helper callback — must be declared here so prismrv_gem.c sees
+ * the prototype before the definition and avoids -Wmissing-prototypes */
+struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
+						 size_t size);
+
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file);
 int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,

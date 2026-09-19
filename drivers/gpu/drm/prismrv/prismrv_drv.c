@@ -22,10 +22,6 @@
 
 #include <uapi/drm/prismrv_drm.h>
 
-struct drm_device;
-struct drm_gem_object;
-struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
-					 size_t size);
 #include "prismrv_device.h"
 
 static const struct prismrv_chip_info prismrv_sgx544_info = {

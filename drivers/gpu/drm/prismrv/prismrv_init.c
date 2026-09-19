@@ -150,10 +150,7 @@ int prismrv_hw_init(struct prismrv_device *pv)
 		goto out_fw;
 
 	prismrv_read_revision(pv);	/* revision stable after clocks on */
-	prismrv_errata_init(pv);
-	ret = prismrv_errata_apply(pv);
-	if (ret)
-		goto out_errata;
+	prismrv_errata_init(pv);	/* sets pv->errata bitmask only */
 
 	prismrv_soft_reset(pv);
 
@@ -161,9 +158,23 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	writel(0, pv->regs + EUR_CR_POWER);
 
 	prismrv_bif_reset(pv);
+
+	/*
+	 * mmu_init() MUST come before errata_apply().
+	 *
+	 * errata_apply() calls prismrv_mmu_map() for each workaround
+	 * buffer, which immediately dereferences pv->pd_cpu to walk the
+	 * page directory.  pv->pd_cpu is allocated and zeroed by
+	 * mmu_init() — calling errata_apply() first (as the code
+	 * previously did) caused a NULL dereference on every cold boot.
+	 */
 	ret = prismrv_mmu_init(pv);
 	if (ret)
-		goto out_errata;
+		goto out_fw;
+
+	ret = prismrv_errata_apply(pv);
+	if (ret)
+		goto out_mmu;
 
 	/* upload the uKernel into GPU address space */
 	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
@@ -216,9 +227,12 @@ out_hostctl:
 		pv->hostctl = NULL;
 	}
 out_mmu:
-	prismrv_mmu_fini(pv);
-out_errata:
+	/*
+	 * errata buffers (if applied) are mapped into the MMU; release
+	 * them before tearing down the page tables.
+	 */
 	prismrv_errata_release(pv);
+	prismrv_mmu_fini(pv);
 out_fw:
 	return ret;
 }
