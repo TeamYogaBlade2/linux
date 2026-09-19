@@ -19,6 +19,7 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 
 #include <linux/gnss.h>
 
@@ -28,7 +29,11 @@
 
 /* STP channel type for GNSS (downstream stp_exp.h numbering). */
 #define STP_TASK_GPS			2
-#define STP_MAX_PAYLOAD_LEN		0x0fff
+#define STP_SDIO_TX_FIFO_SIZE		2080
+#define STP_HEADER_SIZE			4
+#define STP_CRC_SIZE			2
+#define STP_MAX_PAYLOAD_LEN		(STP_SDIO_TX_FIFO_SIZE - \
+					 STP_HEADER_SIZE - STP_CRC_SIZE)
 
 struct mtk_gnss {
 	struct gnss_device *gdev;
@@ -52,21 +57,31 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 {
 	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
 	u8 *frame;
-	size_t frame_len = 4 + len + 2;
+	size_t stp_len;
+	size_t frame_len;
 	int ret;
 
 	if (len > STP_MAX_PAYLOAD_LEN)
 		return -EMSGSIZE;
 
+	stp_len = STP_HEADER_SIZE + len + STP_CRC_SIZE;
+	frame_len = ALIGN(4 + stp_len, 4);
+	if (frame_len > priv->func->cur_blksize)
+		frame_len = ALIGN(frame_len, priv->func->cur_blksize);
+
 	frame = kzalloc(frame_len, GFP_KERNEL);
 	if (!frame)
 		return -ENOMEM;
 
-	frame[0] = 0x80;
-	frame[1] = (STP_TASK_GPS << 4) | ((len >> 8) & 0x0f);
-	frame[2] = len & 0xff;
-	frame[3] = 0x00;
-	memcpy(frame + 4, buf, len);
+	put_unaligned_le16(stp_len, frame);
+	frame[2] = 0;
+	frame[3] = 0;
+
+	frame[4] = 0x80;
+	frame[5] = (STP_TASK_GPS << 4) | ((len >> 8) & 0x0f);
+	frame[6] = len & 0xff;
+	frame[7] = 0;
+	memcpy(frame + 8, buf, len);
 
 	ret = mtk_gnss_write(priv, frame, frame_len);
 	kfree(frame);
