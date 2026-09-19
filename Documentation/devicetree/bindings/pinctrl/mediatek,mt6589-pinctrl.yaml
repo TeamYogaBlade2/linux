@@ -47,7 +47,8 @@ properties:
   interrupt-controller: true
 
   interrupts:
-    maxItems: 1
+    minItems: 3
+    maxItems: 3
     description:
       Specifies the summary IRQ.
 
@@ -106,7 +107,7 @@ patternProperties:
           input-schmitt-disable: true
 
           drive-strength:
-            enum: [2, 4, 8, 10, 12, 14, 16, 20, 24, 28, 32]
+            enum: [2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
 
           slew-rate:
             enum: [0, 1]
