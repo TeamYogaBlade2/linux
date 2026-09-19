@@ -85,6 +85,7 @@ struct mt6628_wmt {
 	bool irq_claimed;
 	bool stopping;
 	bool wmt_waiting;
+	u8 wmt_wait_opcode;
 	int wmt_status;
 };
 
@@ -279,12 +280,18 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 	void *priv;
 
 	if (task == MT6628_STP_TASK_WMT) {
-		if (len != 5 || buf[0] != 0x02 || buf[1] != 0x06 ||
-			get_unaligned_le16(buf + 2) != 1)
+		u16 payload_len;
+
+		if (len < 4 || buf[0] != 0x02)
+			return;
+
+		payload_len = get_unaligned_le16(buf + 2);
+		if (!payload_len || payload_len > len - 4)
 			return;
 
 		mutex_lock(&wmt->wmt_lock);
-		if (wmt->wmt_waiting) {
+		if (wmt->wmt_waiting &&
+		    buf[1] == wmt->wmt_wait_opcode) {
 			wmt->wmt_status = buf[4] ? -EIO : 0;
 			wmt->wmt_waiting = false;
 			complete(&wmt->wmt_done);
@@ -519,28 +526,23 @@ void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
 }
 EXPORT_SYMBOL_GPL(mt6628_stp_unregister_rx);
 
-int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
-				enum mt6628_wmt_func func, bool on)
+static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
+			  const u8 *cmd, size_t len, u8 opcode,
+			  unsigned int timeout_ms)
 {
-	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
 	unsigned long timeout;
 	int ret;
-
-	if (!wmt || (func != MT6628_WMT_FUNC_BT &&
-			     func != MT6628_WMT_FUNC_FM &&
-			     func != MT6628_WMT_FUNC_GPS))
-		return -EINVAL;
 
 	mutex_lock(&wmt->tx_lock);
 	reinit_completion(&wmt->wmt_done);
 
 	mutex_lock(&wmt->wmt_lock);
 	wmt->wmt_waiting = true;
+	wmt->wmt_wait_opcode = opcode;
 	wmt->wmt_status = -ETIMEDOUT;
 	mutex_unlock(&wmt->wmt_lock);
 
-	ret = __mt6628_stp_send(wmt, MT6628_STP_TASK_WMT, cmd,
-				ARRAY_SIZE(cmd));
+	ret = __mt6628_stp_send(wmt, MT6628_STP_TASK_WMT, cmd, len);
 	if (ret) {
 		mutex_lock(&wmt->wmt_lock);
 		wmt->wmt_waiting = false;
@@ -550,7 +552,8 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 	}
 
 	timeout = wait_for_completion_timeout(&wmt->wmt_done,
-					     msecs_to_jiffies(1000));
+					     msecs_to_jiffies(timeout_ms));
+
 	mutex_lock(&wmt->wmt_lock);
 	if (!timeout && wmt->wmt_waiting) {
 		wmt->wmt_waiting = false;
@@ -558,10 +561,39 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 	} else {
 		ret = wmt->wmt_status;
 	}
+	wmt->wmt_wait_opcode = 0xff;
 	mutex_unlock(&wmt->wmt_lock);
-	mutex_unlock(&wmt->tx_lock);
 
+	mutex_unlock(&wmt->tx_lock);
 	return ret;
+}
+
+static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
+				u32 addr, u32 value, u32 mask)
+{
+	u8 cmd[20] = {
+		0x01, 0x08, 0x10, 0x00,
+		0x01, 0x01, 0x00, 0x01,
+	};
+
+	put_unaligned_le32(addr, cmd + 8);
+	put_unaligned_le32(value, cmd + 12);
+	put_unaligned_le32(mask, cmd + 16);
+
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000);
+}
+
+int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
+				enum mt6628_wmt_func func, bool on)
+{
+	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
+
+	if (!wmt || (func != MT6628_WMT_FUNC_BT &&
+			     func != MT6628_WMT_FUNC_FM &&
+			     func != MT6628_WMT_FUNC_GPS))
+		return -EINVAL;
+
+	return mt6628_wmt_cmd(wmt, cmd, ARRAY_SIZE(cmd), 0x06, 1000);
 }
 EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
 
@@ -591,6 +623,7 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	spin_lock_init(&wmt->tx_state_lock);
 	init_waitqueue_head(&wmt->tx_waitq);
 	init_completion(&wmt->wmt_done);
+	wmt->wmt_wait_opcode = 0xff;
 	wmt->tx_fifo_free = MT6628_STP_TX_FIFO_SIZE;
 	INIT_WORK(&wmt->rx_work, mt6628_stp_rx_work);
 	sdio_set_drvdata(func, wmt);
