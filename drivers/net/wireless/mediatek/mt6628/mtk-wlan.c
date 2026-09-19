@@ -58,6 +58,11 @@ struct mt6628_fw_section {
 	__le32 dest_addr;
 } __packed;
 
+static u32 mt6628_crc32(const u8 *data, size_t len)
+{
+	return ~crc32_le(~0, data, len);
+}
+
 static int mt6628_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 {
 	int ret;
@@ -171,9 +176,9 @@ static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
 			return ret;
 
 		rx_len = (u16)rx_len_reg;
-		if (rx_len < MT6628_INIT_EVENT_SIZE) {
+		if (rx_len != MT6628_INIT_EVENT_SIZE) {
 			dev_err(&wl->func->dev,
-				"short init event: %u bytes\n", rx_len);
+				"invalid init event length: %u bytes\n", rx_len);
 			return -EMSGSIZE;
 		}
 
@@ -274,7 +279,7 @@ static int mt6628_download_blob(struct mt6628_wlan *wl, u32 dest_addr,
 		 * mt6628_init_cmd() takes care of the 4-byte HIF packet
 		 * alignment and zero padding separately.
 		 */
-		crc = crc32(0, data, chunk);
+		crc = mt6628_crc32(data, chunk);
 
 		dl.address = cpu_to_le32(dest_addr);
 		dl.length = cpu_to_le32(chunk);
@@ -337,7 +342,7 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	if (fw->size >= MT6628_FW_HEADER_SIZE &&
 	    get_unaligned_le32(fw->data) == MT6628_FW_SIGNATURE &&
 	    get_unaligned_le32(fw->data + 4) ==
-			crc32(0, fw->data + 8, fw->size - 8)) {
+			mt6628_crc32(fw->data + 8, fw->size - 8)) {
 		num_sections = get_unaligned_le32(fw->data + 8);
 
 		if (num_sections >
