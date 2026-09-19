@@ -58,6 +58,10 @@
 #define MT6628_STP_TX_TIMEOUT_MS		1000
 #define MT6628_WMT_RESPONSE_MAX		32
 
+#define MT6628_WMT_GEN_HVR			0x80000000
+#define MT6628_WMT_GEN_FVR			0x80000004
+#define MT6628_WMT_GEN_VER_MASK		0x0000ffff
+
 struct mt6628_stp_endpoint {
 	mt6628_stp_rx_cb cb;
 	void *priv;
@@ -609,6 +613,72 @@ static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
 
 	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
 			      NULL, NULL);
+}
+
+static int mt6628_wmt_reg_read(struct mt6628_wmt *wmt,
+			       u32 addr, u32 mask, u32 *value)
+{
+	u8 cmd[20] = {
+		0x01, 0x08, 0x10, 0x00,
+		0x00, 0x01, 0x00, 0x01,
+	};
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	u16 payload_len;
+	int ret;
+
+	if (!value)
+		return -EINVAL;
+
+	put_unaligned_le32(addr, cmd + 8);
+	put_unaligned_le32(0, cmd + 12);
+	put_unaligned_le32(mask, cmd + 16);
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len < 16 ||
+	    response[0] != 0x02 ||
+	    response[1] != 0x08) {
+		return -EPROTO;
+	}
+
+	payload_len = get_unaligned_le16(response + 2);
+	if (payload_len < 12 ||
+	    payload_len + 4 > response_len ||
+	    response[4] ||
+	    response[5] != 0 ||
+	    response[6] != 0 ||
+	    response[7] != 1 ||
+	    get_unaligned_le32(response + 8) != addr) {
+		return -EPROTO;
+	}
+
+	*value = get_unaligned_le32(response + 12) & mask;
+	return 0;
+}
+
+static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
+				    u16 *hw_ver, u16 *rom_ver)
+{
+	u32 value;
+	int ret;
+
+	ret = mt6628_wmt_reg_read(wmt, MT6628_WMT_GEN_HVR,
+				  MT6628_WMT_GEN_VER_MASK, &value);
+	if (ret)
+		return ret;
+	*hw_ver = value;
+
+	ret = mt6628_wmt_reg_read(wmt, MT6628_WMT_GEN_FVR,
+				  MT6628_WMT_GEN_VER_MASK, &value);
+	if (ret)
+		return ret;
+	*rom_ver = value;
+
+	return 0;
 }
 
 /*
