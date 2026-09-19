@@ -163,9 +163,7 @@ examples:
               interrupt-controller;
               interrupt-parent = <&gic>;
               #interrupt-cells = <2>;
-              interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
-                           <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
-                           <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>;
+              interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>;
 
               usb_pins_default: usb-pins {
                   pins_iddig {
