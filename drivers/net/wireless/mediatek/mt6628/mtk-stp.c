@@ -169,12 +169,29 @@ static void mt6628_stp_tx_complete(struct mt6628_wmt *wmt, u32 chisr)
 }
 
 static int mt6628_stp_write32(struct mt6628_wmt *wmt, unsigned int reg,
-				      u32 val)
+			      u32 val)
 {
 	int ret;
 
 	sdio_claim_host(wmt->func);
 	sdio_writel(wmt->func, val, reg, &ret);
+	sdio_release_host(wmt->func);
+
+	return ret;
+}
+
+/*
+ * MT6628 requires CMD52 accesses for CHLPCR ownership/interrupt
+ * control.  The downstream driver carries this workaround as
+ * COHEC_00006052.
+ */
+static int mt6628_stp_write8(struct mt6628_wmt *wmt, unsigned int reg,
+			     u8 val)
+{
+	int ret;
+
+	sdio_claim_host(wmt->func);
+	sdio_writeb(wmt->func, val, reg, &ret);
 	sdio_release_host(wmt->func);
 
 	return ret;
@@ -186,8 +203,8 @@ static int mt6628_stp_driver_own(struct mt6628_wmt *wmt)
 	int ret;
 	u32 val;
 
-	ret = mt6628_stp_write32(wmt, MT6628_STP_CHLPCR,
-				 MT6628_STP_FW_OWN_REQ_CLR);
+	ret = mt6628_stp_write8(wmt, MT6628_STP_CHLPCR + 1,
+				MT6628_STP_FW_OWN_REQ_CLR >> 8);
 	if (ret)
 		return ret;
 
@@ -213,8 +230,8 @@ static int mt6628_stp_fw_own(struct mt6628_wmt *wmt)
 	int ret;
 	u32 val;
 
-	ret = mt6628_stp_write32(wmt, MT6628_STP_CHLPCR,
-				 MT6628_STP_FW_OWN_REQ_SET);
+	ret = mt6628_stp_write8(wmt, MT6628_STP_CHLPCR + 1,
+				MT6628_STP_FW_OWN_REQ_SET >> 8);
 	if (ret)
 		return ret;
 
@@ -238,12 +255,8 @@ static int mt6628_stp_irq_enable(struct mt6628_wmt *wmt)
 {
 	int ret;
 
-	sdio_claim_host(wmt->func);
-	sdio_writeb(wmt->func, MT6628_STP_INT_EN_SET,
-			    MT6628_STP_CHLPCR, &ret);
-	sdio_release_host(wmt->func);
-
-	return ret;
+	return mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+				 MT6628_STP_INT_EN_SET);
 }
 
 static void mt6628_stp_irq_disable_in_irq(struct mt6628_wmt *wmt)
@@ -252,7 +265,7 @@ static void mt6628_stp_irq_disable_in_irq(struct mt6628_wmt *wmt)
 
 	/* SDIO invokes the callback with the host already claimed. */
 	sdio_writeb(wmt->func, MT6628_STP_INT_EN_CLR,
-			    MT6628_STP_CHLPCR, &ret);
+		    MT6628_STP_CHLPCR, &ret);
 }
 
 static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
@@ -619,8 +632,8 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	return 0;
 
 err_irq_disable:
-	mt6628_stp_write32(wmt, MT6628_STP_CHLPCR,
-			   MT6628_STP_INT_EN_CLR);
+	mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+			  MT6628_STP_INT_EN_CLR);
 err_irq:
 	sdio_claim_host(func);
 	sdio_release_irq(func);
@@ -650,8 +663,8 @@ static void mt6628_stp_remove(struct sdio_func *func)
 	WRITE_ONCE(wmt->stopping, true);
 	wake_up_all(&wmt->tx_waitq);
 
-	mt6628_stp_write32(wmt, MT6628_STP_CHLPCR,
-			   MT6628_STP_INT_EN_CLR);
+	mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
+			  MT6628_STP_INT_EN_CLR);
 
 	if (wmt->irq_claimed) {
 		sdio_claim_host(func);
