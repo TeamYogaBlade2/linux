@@ -24,12 +24,14 @@
 
 #define MT6320_EFUSE_NUM_WORDS		12
 
-/* EFUSE_CON1 */
-#define MT6320_EFUSE_ROW_ADDR		GENMASK(7, 0)
+/* EFUSE_CON0 */
+#define MT6320_EFUSE_ROW_ADDR		GENMASK(5, 0)
+/* EFUSE_CON2 */
+#define MT6320_EFUSE_EN			BIT(0)
 /* EFUSE_CON4 */
 #define MT6320_EFUSE_RD_TRIG		BIT(0)
 /* EFUSE_CON6 */
-#define MT6320_EFUSE_BUSY		BIT(0)
+#define MT6320_EFUSE_BUSY		BIT(2)
 
 struct mt6320_efuse {
 	struct regmap *regmap;
@@ -43,14 +45,15 @@ static int mt6320_efuse_read_word(struct mt6320_efuse *efuse,
 	int ret;
 
 	/* select the row */
-	ret = regmap_update_bits(efuse->regmap, MT6320_EFUSE_CON1,
+	ret = regmap_update_bits(efuse->regmap, MT6320_EFUSE_CON0,
 				 MT6320_EFUSE_ROW_ADDR,
 				 FIELD_PREP(MT6320_EFUSE_ROW_ADDR, row));
 	if (ret)
 		return ret;
 
 	/* enable efuse read path and pulse the read trigger */
-	ret = regmap_write(efuse->regmap, MT6320_EFUSE_CON2, 1);
+	ret = regmap_write(efuse->regmap, MT6320_EFUSE_CON2,
+			   MT6320_EFUSE_EN);
 	if (ret)
 		return ret;
 
@@ -70,10 +73,12 @@ static int mt6320_efuse_read_word(struct mt6320_efuse *efuse,
 
 	ret = regmap_read(efuse->regmap,
 			  MT6320_EFUSE_DOUT_0_15 + row * 2, &val);
+	if (ret)
+		return ret;
 
 	*out = val & 0xffff;
 
-	return ret;
+	return 0;
 }
 
 static int mt6320_efuse_read(void *context, unsigned int off,
@@ -83,7 +88,8 @@ static int mt6320_efuse_read(void *context, unsigned int off,
 	u16 *buf = data;
 	int i, ret;
 
-	if (len != MT6320_EFUSE_NUM_WORDS * sizeof(*buf))
+	if (!len || (off & 1) || (len & 1) ||
+	    off + len > MT6320_EFUSE_NUM_WORDS * sizeof(*buf))
 		return -EINVAL;
 
 	for (i = 0; i < len / sizeof(*buf); i++) {
