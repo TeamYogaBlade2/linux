@@ -100,9 +100,9 @@ static int fm_bop_udelay(u32 us, u8 *buf, int size)
 /* Power-up step 1: enable the FM digital clock. */
 static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 {
-	/* de-emphasis: 0 = 50us, 1 = 50us EU; oscillator code (0..5) */
-	const u16 de_emphasis = 1;
-	const u16 osc_freq = 2;
+	/* Match the MT6628 downstream defaults. */
+	const u16 de_emphasis = 0;
+	const u16 osc_freq = 0;
 	int pkt = 4;
 
 	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
@@ -118,9 +118,9 @@ static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 	pkt += fm_bop_modify(0x70, 0xffbf, 0x0040, buf + pkt, bufsize - pkt);
 	/* no low-power mode, analog line-in, long antenna */
 	pkt += fm_bop_modify(0x61, 0xff63, 0x0000, buf + pkt, bufsize - pkt);
-	pkt += fm_bop_modify(0x61, ~de_emphasis << 8 | 0xff, de_emphasis << 12,
+	pkt += fm_bop_modify(0x61, 0xefff, de_emphasis << 12,
 			     buf + pkt, bufsize - pkt);
-	pkt += fm_bop_modify(0x60, 0xff87, osc_freq << 4,
+	pkt += fm_bop_modify(0x60, 0xff8f, osc_freq << 4,
 			     buf + pkt, bufsize - pkt);
 
 	/* payload length for the packet header */
@@ -145,15 +145,10 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 	 * The power-up BOP program is pushed as a single FM-task STP
 	 * frame; the on-chip firmware executes it sequentially.
 	 */
-	{
-		int sent;
+	sdio_claim_host(fm->func);
+	ret = sdio_writesb(fm->func, MTK_SDIO_CTDR, buf, pkt);
+	sdio_release_host(fm->func);
 
-		sdio_claim_host(fm->func);
-		sent = sdio_memcpy_toio(fm->func, MTK_SDIO_CTDR, buf, pkt);
-		sdio_release_host(fm->func);
-
-		ret = sent == pkt ? 0 : (sent < 0 ? sent : -EIO);
-	}
 	kfree(buf);
 
 	return ret;
@@ -222,16 +217,24 @@ static int mtk_fm_sdio_probe(struct sdio_func *func,
 	sdio_release_host(func);
 	if (ret) {
 		dev_err_probe(&func->dev, ret, "failed to enable func\n");
-		goto err_v4l2;
+		goto err_video;
 	}
 
 	ret = mtk_fm_power_up(fm);
-	if (ret)
-		dev_warn(&func->dev, "FM power-up failed: %d\n", ret);
+	if (ret) {
+		dev_err(&func->dev, "FM power-up failed: %d\n", ret);
+		goto err_disable;
+	}
 
 	return 0;
 
-err_v4l2:
+err_disable:
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+err_video:
+	sdio_set_drvdata(func, NULL);
+	video_unregister_device(&fm->vdev);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	return ret;
 }
@@ -249,6 +252,7 @@ static void mtk_fm_sdio_remove(struct sdio_func *func)
 	sdio_claim_host(func);
 	sdio_disable_func(func);
 	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
 }
 
 static const struct sdio_device_id mtk_fm_sdio_ids[] = {

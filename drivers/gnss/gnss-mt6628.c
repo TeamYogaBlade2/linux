@@ -40,9 +40,9 @@ static int mtk_gnss_write(struct mtk_gnss *gdev_priv, const void *buf,
 	int ret;
 
 	sdio_claim_host(gdev_priv->func);
-	ret = sdio_memcpy_toio(gdev_priv->func, MTK_SDIO_CTDR, (void *)buf,
-			       len);
+	ret = sdio_writesb(gdev_priv->func, MTK_SDIO_CTDR, buf, len);
 	sdio_release_host(gdev_priv->func);
+
 	return ret;
 }
 
@@ -52,7 +52,7 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
 	u8 *frame;
 	size_t frame_len = 4 + len + 2;
-	int sent;
+	int ret;
 
 	frame = kzalloc(frame_len, GFP_KERNEL);
 	if (!frame)
@@ -64,12 +64,13 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 	frame[3] = 0x00;
 	memcpy(frame + 4, buf, len);
 
-	sent = mtk_gnss_write(priv, frame, frame_len);
+	ret = mtk_gnss_write(priv, frame, frame_len);
 	kfree(frame);
 
-	if (sent < 0)
-		return sent;
-	return sent == frame_len ? len : -EIO;
+	if (ret)
+		return ret;
+
+	return len;
 }
 
 /*

@@ -124,7 +124,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
 	size_t pkt_len = hdr_len + extra_len + data_len;
 	u8 *pkt;
-	int ret, sent;
+	int ret;
 
 	pkt = kzalloc(pkt_len, GFP_KERNEL);
 	if (!pkt)
@@ -143,15 +143,13 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 		memcpy(pkt + hdr_len + extra_len, data, data_len);
 
 	sdio_claim_host(func);
-	sent = sdio_memcpy_toio(func, MT6628_MCR_WTDR0, pkt, pkt_len);
+	ret = sdio_writesb(func, MT6628_MCR_WTDR0, pkt, pkt_len);
 	sdio_release_host(func);
 
 	kfree(pkt);
 
-	if (sent < 0)
-		return sent;
-	if (sent != pkt_len)
-		return -EIO;
+	if (ret)
+		return ret;
 
 	/*
 	 * Wait for the command-done interrupt.  An ABNORMAL indication here
@@ -295,23 +293,32 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	/* wait for the firmware ROM to report ready */
 	ret = mt6628_poll_ready(wl);
 	if (ret)
-		return dev_err_probe(&func->dev, ret,
-				     "chip did not report WLAN_READY\n");
+		goto err_disable;
 
 	ret = mt6628_driver_own(wl);
 	if (ret)
-		return dev_err_probe(&func->dev, ret,
-				     "failed to take driver ownership\n");
+		goto err_disable;
 
 	ret = mt6628_download_firmware(wl);
 	if (ret)
-		return ret;
+		goto err_disable;
 
 	return 0;
+
+err_disable:
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
+
+	return dev_err_probe(&func->dev, ret, "MT6628 WLAN probe failed\n");
 }
 
 static void mt6628_wlan_sdio_remove(struct sdio_func *func)
 {
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
 	sdio_set_drvdata(func, NULL);
 }
 
