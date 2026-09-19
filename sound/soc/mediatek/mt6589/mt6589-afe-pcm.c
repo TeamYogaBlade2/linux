@@ -33,7 +33,6 @@
 #define AFE_DAC_CON0		0x0010
 #define AFE_DAC_CON0_AFE_ON	BIT(0)
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
-#define AFE_DAC_CON0_DL1_OUT	BIT(10)
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
 #define AFE_DL1_BASE		0x0040
@@ -203,7 +202,6 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	regmap_set_bits(afe->regmap, AFE_CONN1, AFE_CONN1_DL1_O3);
 	regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_DL1_O4);
 
-	regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_OUT);
 	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON0, 0);
 	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON1, 0);
 
