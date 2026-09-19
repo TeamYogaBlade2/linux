@@ -454,6 +454,11 @@
 	debounce-delay-ms = <32>;
 };
 
+sound {
+	compatible = "mediatek,mt6589-mt6320-sound";
+	mediatek,platform = <&afe>;
+};
+
 &pwm {
 	status = "okay";
 };
