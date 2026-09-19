@@ -15,6 +15,7 @@
 #include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/mfd/mt6320/registers.h>
 #include <linux/mfd/mt6397/core.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -27,9 +28,7 @@
 #include <sound/tlv.h>
 
 #define MT6320_CODEC_RATES	SNDRV_PCM_RATE_8000_48000
-#define MT6320_CODEC_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE | \
-				 SNDRV_PCM_FMTBIT_S24_LE | \
-				 SNDRV_PCM_FMTBIT_S32_LE)
+#define MT6320_CODEC_FORMATS	SNDRV_PCM_FMTBIT_S16_LE
 
 /*
  * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x4000,
@@ -125,15 +124,27 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(dai->component);
 	int rate_code;
+	int ret;
 
 	rate_code = mt6320_newif_rate_code(params_rate(params));
 	if (rate_code < 0)
 		return rate_code;
 
+	ret = regmap_update_bits(priv->regmap,
+				 MT6320_ABB_AFE_PMIC_NEWIF_CFG0,
+				 GENMASK(15, 12),
+				 rate_code << 12);
+	if (ret)
+		return ret;
+
+	/*
+	 * The MT6589 BSP programs the PMIC-side DL SRC with the actual
+	 * sample rate as well as the NEWIF rate code.
+	 */
 	return regmap_update_bits(priv->regmap,
-				  MT6320_ABB_AFE_PMIC_NEWIF_CFG0,
-				  GENMASK(15, 12),
-				  rate_code << 12);
+				  0x4002,
+				  GENMASK(15, 4),
+				  params_rate(params) & GENMASK(15, 4));
 }
 
 static const struct snd_soc_dai_ops mt6320_dai_ops = {
@@ -266,16 +277,65 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 {
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	int ret;
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x7010);
-		break;
+		ret = regmap_write(priv->regmap, 0x4014, 0x0000);
+		if (ret)
+			return ret;
+
+		/*
+		 * AFUNC_AUD_CON2 bit 7 is owned by the shared Analog DAPM
+		 * supply.  Only touch the SDM/FIFO bits here.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x0006);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, 0x4034, 0xc3a1);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x0003);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x000b);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, 0x4008, 0x001e);
+		if (ret)
+			return ret;
+
+		ret = regmap_set_bits(priv->regmap, 0x4000, BIT(0));
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, 0x4004, 0x1801);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, 0x4012, 0x0000);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
+		if (ret)
+			return ret;
+
+		return regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x7010);
+
 	case SND_SOC_DAPM_POST_PMD:
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x6010);
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
-		break;
+		ret = regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x6010);
+		if (ret)
+			return ret;
+
+		return regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
 	}
 	return 0;
 }
@@ -347,6 +407,15 @@ static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 			return ret;
 
 		usleep_range(29000, 31000);
+
+		/*
+		 * The stock HP sequence leaves the common AUDBUF mux in state 6
+		 * before selecting the L/R DAC muxes.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+					 GENMASK(2, 0), 0x0006);
+		if (ret)
+			return ret;
 
 		/* HP L/R mux: DAC. */
 		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
