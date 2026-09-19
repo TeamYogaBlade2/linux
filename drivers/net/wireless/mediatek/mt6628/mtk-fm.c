@@ -49,6 +49,7 @@
 #define FM_REG_CHIP_ID			0x62
 #define FM_REG_ROM_VERSION		0x83
 #define FM_REG_ROM_CTRL			0x61
+#define FM_REG_CG_CTRL			0x60
 #define FM_REG_FORCE_MS			0x75
 #define FM_FORCE_MS			0x0008
 
@@ -56,6 +57,7 @@
 #define FM_CMD_TIMEOUT_MS		3000
 
 struct mtk_fm {
+	struct device *dev;
 	struct v4l2_device v4l2_dev;
 	struct video_device vdev;
 	struct mt6628_wmt *wmt;
@@ -230,7 +232,7 @@ static int mtk_fm_download(struct mtk_fm *fm, u8 opcode,
 	size_t offset = 0;
 	int ret;
 
-	ret = request_firmware(&fw, name, &fm->vdev.dev);
+	ret = request_firmware(&fw, name, fm->dev);
 	if (ret)
 		return ret;
 
@@ -632,6 +634,14 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 	if (tuner->index)
 		return -EINVAL;
 
+	/*
+	 * MT6628's stereo/mono control register is accessed through the
+	 * same clock/control window used by the downstream driver.
+	 */
+	ret = mtk_fm_write_reg(fm, FM_REG_CG_CTRL, 0x3007);
+	if (ret)
+		return ret;
+
 	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &val);
 	if (ret)
 		return ret;
@@ -709,6 +719,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	if (!fm)
 		return -ENOMEM;
 
+	fm->dev = &pdev->dev;
 	fm->wmt = wmt;
 	init_completion(&fm->cmd_done);
 	mutex_init(&fm->cmd_lock);
