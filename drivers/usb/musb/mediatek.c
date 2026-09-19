@@ -383,7 +383,7 @@ static const struct musb_platform_ops mtk_musb_ops = {
 };
 
 #define MTK_MUSB_MAX_EP_NUM	9
-#define MTK_MUSB_RAM_BITS	11
+#define MTK_MUSB_RAM_BITS	12
 
 /*
  * FIFO configuration following the downstream MT6589 kernel: EP1..4
@@ -392,22 +392,32 @@ static const struct musb_platform_ops mtk_musb_ops = {
  * to exactly 8 KiB of FIFO RAM.
  */
 static const struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
-	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512, },
-	{ .hw_ep_num = 2, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 2, .style = FIFO_RX, .maxpacket = 512, },
-	{ .hw_ep_num = 3, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 3, .style = FIFO_RX, .maxpacket = 512, },
-	{ .hw_ep_num = 4, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 2, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 2, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 3, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 3, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 4, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
 	{ .hw_ep_num = 5, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 5, .style = FIFO_RX, .maxpacket = 512, },
 	{ .hw_ep_num = 6, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 6, .style = FIFO_RX, .maxpacket = 512, },
 	{ .hw_ep_num = 7, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 7, .style = FIFO_RX, .maxpacket = 512, },
-	{ .hw_ep_num = 8, .style = FIFO_TX, .maxpacket = 512, },
-	{ .hw_ep_num = 8, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 8, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 8, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
 };
 
 static const struct musb_hdrc_config mtk_musb_hdrc_config = {
