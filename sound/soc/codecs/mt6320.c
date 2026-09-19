@@ -14,6 +14,7 @@
 
 #include <linux/bits.h>
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/mfd/mt6397/core.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -41,6 +42,31 @@
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG1	0x4026
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG2	0x4028
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG3	0x402a
+
+#define MT6320_CID			0x0100
+#define MT6320_AFUNC_AUD_CON2		0x4038
+
+#define MT6320_AUDDAC_CON0		0x0700
+#define MT6320_AUDBUF_CFG0		0x0702
+#define MT6320_AUDBUF_CFG1		0x0704
+#define MT6320_AUDBUF_CFG2		0x0706
+#define MT6320_AUDBUF_CFG3		0x0708
+#define MT6320_AUDBUF_CFG4		0x070a
+#define MT6320_IBIASDIST_CFG0		0x070c
+#define MT6320_AUD_IV_CFG0		0x0710
+#define MT6320_AUDCLKGEN_CFG0		0x0712
+#define MT6320_AUDLDO_CFG0		0x0714
+#define MT6320_AUDNVREGGLB_CFG0	0x0718
+#define MT6320_AUD_NCP0			0x071a
+#define MT6320_ZCD_CON0			0x0738
+#define MT6320_NCP_CLKDIV_CON0		0x0744
+#define MT6320_NCP_CLKDIV_CON1		0x0746
+
+#define MT6320_PMIC_TRIM_ADDRESS1	0x01c2
+#define MT6320_PMIC_TRIM_ADDRESS2	0x01c4
+#define MT6320_PMIC_TRIM_REG1_DEFAULT	0x0220
+#define MT6320_PMIC_TRIM_REG2_DEFAULT	0x0006
+#define MT6320_E2_CID			0x2020
 
 /* ZCD output gain block (different offsets from the MT6323!). */
 #define MT6320_ZCD_CON1			0x073a	/* lineout L/R gain */
@@ -103,6 +129,106 @@ static const struct snd_soc_dai_ops mt6320_dai_ops = {
 	.hw_params = mt6320_codec_hw_params,
 };
 
+static int mt6320_apply_hp_trim(struct mt6320_codec_priv *priv)
+{
+	u32 reg1, reg2, trim;
+	int ret;
+
+	ret = regmap_read(priv->regmap, MT6320_PMIC_TRIM_ADDRESS1, &reg1);
+	if (ret)
+		return ret;
+
+	ret = regmap_read(priv->regmap, MT6320_PMIC_TRIM_ADDRESS2, &reg2);
+	if (ret)
+		return ret;
+
+	if (!(reg1 & BIT(12))) {
+		reg1 = MT6320_PMIC_TRIM_REG1_DEFAULT & 0xfff0;
+		reg2 = MT6320_PMIC_TRIM_REG2_DEFAULT & 0x0fff;
+	}
+
+	trim = BIT(8) |
+		FIELD_PREP(GENMASK(12, 11),
+			   ((reg1 >> 15) & 0x1) | ((reg2 & 0x1) << 1)) |
+		FIELD_PREP(GENMASK(10, 9), (reg1 >> 13) & 0x3) |
+		FIELD_PREP(GENMASK(7, 4), (reg1 >> 8) & 0xf) |
+		FIELD_PREP(GENMASK(3, 0), (reg1 >> 4) & 0xf);
+
+	return regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG3,
+				  GENMASK(12, 0), trim);
+}
+
+static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
+			       struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6320_codec_priv *priv =
+		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	unsigned int cid;
+	int ret;
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 BIT(7), BIT(7));
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0d92);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDNVREGGLB_CFG0, 0x000c);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUD_NCP0, 0xe000);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON0, 0x102b);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0000);
+		if (ret)
+			return ret;
+
+		usleep_range(900, 1100);
+		return 0;
+
+	case SND_SOC_DAPM_POST_PMD:
+		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0001);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUD_NCP0,
+					 GENMASK(14, 13), 0);
+		if (ret)
+			return ret;
+
+		ret = regmap_read(priv->regmap, MT6320_CID, &cid);
+		if (ret)
+			return ret;
+
+		if (cid >= MT6320_E2_CID) {
+			ret = regmap_write(priv->regmap,
+					   MT6320_AUDNVREGGLB_CFG0, 0x0006);
+			if (ret)
+				return ret;
+			ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0192);
+		} else {
+			ret = regmap_write(priv->regmap,
+					   MT6320_AUDNVREGGLB_CFG0, 0x0004);
+			if (ret)
+				return ret;
+			ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0992);
+		}
+		if (ret)
+			return ret;
+
+		return regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					  BIT(7), 0);
+	}
+
+	return 0;
+}
+
 /* Analog idle baseline from the stock power-on sequence. */
 static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(1),  0x0009 },
@@ -148,16 +274,101 @@ static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 {
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	int ret;
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(6), 0xf5ba);
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(4), 0x007c);
-		break;
+		ret = mt6320_apply_hp_trim(priv);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG0, 0x0008);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_ZCD_CON0, 0x0101);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG0, 0x0008);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_IBIASDIST_CFG0, 0x0552);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG1, 0x0900);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG2, 0x0082);
+		if (ret)
+			return ret;
+
+		usleep_range(29000, 31000);
+
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG0, 0x0009);
+		if (ret)
+			return ret;
+
+		usleep_range(29000, 31000);
+
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG1, 0x0940);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG0, 0x000f);
+		if (ret)
+			return ret;
+
+		usleep_range(29000, 31000);
+
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG1, 0x0100);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG2, 0x0082);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0c0c);
+		if (ret)
+			return ret;
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
+					 BIT(0), BIT(0));
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x000f);
+		if (ret)
+			return ret;
+
+		usleep_range(29000, 31000);
+
+		/* HP L/R mux: DAC. */
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+					 GENMASK(7, 5), 4 << 5);
+		if (ret)
+			return ret;
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+					 GENMASK(11, 9), 4 << 9);
+		if (ret)
+			return ret;
+
+		return 0;
+
 	case SND_SOC_DAPM_POST_PMD:
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(4), 0x0000);
-		regmap_write(priv->regmap, MT6320_AUDTOP_CON(6), 0x37e2);
-		break;
+		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0c0c);
+		if (ret)
+			return ret;
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+					 GENMASK(12, 5), 0x0880);
+		if (ret)
+			return ret;
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+					 GENMASK(2, 0), 0x0000);
+		if (ret)
+			return ret;
+		ret = regmap_write(priv->regmap, MT6320_IBIASDIST_CFG0, 0x1552);
+		if (ret)
+			return ret;
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG1,
+					 BIT(8), 0);
+		if (ret)
+			return ret;
+		return 0;
 	}
 	return 0;
 }
@@ -183,6 +394,9 @@ static int mt6320_newif_event(struct snd_soc_dapm_widget *w,
 }
 
 static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
+	SND_SOC_DAPM_SUPPLY("Analog", SND_SOC_NOPM, 0, 0,
+			    mt6320_analog_event,
+			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_SUPPLY("NEWIF", SND_SOC_NOPM, 0, 0, mt6320_newif_event,
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_DAC_E("DAC", NULL, SND_SOC_NOPM, 0, 0, mt6320_dac_event,
@@ -197,6 +411,7 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "DAC", NULL, "AIF1 Playback" },
 	{ "DAC", NULL, "NEWIF" },
 	{ "HP Driver", NULL, "DAC" },
+	{ "HP Driver", NULL, "Analog" },
 	{ "Headphone", NULL, "HP Driver" },
 };
 
