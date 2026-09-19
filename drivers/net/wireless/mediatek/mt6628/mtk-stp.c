@@ -783,6 +783,20 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 }
 EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
 
+int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
+{
+	u32 value;
+
+	if (!wmt)
+		return -EINVAL;
+
+	value = on ? (0x1U << 28) : (0x5U << 28);
+
+	return mt6628_wmt_reg_write(wmt, 0x80050078,
+				    value, 0x7U << 28);
+}
+EXPORT_SYMBOL_GPL(mt6628_wmt_gps_sync_ctrl);
+
 static const struct mfd_cell mt6628_stp_cells[] = {
 	{ .name = "mt6628-bt" },
 	{ .name = "mt6628-fm" },

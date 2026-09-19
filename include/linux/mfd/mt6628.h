@@ -34,5 +34,6 @@ void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
 				    mt6628_stp_rx_cb cb, void *priv);
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 				enum mt6628_wmt_func func, bool on);
+int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on);
 
 #endif /* __LINUX_MFD_MT6628_H */
