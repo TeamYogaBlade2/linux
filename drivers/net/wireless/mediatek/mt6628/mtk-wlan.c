@@ -23,6 +23,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/crc32.h>
+#include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
