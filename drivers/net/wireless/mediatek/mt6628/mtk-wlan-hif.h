@@ -60,6 +60,7 @@
 #define MT6628_WHISR_FW_OWN_BACK	BIT(4)
 
 /* WCIR */
+#define MT6628_WCIR_CHIP_ID		GENMASK(15, 0)
 #define MT6628_WCIR_WLAN_READY		BIT(21)
 
 /* init command ids */

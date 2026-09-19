@@ -103,16 +103,17 @@ static int mt6628_poll_ready(struct mt6628_wlan *wl)
 
 static int mt6628_driver_own(struct mt6628_wlan *wl)
 {
-	unsigned int tries = 100;
+	unsigned int tries = 0;
+	unsigned long timeout = jiffies + msecs_to_jiffies(8192);
 	u32 val;
 	int ret;
 
-	do {
-		ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
-				     MT6628_FW_OWN_REQ_CLR);
-		if (ret)
-			return ret;
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret)
+		return ret;
 
+	while (time_before(jiffies, timeout)) {
 		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
 		if (ret)
 			return ret;
@@ -120,8 +121,19 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		if (val & MT6628_IS_DRIVER_OWN)
 			return 0;
 
-		usleep_range(50, 200);	/* downstream polls up to 8 s */
-	} while (--tries);
+		/*
+		 * Match nicpmSetDriverOwn(): refresh the ownership request
+		 * periodically while the LP engine is completing its transition.
+		 */
+		if (!(tries++ & 0xff)) {
+			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+					     MT6628_FW_OWN_REQ_CLR);
+			if (ret)
+				return ret;
+		}
+
+		usleep_range(900, 1100);
+	}
 
 	dev_err(&wl->func->dev, "timed out waiting for driver ownership\n");
 	return -ETIMEDOUT;
@@ -203,7 +215,8 @@ static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
 /* Send one init command with a payload buffer. */
 static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 			   void *extra, size_t extra_len,
-			   const u8 *data, size_t data_len)
+			   const u8 *data, size_t data_len,
+			   bool wait_result)
 {
 	struct sdio_func *func = wl->func;
 	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
@@ -220,7 +233,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	pkt[2] = 0;			/* ether type offset */
 	pkt[3] = 0;			/* checksum flags: none */
 	pkt[4] = cid;
-	seq_num = wl->seq_num++;
+	seq_num = ++wl->seq_num;
 	pkt[5] = seq_num;
 	put_unaligned_le16(0, pkt + 6);
 
@@ -237,6 +250,9 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 
 	if (ret)
 		return ret;
+
+	if (!wait_result)
+		return 0;
 
 	return mt6628_wait_init_cmd_result(wl, seq_num);
 }
@@ -266,7 +282,7 @@ static int mt6628_download_blob(struct mt6628_wlan *wl, u32 dest_addr,
 		dl.data_mode = cpu_to_le32(BIT(0) | BIT(31));
 
 		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_DOWNLOAD_BUF,
-				      &dl, sizeof(dl), data, chunk);
+				      &dl, sizeof(dl), data, chunk, true);
 		if (ret)
 			return ret;
 
@@ -390,12 +406,16 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 		};
 
 		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_WIFI_START,
-				      &start, sizeof(start), NULL, 0);
+				      &start, sizeof(start), NULL, 0, false);
 		if (ret) {
 			dev_err(&wl->func->dev, "WIFI_START failed: %d\n",
 				ret);
 			goto out_restore_seq;
 		}
+
+		ret = mt6628_poll_ready(wl);
+		if (ret)
+			goto out_restore_seq;
 	}
 
 	wl->fw_running = true;
@@ -411,6 +431,7 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 				  const struct sdio_device_id *id)
 {
 	struct mt6628_wlan *wl;
+	u32 wcir;
 	int ret;
 
 	if (func->num != 1) {
@@ -435,10 +456,16 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 
 	msleep(50);		/* let the ROM come up */
 
-	/* wait for the firmware ROM to report ready */
-	ret = mt6628_poll_ready(wl);
+	ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
 	if (ret)
 		goto err_disable;
+
+	if ((wcir & MT6628_WCIR_CHIP_ID) != 0x6628) {
+		dev_err(&func->dev, "unexpected chip ID %#x\n",
+			wcir & MT6628_WCIR_CHIP_ID);
+		ret = -ENODEV;
+		goto err_disable;
+	}
 
 	ret = mt6628_driver_own(wl);
 	if (ret)
