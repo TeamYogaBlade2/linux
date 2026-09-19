@@ -56,6 +56,7 @@
 #define MT6628_STP_RX_BUF_SIZE		2560
 #define MT6628_STP_TX_MAX_PENDING	7
 #define MT6628_STP_TX_TIMEOUT_MS		1000
+#define MT6628_WMT_RESPONSE_MAX		32
 
 struct mt6628_stp_endpoint {
 	mt6628_stp_rx_cb cb;
@@ -87,6 +88,8 @@ struct mt6628_wmt {
 	bool wmt_waiting;
 	u8 wmt_wait_opcode;
 	int wmt_status;
+	u8 wmt_response[MT6628_WMT_RESPONSE_MAX];
+	u8 wmt_response_len;
 };
 
 static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
@@ -292,7 +295,17 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 		mutex_lock(&wmt->wmt_lock);
 		if (wmt->wmt_waiting &&
 		    buf[1] == wmt->wmt_wait_opcode) {
-			wmt->wmt_status = buf[4] ? -EIO : 0;
+			if (len < 5) {
+				wmt->wmt_status = -EPROTO;
+				wmt->wmt_response_len = 0;
+			} else {
+				wmt->wmt_status = buf[4] ? -EIO : 0;
+				wmt->wmt_response_len =
+					min_t(size_t, len,
+					      MT6628_WMT_RESPONSE_MAX);
+				memcpy(wmt->wmt_response, buf,
+				       wmt->wmt_response_len);
+			}
 			wmt->wmt_waiting = false;
 			complete(&wmt->wmt_done);
 		}
@@ -528,10 +541,14 @@ EXPORT_SYMBOL_GPL(mt6628_stp_unregister_rx);
 
 static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
 			  const u8 *cmd, size_t len, u8 opcode,
-			  unsigned int timeout_ms)
+			  unsigned int timeout_ms,
+			  u8 *response, size_t *response_len)
 {
 	unsigned long timeout;
 	int ret;
+
+	if (response_len)
+		*response_len = 0;
 
 	mutex_lock(&wmt->tx_lock);
 	reinit_completion(&wmt->wmt_done);
@@ -540,6 +557,7 @@ static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
 	wmt->wmt_waiting = true;
 	wmt->wmt_wait_opcode = opcode;
 	wmt->wmt_status = -ETIMEDOUT;
+	wmt->wmt_response_len = 0;
 	mutex_unlock(&wmt->wmt_lock);
 
 	ret = __mt6628_stp_send(wmt, MT6628_STP_TASK_WMT, cmd, len);
@@ -561,6 +579,15 @@ static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
 	} else {
 		ret = wmt->wmt_status;
 	}
+
+	if (!ret && response && response_len) {
+		size_t copy_len = min_t(size_t, wmt->wmt_response_len,
+					*response_len);
+
+		memcpy(response, wmt->wmt_response, copy_len);
+		*response_len = copy_len;
+	}
+
 	wmt->wmt_wait_opcode = 0xff;
 	mutex_unlock(&wmt->wmt_lock);
 
@@ -580,7 +607,8 @@ static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
 	put_unaligned_le32(value, cmd + 12);
 	put_unaligned_le32(mask, cmd + 16);
 
-	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000);
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+			      NULL, NULL);
 }
 
 /*
@@ -620,7 +648,8 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 			     func != MT6628_WMT_FUNC_GPS))
 		return -EINVAL;
 
-	return mt6628_wmt_cmd(wmt, cmd, ARRAY_SIZE(cmd), 0x06, 1000);
+	return mt6628_wmt_cmd(wmt, cmd, ARRAY_SIZE(cmd), 0x06, 1000,
+			      NULL, NULL);
 }
 EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
 
