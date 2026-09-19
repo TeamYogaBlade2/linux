@@ -82,16 +82,26 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 
 	switch (role) {
 	case USB_ROLE_HOST:
-		musb->xceiv->otg->state = OTG_STATE_A_WAIT_VRISE;
-		glue->phy_mode = PHY_MODE_USB_HOST;
 		new_role = USB_ROLE_HOST;
 		if (glue->role == USB_ROLE_NONE) {
 			if (glue->vusb) {
 				ret = regulator_enable(glue->vusb);
-				if (ret)
+				if (ret) {
 					dev_err(glue->dev, "failed to enable vusb: %d\n", ret);
+					return ret;
+				}
 			}
-			phy_power_on(glue->phy);
+		}
+
+		musb->xceiv->otg->state = OTG_STATE_A_WAIT_VRISE;
+		glue->phy_mode = PHY_MODE_USB_HOST;
+		if (glue->role == USB_ROLE_NONE) {
+			ret = phy_power_on(glue->phy);
+			if (ret) {
+				if (glue->vusb)
+					regulator_disable(glue->vusb);
+				return ret;
+			}
 		}
 
 		devctl |= MUSB_DEVCTL_SESSION;
@@ -99,18 +109,28 @@ static int mtk_otg_switch_set(struct mtk_glue *glue, enum usb_role role)
 		MUSB_HST_MODE(musb);
 		break;
 	case USB_ROLE_DEVICE:
-		musb->xceiv->otg->state = OTG_STATE_B_IDLE;
-		glue->phy_mode = PHY_MODE_USB_DEVICE;
 		new_role = USB_ROLE_DEVICE;
 		devctl &= ~MUSB_DEVCTL_SESSION;
 		musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
 		if (glue->role == USB_ROLE_NONE) {
 			if (glue->vusb) {
 				ret = regulator_enable(glue->vusb);
-				if (ret)
+				if (ret) {
 					dev_err(glue->dev, "failed to enable vusb: %d\n", ret);
+					return ret;
+				}
 			}
-			phy_power_on(glue->phy);
+		}
+
+		musb->xceiv->otg->state = OTG_STATE_B_IDLE;
+		glue->phy_mode = PHY_MODE_USB_DEVICE;
+		if (glue->role == USB_ROLE_NONE) {
+			ret = phy_power_on(glue->phy);
+			if (ret) {
+				if (glue->vusb)
+					regulator_disable(glue->vusb);
+				return ret;
+			}
 		}
 
 		MUSB_DEV_MODE(musb);
