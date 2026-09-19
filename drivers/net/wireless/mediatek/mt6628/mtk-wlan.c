@@ -295,6 +295,7 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	char fwname[64];
 	u8 seq_backup;
 	u32 num_sections;
+	size_t section_data_start;
 	unsigned int offset;
 	int ret;
 
@@ -367,6 +368,9 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 			goto out_restore_seq;
 		}
 
+		section_data_start = MT6628_FW_HEADER_SIZE +
+			(size_t)num_sections * MT6628_FW_SECTION_SIZE;
+
 		for (offset = 0; offset < num_sections; offset++) {
 			const struct mt6628_fw_section *section;
 			u32 data_offset;
@@ -381,7 +385,8 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 			data_len = le32_to_cpu(section->length);
 			dest_addr = le32_to_cpu(section->dest_addr);
 
-			if (data_offset > fw->size ||
+			if (data_offset < section_data_start ||
+			    data_offset > fw->size ||
 			    data_len > fw->size - data_offset) {
 				dev_err(&wl->func->dev,
 					"invalid firmware section %u: offset %#x length %#x\n",
