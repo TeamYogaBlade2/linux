@@ -2782,6 +2782,15 @@ config SND_SOC_MT6320
 	  Enable support for the platform which uses MT6320 as
 	  external codec device.
 
+config SND_SOC_MT6320_ACCDET
+	tristate "MediaTek MT6320 ACCDET"
+	depends on MFD_MT6397
+	depends on IIO
+	depends on SND_SOC
+	help
+	  Enable headset/accessory detection for the MediaTek MT6320
+	  PMIC on MT6589 platforms.
+
 config SND_SOC_MT6351
 	tristate "MediaTek MT6351 Codec"
 

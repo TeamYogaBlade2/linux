@@ -624,6 +624,7 @@ obj-$(CONFIG_SND_SOC_MT6351)	+= snd-soc-mt6351.o
 obj-$(CONFIG_SND_SOC_MT6357)	+= snd-soc-mt6357.o
 obj-$(CONFIG_SND_SOC_MT6323)	+= snd-soc-mt6323.o
 obj-$(CONFIG_SND_SOC_MT6320)	+= mt6320.o
+obj-$(CONFIG_SND_SOC_MT6320_ACCDET) += mt6320-accdet.o
 obj-$(CONFIG_SND_SOC_MT6358)	+= snd-soc-mt6358.o
 obj-$(CONFIG_SND_SOC_MT6359)	+= snd-soc-mt6359.o
 obj-$(CONFIG_SND_SOC_MT6359_ACCDET) += mt6359-accdet.o

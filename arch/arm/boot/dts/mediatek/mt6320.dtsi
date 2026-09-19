@@ -57,6 +57,10 @@
 			clock-names = "top-aud26m";
 		};
 
+		mt6320_accdet: accdet {
+			compatible = "mediatek,mt6320-accdet";
+		};
+
 		mt6320_adc: adc {
 			compatible = "mediatek,mt6320-auxadc";
 			#io-channel-cells = <1>;

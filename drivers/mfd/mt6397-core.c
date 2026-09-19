@@ -88,6 +88,10 @@ static const struct resource mt6320_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_HOMEKEY, "homekey"),
 };
 
+static const struct resource mt6320_accdet_resources[] = {
+	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_ACCDET, "accdet_irq"),
+};
+
 static const struct resource mt6358_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_PWRKEY, "powerkey"),
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_HOMEKEY, "homekey"),
@@ -176,6 +180,11 @@ static const struct mfd_cell mt6320_devs[] = {
 	}, {
 		.name = "mt6320-efuse",
 		.of_compatible = "mediatek,mt6320-efuse"
+	}, {
+		.name = "mt6320-accdet",
+		.num_resources = ARRAY_SIZE(mt6320_accdet_resources),
+		.resources = mt6320_accdet_resources,
+		.of_compatible = "mediatek,mt6320-accdet"
 	}, {
 		.name = "mt6320-sound",
 		.of_compatible = "mediatek,mt6320-sound"
