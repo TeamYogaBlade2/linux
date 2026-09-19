@@ -35,6 +35,9 @@
 #define MT6628_STP_INT_EN_SET		BIT(0)
 
 #define MT6628_STP_RX_LEN		GENMASK(31, 16)
+#define MT6628_STP_FIRMWARE_INT		GENMASK(15, 9)
+#define MT6628_STP_TX_FIFO_OVERFLOW	BIT(8)
+#define MT6628_STP_FW_INT_IND_INDICATOR	BIT(7)
 #define MT6628_STP_RX_DONE		BIT(1)
 #define MT6628_STP_TX_UNDER_THOLD	BIT(3)
 #define MT6628_STP_TX_EMPTY		BIT(2)
@@ -607,6 +610,9 @@ static int mt6628_stp_probe(struct sdio_func *func,
 
 	/* RX plus TX-completion indications are consumed by this transport. */
 	ret = mt6628_stp_write32(wmt, MT6628_STP_CHIER,
+				 MT6628_STP_FIRMWARE_INT |
+				 MT6628_STP_TX_FIFO_OVERFLOW |
+				 MT6628_STP_FW_INT_IND_INDICATOR |
 				 MT6628_STP_RX_DONE |
 				 MT6628_STP_TX_UNDER_THOLD |
 				 MT6628_STP_TX_EMPTY |
