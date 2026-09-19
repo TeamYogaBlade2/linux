@@ -64,15 +64,10 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
-	priv->open = true;
-	mutex_unlock(&priv->lock);
-
 	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
-	if (ret) {
-		mutex_lock(&priv->lock);
-		priv->open = false;
-		mutex_unlock(&priv->lock);
-	}
+	if (!ret)
+		priv->open = true;
+	mutex_unlock(&priv->lock);
 
 	return ret;
 }
