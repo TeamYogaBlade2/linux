@@ -82,6 +82,10 @@ static int prismrv_probe(struct platform_device *pdev)
 	spin_lock_init(&pv->event_lock);
 	INIT_LIST_HEAD(&pv->pending_fences);
 	mutex_init(&pv->init_mutex);
+	mutex_init(&pv->mmu_lock);
+	spin_lock_init(&pv->bo_list_lock);
+	INIT_LIST_HEAD(&pv->bo_list);
+	init_rwsem(&pv->submit_rwsem);
 	INIT_WORK(&pv->recovery_work, prismrv_recovery_work);
 	init_waitqueue_head(&pv->init_wq);
 

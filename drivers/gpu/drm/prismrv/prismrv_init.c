@@ -240,6 +240,7 @@ out_fw:
 void prismrv_hw_fini(struct prismrv_device *pv)
 {
 	unsigned int i;
+	LIST_HEAD(retiring);
 
 	pv->hw_ready = false;
 
@@ -253,19 +254,32 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 
 		dma_fence_set_error(&pf->base, -EIO);
 		dma_fence_signal(&pf->base);
+		/*
+		 * Release the BO references the fence was holding.
+		 * Must be done outside event_lock (which is a spinlock)
+		 * because drm_gem_object_put() may sleep if the last
+		 * ref triggers shmem page release.  Stash the fence
+		 * pointer and do the put after unlocking.
+		 *
+		 * We cannot call prismrv_fence_release_bos() here while
+		 * holding the spinlock, so splice the whole list first.
+		 */
+		list_add_tail(&pf->node, &retiring);
+	}
+	spin_unlock(&pv->event_lock);
+
+	while (!list_empty(&retiring)) {
+		struct prismrv_fence *pf =
+			list_first_entry(&retiring, struct prismrv_fence, node);
+		list_del_init(&pf->node);
+
+		prismrv_fence_release_bos(pf);
 		dma_fence_put(&pf->base);
 		atomic_dec(&pv->busy_count);
 
-		/*
-		 * Release the runtime PM reference that submit_ioctl()
-		 * held for the lifetime of this command.  Each pending
-		 * fence holds exactly one PM reference; release it here
-		 * so the usage count stays balanced even on teardown.
-		 */
 		pm_runtime_mark_last_busy(pv->drm.dev);
 		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
-	spin_unlock(&pv->event_lock);
 
 	prismrv_ccb_fini(pv);
 

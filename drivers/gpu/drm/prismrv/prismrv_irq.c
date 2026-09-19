@@ -12,6 +12,8 @@
  */
 #include <linux/interrupt.h>
 #include <linux/pm_runtime.h>
+#include <linux/rwsem.h>
+#include <drm/drm_gem.h>
 
 #include "prismrv_device.h"
 
@@ -22,25 +24,34 @@
 /* consecutive completions without a fence being signalled trigger reset */
 #define PRISMRV_RECOVERY_THRESHOLD	3
 
+/*
+ * Release the GEM object references that submit_ioctl() transferred
+ * into the fence.  Called from handle_completion() (normal path) and
+ * from hw_fini() forced-retirement path.
+ *
+ * Must be called AFTER dma_fence_signal() so that any waiter waking
+ * up cannot observe a fence that is signalled but whose BOs are still
+ * being referenced.
+ */
+static void prismrv_fence_release_bos(struct prismrv_fence *pf)
+{
+	u32 i;
+
+	if (!pf->bos)
+		return;
+	for (i = 0; i < pf->num_bos; i++)
+		if (pf->bos[i])
+			drm_gem_object_put(pf->bos[i]);
+	kvfree(pf->bos);
+	pf->bos = NULL;
+	pf->num_bos = 0;
+}
+
 static void prismrv_handle_completion(struct prismrv_device *pv)
 {
 	LIST_HEAD(signalled);
 	u32 read_off;
 
-	/*
-	 * Read the uKernel's CCB read_offset: every slot up to (but not
-	 * including) this offset has been consumed.  We retire exactly those
-	 * fences whose CCB slot lies before the current read_offset, in
-	 * submission order.
-	 *
-	 * The CCB is a power-of-2 ring (256 entries) so we compare slot
-	 * numbers modulo 256.  A slot is "done" when the distance from the
-	 * fence's slot to read_offset (mod 256) is less than 128 — i.e. the
-	 * read pointer has advanced past it without wrapping twice.
-	 *
-	 * If the driver has no CCB yet (very early IRQ before init) treat
-	 * read_offset as 0 and retire nothing.
-	 */
 	if (pv->ccb)
 		read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
 	else
@@ -52,39 +63,30 @@ static void prismrv_handle_completion(struct prismrv_device *pv)
 			list_first_entry(&pv->pending_fences,
 					 struct prismrv_fence, node);
 
-		/*
-		 * Check whether pf->ccb_slot has been consumed by the uKernel.
-		 * Slot s is done when ((read_off - s - 1) & 255) < 128, which
-		 * is equivalent to "read_off is strictly ahead of s (mod 256)".
-		 * If no slot was recorded (ccb_slot == 0xFFFF) retire it
-		 * unconditionally — this handles the pre-CCB-slot era fences
-		 * and hw_fini retirement.
-		 */
 		if (pf->ccb_slot != 0xFFFF &&
 		    ((read_off - pf->ccb_slot - 1) & 255) >= 128)
-			break;	/* this and all later slots are still pending */
+			break;
 
 		list_del(&pf->node);
 		list_add_tail(&pf->node, &signalled);
 	}
 	spin_unlock(&pv->event_lock);
 
-	/* signal completed fences outside the spinlock */
 	while (!list_empty(&signalled)) {
 		struct prismrv_fence *pf =
 			list_first_entry(&signalled, struct prismrv_fence, node);
 		list_del_init(&pf->node);
 
 		dma_fence_signal(&pf->base);
+		/*
+		 * Release the BO references AFTER signalling: waiters that
+		 * wake up on the fence will see all BOs still referenced
+		 * until we are done here.
+		 */
+		prismrv_fence_release_bos(pf);
 		dma_fence_put(&pf->base);
 		atomic_dec(&pv->busy_count);
 
-		/*
-		 * Release the runtime PM reference that was taken (and
-		 * intentionally held) by prismrv_submit_ioctl() for the
-		 * lifetime of this command.  One get per submit, one put
-		 * per completion.
-		 */
 		pm_runtime_mark_last_busy(pv->drm.dev);
 		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
@@ -115,28 +117,72 @@ void prismrv_recovery_work(struct work_struct *work)
 		container_of(work, struct prismrv_device, recovery_work);
 	int ret;
 
-	/*
-	 * Hold a runtime PM reference for the whole re-init: hw_init
-	 * touches registers and must not race a suspend halfway through.
-	 */
 	ret = pm_runtime_resume_and_get(pv->drm.dev);
 	if (ret) {
 		dev_err(pv->drm.dev, "recovery: resume failed (%d)\n", ret);
 		return;
 	}
 
-	mutex_lock(&pv->init_mutex);
 	/*
-	 * Fully tear down the old hardware state before re-initialising.
-	 * hw_fini() retires any pending fences (signalling them with an
-	 * error so waiters unblock), frees the CCB, HostCtl and errata
-	 * DMA buffers, and tears down the MMU page tables — leaving a
-	 * completely clean slate for hw_init().  Skipping this step would
-	 * cause double-allocation of DMA buffers and stale MMU mappings.
+	 * Step 1: soft-reset the GPU immediately.
+	 *
+	 * This stops all DMA activity from the GPU before we free any
+	 * DMA buffers or page tables.  Without this, a hung/wedged GPU
+	 * could still be reading the CCB or walking page tables while
+	 * we free them below — triggering IOMMU faults or memory
+	 * corruption.
+	 *
+	 * The soft reset clears EUR_CR_SOFT_RESET and disables the BIF,
+	 * so DMA is guaranteed to have stopped by the time we proceed.
+	 */
+	prismrv_soft_reset(pv);
+
+	/*
+	 * Step 2: take the submit write-lock (exclusive).
+	 *
+	 * This blocks until every concurrent prismrv_submit_ioctl() has
+	 * released its read-lock and returned.  After this point no new
+	 * submit can touch the CCB, HostCtl or MMU structures until we
+	 * reinitialise them and release the lock.
+	 */
+	down_write(&pv->submit_rwsem);
+	mutex_lock(&pv->init_mutex);
+
+	/*
+	 * Step 3: mark hardware not ready so any submit that slipped
+	 * through the rwsem (e.g. checked hw_ready before we got the
+	 * write-lock) will bail out cleanly.
+	 */
+	WRITE_ONCE(pv->hw_ready, false);
+
+	/*
+	 * Step 4: invalidate all BO GPU VAs under mmu_lock.
+	 *
+	 * hw_fini() will zero the page tables; clear bo->gpu_va on
+	 * every live BO first so that the next submit re-maps each BO
+	 * into the fresh MMU context.  Without this, pin_and_map()
+	 * would see gpu_va != 0 and skip the re-map, making the GPU
+	 * walk page tables that are now zeroed.
+	 */
+	mutex_lock(&pv->mmu_lock);
+	prismrv_mmu_invalidate_all_bos(pv);
+	mutex_unlock(&pv->mmu_lock);
+
+	/*
+	 * Step 5: tear down old HW state and reinitialise.
+	 *
+	 * hw_fini() retires pending fences with -EIO (releasing their
+	 * BO refs and PM references), frees CCB/HostCtl/errata DMA
+	 * buffers and tears down the MMU page tables.
+	 *
+	 * hw_init() re-applies errata, rebuilds the MMU, reloads the
+	 * uKernel and waits for it to report ready.
 	 */
 	prismrv_hw_fini(pv);
 	prismrv_hw_init(pv);
+
 	mutex_unlock(&pv->init_mutex);
+	up_write(&pv->submit_rwsem);
 
 	pm_runtime_mark_last_busy(pv->drm.dev);
 	pm_runtime_put_autosuspend(pv->drm.dev);

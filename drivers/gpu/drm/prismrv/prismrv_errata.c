@@ -56,16 +56,24 @@ static const struct prismrv_errata_entry prismrv_errata_table[] = {
 };
 
 /**
- * prismrv_read_revision() — read the core revision registers.
+ * prismrv_read_revision() — read the core ID and revision registers.
  *
- * EUR_CR_CORE_REVISION layout:
- *   [31:24] designer   [23:16] major   [15:8] minor   [7:0] maintenance
+ * SGX544 has two separate registers (matching the published sgx544defs.h):
+ *   EUR_CR_CORE_ID       (offset 0x20): designer [31:16], core_id [15:0]
+ *   EUR_CR_CORE_REVISION (offset 0x24): designer [31:24], major [23:16],
+ *                                        minor [15:8], maintenance [7:0]
  *
- * The major field is the RTL head revision the vendor driver keys its
- * errata tables on (e.g. 115 for MT6589).
+ * The kernel driver stores both raw values.  The UAPI exposes them as
+ * separate GET_PARAM keys (PRISMRV_PARAM_CORE_ID and
+ * PRISMRV_PARAM_CORE_REVISION) so userspace can identify the exact core
+ * without the previous ambiguity of combining them into one 64-bit value.
+ *
+ * The errata table is keyed on core_id (from EUR_CR_CORE_ID) and
+ * core_rev_major (from EUR_CR_CORE_REVISION).
  */
 u32 prismrv_read_revision(struct prismrv_device *pv)
 {
+	pv->core_id       = readl(pv->regs + EUR_CR_CORE_ID);
 	pv->core_revision = readl(pv->regs + EUR_CR_CORE_REVISION);
 	pv->core_rev_major =
 		(pv->core_revision >> EUR_CR_CORE_REVISION_MAJOR_SHIFT) & 0xff;

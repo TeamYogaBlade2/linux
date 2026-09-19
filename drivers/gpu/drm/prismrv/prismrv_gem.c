@@ -77,6 +77,7 @@ static void prismrv_va_free_locked(u32 base, size_t size)
 struct prismrv_bo {
 	struct drm_gem_shmem_object base;
 	u32 gpu_va;
+	struct list_head bo_node;	/* prismrv_device.bo_list */
 };
 
 static inline struct prismrv_bo *to_prbo(struct drm_gem_object *obj)
@@ -89,12 +90,27 @@ static void prismrv_bo_free(struct drm_gem_object *obj)
 	struct prismrv_device *pv = to_prismrv(obj->dev);
 	struct prismrv_bo *bo = to_prbo(obj);
 
+	/* remove from the device-wide BO list before touching MMU */
+	spin_lock(&pv->bo_list_lock);
+	list_del(&bo->bo_node);
+	spin_unlock(&pv->bo_list_lock);
+
 	if (bo->gpu_va) {
-		prismrv_mmu_unmap(pv, bo->gpu_va, obj->size);
+		mutex_lock(&pv->mmu_lock);
+		/*
+		 * Guard against the case where recovery/runtime-resume
+		 * has already torn down the MMU (pd_pts == NULL).  In
+		 * that case gpu_va was cleared by
+		 * prismrv_mmu_invalidate_all_bos() and there is nothing
+		 * to unmap; skip silently.
+		 */
+		if (pv->pd_pts)
+			prismrv_mmu_unmap(pv, bo->gpu_va, obj->size);
 		mutex_lock(&va_lock);
 		prismrv_va_free_locked(bo->gpu_va, PAGE_ALIGN(obj->size));
-		bo->gpu_va = 0;
 		mutex_unlock(&va_lock);
+		bo->gpu_va = 0;
+		mutex_unlock(&pv->mmu_lock);
 	}
 	drm_gem_shmem_free(&bo->base);
 }
@@ -115,19 +131,26 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	size_t va_off = 0;
 	int ret;
 
-	if (bo->gpu_va)
+	/*
+	 * Fast-path check outside the lock: if gpu_va is already set the
+	 * BO was mapped in a previous submit and the mapping is still live.
+	 * Re-check under mmu_lock below to close the TOCTOU window between
+	 * concurrent submits referencing the same BO.
+	 */
+	if (READ_ONCE(bo->gpu_va))
 		return 0;
 
-	/*
-	 * Pin the backing pages and DMA-map them through the shmem
-	 * helper.  The resulting table is cached in shmem->sgt and
-	 * unmapped/freed by drm_gem_shmem_release(), so the driver must
-	 * not manage its lifetime (a previous version did both here and
-	 * in bo_free, double-unmapping the table).
-	 */
 	sgt = drm_gem_shmem_get_pages_sgt(shmem);
 	if (IS_ERR(sgt))
 		return PTR_ERR(sgt);
+
+	mutex_lock(&pv->mmu_lock);
+
+	/* re-check under lock: another thread may have mapped it first */
+	if (bo->gpu_va) {
+		mutex_unlock(&pv->mmu_lock);
+		return 0;
+	}
 
 	mutex_lock(&va_lock);
 	/* reuse the first freed range large enough, else bump-allocate */
@@ -151,6 +174,7 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 			if (want > PRISMRV_VA_SIZE ||
 			    va_next > PRISMRV_VA_BASE + PRISMRV_VA_SIZE - want) {
 				mutex_unlock(&va_lock);
+				mutex_unlock(&pv->mmu_lock);
 				return -ENOSPC;
 			}
 			bo->gpu_va = va_next;
@@ -163,9 +187,6 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	for_each_sgtable_dma_sg(sgt, sg, i) {
 		size_t len = sg_dma_len(sg);
 
-		/* one sg entry may span several pages: map its full
-		 * length at the current VA cursor instead of assuming
-		 * page-sized entries */
 		ret = prismrv_mmu_map(pv, bo->gpu_va + va_off,
 				      sg_dma_address(sg), len);
 		if (ret)
@@ -173,19 +194,16 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 		va_off += len;
 	}
 
+	mutex_unlock(&pv->mmu_lock);
 	return 0;
 
 err_unmap:
-	/*
-	 * Unwind exactly what was mapped (va_off bytes), not the whole
-	 * VA reservation — unmapping reserved-but-unmapped pages would
-	 * leave stale PTEs behind for the next user of this range.
-	 */
 	prismrv_mmu_unmap(pv, bo->gpu_va, va_off);
 	mutex_lock(&va_lock);
 	prismrv_va_free_locked(bo->gpu_va, want);
 	mutex_unlock(&va_lock);
 	bo->gpu_va = 0;
+	mutex_unlock(&pv->mmu_lock);
 	return ret;
 }
 
@@ -198,6 +216,7 @@ err_unmap:
 struct drm_gem_object *
 prismrv_gem_create_object(struct drm_device *dev, size_t size)
 {
+	struct prismrv_device *pv = to_prismrv(dev);
 	struct prismrv_bo *bo;
 
 	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
@@ -205,6 +224,12 @@ prismrv_gem_create_object(struct drm_device *dev, size_t size)
 		return ERR_PTR(-ENOMEM);
 
 	bo->base.base.funcs = &prismrv_gem_funcs;
+	INIT_LIST_HEAD(&bo->bo_node);
+
+	spin_lock(&pv->bo_list_lock);
+	list_add(&bo->bo_node, &pv->bo_list);
+	spin_unlock(&pv->bo_list_lock);
+
 	return &bo->base.base;
 }
 
@@ -275,6 +300,37 @@ int prismrv_gem_populate(struct prismrv_device *pv, struct drm_gem_object **objs
 	return 0;
 }
 
+/**
+ * prismrv_mmu_invalidate_all_bos() - clear gpu_va on every live BO.
+ *
+ * Called from prismrv_hw_fini() before tearing down the MMU page
+ * tables.  Clearing bo->gpu_va ensures that the next submit re-maps
+ * each BO into the fresh MMU context rather than skipping the map
+ * (because pin_and_map() early-returns when gpu_va != 0).
+ *
+ * The VA space is also returned to the free list so the new mapping
+ * can reuse the same addresses if convenient.
+ *
+ * Must be called with pv->mmu_lock held by the caller (i.e. from
+ * hw_fini which already serialises via init_mutex + submit_rwsem).
+ */
+void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv)
+{
+	struct prismrv_bo *bo;
+
+	spin_lock(&pv->bo_list_lock);
+	list_for_each_entry(bo, &pv->bo_list, bo_node) {
+		if (bo->gpu_va) {
+			mutex_lock(&va_lock);
+			prismrv_va_free_locked(bo->gpu_va,
+					       PAGE_ALIGN(bo->base.base.size));
+			mutex_unlock(&va_lock);
+			bo->gpu_va = 0;
+		}
+	}
+	spin_unlock(&pv->bo_list_lock);
+}
+
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj)
 {
 	return to_prbo(obj)->gpu_va;
@@ -287,9 +343,13 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 	struct drm_prismrv_get_param *args = data;
 
 	switch (args->param) {
-	case PRISMRV_PARAM_GPU_ID:
-		/* raw EUR_CR_CORE_REVISION: [23:16] major (RTL head rev),
-		 * [15:8] minor, [7:0] maintenance */
+	case PRISMRV_PARAM_CORE_ID:
+		/* raw EUR_CR_CORE_ID: [31:16] designer, [15:0] core */
+		args->value = pv->core_id;
+		break;
+	case PRISMRV_PARAM_CORE_REVISION:
+		/* raw EUR_CR_CORE_REVISION: [23:16] major, [15:8] minor,
+		 *                            [7:0] maintenance */
 		args->value = pv->core_revision;
 		break;
 	case PRISMRV_PARAM_CORE_COUNT:

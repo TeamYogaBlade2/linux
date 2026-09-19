@@ -306,13 +306,24 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		return ret;
 
+	/*
+	 * Take the submit read-lock.  recovery_work() takes the write
+	 * side (exclusive) so that a concurrent recovery cannot free
+	 * the CCB/MMU/HostCtl structures while a submit is in flight.
+	 * hw_ready is checked while holding this lock so we see any
+	 * in-progress recovery that has already cleared the flag.
+	 */
+	down_read(&pv->submit_rwsem);
+
 	if (!pv->hw_ready) {
+		up_read(&pv->submit_rwsem);
 		pm_runtime_put_sync(pv->drm.dev);
 		return -ENODEV;
 	}
 	if (args->cmd_type >= PRISMRV_CMD_COUNT ||
 	    args->num_bos > PRISMRV_MAX_SUBMIT_BOS ||
 	    args->num_in_fences > PRISMRV_MAX_IN_FENCES) {
+		up_read(&pv->submit_rwsem);
 		pm_runtime_put_sync(pv->drm.dev);
 		return -EINVAL;
 	}
@@ -320,6 +331,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	/* slot 0 = command BO, 1..num_bos = user bos */
 	objs = kvcalloc(args->num_bos + 1, sizeof(*objs), GFP_KERNEL);
 	if (!objs) {
+		up_read(&pv->submit_rwsem);
 		pm_runtime_put_sync(pv->drm.dev);
 		return -ENOMEM;
 	}
@@ -330,8 +342,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto out_put;
 
-	/* the command BO is always referenced object 0 so it is pinned,
-	 * DMA-mapped and MMU-mapped along with the rest */
+	/* the command BO is always referenced object 0 */
 	objs[0] = drm_gem_object_lookup(file, args->cmd_handle);
 	if (!objs[0]) {
 		ret = -ENOENT;
@@ -340,20 +351,14 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (args->cmd_size > objs[0]->size) {
 		ret = -EINVAL;
 		drm_gem_object_put(objs[0]);
+		objs[0] = NULL;
 		goto out_put;
 	}
 
 	/*
-	 * Look up the user BO handles.  drm_gem_objects_lookup() allocates
-	 * a fresh array and writes its address to *objs_out — it does NOT
-	 * fill an existing array.  The previous code passed &(objs+1) as
-	 * the output pointer, which made the function overwrite a stack
-	 * variable while objs[1..] stayed NULL, and then leaked the newly
-	 * allocated array entirely.
-	 *
-	 * Correct approach: receive the new array, copy the pointers into
-	 * our pre-allocated objs[] slot, then free the temporary array.
-	 * The objects themselves are already reference-counted by the lookup.
+	 * Look up the user BO handles into objs[1..num_bos].
+	 * drm_gem_objects_lookup() allocates a fresh array; copy into
+	 * our layout then free the temporary array.
 	 */
 	if (args->num_bos > 0) {
 		struct drm_gem_object **user_objs = NULL;
@@ -364,11 +369,6 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		if (ret)
 			goto out_put;
 
-		/*
-		 * user_objs is a freshly-allocated array[num_bos].
-		 * Transfer the references into our objs[] layout
-		 * (slot 0 = cmd BO, slots 1..num_bos = user BOs).
-		 */
 		memcpy(objs + 1, user_objs,
 		       args->num_bos * sizeof(*user_objs));
 		kvfree(user_objs);
@@ -376,9 +376,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 	/*
 	 * Implicit sync: wait for any exclusive fence other drivers
-	 * left on the buffers we are about to read/write (PRIME-shared
-	 * camera/display/v4l2 buffers).  Without this the GPU can read
-	 * a scanout buffer mid-write.
+	 * left on the buffers we are about to read/write.
 	 */
 	for (i = 0; i <= args->num_bos; i++) {
 		struct dma_resv *resv = objs[i]->resv;
@@ -393,16 +391,9 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto out_put;
 
-	/* pass the command stream by reference: data[0] = GPU VA of the
-	 * command BO, data[1] = valid byte count.  The uKernel-side client
-	 * CCB handler (and the emulator's HostCtl shim) reads the packet
-	 * stream from there; the vendor model also keeps payload bodies
-	 * out of the 24-byte kernel CCB slot. */
 	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(objs[0]));
 	cmd_data[1] = cpu_to_le32(args->cmd_size);
 	if (args->num_bos >= 1 && objs[1])
-		/* bos array convention: user bos[0] (objs[1]) is the TA
-		 * packet-stream BO for draw submissions */
 		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(objs[1]));
 
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
@@ -412,7 +403,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	}
 	spin_lock_init(&f->lock);
 	INIT_LIST_HEAD(&f->node);
-	f->ccb_slot = 0xFFFF;	/* not yet assigned; set by ccb_schedule() */
+	f->ccb_slot = 0xFFFF;
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
 		       atomic_inc_return(&pv->fence_context),
 		       atomic_inc_return(&pv->fence_seqno));
@@ -436,44 +427,71 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	args->out_fence_fd = fd;
 	fd_install(fd, sf->file);
 
+	/*
+	 * Transfer the BO references to the fence so that the GEM
+	 * objects remain alive (and their GPU VA / MMU mappings valid)
+	 * until the GPU has finished.  The fence releases them in
+	 * prismrv_fence_release_bos(), called from handle_completion()
+	 * and hw_fini() forced-retirement paths.
+	 *
+	 * Note: objs is now owned by the fence; set it to NULL so the
+	 * out_objs cleanup path below does not double-put.
+	 */
+	f->bos = objs;
+	f->num_bos = args->num_bos + 1;
+	objs = NULL;
+
+	/*
+	 * Register the completion fence as an exclusive writer on every
+	 * referenced BO's dma_resv.  Without this, a second submit to
+	 * the same BO would not wait for the first GPU job to finish
+	 * (implicit-sync ordering).
+	 *
+	 * dma_resv_lock() is required; take it on each object in turn.
+	 */
+	dma_fence_get(&f->base);	/* ref for dma_resv */
+	for (i = 0; i < f->num_bos; i++) {
+		dma_resv_lock(f->bos[i]->resv, NULL);
+		dma_resv_add_fence(f->bos[i]->resv, &f->base,
+				   DMA_RESV_USAGE_WRITE);
+		dma_resv_unlock(f->bos[i]->resv);
+	}
+	dma_fence_put(&f->base);	/* resv holds its own ref */
+
 	/* record the fence so the IRQ handler can signal it on completion */
 	dma_fence_get(&f->base);
 	spin_lock(&pv->event_lock);
 	list_add_tail(&f->node, &pv->pending_fences);
 	spin_unlock(&pv->event_lock);
 
-	/*
-	 * Increment BEFORE scheduling: if the CCB times out,
-	 * ccb_schedule() has already retired the fence (removed from the
-	 * pending list, signalled with -ETIMEDOUT) and the IRQ path can
-	 * no longer touch it — so busy_count must come back down here.
-	 *
-	 * The runtime PM reference taken at the top of this function is
-	 * intentionally NOT released here on the success path.  Instead it
-	 * is transferred to the fence and released by prismrv_handle_completion()
-	 * (or prismrv_hw_fini() on teardown) once the GPU actually finishes
-	 * the submitted command.  This keeps the device awake until the work
-	 * is done, satisfying the autosuspend contract.
-	 */
 	atomic_inc(&pv->busy_count);
 	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
 	if (ret) {
-		/* CCB schedule failed (timeout): fence already retired by
-		 * ccb_schedule(), busy_count was pre-incremented so undo it,
-		 * and release the PM reference we held. */
+		/*
+		 * CCB timeout: ccb_schedule() has already retired the
+		 * fence under event_lock (list_del + signal + put).
+		 * That retirement path does NOT touch busy_count or PM,
+		 * so we must do it here — but only if the fence was
+		 * actually retired by us rather than by a concurrent
+		 * recovery.  Use list_empty_careful() to detect this:
+		 * after list_del_init() the node is empty.
+		 *
+		 * The BO refs are still in f->bos; they will be released
+		 * when f's last reference drops (the sync_file holds one).
+		 */
 		atomic_dec(&pv->busy_count);
 		pm_runtime_mark_last_busy(pv->drm.dev);
 		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
-	/* Both success and CCB-timeout fall through to out_objs to clean up
-	 * the object references.  The PM put on the success path happens later
-	 * in prismrv_handle_completion(). */
-	goto out_objs;
+	/* success: PM reference kept until handle_completion() */
+	up_read(&pv->submit_rwsem);
+	kvfree(objs);	/* NULL after transfer to fence */
+	return ret;
+
 out_put:
+	up_read(&pv->submit_rwsem);
 	pm_runtime_mark_last_busy(pv->drm.dev);
 	pm_runtime_put_autosuspend(pv->drm.dev);
-out_objs:
-	/* objects 0..num_bos are referenced (0 = cmd BO) */
 	for (i = 0; i <= args->num_bos && objs; i++)
 		if (objs[i])
 			drm_gem_object_put(objs[i]);

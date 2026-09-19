@@ -136,6 +136,17 @@ struct prismrv_fence {
 	 * or during hw_fini unconditional retirement.
 	 */
 	u16 ccb_slot;
+
+	/*
+	 * GEM object references held for the lifetime of this job.
+	 * The submit ioctl drops its own refs from objs[] immediately
+	 * after enqueuing; these refs keep the BOs alive (and their GPU
+	 * VA / MMU mappings valid) until the GPU has finished.
+	 * Released in prismrv_fence_release_bos(), called from both
+	 * handle_completion() and hw_fini() forced-retirement paths.
+	 */
+	struct drm_gem_object **bos;
+	u32 num_bos;
 };
 
 struct prismrv_device {
@@ -151,7 +162,8 @@ struct prismrv_device {
 	int nr_clocks;
 
 	/* runtime-detected hardware revision */
-	u32 core_revision;	/* raw EUR_CR_CORE_REVISION */
+	u32 core_id;		/* raw EUR_CR_CORE_ID: designer/core fields */
+	u32 core_revision;	/* raw EUR_CR_CORE_REVISION: major/minor/maint */
 	u32 core_rev_major;
 	u32 core_rev_minor;
 
@@ -163,7 +175,23 @@ struct prismrv_device {
 	u32 *pd_cpu;			/* page directory (kernel shadow) */
 	u32 **pd_pts;			/* per-PDE page table cpu pointers */
 	dma_addr_t *pd_pt_dma;		/* matching dma addresses */
-	dma_addr_t pt_dma_addr;		/* scratch dma addr (PD alloc / latest PT) */
+	dma_addr_t pt_dma_addr;		/* scratch dma addr (PD alloc) */
+	/*
+	 * Serialises prismrv_mmu_map() / prismrv_mmu_unmap() and the
+	 * PDE-allocation critical section within mmu_map().  Without
+	 * this, concurrent submits from multiple threads can race on
+	 * PDE allocation and double-allocate a page table.
+	 */
+	struct mutex mmu_lock;
+
+	/*
+	 * All live prismrv_bo objects, protected by bo_list_lock.
+	 * Used by prismrv_mmu_invalidate_all_bos() during recovery /
+	 * runtime-resume to clear bo->gpu_va so the next submit
+	 * re-maps each BO into the new MMU context.
+	 */
+	struct list_head bo_list;
+	spinlock_t bo_list_lock;
 
 	/* uKernel */
 	size_t ukernel_size;
@@ -215,6 +243,13 @@ struct prismrv_device {
 	atomic_t fence_seqno;		/* per-context sequence number */
 	struct work_struct recovery_work;
 	struct mutex init_mutex;	/* serialises prismrv_hw_init */
+	/*
+	 * Prevents concurrent submit and recovery tearing each other's
+	 * state.  submit_ioctl() takes this read-side; recovery_work()
+	 * takes it write-side (exclusive).  hw_ready is checked under
+	 * the read lock so a recovery that clears it is fully visible.
+	 */
+	struct rw_semaphore submit_rwsem;
 
 	wait_queue_head_t init_wq;
 	bool hw_ready;
@@ -248,6 +283,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
  * the prototype before the definition and avoids -Wmissing-prototypes */
 struct drm_gem_object *prismrv_gem_create_object(struct drm_device *dev,
 						 size_t size);
+/* called from handle_completion() and hw_fini() to release BO refs */
+void prismrv_fence_release_bos(struct prismrv_fence *pf);
 
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file);
@@ -259,6 +296,7 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);
+void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv);
 
 int prismrv_devfreq_init(struct prismrv_device *pv);
 void prismrv_devfreq_fini(struct prismrv_device *pv);
