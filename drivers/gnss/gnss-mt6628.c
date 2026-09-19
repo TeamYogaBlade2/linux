@@ -64,11 +64,15 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
+	priv->open = true;
+	mutex_unlock(&priv->lock);
 
 	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
-	if (!ret)
-		priv->open = true;
-	mutex_unlock(&priv->lock);
+	if (ret) {
+		mutex_lock(&priv->lock);
+		priv->open = false;
+		mutex_unlock(&priv->lock);
+	}
 
 	return ret;
 }
@@ -76,13 +80,15 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 static void mtk_gnss_close(struct gnss_device *gdev)
 {
 	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
+	bool was_open;
 
 	mutex_lock(&priv->lock);
-	if (priv->open) {
-		priv->open = false;
-		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
-	}
+	was_open = priv->open;
+	priv->open = false;
 	mutex_unlock(&priv->lock);
+
+	if (was_open)
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
 }
 
 static const struct gnss_operations mtk_gnss_ops = {
@@ -142,16 +148,18 @@ err_put:
 static void mtk_gnss_remove(struct platform_device *pdev)
 {
 	struct mtk_gnss *priv = platform_get_drvdata(pdev);
+	bool was_open;
 
 	if (!priv)
 		return;
 
 	mutex_lock(&priv->lock);
-	if (priv->open) {
-		priv->open = false;
-		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
-	}
+	was_open = priv->open;
+	priv->open = false;
 	mutex_unlock(&priv->lock);
+
+	if (was_open)
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
 
 	mt6628_stp_unregister_rx(priv->wmt, MT6628_STP_TASK_GPS,
 					 mtk_gnss_rx, priv);

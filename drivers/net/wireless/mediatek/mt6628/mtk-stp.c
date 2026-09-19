@@ -8,6 +8,7 @@
 
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/bitfield.h>
 #include <linux/jiffies.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
@@ -15,7 +16,9 @@
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/unaligned.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 
 #include <linux/mfd/mt6628.h>
@@ -33,6 +36,9 @@
 
 #define MT6628_STP_RX_LEN		GENMASK(31, 16)
 #define MT6628_STP_RX_DONE		BIT(1)
+#define MT6628_STP_TX_UNDER_THOLD	BIT(3)
+#define MT6628_STP_TX_EMPTY		BIT(2)
+#define MT6628_STP_TX_COMPLETE_COUNT	GENMASK(6, 4)
 
 #define MT6628_STP_TX_FIFO_SIZE		2080
 #define MT6628_STP_RX_FIFO_SIZE		2304
@@ -45,6 +51,8 @@
 #define MT6628_STP_MAX_PAYLOAD_LEN	1999
 
 #define MT6628_STP_RX_BUF_SIZE		2560
+#define MT6628_STP_TX_MAX_PENDING	7
+#define MT6628_STP_TX_TIMEOUT_MS		1000
 
 struct mt6628_stp_endpoint {
 	mt6628_stp_rx_cb cb;
@@ -59,15 +67,106 @@ struct mt6628_wmt {
 	struct mutex rx_lock;
 	struct mutex wmt_lock;
 	struct completion wmt_done;
+	spinlock_t tx_state_lock;
+	wait_queue_head_t tx_waitq;
+	u16 tx_sizes[MT6628_STP_TX_MAX_PENDING];
+	u8 tx_head;
+	u8 tx_tail;
+	u8 tx_pending;
+	u16 tx_fifo_free;
 
 	struct mt6628_stp_endpoint endpoint[MT6628_STP_TASK_MAX];
 	u8 rx_buf[MT6628_STP_RX_BUF_SIZE];
 
 	bool driver_owned;
 	bool irq_claimed;
+	bool stopping;
 	bool wmt_waiting;
 	int wmt_status;
 };
+
+static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
+{
+	unsigned long flags;
+	bool ready;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	ready = !wmt->stopping &&
+		wmt->tx_pending < MT6628_STP_TX_MAX_PENDING &&
+		wmt->tx_fifo_free >= frame_len;
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	return ready;
+}
+
+static int mt6628_stp_tx_reserve(struct mt6628_wmt *wmt,
+				 size_t frame_len, u8 *slot)
+{
+	unsigned long flags;
+	int ret = -EAGAIN;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (!wmt->stopping &&
+	    wmt->tx_pending < MT6628_STP_TX_MAX_PENDING &&
+	    wmt->tx_fifo_free >= frame_len) {
+		*slot = wmt->tx_tail;
+		wmt->tx_sizes[wmt->tx_tail] = frame_len;
+		wmt->tx_tail =
+			(wmt->tx_tail + 1) % MT6628_STP_TX_MAX_PENDING;
+		wmt->tx_pending++;
+		wmt->tx_fifo_free -= frame_len;
+		ret = 0;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	return ret;
+}
+
+static void mt6628_stp_tx_cancel(struct mt6628_wmt *wmt,
+				 size_t frame_len, u8 slot)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (wmt->tx_pending &&
+	    wmt->tx_tail == (u8)((slot + 1) % MT6628_STP_TX_MAX_PENDING)) {
+		wmt->tx_tail = slot;
+		wmt->tx_pending--;
+		wmt->tx_fifo_free += frame_len;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+	wake_up_all(&wmt->tx_waitq);
+}
+
+static void mt6628_stp_tx_complete(struct mt6628_wmt *wmt, u32 chisr)
+{
+	unsigned int count = FIELD_GET(MT6628_STP_TX_COMPLETE_COUNT, chisr);
+	unsigned long flags;
+	bool changed = false;
+
+	if (!count)
+		return;
+
+	spin_lock_irqsave(&wmt->tx_state_lock, flags);
+	if (count > wmt->tx_pending) {
+		dev_warn(&wmt->func->dev,
+			 "invalid STP TX completion count %u (pending %u)\n",
+			 count, wmt->tx_pending);
+		count = wmt->tx_pending;
+	}
+
+	while (count--) {
+		wmt->tx_fifo_free += wmt->tx_sizes[wmt->tx_head];
+		wmt->tx_head =
+			(wmt->tx_head + 1) % MT6628_STP_TX_MAX_PENDING;
+		wmt->tx_pending--;
+		changed = true;
+	}
+	spin_unlock_irqrestore(&wmt->tx_state_lock, flags);
+
+	if (changed)
+		wake_up_all(&wmt->tx_waitq);
+}
 
 static int mt6628_stp_write32(struct mt6628_wmt *wmt, unsigned int reg,
 				      u32 val)
@@ -184,10 +283,9 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 	mutex_lock(&wmt->rx_lock);
 	cb = wmt->endpoint[task].cb;
 	priv = wmt->endpoint[task].priv;
-	mutex_unlock(&wmt->rx_lock);
-
 	if (cb)
 		cb(priv, buf, len);
+	mutex_unlock(&wmt->rx_lock);
 }
 
 static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
@@ -201,7 +299,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		size_t frame_len;
 		size_t padded_len;
 
-		if (wmt->rx_buf[pos] != 0x80)
+		if (!(wmt->rx_buf[pos] & BIT(7)))
 			break;
 
 		task = (wmt->rx_buf[pos + 1] >> 4) & 0x07;
@@ -213,10 +311,6 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		frame_len = MT6628_STP_HEADER_SIZE + len +
 			MT6628_STP_CRC_SIZE;
 		if (frame_len > end - pos)
-			break;
-
-		if (wmt->rx_buf[pos + frame_len - 2] ||
-			wmt->rx_buf[pos + frame_len - 1])
 			break;
 
 		mt6628_stp_dispatch(wmt, task, wmt->rx_buf + pos +
@@ -236,10 +330,13 @@ static void mt6628_stp_rx_work(struct work_struct *work)
 	u32 chisr;
 	u16 rx_len;
 	size_t bus_len;
+	bool have_rx = false;
 	int ret;
 
 	sdio_claim_host(wmt->func);
 	chisr = sdio_readl(wmt->func, MT6628_STP_CHISR, &ret);
+	if (!ret)
+		mt6628_stp_tx_complete(wmt, chisr);
 	if (!ret && (chisr & MT6628_STP_RX_DONE)) {
 		rx_len = FIELD_GET(MT6628_STP_RX_LEN, chisr);
 		if (rx_len >= MT6628_STP_SDIO_HDR_SIZE &&
@@ -253,13 +350,16 @@ static void mt6628_stp_rx_work(struct work_struct *work)
 				if (!ret &&
 				    get_unaligned_le16(wmt->rx_buf) == rx_len &&
 				    !wmt->rx_buf[2] && !wmt->rx_buf[3])
-					mt6628_stp_parse_rx(wmt, rx_len);
+					have_rx = true;
 			}
 		}
 	}
 	sdio_release_host(wmt->func);
 
-	if (mt6628_stp_irq_enable(wmt))
+	if (have_rx)
+		mt6628_stp_parse_rx(wmt, rx_len);
+
+	if (!READ_ONCE(wmt->stopping) && mt6628_stp_irq_enable(wmt))
 		dev_warn(&wmt->func->dev, "failed to re-enable STP IRQ\n");
 }
 
@@ -268,6 +368,8 @@ static void mt6628_stp_irq(struct sdio_func *func)
 	struct mt6628_wmt *wmt = sdio_get_drvdata(func);
 
 	if (!wmt)
+		return;
+	if (READ_ONCE(wmt->stopping))
 		return;
 
 	mt6628_stp_irq_disable_in_irq(wmt);
@@ -281,6 +383,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	u8 *frame;
 	size_t stp_len;
 	size_t bus_len;
+	size_t fifo_len;
 	size_t frame_len;
 	int ret;
 
@@ -289,10 +392,11 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 
 	stp_len = MT6628_STP_HEADER_SIZE + len + MT6628_STP_CRC_SIZE;
 	bus_len = MT6628_STP_SDIO_HDR_SIZE + stp_len;
-	frame_len = ALIGN(bus_len, 4);
+	fifo_len = ALIGN(bus_len, 4);
+	frame_len = fifo_len;
 	if (frame_len > MT6628_STP_BLK_SIZE)
 		frame_len = ALIGN(frame_len, MT6628_STP_BLK_SIZE);
-	if (frame_len > MT6628_STP_TX_FIFO_SIZE)
+	if (fifo_len > MT6628_STP_TX_FIFO_SIZE)
 		return -EMSGSIZE;
 
 	frame = kzalloc(frame_len, GFP_KERNEL);
@@ -309,10 +413,38 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	memcpy(frame + MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE,
 	       buf, len);
 
-	sdio_claim_host(wmt->func);
-	ret = sdio_writesb(wmt->func, MT6628_STP_CTDR, frame, frame_len);
-	sdio_release_host(wmt->func);
+	ret = wait_event_interruptible_timeout(
+		wmt->tx_waitq,
+		READ_ONCE(wmt->stopping) || mt6628_stp_tx_ready(wmt, fifo_len),
+		msecs_to_jiffies(MT6628_STP_TX_TIMEOUT_MS));
+	if (ret < 0)
+		goto out_free;
+	if (READ_ONCE(wmt->stopping)) {
+		ret = -ESHUTDOWN;
+		goto out_free;
+	}
+	if (!ret) {
+		ret = -ETIMEDOUT;
+		goto out_free;
+	}
 
+	{
+		u8 tx_slot;
+
+		ret = mt6628_stp_tx_reserve(wmt, fifo_len, &tx_slot);
+		if (ret)
+			goto out_free;
+
+		sdio_claim_host(wmt->func);
+		ret = sdio_writesb(wmt->func, MT6628_STP_CTDR, frame,
+					frame_len);
+		sdio_release_host(wmt->func);
+
+		if (ret)
+			mt6628_stp_tx_cancel(wmt, fifo_len, tx_slot);
+	}
+
+out_free:
 	kfree(frame);
 	return ret;
 }
@@ -437,7 +569,10 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	mutex_init(&wmt->tx_lock);
 	mutex_init(&wmt->rx_lock);
 	mutex_init(&wmt->wmt_lock);
+	spin_lock_init(&wmt->tx_state_lock);
+	init_waitqueue_head(&wmt->tx_waitq);
 	init_completion(&wmt->wmt_done);
+	wmt->tx_fifo_free = MT6628_STP_TX_FIFO_SIZE;
 	INIT_WORK(&wmt->rx_work, mt6628_stp_rx_work);
 	sdio_set_drvdata(func, wmt);
 
@@ -454,9 +589,12 @@ static int mt6628_stp_probe(struct sdio_func *func,
 		goto err_disable;
 	wmt->driver_owned = true;
 
-	/* Only RX_DONE is consumed by this transport. */
+	/* RX plus TX-completion indications are consumed by this transport. */
 	ret = mt6628_stp_write32(wmt, MT6628_STP_CHIER,
-				 MT6628_STP_RX_DONE);
+				 MT6628_STP_RX_DONE |
+				 MT6628_STP_TX_UNDER_THOLD |
+				 MT6628_STP_TX_EMPTY |
+				 MT6628_STP_TX_COMPLETE_COUNT);
 	if (ret)
 		goto err_fw_own;
 
@@ -509,6 +647,8 @@ static void mt6628_stp_remove(struct sdio_func *func)
 
 	/* Children may need FUNC_OFF, so keep transport/IRQ alive first. */
 	mfd_remove_devices(&func->dev);
+	WRITE_ONCE(wmt->stopping, true);
+	wake_up_all(&wmt->tx_waitq);
 
 	mt6628_stp_write32(wmt, MT6628_STP_CHLPCR,
 			   MT6628_STP_INT_EN_CLR);

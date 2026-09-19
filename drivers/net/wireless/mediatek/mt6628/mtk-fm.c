@@ -209,10 +209,11 @@ static int mtk_fm_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	platform_set_drvdata(pdev, fm);
+
 	return 0;
 
 err_v4l2:
-	video_unregister_device(&fm->vdev);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	return ret;
 }
