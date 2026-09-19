@@ -65,14 +65,13 @@ properties:
                                       above recharge threshold, and the current is below this
                                       setting (typically 10% of battery capacity).
 
-  properties:
-    poll-interval:
-      description:
-        Polling interval in milliseconds. If this property is set and no interrupt
-        is specified, the driver will periodically check the charger status instead
-        of using the hardware interrupt line. Ignored if an interrupt is available.
-      minimum: 100
-      maximum: 60000
+  poll-interval:
+    description:
+      Polling interval in milliseconds. If this property is set and no interrupt
+      is specified, the driver will periodically check the charger status instead
+      of using the hardware interrupt line. Ignored if an interrupt is available.
+    minimum: 100
+    maximum: 60000
 
 required:
   - compatible
