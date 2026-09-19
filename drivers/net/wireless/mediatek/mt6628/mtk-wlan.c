@@ -345,6 +345,13 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 			mt6628_crc32(fw->data + 8, fw->size - 8)) {
 		num_sections = get_unaligned_le32(fw->data + 8);
 
+		if (!num_sections) {
+			dev_err(&wl->func->dev,
+				"firmware contains no sections\n");
+			ret = -EINVAL;
+			goto out_restore_seq;
+		}
+
 		if (num_sections >
 		    (fw->size - MT6628_FW_HEADER_SIZE) /
 			MT6628_FW_SECTION_SIZE) {
@@ -375,6 +382,14 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 					"invalid firmware section %u: offset %#x length %#x\n",
 					offset, data_offset, data_len);
 				ret = -EINVAL;
+				goto out_restore_seq;
+			}
+
+			if (data_len > U32_MAX - dest_addr) {
+				dev_err(&wl->func->dev,
+					"firmware section %u address overflow: %#x + %#x\n",
+					offset, dest_addr, data_len);
+				ret = -EOVERFLOW;
 				goto out_restore_seq;
 			}
 
