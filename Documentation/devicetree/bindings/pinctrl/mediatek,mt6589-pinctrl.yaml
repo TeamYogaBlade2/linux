@@ -47,8 +47,7 @@ properties:
   interrupt-controller: true
 
   interrupts:
-    minItems: 3
-    maxItems: 3
+    maxItems: 1
     description:
       Specifies the summary IRQ.
 
