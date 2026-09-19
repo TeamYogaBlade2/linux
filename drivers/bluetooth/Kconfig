@@ -442,7 +442,6 @@ config BT_MT6628_STP
 	tristate "MediaTek MT6628 Bluetooth over STP"
 	depends on MMC
 	depends on MTK_MT6628_STP
-	select BT
 	help
 	  Bluetooth HCI transport for the MT6628 shared STP function.
 
