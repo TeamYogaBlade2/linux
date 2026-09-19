@@ -50,9 +50,17 @@ properties:
       - const: core
       - const: mem
       - const: sys
+      - const: hyd
+
+  operating-points-v2: true
 
   power-domains:
     maxItems: 1
+
+  resets:
+    maxItems: 1
+
+  reset-names: {}
 
 required:
   - compatible
@@ -86,6 +94,26 @@ allOf:
       properties:
         clocks: false
         clock-names: false
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: mediatek,mt6589-gpu
+    then:
+      required:
+        - clocks
+        - clock-names
+        - power-domains
+        - resets
+      properties:
+        clocks:
+          minItems: 4
+          maxItems: 4
+        clock-names:
+          minItems: 4
+          maxItems: 4
+          items:
+            enum: [core, mem, sys, hyd]
   - if:
       properties:
         compatible:

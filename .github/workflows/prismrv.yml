@@ -1,0 +1,90 @@
+name: prismrv-driver-build
+
+# Build the PrismRV DRM driver in-tree against the repository's own
+# kernel source (dev/v7.1/prismrv-drm branch) using lenovo-blade_defconfig.
+# This guarantees that MT6589-specific Kconfig symbols, platform drivers,
+# and clock drivers resolve correctly — vanilla kernel.org sources do not
+# carry any of these.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dev/v7.1/prismrv-drm'
+    paths:
+      - 'drivers/gpu/drm/prismrv/**'
+      - 'include/uapi/drm/prismrv_drm.h'
+      - 'arch/arm/configs/lenovo-blade_defconfig'
+      - '.github/workflows/prismrv.yml'
+  pull_request:
+    branches:
+      - 'dev/v7.1/prismrv-drm'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prismrv-kbuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kbuild-intree:
+    name: in-tree build (lenovo-blade_defconfig)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # Full clone: the Makefile needs the git tree to embed the
+        # version string; a shallow clone would give a wrong LOCALVERSION.
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM cross-toolchain and build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev \
+            gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+            llvm clang lld \
+            make python3
+
+      - name: Configure (lenovo-blade_defconfig)
+        run: |
+          make ARCH=arm \
+               CROSS_COMPILE=arm-linux-gnueabihf- \
+               lenovo-blade_defconfig
+          # Confirm the driver is enabled before spending time building
+          grep -q 'CONFIG_DRM_PRISMRV=y' .config || {
+            echo "::error::CONFIG_DRM_PRISMRV=y not set by lenovo-blade_defconfig"
+            exit 1
+          }
+
+      - name: Build kernel + driver (clang cross)
+        run: |
+          make ARCH=arm \
+               CROSS_COMPILE=arm-linux-gnueabihf- \
+               LLVM=1 LLVM_IAS=1 \
+               -j$(nproc) \
+               2>&1 | tee build.log
+          # Fail on any compiler warning emitted for prismrv sources
+          if grep -E 'drivers/gpu/drm/prismrv/.*warning:' build.log; then
+            echo "::error::warnings in prismrv driver (policy: warnings are errors)"
+            exit 1
+          fi
+
+      - name: Verify driver object was produced
+        run: |
+          # DRM_PRISMRV=y → built-in; look for the linked object or module
+          ls drivers/gpu/drm/prismrv/*.o 2>/dev/null | grep -v '\.mod\.o' \
+            || ls drivers/gpu/drm/prismrv/*.ko 2>/dev/null \
+            || { echo "::error::no prismrv driver objects found"; exit 1; }
+
+      - name: Check uapi header installs cleanly (host gcc)
+        run: |
+          mkdir -p /tmp/uapi/drm
+          install include/uapi/drm/prismrv_drm.h /tmp/uapi/drm/
+          gcc -fsyntax-only -I/tmp/uapi -x c - <<'HDREOF'
+          #include <drm/prismrv_drm.h>
+          int main(void) { return PRISMRV_UAPI_VERSION == 1 ? 0 : 1; }
+          HDREOF
