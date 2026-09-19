@@ -20,7 +20,13 @@ properties:
       - mediatek,mt6589-audio
 
   clocks:
-    maxItems: 1
+    minItems: 2
+    maxItems: 2
+
+  clock-names:
+    items:
+      - const: afe
+      - const: i2s
 
   interrupts:
     maxItems: 1
@@ -28,6 +34,7 @@ properties:
 required:
   - compatible
   - clocks
+  - clock-names
   - interrupts
 
 additionalProperties: false
