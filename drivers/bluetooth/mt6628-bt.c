@@ -175,7 +175,7 @@ static void mt6628_bt_remove(struct platform_device *pdev)
 
 static struct platform_driver mt6628_bt_driver = {
 	.probe = mt6628_bt_probe,
-	.remove_new = mt6628_bt_remove,
+	.remove = mt6628_bt_remove,
 	.driver = {
 		.name = "mt6628-bt",
 	},

@@ -169,7 +169,7 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 
 static struct platform_driver mtk_gnss_driver = {
 	.probe = mtk_gnss_probe,
-	.remove_new = mtk_gnss_remove,
+	.remove = mtk_gnss_remove,
 	.driver = {
 		.name = "mt6628-gnss",
 	},

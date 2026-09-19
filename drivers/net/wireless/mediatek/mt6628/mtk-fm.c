@@ -531,7 +531,7 @@ static void mtk_fm_remove(struct platform_device *pdev)
 
 static struct platform_driver mtk_fm_driver = {
 	.probe = mtk_fm_probe,
-	.remove_new = mtk_fm_remove,
+	.remove = mtk_fm_remove,
 	.driver = {
 		.name = "mt6628-fm",
 	},
