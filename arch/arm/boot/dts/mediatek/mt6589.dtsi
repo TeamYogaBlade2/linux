@@ -1272,7 +1272,7 @@
 			clocks = <&vencsys CLK_VENC_VEN>,
 				 <&vencsys CLK_VENC_VEN>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
 		};
 
 		larb1: larb@16010000 {
@@ -1283,7 +1283,7 @@
 			clocks = <&vdecsys CLK_VDEC0_VDE>,
 				 <&vdecsys CLK_VDEC1_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_VDE>;
 		};
 
 		larb2: larb@14010000 {
@@ -1305,7 +1305,7 @@
 			clocks = <&imgsys CLK_IMAGE_LARB3_SMI>,
 				 <&imgsys CLK_IMAGE_LARB3_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
 		};
 
 		larb4: larb@15002000 {
@@ -1316,7 +1316,7 @@
 			clocks = <&imgsys CLK_IMAGE_LARB4_SMI>,
 				 <&imgsys CLK_IMAGE_LARB4_SMI>;
 			clock-names = "apb", "smi";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>; /* maybe */
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
 		};
 	};
 };
