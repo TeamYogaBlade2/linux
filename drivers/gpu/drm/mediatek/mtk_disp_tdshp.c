@@ -116,6 +116,7 @@ void mtk_tdshp_start(struct device *dev)
 	struct mtk_disp_tdshp *tdshp = dev_get_drvdata(dev);
 
 	writel(1, tdshp->regs + DISP_REG_TDSHP_START);
+	mtk_tdshp_matrix_init(tdshp);
 }
 
 void mtk_tdshp_stop(struct device *dev)
@@ -162,8 +163,6 @@ static int mtk_disp_tdshp_probe(struct platform_device *pdev)
 	if (ret)
 		dev_dbg(dev, "No mediatek,gce-client-reg\n");
 #endif
-
-	mtk_tdshp_matrix_init(tdshp);
 
 	platform_set_drvdata(pdev, tdshp);
 
