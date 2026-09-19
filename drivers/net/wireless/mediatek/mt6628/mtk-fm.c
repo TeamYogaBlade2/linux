@@ -16,10 +16,12 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/completion.h>
 #include <linux/mfd/mt6628.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
@@ -34,14 +36,65 @@
 
 /* FM packet types on the STP control channel */
 #define FM_TASK_COMMAND_PKT_TYPE	0x1
+#define FM_TASK_EVENT_PKT_TYPE		0x2
 #define FM_ENABLE_OPCODE		0x07
 
 struct mtk_fm {
 	struct v4l2_device v4l2_dev;
 	struct video_device vdev;
 	struct mt6628_wmt *wmt;
+	struct completion cmd_done;
+	u8 waiting_opcode;
+	int cmd_status;
 	u32 freq;			/* in 10 kHz units */
 };
+
+static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
+{
+	struct mtk_fm *fm = priv;
+	u16 payload_len;
+
+	if (len < 4 || buf[0] != FM_TASK_EVENT_PKT_TYPE)
+		return;
+
+	payload_len = get_unaligned_le16(buf + 2);
+	if (payload_len > len - 4)
+		return;
+
+	if (buf[1] != fm->waiting_opcode)
+		return;
+
+	/*
+	 * Firmware-download / enable commands use an event with no
+	 * opcode-specific result payload.  Reception of the matching
+	 * opcode is the success indication used by the downstream
+	 * fm_cmd_tx()/fm_event_parser() path.
+	 */
+	fm->cmd_status = 0;
+	complete(&fm->cmd_done);
+}
+
+static int mtk_fm_send_cmd(struct mtk_fm *fm, const u8 *buf, size_t len,
+			   u8 opcode, unsigned int timeout_ms)
+{
+	unsigned long timeout;
+	int ret;
+
+	reinit_completion(&fm->cmd_done);
+	fm->waiting_opcode = opcode;
+	fm->cmd_status = -ETIMEDOUT;
+
+	ret = mt6628_stp_send(fm->wmt, MT6628_STP_TASK_FM, buf, len);
+	if (ret < 0)
+		return ret;
+
+	timeout = wait_for_completion_timeout(&fm->cmd_done,
+					     msecs_to_jiffies(timeout_ms));
+	if (!timeout)
+		return -ETIMEDOUT;
+
+	return fm->cmd_status;
+}
 
 /* ---- BOP buffer construction ---- */
 
@@ -135,10 +188,10 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 
 	pkt = fm_pwrup_clock_on(fm, buf, 512);
 
-	ret = mt6628_stp_send(fm->wmt, MT6628_STP_TASK_FM, buf, pkt);
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 3000);
 	kfree(buf);
 
-	return ret < 0 ? ret : 0;
+	return ret;
 }
 
 /* ---- V4L2 ---- */
@@ -179,13 +232,18 @@ static int mtk_fm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	fm->wmt = wmt;
+	init_completion(&fm->cmd_done);
 
 	fm->freq = 87500;	/* 87.5 MHz in 10kHz units */
 
+	ret = mt6628_stp_register_rx(wmt, MT6628_STP_TASK_FM,
+				     mtk_fm_rx, fm);
+	if (ret)
+		return ret;
+
 	ret = v4l2_device_register(&pdev->dev, &fm->v4l2_dev);
 	if (ret)
-		return dev_err_probe(&pdev->dev, ret,
-				     "failed to register v4l2 device\n");
+		goto err_unregister_rx;
 
 	ret = mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, true);
 	if (ret)
@@ -214,7 +272,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 		v4l2_err(&fm->v4l2_dev, "failed to register radio: %d\n", ret);
 		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
 		v4l2_device_unregister(&fm->v4l2_dev);
-		return ret;
+		goto err_unregister_rx;
 	}
 
 	platform_set_drvdata(pdev, fm);
@@ -223,6 +281,9 @@ static int mtk_fm_probe(struct platform_device *pdev)
 
 err_v4l2:
 	v4l2_device_unregister(&fm->v4l2_dev);
+err_unregister_rx:
+	mt6628_stp_unregister_rx(wmt, MT6628_STP_TASK_FM,
+				 mtk_fm_rx, fm);
 	return ret;
 }
 
@@ -236,6 +297,8 @@ static void mtk_fm_remove(struct platform_device *pdev)
 	video_unregister_device(&fm->vdev);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	mt6628_wmt_func_ctrl(fm->wmt, MT6628_WMT_FUNC_FM, false);
+	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
+				 mtk_fm_rx, fm);
 }
 
 static struct platform_driver mtk_fm_driver = {
