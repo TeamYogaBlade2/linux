@@ -2617,23 +2617,16 @@ static int musb_probe(struct platform_device *pdev)
 	return musb_init_controller(dev, irq, base);
 }
 
-static void musb_remove(struct platform_device *pdev)
+static void musb_quiesce(struct musb *musb)
 {
-	struct device	*dev = &pdev->dev;
-	struct musb	*musb = dev_to_musb(dev);
-	unsigned long	flags;
+	unsigned long flags;
 
-	/* this gets called on rmmod.
-	 *  - Host mode: host may still be active
-	 *  - Peripheral mode: peripheral is deactivated (or never-activated)
-	 *  - OTG mode: both roles are deactivated (or never-activated)
-	 */
-	musb_exit_debugfs(musb);
+	pm_runtime_get_sync(musb->controller);
 
 	cancel_delayed_work_sync(&musb->irq_work);
 	cancel_delayed_work_sync(&musb->finish_resume_work);
 	cancel_delayed_work_sync(&musb->deassert_reset_work);
-	pm_runtime_get_sync(musb->controller);
+
 	musb_host_cleanup(musb);
 	musb_gadget_cleanup(musb);
 
@@ -2642,17 +2635,56 @@ static void musb_remove(struct platform_device *pdev)
 	musb_disable_interrupts(musb);
 	musb_writeb(musb->mregs, MUSB_DEVCTL, 0);
 	spin_unlock_irqrestore(&musb->lock, flags);
-	musb_platform_exit(musb);
 
+	timer_shutdown_sync(&musb->otg_timer);
+
+	if (musb->nIrq >= 0)
+		synchronize_irq(musb->nIrq);
+}
+
+static void musb_remove(struct platform_device *pdev)
+{
+	struct device	*dev = &pdev->dev;
+	struct musb	*musb = dev_to_musb(dev);
+
+	/* this gets called on rmmod.
+	 *  - Host mode: host may still be active
+	 *  - Peripheral mode: peripheral is deactivated (or never-activated)
+	 *  - OTG mode: both roles are deactivated (or never-activated)
+	 */
+	musb_exit_debugfs(musb);
+
+	musb_quiesce(musb);
+
+	if (musb->dma_controller) {
+		musb_dma_controller_destroy(musb->dma_controller);
+		musb->dma_controller = NULL;
+	}
+
+	musb_platform_exit(musb);
 	pm_runtime_dont_use_autosuspend(musb->controller);
 	pm_runtime_put_sync(musb->controller);
 	pm_runtime_disable(musb->controller);
 	musb_phy_callback = NULL;
-	if (musb->dma_controller)
-		musb_dma_controller_destroy(musb->dma_controller);
 	usb_phy_shutdown(musb->xceiv);
 	musb_free(musb);
 	device_init_wakeup(dev, 0);
+}
+
+static void musb_shutdown(struct platform_device *pdev)
+{
+	struct musb *musb = dev_to_musb(&pdev->dev);
+
+	musb_quiesce(musb);
+
+	if (musb->dma_controller) {
+		musb_dma_controller_destroy(musb->dma_controller);
+		musb->dma_controller = NULL;
+	}
+
+	musb_platform_exit(musb);
+	musb_phy_callback = NULL;
+	usb_phy_shutdown(musb->xceiv);
 }
 
 #ifdef	CONFIG_PM
@@ -2950,6 +2982,7 @@ static struct platform_driver musb_driver = {
 	},
 	.probe		= musb_probe,
 	.remove		= musb_remove,
+	.shutdown	= musb_shutdown,
 };
 
 module_platform_driver(musb_driver);

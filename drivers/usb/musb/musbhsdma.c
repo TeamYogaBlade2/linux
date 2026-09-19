@@ -72,26 +72,26 @@ struct musb_dma_controller {
 };
 
 static void dma_channel_release(struct dma_channel *channel);
+static int dma_channel_abort(struct dma_channel *channel);
 
 static void dma_controller_stop(struct musb_dma_controller *controller)
 {
-	struct musb *musb = controller->private_data;
 	struct dma_channel *channel;
+	void __iomem *mbase = controller->base;
 	u8 bit;
 
-	if (controller->used_channels != 0) {
-		dev_err(musb->controller,
-			"Stopping DMA controller while channel active\n");
+	for (bit = 0; bit < MUSB_HSDMA_CHANNELS; bit++) {
+		channel = &controller->channel[bit].channel;
 
-		for (bit = 0; bit < MUSB_HSDMA_CHANNELS; bit++) {
-			if (controller->used_channels & (1 << bit)) {
-				channel = &controller->channel[bit].channel;
-				dma_channel_release(channel);
-
-				if (!controller->used_channels)
-					break;
-			}
+		if (controller->used_channels & (1 << bit)) {
+			dma_channel_abort(channel);
+			dma_channel_release(channel);
 		}
+
+		musb_writew(mbase,
+			MUSB_HSDMA_CHANNEL_OFFSET(bit, MUSB_HSDMA_CONTROL), 0);
+		musb_write_hsdma_addr(mbase, bit, 0);
+		musb_write_hsdma_count(mbase, bit, 0);
 	}
 }
 
