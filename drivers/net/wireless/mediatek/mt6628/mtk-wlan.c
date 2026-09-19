@@ -340,9 +340,18 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	 * (offset 8) to the end of the image.
 	 */
 	if (fw->size >= MT6628_FW_HEADER_SIZE &&
-	    get_unaligned_le32(fw->data) == MT6628_FW_SIGNATURE &&
-	    get_unaligned_le32(fw->data + 4) ==
-			mt6628_crc32(fw->data + 8, fw->size - 8)) {
+	    get_unaligned_le32(fw->data) == MT6628_FW_SIGNATURE) {
+		u32 expected_crc = get_unaligned_le32(fw->data + 4);
+		u32 actual_crc = mt6628_crc32(fw->data + 8, fw->size - 8);
+
+		if (expected_crc != actual_crc) {
+			dev_err(&wl->func->dev,
+				"divided firmware CRC mismatch: expected %#x, got %#x\n",
+				expected_crc, actual_crc);
+			ret = -EBADMSG;
+			goto out_restore_seq;
+		}
+
 		num_sections = get_unaligned_le32(fw->data + 8);
 
 		if (!num_sections) {
