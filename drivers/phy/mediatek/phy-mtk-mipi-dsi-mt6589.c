@@ -206,9 +206,8 @@ static int mt6589_mipi_tx_pll_prepare(struct clk_hw *hw)
 	/* Step 2: PLL power-up sequence (mimic downstream 0x400 -> PLL setup -> 0x600) */
 	writel(0x400, base + MIPITX_DSI_PLL_PWR);
 	mt6589_mipi_tx_set_pll(mipi_tx, cfg);
-	usleep_range(20, 100);
+	msleep(100);
 	writel(0x600, base + MIPITX_DSI_PLL_PWR);
-	usleep_range(20, 100);
 
 	return 0;
 }
