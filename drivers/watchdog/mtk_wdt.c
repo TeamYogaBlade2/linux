@@ -239,22 +239,6 @@ static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
 
 	wdt_base = mtk_wdt->wdt_base;
 
-	/*
-	 * Configure WDT for a clean hardware reset:
-	 *
-	 *  - Clear WDT_MODE_IRQ_EN  : generate a reset signal, not an IRQ
-	 *  - Clear WDT_MODE_DUAL_EN : single (HW-reset) mode, not dual mode
-	 *  - Clear WDT_MODE_AUTO_START (bit 4, "bypass power-key" flag):
-	 *      On MT6589/MT6320, this bit tells the bootloader whether to
-	 *      require a power-key press after reset.  Leaving it set causes
-	 *      the system to boot into a preloader "bypass" path that looks
-	 *      like an unknown mode.  Clearing it means the SoC expects a
-	 *      normal, power-key-gated boot — which is correct for `reboot`.
-	 *  - Set  WDT_MODE_EXRST_EN : drive the external reset line so all
-	 *      peripherals are reset along with the CPU.
-	 *
-	 * Matches downstream wdt_arch_reset(mode=0) in mtk_wdt.c.
-	 */
 	reg = readl(wdt_base + WDT_MODE);
 	reg &= ~(WDT_MODE_IRQ_EN | WDT_MODE_DUAL_EN | WDT_MODE_AUTO_START);
 	reg |= WDT_MODE_EXRST_EN;
