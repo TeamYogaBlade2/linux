@@ -721,11 +721,13 @@
 			reg = <0x12070000 0x1000>;
 			#clock-cells = <1>;
 
-			afe: audio-controller {
-				compatible = "mediatek,mt6589-audio";
-				clocks = <&audsys CLK_AUDIO_AFE>;
-				interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
-			};
+		afe: audio-controller {
+			compatible = "mediatek,mt6589-audio";
+			clocks = <&audsys CLK_AUDIO_AFE>,
+				 <&audsys CLK_AUDIO_I2S>;
+			clock-names = "afe", "i2s";
+			interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
+		};
 		};
 
 		pwm: pwm@1100b000 {
