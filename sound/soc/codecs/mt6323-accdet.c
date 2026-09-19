@@ -414,7 +414,10 @@ static int mt6323_accdet_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	mt6323_accdet_init(accdet);
+	ret = mt6323_accdet_init(accdet);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to initialize accdet\n");
 
 	guard(mutex)(&accdet->lock);
 	mt6323_accdet_wake(accdet);
