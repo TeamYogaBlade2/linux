@@ -232,16 +232,7 @@ static void mt6589_enable_translation(struct mtk_iommu_v1_data *data)
 	for (i = 0; i < data->soc->num_cores; i++) {
 		void __iomem *base = data->cores[i].base;
 
-		/*
-		 * Keep the prefetch engine (PFH) disabled.  The MT6589 PFH TLB
-		 * works on 128-bit (4 PTE) lines and speculatively fetches PTEs
-		 * beyond the end of every buffer.  Entries fetched past the end
-		 * of a mapping would be cached as invalid TLB lines and cause
-		 * translation-fault storms once the IOMMU sees traffic near
-		 * mapping boundaries.  Unlike the downstream kernel we cannot
-		 * pad each IOVA allocation, so simply run with PFH off.
-		 */
-		u32 ctrl = F_MMU_CTRL_PFH_DIS(1) |
+		u32 ctrl = F_MMU_CTRL_PFH_DIS(0) |
 			   F_MMU_CTRL_TLB_WALK_DIS(0) |
 			   F_MMU_TF_PROTECT_SEL(2);
 		writel_relaxed(ctrl, base + REG_MMU_CTRL_REG);
@@ -802,20 +793,12 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 		writel_relaxed(regval, data->l2_base + REG_L2_GDC_OP);
 	}
 
-	/*
-	 * Per-core setup: disable prefetch and table walk for now.
-	 * They will be enabled in mtk_iommu_v1_bind() after all ports are
-	 * set to physical mode by the SMI driver.
-	 */
+	/* Match the MT6589 hardware defaults used by the downstream driver. */
 	for (i = 0; i < data->soc->num_cores; i++) {
 		void __iomem *base = data->cores[i].base;
 
-		/*
-		 * Keep prefetch and table-walk-based prefetch disabled; see
-		 * mt6589_enable_translation().
-		 */
-		regval = F_MMU_CTRL_PFH_DIS(1) |
-			 F_MMU_CTRL_TLB_WALK_DIS(1) |
+		regval = F_MMU_CTRL_PFH_DIS(0) |
+			 F_MMU_CTRL_TLB_WALK_DIS(0) |
 			 F_MMU_TF_PROTECT_SEL(2);
 		writel_relaxed(regval, base + REG_MMU_CTRL_REG);
 
