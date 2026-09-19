@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * MediaTek MT6572 AFE platform driver.
+ * MediaTek MT6589 AFE platform driver.
  *
  * DL1 playback front-end feeding the ADDA downlink SRC and the AFE<->PMIC
- * serial link to the mt6323 codec. The AFE registers are in the parent audsys
+ * serial link to the mt6320 codec. The AFE registers are in the parent audsys
  * syscon; a fast_io regmap keeps the trigger and the period IRQ atomic.
+ *
+ * based on mt6572-afe-pcm.c
  */
 
 #include <linux/bitfield.h>
@@ -76,7 +78,7 @@
 #define AFE_ADDA_NEWIF_CFG1	0x013c
 #define AFE_ADDA_NEWIF_CFG1_VAL	0x03117180
 
-static const struct regmap_config mt6572_afe_regmap_config = {
+static const struct regmap_config mt6589_afe_regmap_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
@@ -84,7 +86,7 @@ static const struct regmap_config mt6572_afe_regmap_config = {
 	.max_register = 0x0ffc,
 };
 
-struct mt6572_afe {
+struct mt6589_afe {
 	struct device *dev;
 	struct regmap *regmap;
 	struct clk *clk;
@@ -93,7 +95,7 @@ struct mt6572_afe {
 };
 
 /* Hz -> AFE sample-rate code. */
-static int mt6572_afe_rate_code(unsigned int rate)
+static int mt6589_afe_rate_code(unsigned int rate)
 {
 	switch (rate) {
 	case 8000:	return 0;
@@ -110,7 +112,7 @@ static int mt6572_afe_rate_code(unsigned int rate)
 }
 
 /* Hz -> ADDA downlink SRC input-mode code. */
-static int mt6572_afe_adda_rate_code(unsigned int rate)
+static int mt6589_afe_adda_rate_code(unsigned int rate)
 {
 	switch (rate) {
 	case 8000:	return 0;
@@ -126,9 +128,9 @@ static int mt6572_afe_adda_rate_code(unsigned int rate)
 	}
 }
 
-static struct snd_soc_dai_driver mt6572_afe_dais[] = {
+static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 	{
-		.name = "mt6572-afe-dl1",
+		.name = "mt6589-afe-dl1",
 		.playback = {
 			.stream_name = "DL1 Playback",
 			.channels_min = 1,
@@ -139,7 +141,7 @@ static struct snd_soc_dai_driver mt6572_afe_dais[] = {
 	},
 };
 
-static const struct snd_pcm_hardware mt6572_afe_hardware = {
+static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	/* on-chip SRAM buffer, no mmap */
 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
@@ -155,20 +157,20 @@ static const struct snd_pcm_hardware mt6572_afe_hardware = {
 	.buffer_bytes_max = 16 * 1024,		/* AFE on-chip SRAM */
 };
 
-static int mt6572_afe_pcm_open(struct snd_soc_component *comp,
+static int mt6589_afe_pcm_open(struct snd_soc_component *comp,
 			       struct snd_pcm_substream *substream)
 {
-	snd_soc_set_runtime_hwparams(substream, &mt6572_afe_hardware);
+	snd_soc_set_runtime_hwparams(substream, &mt6589_afe_hardware);
 	/* AFE_DL1_END[2:0] must be 7: keep the period (so the buffer) 8-byte aligned. */
 	return snd_pcm_hw_constraint_step(substream->runtime, 0,
 					  SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 8);
 }
 
-static int mt6572_afe_pcm_hw_params(struct snd_soc_component *comp,
+static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 				    struct snd_pcm_substream *substream,
 				    struct snd_pcm_hw_params *params)
 {
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned int bytes = params_buffer_bytes(params);
 	u32 base = lower_32_bits(runtime->dma_addr);
@@ -181,13 +183,13 @@ static int mt6572_afe_pcm_hw_params(struct snd_soc_component *comp,
 	return 0;
 }
 
-static int mt6572_afe_pcm_prepare(struct snd_soc_component *comp,
+static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 				  struct snd_pcm_substream *substream)
 {
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int adda_code = mt6572_afe_adda_rate_code(runtime->rate);
-	int rate_code = mt6572_afe_rate_code(runtime->rate);
+	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
+	int rate_code = mt6589_afe_rate_code(runtime->rate);
 
 	if (adda_code < 0 || rate_code < 0)
 		return -EINVAL;
@@ -233,10 +235,10 @@ static int mt6572_afe_pcm_prepare(struct snd_soc_component *comp,
 	return 0;
 }
 
-static int mt6572_afe_pcm_trigger(struct snd_soc_component *comp,
+static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 				  struct snd_pcm_substream *substream, int cmd)
 {
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -260,10 +262,10 @@ static int mt6572_afe_pcm_trigger(struct snd_soc_component *comp,
 	}
 }
 
-static snd_pcm_uframes_t mt6572_afe_pcm_pointer(struct snd_soc_component *comp,
+static snd_pcm_uframes_t mt6589_afe_pcm_pointer(struct snd_soc_component *comp,
 						struct snd_pcm_substream *substream)
 {
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	u32 base = lower_32_bits(runtime->dma_addr);
 	unsigned int cur = 0;
@@ -274,10 +276,10 @@ static snd_pcm_uframes_t mt6572_afe_pcm_pointer(struct snd_soc_component *comp,
 	return bytes_to_frames(runtime, cur - base);
 }
 
-static int mt6572_afe_pcm_new(struct snd_soc_component *comp,
+static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 				    struct snd_soc_pcm_runtime *rtd)
 {
-	size_t size = mt6572_afe_hardware.buffer_bytes_max;
+	size_t size = mt6589_afe_hardware.buffer_bytes_max;
 
 	snd_pcm_set_managed_buffer_all(rtd->pcm, SNDRV_DMA_TYPE_DEV_IRAM, comp->dev,
 				       size, size);
@@ -286,21 +288,21 @@ static int mt6572_afe_pcm_new(struct snd_soc_component *comp,
 
 static const DECLARE_TLV_DB_LINEAR(dl_gain_tlv, TLV_DB_GAIN_MUTE, 0);
 
-static int mt6572_dl_gain_get(struct snd_kcontrol *kcontrol,
+static int mt6589_dl_gain_get(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 
 	ucontrol->value.integer.value[0] = afe->dl_gain;
 	return 0;
 }
 
-static int mt6572_dl_gain_put(struct snd_kcontrol *kcontrol,
+static int mt6589_dl_gain_put(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct mt6572_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	unsigned int gain = ucontrol->value.integer.value[0];
 
 	if (gain > 0xffff)
@@ -316,27 +318,27 @@ static int mt6572_dl_gain_put(struct snd_kcontrol *kcontrol,
 }
 
 /* DL digital gain, shadowed in afe->dl_gain so .prepare re-applies it. */
-static const struct snd_kcontrol_new mt6572_afe_controls[] = {
+static const struct snd_kcontrol_new mt6589_afe_controls[] = {
 	SOC_SINGLE_EXT_TLV("Playback Volume", SND_SOC_NOPM, 0, 0xffff, 0,
-			   mt6572_dl_gain_get, mt6572_dl_gain_put, dl_gain_tlv),
+			   mt6589_dl_gain_get, mt6589_dl_gain_put, dl_gain_tlv),
 };
 
-static const struct snd_soc_component_driver mt6572_afe_component = {
-	.name = "mt6572-afe-pcm",
-	.controls = mt6572_afe_controls,
-	.num_controls = ARRAY_SIZE(mt6572_afe_controls),
-	.open = mt6572_afe_pcm_open,
-	.hw_params = mt6572_afe_pcm_hw_params,
-	.prepare = mt6572_afe_pcm_prepare,
-	.trigger = mt6572_afe_pcm_trigger,
-	.pointer = mt6572_afe_pcm_pointer,
-	.pcm_new = mt6572_afe_pcm_new,
+static const struct snd_soc_component_driver mt6589_afe_component = {
+	.name = "mt6589-afe-pcm",
+	.controls = mt6589_afe_controls,
+	.num_controls = ARRAY_SIZE(mt6589_afe_controls),
+	.open = mt6589_afe_pcm_open,
+	.hw_params = mt6589_afe_pcm_hw_params,
+	.prepare = mt6589_afe_pcm_prepare,
+	.trigger = mt6589_afe_pcm_trigger,
+	.pointer = mt6589_afe_pcm_pointer,
+	.pcm_new = mt6589_afe_pcm_new,
 };
 
 /* IRQ1 marks a DL1 period; hardirq (fast_io regmap, atomic PCM). Active-low. */
-static irqreturn_t mt6572_afe_irq(int irq, void *dev_id)
+static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
-	struct mt6572_afe *afe = dev_id;
+	struct mt6589_afe *afe = dev_id;
 	unsigned int status;
 
 	regmap_read(afe->regmap, AFE_IRQ_MCU_STATUS, &status);
@@ -353,10 +355,10 @@ static irqreturn_t mt6572_afe_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int mt6572_afe_pcm_dev_probe(struct platform_device *pdev)
+static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct mt6572_afe *afe;
+	struct mt6589_afe *afe;
 	struct resource res;
 	void __iomem *base;
 	int ret, irq;
@@ -384,7 +386,7 @@ static int mt6572_afe_pcm_dev_probe(struct platform_device *pdev)
 	base = devm_ioremap(dev, res.start, resource_size(&res));
 	if (!base)
 		return dev_err_probe(dev, -ENOMEM, "failed to map AFE registers\n");
-	afe->regmap = devm_regmap_init_mmio(dev, base, &mt6572_afe_regmap_config);
+	afe->regmap = devm_regmap_init_mmio(dev, base, &mt6589_afe_regmap_config);
 	if (IS_ERR(afe->regmap))
 		return dev_err_probe(dev, PTR_ERR(afe->regmap),
 				     "failed to init AFE regmap\n");
@@ -401,33 +403,33 @@ static int mt6572_afe_pcm_dev_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
-	ret = devm_request_irq(dev, irq, mt6572_afe_irq, 0, "mt6572-afe", afe);
+	ret = devm_request_irq(dev, irq, mt6589_afe_irq, 0, "mt6589-afe", afe);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to request AFE irq %d\n", irq);
 
-	ret = devm_snd_soc_register_component(dev, &mt6572_afe_component,
-					      mt6572_afe_dais,
-					      ARRAY_SIZE(mt6572_afe_dais));
+	ret = devm_snd_soc_register_component(dev, &mt6589_afe_component,
+					      mt6589_afe_dais,
+					      ARRAY_SIZE(mt6589_afe_dais));
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register AFE component\n");
 
 	return 0;
 }
 
-static const struct of_device_id mt6572_afe_pcm_dt_match[] = {
-	{ .compatible = "mediatek,mt6572-audio" },
+static const struct of_device_id mt6589_afe_pcm_dt_match[] = {
+	{ .compatible = "mediatek,mt6589-audio" },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, mt6572_afe_pcm_dt_match);
+MODULE_DEVICE_TABLE(of, mt6589_afe_pcm_dt_match);
 
-static struct platform_driver mt6572_afe_pcm_driver = {
+static struct platform_driver mt6589_afe_pcm_driver = {
 	.driver = {
-		.name = "mt6572-afe-pcm",
-		.of_match_table = mt6572_afe_pcm_dt_match,
+		.name = "mt6589-afe-pcm",
+		.of_match_table = mt6589_afe_pcm_dt_match,
 	},
-	.probe = mt6572_afe_pcm_dev_probe,
+	.probe = mt6589_afe_pcm_dev_probe,
 };
-module_platform_driver(mt6572_afe_pcm_driver);
+module_platform_driver(mt6589_afe_pcm_driver);
 
-MODULE_DESCRIPTION("MediaTek MT6572 AFE platform driver");
+MODULE_DESCRIPTION("MediaTek mt6589 AFE platform driver");
 MODULE_LICENSE("GPL");
