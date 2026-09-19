@@ -52,7 +52,9 @@ examples:
 
         afe: audio-controller {
             compatible = "mediatek,mt6589-audio";
-            clocks = <&audsys CLK_AUDIO_AFE>;
+            clocks = <&audsys CLK_AUDIO_AFE>,
+                     <&audsys CLK_AUDIO_I2S>;
+            clock-names = "afe", "i2s";
             interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
         };
     };
