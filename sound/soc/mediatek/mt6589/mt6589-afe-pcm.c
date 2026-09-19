@@ -89,6 +89,7 @@ struct mt6589_afe {
 	struct device *dev;
 	struct regmap *regmap;
 	struct clk *clk;
+	struct clk *clk_i2s;
 	struct snd_pcm_substream *dl1_substream;	/* active DL1 stream */
 	unsigned int dl_gain;				/* "Playback Volume" */
 };
@@ -379,10 +380,15 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to set DMA mask\n");
 
-	afe->clk = devm_clk_get_enabled(dev, NULL);
+	afe->clk = devm_clk_get_enabled(dev, "afe");
 	if (IS_ERR(afe->clk))
 		return dev_err_probe(dev, PTR_ERR(afe->clk),
 				     "failed to get/enable the audio clock\n");
+
+	afe->clk_i2s = devm_clk_get_enabled(dev, "i2s");
+	if (IS_ERR(afe->clk_i2s))
+		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
+				     "failed to get/enable the I2S clock\n");
 
 	/* The AFE registers are in the parent audsys syscon window. */
 	ret = of_address_to_resource(dev->parent->of_node, 0, &res);
