@@ -71,6 +71,13 @@ properties:
   vusb-supply:
     description: Regulator for USB 3.3V power
 
+  resets:
+    maxItems: 1
+
+  reset-names:
+    items:
+      - const: hrst
+
 dependencies:
   usb-role-switch: [ connector ]
   connector: [ usb-role-switch ]
