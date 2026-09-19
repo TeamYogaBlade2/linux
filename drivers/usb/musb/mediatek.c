@@ -16,6 +16,7 @@
 #include <linux/usb/role.h>
 #include <linux/usb/usb_phy_generic.h>
 #include <linux/regulator/consumer.h>
+#include <linux/reset.h>
 #include "musb_core.h"
 #include "musb_dma.h"
 
@@ -52,6 +53,7 @@ struct mtk_glue {
 	enum usb_role role;
 	struct usb_role_switch *role_sw;
 	struct regulator *vusb;
+	struct reset_control *rstc;
 };
 
 static int mtk_musb_clks_get(struct mtk_glue *glue)
@@ -441,6 +443,15 @@ static int mtk_musb_probe(struct platform_device *pdev)
 	ret = mtk_musb_clks_get(glue);
 	if (ret)
 		return ret;
+
+	glue->rstc = devm_reset_control_get_optional_exclusive(dev, "hrst");
+	if (IS_ERR(glue->rstc))
+		return dev_err_probe(dev, PTR_ERR(glue->rstc),
+				"failed to get reset control\n");
+
+	ret = reset_control_reset(glue->rstc);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to reset usb ip\n");
 
 	pdata->config = &mtk_musb_hdrc_config;
 	pdata->platform_ops = &mtk_musb_ops;
