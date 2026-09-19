@@ -293,7 +293,6 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 {
 	const struct firmware *fw;
 	char fwname[64];
-	u8 seq_backup;
 	u32 num_sections;
 	size_t section_data_start;
 	unsigned int offset;
@@ -312,7 +311,10 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 		return ret;
 	}
 
-	seq_backup = wl->seq_num;
+	/*
+	 * Start the firmware-init command sequence at 1 and keep the final
+	 * sequence number for subsequent runtime commands.
+	 */
 	wl->seq_num = 0;
 
 	dev_info(&wl->func->dev, "firmware %s (%zu bytes)\n", fwname,
@@ -452,7 +454,6 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	dev_info(&wl->func->dev, "firmware started\n");
 
 out_restore_seq:
-	wl->seq_num = seq_backup;
 	release_firmware(fw);
 	return ret;
 }
