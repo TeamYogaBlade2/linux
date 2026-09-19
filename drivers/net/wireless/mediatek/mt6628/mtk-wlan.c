@@ -144,36 +144,24 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 
 static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
 {
-	unsigned int tries = 1000;
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 
-	while (tries--) {
-		u32 isr;
+	while (time_before(jiffies, timeout)) {
 		u32 rx_len_reg;
 		u16 rx_len;
 		u8 *resp;
 		int ret;
-
-		ret = mt6628_read32(wl, MT6628_MCR_WHISR, &isr);
-		if (ret)
-			return ret;
-
-		if (isr & MT6628_WHISR_ABNORMAL) {
-			dev_err(&wl->func->dev,
-				"firmware reported abnormal status (isr %#x)\n",
-				isr);
-			return -EIO;
-		}
-
-		if (!(isr & MT6628_WHISR_RX0_DONE)) {
-			usleep_range(1000, 1500);
-			continue;
-		}
 
 		ret = mt6628_read32(wl, MT6628_MCR_WRPLR, &rx_len_reg);
 		if (ret)
 			return ret;
 
 		rx_len = (u16)rx_len_reg;
+		if (!rx_len) {
+			usleep_range(50, 100);
+			continue;
+		}
+
 		if (rx_len != MT6628_INIT_EVENT_SIZE) {
 			dev_err(&wl->func->dev,
 				"invalid init event length: %u bytes\n", rx_len);
@@ -199,10 +187,14 @@ static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
 		 *   +3: ucSeqNum
 		 *   +4: ucStatus
 		 */
-		if (resp[2] != MT6628_INIT_EVENT_CMD_RESULT ||
+		if (get_unaligned_le16(resp) != rx_len ||
+		    resp[2] != MT6628_INIT_EVENT_CMD_RESULT ||
 		    resp[3] != seq_num) {
+			dev_err(&wl->func->dev,
+				"invalid init event response: len=%u eid=%u seq=%u\n",
+				get_unaligned_le16(resp), resp[2], resp[3]);
 			kfree(resp);
-			continue;
+			return -EPROTO;
 		}
 
 		ret = resp[4] ? -EIO : 0;
