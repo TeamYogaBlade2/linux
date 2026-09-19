@@ -9,23 +9,22 @@
  * MAC: the firmware generates 802.11 headers, the host hands it plain
  * ethernet frames.
  *
- * Bring-up sequence (from the downstream wlanAdapterStart()):
- *   1. wait for WCIR_WLAN_READY
+ * Bring-up sequence:
+ *   1. verify the WCIR chip ID
  *   2. take driver ownership through WHLPCR
  *   3. push the firmware image with DOWNLOAD_BUF commands (address,
- *      length, CRC32 per chunk), then issue WIFI_START
- *   4. query pending errors
- *   5. enable interrupts
+ *      length, CRC32 per chunk)
+ *   4. issue WIFI_START
+ *   5. wait for WCIR_WLAN_READY
  *
- * cfg80211/netdev wiring is not implemented yet; this driver only owns
- * the chip bring-up and exposes the state for the data-path work that
- * follows.
+ * The cfg80211/netdev and interrupt-driven runtime data path is not
+ * implemented yet.
  */
 
 #include <linux/bitfield.h>
 #include <linux/crc32.h>
-#include <linux/iopoll.h>
 #include <linux/firmware.h>
+#include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/mmc/sdio_func.h>
@@ -36,9 +35,8 @@
 
 #define MT6628_FW_NAME			"mediatek/mt6628_wifi_fw.bin"
 #define MT6628_FW_DL_CHUNK		2048
-/* CFG_FW_LOAD_ADDRESS / CFG_FW_START_ADDRESS of the downstream config.h */
+/* CFG_FW_LOAD_ADDRESS of the downstream config.h */
 #define MT6628_FW_LOAD_ADDRESS		0x00060000
-#define MT6628_FW_START_ADDRESS		0x00060000
 #define MT6628_FW_SIGNATURE		0x574b544d
 #define MT6628_FW_HEADER_SIZE		16
 #define MT6628_FW_SECTION_SIZE		16

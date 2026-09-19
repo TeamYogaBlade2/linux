@@ -24,6 +24,7 @@
  * WIFI_START (0x02) to boot.
  */
 
+#include <linux/bits.h>
 #include <linux/mmc/sdio_func.h>
 
 /* register offsets */
