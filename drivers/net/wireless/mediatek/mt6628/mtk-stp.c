@@ -561,6 +561,7 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
 
 static const struct mfd_cell mt6628_stp_cells[] = {
+	{ .name = "mt6628-bt" },
 	{ .name = "mt6628-fm" },
 	{ .name = "mt6628-gnss" },
 };

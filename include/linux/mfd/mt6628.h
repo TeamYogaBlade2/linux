@@ -17,6 +17,7 @@ enum mt6628_stp_task {
 };
 
 enum mt6628_wmt_func {
+	MT6628_WMT_FUNC_BT = 0,
 	MT6628_WMT_FUNC_FM = 1,
 	MT6628_WMT_FUNC_GPS = 2,
 };
