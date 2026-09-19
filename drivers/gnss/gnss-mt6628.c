@@ -16,75 +16,37 @@
  */
 
 #include <linux/module.h>
-#include <linux/mmc/sdio_func.h>
-#include <linux/mmc/sdio_ids.h>
+#include <linux/mfd/mt6628.h>
+#include <linux/mutex.h>
+#include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/unaligned.h>
 
 #include <linux/gnss.h>
 
-/* Common HIF register addresses (SDIO function 2). */
-#define MTK_SDIO_CTDR			0x18
-#define MTK_SDIO_CRDR			0x1c
-
-/* STP channel type for GNSS (downstream stp_exp.h numbering). */
-#define STP_TASK_GPS			2
-#define STP_SDIO_TX_FIFO_SIZE		2080
-#define STP_HEADER_SIZE			4
-#define STP_CRC_SIZE			2
-#define STP_MAX_PAYLOAD_LEN		(STP_SDIO_TX_FIFO_SIZE - \
-					 STP_HEADER_SIZE - STP_CRC_SIZE)
-
 struct mtk_gnss {
 	struct gnss_device *gdev;
-	struct sdio_func *func;
+	struct mt6628_wmt *wmt;
+	struct mutex lock;
+	bool open;
 };
 
-static int mtk_gnss_write(struct mtk_gnss *gdev_priv, const void *buf,
-			  size_t len)
+static void mtk_gnss_rx(void *priv, const u8 *buf, size_t len)
 {
-	int ret;
+	struct mtk_gnss *gnss = priv;
 
-	sdio_claim_host(gdev_priv->func);
-	ret = sdio_writesb(gdev_priv->func, MTK_SDIO_CTDR, buf, len);
-	sdio_release_host(gdev_priv->func);
-
-	return ret;
+	mutex_lock(&gnss->lock);
+	if (gnss->open)
+		gnss_insert_raw(gnss->gdev, buf, len);
+	mutex_unlock(&gnss->lock);
 }
 
 static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 			      size_t len)
 {
 	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
-	u8 *frame;
-	size_t stp_len;
-	size_t frame_len;
 	int ret;
 
-	if (len > STP_MAX_PAYLOAD_LEN)
-		return -EMSGSIZE;
-
-	stp_len = STP_HEADER_SIZE + len + STP_CRC_SIZE;
-	frame_len = ALIGN(4 + stp_len, 4);
-	if (frame_len > priv->func->cur_blksize)
-		frame_len = ALIGN(frame_len, priv->func->cur_blksize);
-
-	frame = kzalloc(frame_len, GFP_KERNEL);
-	if (!frame)
-		return -ENOMEM;
-
-	put_unaligned_le16(stp_len, frame);
-	frame[2] = 0;
-	frame[3] = 0;
-
-	frame[4] = 0x80;
-	frame[5] = (STP_TASK_GPS << 4) | ((len >> 8) & 0x0f);
-	frame[6] = len & 0xff;
-	frame[7] = 0;
-	memcpy(frame + 8, buf, len);
-
-	ret = mtk_gnss_write(priv, frame, frame_len);
-	kfree(frame);
+	ret = mt6628_stp_send(priv->wmt, MT6628_STP_TASK_GPS, buf, len);
 
 	if (ret)
 		return ret;
@@ -92,20 +54,35 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 	return len;
 }
 
-/*
- * The gnss core calls ops->open/close unconditionally on first/last
- * file open.  The chip is powered up by the WMT owner before this
- * device is probed, so there is nothing to do here yet; the hooks are
- * where WMT FUNC_ON/OFF will be wired once the arbitration between the
- * BT/FM/GPS functions sharing this control channel is settled.
- */
 static int mtk_gnss_open(struct gnss_device *gdev)
 {
-	return 0;
+	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
+	int ret;
+
+	mutex_lock(&priv->lock);
+	if (priv->open) {
+		mutex_unlock(&priv->lock);
+		return 0;
+	}
+
+	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
+	if (!ret)
+		priv->open = true;
+	mutex_unlock(&priv->lock);
+
+	return ret;
 }
 
 static void mtk_gnss_close(struct gnss_device *gdev)
 {
+	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
+
+	mutex_lock(&priv->lock);
+	if (priv->open) {
+		priv->open = false;
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+	}
+	mutex_unlock(&priv->lock);
 }
 
 static const struct gnss_operations mtk_gnss_ops = {
@@ -114,25 +91,25 @@ static const struct gnss_operations mtk_gnss_ops = {
 	.write_raw	= mtk_gnss_write_raw,
 };
 
-static int mtk_gnss_sdio_probe(struct sdio_func *func,
-			       const struct sdio_device_id *id)
+static int mtk_gnss_probe(struct platform_device *pdev)
 {
 	struct mtk_gnss *priv;
 	struct gnss_device *gdev;
+	struct mt6628_wmt *wmt;
 	int ret;
 
-	if (func->num != 2) {
-		dev_dbg(&func->dev, "ignoring function %d\n", func->num);
-		return -ENODEV;
-	}
+	wmt = dev_get_drvdata(pdev->dev.parent);
+	if (!wmt)
+		return -EPROBE_DEFER;
 
-	priv = devm_kzalloc(&func->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	priv->func = func;
+	priv->wmt = wmt;
+	mutex_init(&priv->lock);
 
-	gdev = gnss_allocate_device(&func->dev);
+	gdev = gnss_allocate_device(&pdev->dev);
 	if (IS_ERR(gdev))
 		return PTR_ERR(gdev);
 
@@ -140,29 +117,20 @@ static int mtk_gnss_sdio_probe(struct sdio_func *func,
 	gdev->ops = &mtk_gnss_ops;
 	gnss_set_drvdata(gdev, priv);
 
-	sdio_claim_host(func);
-	ret = sdio_enable_func(func);
-	sdio_release_host(func);
+	ret = mt6628_stp_register_rx(wmt, MT6628_STP_TASK_GPS,
+					 mtk_gnss_rx, priv);
 	if (ret)
 		goto err_put;
 
 	ret = gnss_register_device(gdev);
 	if (ret) {
-		sdio_claim_host(func);
-		sdio_disable_func(func);
-		sdio_release_host(func);
+		mt6628_stp_unregister_rx(wmt, MT6628_STP_TASK_GPS,
+					 mtk_gnss_rx, priv);
 		goto err_put;
 	}
 
-	sdio_set_drvdata(func, priv);
-
-	/*
-	 * The receive path (draining STP frames of the GPS task into
-	 * gnss_insert_raw) is not implemented yet: the control channel
-	 * has no out-of-band interrupt wired to this driver and the
-	 * polling design still needs to be validated on hardware.
-	 */
-	dev_info(&func->dev, "MT6628 GNSS registered\n");
+	platform_set_drvdata(pdev, priv);
+	dev_info(&pdev->dev, "MT6628 GNSS registered\n");
 
 	return 0;
 
@@ -171,36 +139,34 @@ err_put:
 	return ret;
 }
 
-static void mtk_gnss_sdio_remove(struct sdio_func *func)
+static void mtk_gnss_remove(struct platform_device *pdev)
 {
-	struct mtk_gnss *priv = sdio_get_drvdata(func);
+	struct mtk_gnss *priv = platform_get_drvdata(pdev);
 
 	if (!priv)
 		return;
 
+	mutex_lock(&priv->lock);
+	if (priv->open) {
+		priv->open = false;
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+	}
+	mutex_unlock(&priv->lock);
+
+	mt6628_stp_unregister_rx(priv->wmt, MT6628_STP_TASK_GPS,
+					 mtk_gnss_rx, priv);
 	gnss_deregister_device(priv->gdev);
 	gnss_put_device(priv->gdev);
-
-	sdio_claim_host(func);
-	sdio_disable_func(func);
-	sdio_release_host(func);
-	sdio_set_drvdata(func, NULL);
 }
 
-static const struct sdio_device_id mtk_gnss_sdio_ids[] = {
-	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK,
-		      SDIO_DEVICE_ID_MEDIATEK_MT6628) },
-	{ }
+static struct platform_driver mtk_gnss_driver = {
+	.probe = mtk_gnss_probe,
+	.remove_new = mtk_gnss_remove,
+	.driver = {
+		.name = "mt6628-gnss",
+	},
 };
-MODULE_DEVICE_TABLE(sdio, mtk_gnss_sdio_ids);
-
-static struct sdio_driver mtk_gnss_driver = {
-	.name = KBUILD_MODNAME,
-	.probe = mtk_gnss_sdio_probe,
-	.remove = mtk_gnss_sdio_remove,
-	.id_table = mtk_gnss_sdio_ids,
-};
-module_sdio_driver(mtk_gnss_driver);
+module_platform_driver(mtk_gnss_driver);
 
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("MediaTek MT6628 GNSS driver");

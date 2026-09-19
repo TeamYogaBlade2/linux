@@ -5,9 +5,8 @@ config WLAN_VENDOR_MEDIATEK_MT6628
 	help
 	  Enable support for the MediaTek MT6628 combo chip.
 
-	  The current implementation provides the WLAN SDIO function
-	  bring-up and firmware download path.  Shared WMT/BGF/STP support
-	  for the other combo-chip functions is not implemented yet.
+	  WLAN bring-up and the shared WMT/BGF/STP transport are provided
+	  as separate function drivers.
 
 if WLAN_VENDOR_MEDIATEK_MT6628
 
@@ -23,10 +22,15 @@ config MTK_MT6628_WLAN
 config MTK_MT6628_FM
 	tristate "MediaTek MT6628 FM radio support"
 	depends on VIDEO_DEV
+	select MTK_MT6628_STP
 	select VIDEO_V4L2
 	help
 	  This enables the FM radio receiver of the MediaTek MT6628 combo
-	  chip.  The FM implementation currently depends on the shared
-	  BGF/STP transport, which is not implemented in this tree yet.
+	  chip through the shared function-2 WMT/STP transport.
 
 endif
+
+config MTK_MT6628_STP
+	tristate
+	depends on MMC
+	select MFD_CORE

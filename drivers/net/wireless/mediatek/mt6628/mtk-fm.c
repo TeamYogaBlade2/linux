@@ -16,21 +16,14 @@
 
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/mfd/mt6628.h>
 #include <linux/module.h>
-#include <linux/mmc/sdio_func.h>
-#include <linux/mmc/sdio_ids.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/unaligned.h>
 
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 
-/* STP task type for FM traffic */
-#define STP_TASK_FM		1
-
-/* Common HIF register addresses (SDIO function 2) */
-#define MTK_SDIO_CTDR			0x18
 /* FM BOP opcodes */
 #define FM_BOP_BASE			0x80
 #define FM_BOP_WRITE			(FM_BOP_BASE + 0x00)
@@ -46,7 +39,7 @@
 struct mtk_fm {
 	struct v4l2_device v4l2_dev;
 	struct video_device vdev;
-	struct sdio_func *func;		/* STP control function (2) */
+	struct mt6628_wmt *wmt;
 	u32 freq;			/* in 10 kHz units */
 };
 
@@ -134,10 +127,7 @@ static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 static int mtk_fm_power_up(struct mtk_fm *fm)
 {
 	u8 *buf;
-	u8 *frame;
 	int pkt, ret;
-	size_t stp_len;
-	size_t frame_len;
 
 	buf = kzalloc(512, GFP_KERNEL);
 	if (!buf)
@@ -145,54 +135,10 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 
 	pkt = fm_pwrup_clock_on(fm, buf, 512);
 
-	/*
-	 * SDIO STP transport:
-	 *   byte 0: STP signature
-	 *   byte 1: task + payload length[11:8]
-	 *   byte 2: payload length[7:0]
-	 *   byte 3: zero on SDIO
-	 *   payload
-	 *   two zero CRC bytes
-	 *
-	 * The downstream stp_core uses exactly this format for SDIO.
-	 */
-	if (pkt > 0xfff) {
-		kfree(buf);
-		return -EMSGSIZE;
-	}
-
-	stp_len = 4 + pkt + 2;
-	frame_len = ALIGN(4 + stp_len, 4);
-	if (frame_len > fm->func->cur_blksize)
-		frame_len = ALIGN(frame_len, fm->func->cur_blksize);
-
-	frame = kzalloc(frame_len, GFP_KERNEL);
-	if (!frame) {
-		kfree(buf);
-		return -ENOMEM;
-	}
-
-	put_unaligned_le16(stp_len, frame);
-	frame[2] = 0;
-	frame[3] = 0;
-
-	frame[4] = 0x80;
-	frame[5] = (STP_TASK_FM << 4) | ((pkt >> 8) & 0x0f);
-	frame[6] = pkt & 0xff;
-	frame[7] = 0x00;
-	memcpy(frame + 8, buf, pkt);
-
-	sdio_claim_host(fm->func);
-	ret = sdio_writesb(fm->func, MTK_SDIO_CTDR, frame, frame_len);
-	sdio_release_host(fm->func);
-
-	kfree(frame);
+	ret = mt6628_stp_send(fm->wmt, MT6628_STP_TASK_FM, buf, pkt);
 	kfree(buf);
 
-	if (ret)
-		return ret;
-
-	return pkt;
+	return ret < 0 ? ret : 0;
 }
 
 /* ---- V4L2 ---- */
@@ -214,30 +160,39 @@ static const struct v4l2_file_operations mtk_fm_fops = {
 	.unlocked_ioctl		= video_ioctl2,
 };
 
-static int mtk_fm_sdio_probe(struct sdio_func *func,
-			     const struct sdio_device_id *id)
+static int mtk_fm_probe(struct platform_device *pdev)
 {
 	struct mtk_fm *fm;
+	struct mt6628_wmt *wmt;
 	int ret;
 
-	if (func->num != 2) {
-		dev_dbg(&func->dev, "ignoring function %d\n", func->num);
-		return -ENODEV;
-	}
+	wmt = dev_get_drvdata(pdev->dev.parent);
+	if (!wmt)
+		return -EPROBE_DEFER;
 
-	fm = devm_kzalloc(&func->dev, sizeof(*fm), GFP_KERNEL);
+	fm = devm_kzalloc(&pdev->dev, sizeof(*fm), GFP_KERNEL);
 	if (!fm)
 		return -ENOMEM;
 
-	fm->func = func;
-	sdio_set_drvdata(func, fm);
+	fm->wmt = wmt;
 
 	fm->freq = 87500;	/* 87.5 MHz in 10kHz units */
 
-	ret = v4l2_device_register(&func->dev, &fm->v4l2_dev);
+	ret = v4l2_device_register(&pdev->dev, &fm->v4l2_dev);
 	if (ret)
-		return dev_err_probe(&func->dev, ret,
+		return dev_err_probe(&pdev->dev, ret,
 				     "failed to register v4l2 device\n");
+
+	ret = mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, true);
+	if (ret)
+		goto err_v4l2;
+
+	ret = mtk_fm_power_up(fm);
+	if (ret) {
+		dev_err(&pdev->dev, "FM power-up failed: %d\n", ret);
+		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
+		goto err_v4l2;
+	}
 
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
@@ -249,66 +204,39 @@ static int mtk_fm_sdio_probe(struct sdio_func *func,
 	ret = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
 	if (ret) {
 		v4l2_err(&fm->v4l2_dev, "failed to register radio: %d\n", ret);
+		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
 		v4l2_device_unregister(&fm->v4l2_dev);
 		return ret;
 	}
 
-	sdio_claim_host(func);
-	ret = sdio_enable_func(func);
-	sdio_release_host(func);
-	if (ret) {
-		dev_err_probe(&func->dev, ret, "failed to enable func\n");
-		goto err_video;
-	}
-
-	ret = mtk_fm_power_up(fm);
-	if (ret) {
-		dev_err(&func->dev, "FM power-up failed: %d\n", ret);
-		goto err_disable;
-	}
-
 	return 0;
 
-err_disable:
-	sdio_claim_host(func);
-	sdio_disable_func(func);
-	sdio_release_host(func);
-err_video:
-	sdio_set_drvdata(func, NULL);
+err_v4l2:
 	video_unregister_device(&fm->vdev);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	return ret;
 }
 
-static void mtk_fm_sdio_remove(struct sdio_func *func)
+static void mtk_fm_remove(struct platform_device *pdev)
 {
-	struct mtk_fm *fm = sdio_get_drvdata(func);
+	struct mtk_fm *fm = platform_get_drvdata(pdev);
 
 	if (!fm)
 		return;
 
 	video_unregister_device(&fm->vdev);
 	v4l2_device_unregister(&fm->v4l2_dev);
-
-	sdio_claim_host(func);
-	sdio_disable_func(func);
-	sdio_release_host(func);
-	sdio_set_drvdata(func, NULL);
+	mt6628_wmt_func_ctrl(fm->wmt, MT6628_WMT_FUNC_FM, false);
 }
 
-static const struct sdio_device_id mtk_fm_sdio_ids[] = {
-	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, 0x6628) },
-	{ }
+static struct platform_driver mtk_fm_driver = {
+	.probe = mtk_fm_probe,
+	.remove_new = mtk_fm_remove,
+	.driver = {
+		.name = "mt6628-fm",
+	},
 };
-MODULE_DEVICE_TABLE(sdio, mtk_fm_sdio_ids);
-
-static struct sdio_driver mtk_fm_driver = {
-	.name = KBUILD_MODNAME,
-	.probe = mtk_fm_sdio_probe,
-	.remove = mtk_fm_sdio_remove,
-	.id_table = mtk_fm_sdio_ids,
-};
-module_sdio_driver(mtk_fm_driver);
+module_platform_driver(mtk_fm_driver);
 
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("MediaTek MT6628 FM radio driver");
