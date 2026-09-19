@@ -327,6 +327,12 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	dev_info(&wl->func->dev, "firmware %s (%zu bytes)\n", fwname,
 		 fw->size);
 
+	if (!fw->size) {
+		dev_err(&wl->func->dev, "firmware image is empty\n");
+		ret = -EINVAL;
+		goto out_restore_seq;
+	}
+
 	/*
 	 * MT6628 uses divided firmware images:
 	 *
