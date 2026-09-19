@@ -21,6 +21,7 @@
 #include <linux/mmc/sdio_ids.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
@@ -135,6 +136,7 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 	u8 *buf;
 	u8 *frame;
 	int pkt, ret;
+	size_t stp_len;
 	size_t frame_len;
 
 	buf = kzalloc(512, GFP_KERNEL);
@@ -159,18 +161,26 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 		return -EMSGSIZE;
 	}
 
-	frame_len = 4 + pkt + 2;
+	stp_len = 4 + pkt + 2;
+	frame_len = ALIGN(4 + stp_len, 4);
+	if (frame_len > fm->func->cur_blksize)
+		frame_len = ALIGN(frame_len, fm->func->cur_blksize);
+
 	frame = kzalloc(frame_len, GFP_KERNEL);
 	if (!frame) {
 		kfree(buf);
 		return -ENOMEM;
 	}
 
-	frame[0] = 0x80;
-	frame[1] = (STP_TASK_FM << 4) | ((pkt >> 8) & 0x0f);
-	frame[2] = pkt & 0xff;
-	frame[3] = 0x00;
-	memcpy(frame + 4, buf, pkt);
+	put_unaligned_le16(stp_len, frame);
+	frame[2] = 0;
+	frame[3] = 0;
+
+	frame[4] = 0x80;
+	frame[5] = (STP_TASK_FM << 4) | ((pkt >> 8) & 0x0f);
+	frame[6] = pkt & 0xff;
+	frame[7] = 0x00;
+	memcpy(frame + 8, buf, pkt);
 
 	sdio_claim_host(fm->func);
 	ret = sdio_writesb(fm->func, MTK_SDIO_CTDR, frame, frame_len);
