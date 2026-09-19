@@ -360,6 +360,7 @@ struct mtk_thermal {
 	/* Calibration values */
 	s32 adc_ge;
 	s32 adc_oe;
+	s32 adc_cali_base;
 	s32 degc_cali;
 	s32 o_slope;
 	s32 o_slope_sign;
@@ -812,8 +813,8 @@ static int raw_to_mcelsius_v1_5(struct mtk_thermal *mt, int sensno, s32 raw)
 		return 0;
 
 	raw &= 0xfff;
-	g_gain = 10000 + (((mt->adc_ge - 512) * 10000) >> 12);
-	g_oe = mt->adc_oe - 512;
+	g_gain = 10000 + (((mt->adc_ge - mt->adc_cali_base) * 10000) >> 12);
+	g_oe = mt->adc_oe - mt->adc_cali_base;
 	format_1 = mt->vts[sensno] + 3350 - g_oe;
 	format_2 = (mt->degc_cali * 10) >> 1;
 	g_x_roomt = (((format_1 * 10000) >> 12) * 10000) / g_gain;
@@ -1189,6 +1190,7 @@ static int mtk_thermal_extract_efuse_mt6589(struct mtk_thermal *mt, u32 *buf)
 		     (((buf[2] & 0x000C0000) >> 18) << 8);
 	mt->adc_oe = ((buf[1] & 0x00FF0000) >> 16) |
 		     (((buf[2] & 0x00030000) >> 16) << 8);
+	mt->adc_cali_base = (buf[2] & BIT(20)) ? 512 : 128;
 
 	mt->vts[VTS1] = (buf[0] & 0x03FE0000) >> 17;
 	mt->vts[VTSABB] = (buf[1] & 0x0000FF80) >> 7;
@@ -1221,6 +1223,7 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 	/* Start with default values */
 	mt->adc_ge = 512;
 	mt->adc_oe = 512;
+	mt->adc_cali_base = 512;
 	for (i = 0; i < mt->conf->num_sensors; i++)
 		mt->vts[i] = 260;
 	mt->degc_cali = 40;
