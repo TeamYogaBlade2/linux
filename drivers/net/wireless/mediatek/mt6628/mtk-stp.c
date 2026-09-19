@@ -681,6 +681,28 @@ static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
 	return 0;
 }
 
+static int mt6628_wmt_reset(struct mt6628_wmt *wmt)
+{
+	static const u8 cmd[] = {
+		0x01, 0x07, 0x01, 0x00,
+		0x04,
+	};
+
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x07, 1000,
+			      NULL, NULL);
+}
+
+static int mt6628_wmt_set_fm_strap(struct mt6628_wmt *wmt, u8 mode)
+{
+	u8 cmd[] = {
+		0x01, 0x05, 0x02, 0x00,
+		0x02, mode,
+	};
+
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x05, 1000,
+			      NULL, NULL);
+}
+
 /*
  * MT6628 merge-interface setup used by the MT6589 downstream BSP.
  *
