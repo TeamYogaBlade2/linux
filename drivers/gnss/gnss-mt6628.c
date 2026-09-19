@@ -28,6 +28,7 @@
 
 /* STP channel type for GNSS (downstream stp_exp.h numbering). */
 #define STP_TASK_GPS			2
+#define STP_MAX_PAYLOAD_LEN		0x0fff
 
 struct mtk_gnss {
 	struct gnss_device *gdev;
@@ -53,6 +54,9 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 	u8 *frame;
 	size_t frame_len = 4 + len + 2;
 	int ret;
+
+	if (len > STP_MAX_PAYLOAD_LEN)
+		return -EMSGSIZE;
 
 	frame = kzalloc(frame_len, GFP_KERNEL);
 	if (!frame)
