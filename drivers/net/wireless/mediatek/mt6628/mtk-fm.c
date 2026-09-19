@@ -42,12 +42,15 @@
 #define FM_ENABLE_OPCODE		0x07
 #define FM_FSPI_READ_OPCODE		0x03
 #define FM_FSPI_WRITE_OPCODE		0x04
+#define FM_TUNE_OPCODE			0x09
 #define FM_PATCH_DOWNLOAD_OPCODE	0x12
 #define FM_COEFF_DOWNLOAD_OPCODE	0x13
 
 #define FM_REG_CHIP_ID			0x62
 #define FM_REG_ROM_VERSION		0x83
 #define FM_REG_ROM_CTRL			0x61
+#define FM_REG_FORCE_MS			0x75
+#define FM_FORCE_MS			0x0008
 
 #define FM_PATCH_SEG_LEN		512
 #define FM_CMD_TIMEOUT_MS		3000
@@ -474,6 +477,114 @@ static int mtk_fm_power_down(struct mtk_fm *fm)
 	return ret;
 }
 
+struct mtk_fm_chan_para {
+	u16 freq;
+	u8 value;
+};
+
+/*
+ * MT6628's downstream chan_para_map is indexed in 5 kHz units.
+ * Keep only the non-zero entries here; all other entries are zero.
+ */
+static const struct mtk_fm_chan_para mtk_fm_chan_para_map[] = {
+	{  7680, 1 },
+	{  7690, 1 },
+	{  8000, 8 },
+	{  8210, 1 },
+	{  8450, 1 },
+	{  8460, 1 },
+	{  8470, 1 },
+	{  9210, 1 },
+	{  9220, 1 },
+	{  9230, 1 },
+	{  9450, 1 },
+	{  9460, 1 },
+	{  9470, 1 },
+	{  9480, 1 },
+	{  9500, 1 },
+	{  9510, 1 },
+	{  9520, 1 },
+	{  9550, 2 },
+	{  9590, 1 },
+	{  9600, 8 },
+	{  9840, 2 },
+	{  9980, 1 },
+	{  9990, 1 },
+	{ 10030, 1 },
+	{ 10260, 2 },
+	{ 10400, 8 },
+	{ 10500, 1 },
+	{ 10510, 1 },
+	{ 10520, 1 },
+	{ 10750, 1 },
+	{ 10760, 1 },
+	{ 10770, 1 },
+};
+
+static u8 mtk_fm_get_chan_para(u32 freq)
+{
+	unsigned int i;
+
+	if (freq < 7600 || freq > 10800)
+		return 0;
+
+	freq = 7600 + DIV_ROUND_CLOSEST(freq - 7600, 5) * 5;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_fm_chan_para_map); i++)
+		if (mtk_fm_chan_para_map[i].freq == freq)
+			return mtk_fm_chan_para_map[i].value;
+
+	return 0;
+}
+
+static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
+{
+	u8 buf[64] = {};
+	u16 tune_value;
+	u8 chan_para;
+	int pkt = 4;
+	int ret;
+
+	if (freq < 7600 || freq > 10800)
+		return -EINVAL;
+
+	tune_value = (freq - 6400) * 2 / 10;
+	chan_para = mtk_fm_get_chan_para(freq);
+
+	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
+	buf[1] = FM_TUNE_OPCODE;
+
+	/*
+	 * FM_CHANNEL_SET = 0x65
+	 * [9:0]  desired channel
+	 * [15:12] ATJ/HL/FA channel parameters
+	 */
+	pkt += fm_bop_modify(0x65, 0xfc00, tune_value,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x65, 0x0fff, chan_para << 12,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	/* Enable the hardware-controlled tuning sequence. */
+	pkt += fm_bop_modify(0x63, 0xfff8, 0x0001,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	put_unaligned_le16(pkt - 4, buf + 2);
+
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_TUNE_OPCODE, 5000);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * MT6628's FM event parser reports TUNE_DONE as a one-byte payload
+	 * whose value must be 1.
+	 */
+	if (fm->cmd_data_len != 1 || fm->cmd_data[0] != 1)
+		return -EIO;
+
+	fm->freq = freq;
+	return 0;
+}
+
 /* ---- V4L2 ---- */
 
 static int mtk_fm_querycap(struct file *file, void *priv,
@@ -488,8 +599,91 @@ static int mtk_fm_querycap(struct file *file, void *priv,
 	return 0;
 }
 
+static int mtk_fm_g_tuner(struct file *file, void *priv,
+			  struct v4l2_tuner *tuner)
+{
+	if (tuner->index)
+		return -EINVAL;
+
+	strscpy(tuner->name, "FM", sizeof(tuner->name));
+	tuner->type = V4L2_TUNER_RADIO;
+	tuner->capability = V4L2_TUNER_CAP_LOW |
+			    V4L2_TUNER_CAP_STEREO;
+	tuner->rangelow = 76 * 16;
+	tuner->rangehigh = 108 * 16;
+	tuner->rxsubchans = V4L2_TUNER_SUB_MONO |
+			    V4L2_TUNER_SUB_STEREO;
+	tuner->audmode = V4L2_TUNER_MODE_STEREO;
+
+	return 0;
+}
+
+static int mtk_fm_s_tuner(struct file *file, void *priv,
+			  const struct v4l2_tuner *tuner)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+	u16 val;
+	int ret;
+
+	if (tuner->index)
+		return -EINVAL;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &val);
+	if (ret)
+		return ret;
+
+	switch (tuner->audmode) {
+	case V4L2_TUNER_MODE_MONO:
+		val |= FM_FORCE_MS;
+		break;
+	case V4L2_TUNER_MODE_STEREO:
+		val &= ~FM_FORCE_MS;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return mtk_fm_write_reg(fm, FM_REG_FORCE_MS, val);
+}
+
+static int mtk_fm_g_frequency(struct file *file, void *priv,
+			      struct v4l2_frequency *frequency)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+
+	if (frequency->tuner)
+		return -EINVAL;
+
+	frequency->type = V4L2_TUNER_RADIO;
+	frequency->frequency = DIV_ROUND_CLOSEST(fm->freq * 4, 25);
+
+	return 0;
+}
+
+static int mtk_fm_s_frequency(struct file *file, void *priv,
+			      const struct v4l2_frequency *frequency)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+	u32 freq;
+
+	if (frequency->tuner)
+		return -EINVAL;
+
+	if (frequency->frequency < 76 * 16 ||
+	    frequency->frequency > 108 * 16)
+		return -ERANGE;
+
+	freq = DIV_ROUND_CLOSEST(frequency->frequency * 25, 4);
+
+	return mtk_fm_tune(fm, freq);
+}
+
 static const struct v4l2_ioctl_ops mtk_fm_ioctl_ops = {
 	.vidioc_querycap	= mtk_fm_querycap,
+	.vidioc_g_tuner		= mtk_fm_g_tuner,
+	.vidioc_s_tuner		= mtk_fm_s_tuner,
+	.vidioc_g_frequency	= mtk_fm_g_frequency,
+	.vidioc_s_frequency	= mtk_fm_s_frequency,
 };
 
 static const struct v4l2_file_operations mtk_fm_fops = {
@@ -542,11 +736,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
 	fm->vdev.ioctl_ops = &mtk_fm_ioctl_ops;
-	/*
-	 * Tuner/frequency ioctls are not implemented yet.  Do not advertise
-	 * V4L2_CAP_TUNER until VIDIOC_{G,S}_TUNER/FREQUENCY exist.
-	 */
-	fm->vdev.device_caps = V4L2_CAP_RADIO;
+	fm->vdev.device_caps = V4L2_CAP_RADIO | V4L2_CAP_TUNER;
 	fm->vdev.release = video_device_release_empty;
 	video_set_drvdata(&fm->vdev, fm);
 
