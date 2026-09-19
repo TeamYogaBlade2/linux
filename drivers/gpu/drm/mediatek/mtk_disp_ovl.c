@@ -585,8 +585,8 @@ static unsigned int mt6589_fmt_convert(unsigned int fmt, unsigned int blend_mode
 	case DRM_FORMAT_XRGB8888: return (2 << 12);
 	case DRM_FORMAT_ABGR8888:
 	case DRM_FORMAT_XBGR8888: return (2 << 12) | OVL_CON_BYTE_SWAP;
-	case DRM_FORMAT_UYVY:    return (9 << 12);
-	case DRM_FORMAT_YUYV:    return (8 << 12);
+	case DRM_FORMAT_UYVY:    return (9 << 12) | OVL_CON_MTX_YUV_TO_RGB;
+	case DRM_FORMAT_YUYV:    return (8 << 12) | OVL_CON_MTX_YUV_TO_RGB;
 	}
 	return 0;
 }
