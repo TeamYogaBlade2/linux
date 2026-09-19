@@ -348,7 +348,8 @@ static void mt6628_stp_rx_work(struct work_struct *work)
 
 	sdio_claim_host(wmt->func);
 	chisr = sdio_readl(wmt->func, MT6628_STP_CHISR, &ret);
-	if (!ret)
+	if (!ret && (chisr & (MT6628_STP_TX_EMPTY |
+			     MT6628_STP_TX_UNDER_THOLD)))
 		mt6628_stp_tx_complete(wmt, chisr);
 	if (!ret && (chisr & MT6628_STP_RX_DONE)) {
 		rx_len = FIELD_GET(MT6628_STP_RX_LEN, chisr);
