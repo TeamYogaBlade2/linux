@@ -166,10 +166,8 @@ static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 			;
 
 		val = readl(spm_base + pwr_con);
-		val |= PWR_CLK_DIS_BIT | PWR_SRAM_CLKISO_BIT | PWR_ISO_BIT;
-		writel(val, spm_base + pwr_con);
-		val = readl(spm_base + pwr_con);
-		val &= ~(PWR_SRAM_ISOINT_B_BIT | PWR_RST_B_BIT);
+		val |= PWR_SRAM_CLKISO_BIT;
+		val &= ~PWR_SRAM_ISOINT_B_BIT;
 		writel(val, spm_base + pwr_con);
 
 		val = readl(spm_base + SPM_L1_PDN(cpu));
@@ -177,6 +175,15 @@ static void spm_ctrl_cpu(enum mtk_cpu_target_state state, unsigned int cpu)
 		writel(val, spm_base + SPM_L1_PDN(cpu));
 		if (mtk_smp_info->hotplug->spm_l1_pdn_ack_bits[cpu - 1])
 			spm_l1_wait_busy(state, cpu);
+
+		val = readl(spm_base + pwr_con);
+		val |= PWR_ISO_BIT;
+		writel(val, spm_base + pwr_con);
+
+		val = readl(spm_base + pwr_con);
+		val |= PWR_CLK_DIS_BIT;
+		val &= ~PWR_RST_B_BIT;
+		writel(val, spm_base + pwr_con);
 
 		val = readl(spm_base + pwr_con);
 		val &= ~PWR_ON_BIT;
