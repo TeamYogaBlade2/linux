@@ -20,6 +20,7 @@
 #include <linux/regmap.h>
 
 #include <sound/pcm.h>
+#include <sound/pcm_params.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
 #include <sound/tlv.h>
@@ -52,6 +53,54 @@ struct mt6320_codec_priv {
 	struct device *dev;
 	struct regmap *regmap;		/* borrowed from the parent MFD */
 	struct clk *clk_aud26m;		/* codec master clock via CCF */
+};
+
+static int mt6320_newif_rate_code(unsigned int rate)
+{
+	switch (rate) {
+	case 8000:
+		return 0;
+	case 11025:
+		return 1;
+	case 12000:
+		return 2;
+	case 16000:
+		return 3;
+	case 22050:
+		return 4;
+	case 24000:
+		return 5;
+	case 32000:
+		return 6;
+	case 44100:
+		return 7;
+	case 48000:
+		return 8;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
+				  struct snd_pcm_hw_params *params,
+				  struct snd_soc_dai *dai)
+{
+	struct mt6320_codec_priv *priv =
+		snd_soc_component_get_drvdata(dai->component);
+	int rate_code;
+
+	rate_code = mt6320_newif_rate_code(params_rate(params));
+	if (rate_code < 0)
+		return rate_code;
+
+	return regmap_update_bits(priv->regmap,
+				  MT6320_ABB_AFE_PMIC_NEWIF_CFG0,
+				  GENMASK(15, 12),
+				  rate_code << 12);
+}
+
+static const struct snd_soc_dai_ops mt6320_dai_ops = {
+	.hw_params = mt6320_codec_hw_params,
 };
 
 /* Analog idle baseline from the stock power-on sequence. */
@@ -189,6 +238,7 @@ static const struct snd_soc_component_driver mt6320_soc_component_driver = {
 static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 	{
 		.name = "mt6320-snd-codec-aif1",
+		.ops = &mt6320_dai_ops,
 		.playback = {
 			.stream_name = "AIF1 Playback",
 			.channels_min = 1,
