@@ -273,6 +273,57 @@ out_release:
 	return ret;
 }
 
+static int mtk_fm_download_versioned(struct mtk_fm *fm, u8 opcode,
+				     unsigned int rom, const char *kind)
+{
+	const struct firmware *fw;
+	char name[64];
+	unsigned int version;
+	int ret;
+
+	/*
+	 * Match the downstream selection policy:
+	 * use the ROM-specific image when present, otherwise fall back
+	 * to the newest available image.
+	 */
+	version = rom + 1;
+	snprintf(name, sizeof(name),
+		 "mediatek/mt6628/mt6628_fm_v%u_%s.bin",
+		 version, kind);
+
+	ret = request_firmware(&fw, name, fm->dev);
+	if (!ret) {
+		release_firmware(fw);
+		return mtk_fm_download(fm, opcode, name);
+	}
+
+	if (ret != -ENOENT)
+		return ret;
+
+	for (version = 5; version >= 1; version--) {
+		if (version == rom + 1)
+			continue;
+
+		snprintf(name, sizeof(name),
+			 "mediatek/mt6628/mt6628_fm_v%u_%s.bin",
+			 version, kind);
+
+		ret = request_firmware(&fw, name, fm->dev);
+		if (!ret) {
+			release_firmware(fw);
+			dev_warn(fm->dev,
+				 "ROM v%u %s firmware missing, using v%u\n",
+				 rom + 1, kind, version);
+			return mtk_fm_download(fm, opcode, name);
+		}
+
+		if (ret != -ENOENT)
+			return ret;
+	}
+
+	return -ENOENT;
+}
+
 static int mtk_fm_get_rom_version(struct mtk_fm *fm, u8 *rom)
 {
 	u16 val;
@@ -356,9 +407,7 @@ static int fm_pwrup_clock_on(struct mtk_fm *fm, u8 *buf, int bufsize)
 static int mtk_fm_power_up(struct mtk_fm *fm)
 {
 	u8 *buf;
-	char patch[64];
-	char coeff[64];
-	u16 chip_id, val;
+	u16 chip_id;
 	u8 rom;
 	int pkt, ret;
 
@@ -388,16 +437,13 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 		goto out_free;
 	}
 
-	snprintf(patch, sizeof(patch),
-		 "mediatek/mt6628/mt6628_fm_v%u_patch.bin", rom + 1);
-	snprintf(coeff, sizeof(coeff),
-		 "mediatek/mt6628/mt6628_fm_v%u_coeff.bin", rom + 1);
-
-	ret = mtk_fm_download(fm, FM_PATCH_DOWNLOAD_OPCODE, patch);
+	ret = mtk_fm_download_versioned(fm, FM_PATCH_DOWNLOAD_OPCODE,
+					rom, "patch");
 	if (ret)
 		goto out_free;
 
-	ret = mtk_fm_download(fm, FM_COEFF_DOWNLOAD_OPCODE, coeff);
+	ret = mtk_fm_download_versioned(fm, FM_COEFF_DOWNLOAD_OPCODE,
+					rom, "coeff");
 	if (ret)
 		goto out_free;
 
