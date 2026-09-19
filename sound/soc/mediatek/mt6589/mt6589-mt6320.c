@@ -15,10 +15,6 @@
 #include <sound/jack.h>
 #include <sound/soc.h>
 
-static const struct snd_soc_dapm_widget mt6589_mt6320_widgets[] = {
-	SND_SOC_DAPM_SPK("Speaker", NULL),
-};
-
 SND_SOC_DAILINK_DEFS(playback,
 	DAILINK_COMP_ARRAY(COMP_CPU("mt6589-afe-dl1")),
 	DAILINK_COMP_ARRAY(COMP_CODEC("mt6320-sound", "mt6320-snd-codec-aif1")),
@@ -89,8 +85,6 @@ static struct snd_soc_card mt6589_mt6320_card = {
 	.owner = THIS_MODULE,
 	.dai_link = mt6589_mt6320_dai_links,
 	.num_links = ARRAY_SIZE(mt6589_mt6320_dai_links),
-	.dapm_widgets = mt6589_mt6320_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(mt6589_mt6320_widgets),
 	.late_probe = mt6589_mt6320_late_probe,
 };
 
