@@ -1305,3 +1305,6 @@ module_sdio_driver(mt6628_stp_driver);
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("MediaTek MT6628 shared WMT/STP SDIO transport");
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE("mt6628_patch_e1_hdr.bin");
+MODULE_FIRMWARE("mt6628_patch_e2_0_hdr.bin");
+MODULE_FIRMWARE("mt6628_patch_e2_1_hdr.bin");
