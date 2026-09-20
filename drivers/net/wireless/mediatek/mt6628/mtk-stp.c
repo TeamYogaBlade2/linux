@@ -319,11 +319,12 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 			return;
 
 		payload_len = get_unaligned_le16(buf + 2);
-		if (!payload_len || payload_len > len - 4)
+		if (!payload_len || payload_len != len - 4)
 			return;
 
 		mutex_lock(&wmt->wmt_lock);
 		if (wmt->wmt_waiting &&
+		    buf[0] == 0x02 &&
 		    buf[1] == wmt->wmt_wait_opcode) {
 			if (len < 5) {
 				wmt->wmt_status = -EPROTO;
