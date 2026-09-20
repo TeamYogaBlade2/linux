@@ -10,6 +10,7 @@
 #include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/bitfield.h>
+#include <linux/firmware.h>
 #include <linux/jiffies.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
@@ -290,8 +291,6 @@ static int mt6628_stp_fw_own(struct mt6628_wmt *wmt)
 
 static int mt6628_stp_irq_enable(struct mt6628_wmt *wmt)
 {
-	int ret;
-
 	return mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
 				 MT6628_STP_INT_EN_SET);
 }
@@ -548,7 +547,7 @@ int mt6628_stp_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
 {
 	int ret;
 
-	if (!wmt || !buf && len)
+	if (!wmt || (!buf && len))
 		return -EINVAL;
 
 	mutex_lock(&wmt->tx_lock);
@@ -732,6 +731,8 @@ static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
 }
 
 static int mt6628_wmt_reset(struct mt6628_wmt *wmt);
+static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt);
+static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt);
 
 static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 					 const struct firmware *fw,
