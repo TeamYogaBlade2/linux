@@ -485,7 +485,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	frame_len = fifo_len;
 	if (frame_len > MT6628_STP_BLK_SIZE)
 		frame_len = ALIGN(frame_len, MT6628_STP_BLK_SIZE);
-	if (fifo_len > MT6628_STP_TX_FIFO_SIZE)
+	if (frame_len > MT6628_STP_TX_FIFO_SIZE)
 		return -EMSGSIZE;
 
 	frame = kzalloc(frame_len, GFP_KERNEL);
@@ -508,7 +508,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 
 	ret = wait_event_interruptible_timeout(
 		wmt->tx_waitq,
-		READ_ONCE(wmt->stopping) || mt6628_stp_tx_ready(wmt, fifo_len),
+		READ_ONCE(wmt->stopping) || mt6628_stp_tx_ready(wmt, frame_len),
 		msecs_to_jiffies(MT6628_STP_TX_TIMEOUT_MS));
 	if (ret < 0)
 		goto out_free;
@@ -524,7 +524,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	{
 		u8 tx_slot;
 
-		ret = mt6628_stp_tx_reserve(wmt, fifo_len, &tx_slot);
+		ret = mt6628_stp_tx_reserve(wmt, frame_len, &tx_slot);
 		if (ret)
 			goto out_free;
 
@@ -534,7 +534,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 		sdio_release_host(wmt->func);
 
 		if (ret)
-			mt6628_stp_tx_cancel(wmt, fifo_len, tx_slot);
+			mt6628_stp_tx_cancel(wmt, frame_len, tx_slot);
 	}
 
 out_free:
