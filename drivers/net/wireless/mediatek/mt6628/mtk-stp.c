@@ -63,6 +63,31 @@
 #define MT6628_WMT_GEN_FVR			0x80000004
 #define MT6628_WMT_GEN_VER_MASK		0x0000ffff
 
+#define MT6628_WMT_PATCH_HDR_SIZE		28
+#define MT6628_WMT_PATCH_HWVER_OFFSET		22
+#define MT6628_WMT_PATCH_INFO_OFFSET		24
+#define MT6628_WMT_PATCH_FRAG_SIZE		1000
+
+#define MT6628_WMT_PATCH_ADDR_CMD_REG		0xf00901d4
+#define MT6628_WMT_PATCH_PART_ADDR_REG		0xf0090348
+
+static const u8 mt6628_wmt_patch_addr_evt[] = {
+	0x02, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01,
+};
+
+static const u8 mt6628_wmt_patch_evt[] = {
+	0x02, 0x01, 0x01, 0x00, 0x00,
+};
+
+static const char * const mt6628_e1_patch_names[] = {
+	"mt6628_patch_e1_hdr.bin",
+};
+
+static const char * const mt6628_e2_patch_names[] = {
+	"mt6628_patch_e2_0_hdr.bin",
+	"mt6628_patch_e2_1_hdr.bin",
+};
+
 struct mt6628_stp_endpoint {
 	mt6628_stp_rx_cb cb;
 	void *priv;
@@ -703,6 +728,271 @@ static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
 	*rom_ver = value;
 
 	return 0;
+}
+
+static int mt6628_wmt_reset(struct mt6628_wmt *wmt);
+
+static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
+					 const struct firmware *fw,
+					 u16 rom_ver)
+{
+	u8 address[4];
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len;
+	size_t offset;
+	u8 patch_num;
+	u8 patch_seq;
+	u16 frag_size;
+	u16 cmd_len;
+	int ret;
+
+	if (fw->size < MT6628_WMT_PATCH_HDR_SIZE)
+		return -EINVAL;
+
+	/*
+	 * The launcher compares the low byte of the patch HW version
+	 * (header byte 22) with the low byte of FVR.
+	 */
+	if (fw->data[MT6628_WMT_PATCH_HWVER_OFFSET] !=
+	    (rom_ver & 0xff))
+		return -EINVAL;
+
+	/*
+	 * combo_tool reads the four bytes immediately following the
+	 * HW-version field as patchInfo:
+	 *
+	 *   [7:4] patch count
+	 *   [3:0] download sequence
+	 *   [31:8] patch address
+	 *
+	 * The first byte is explicitly cleared before it is used as
+	 * the partial-patch address.
+	 */
+	patch_num = (fw->data[MT6628_WMT_PATCH_INFO_OFFSET] >> 4) & 0x0f;
+	patch_seq = fw->data[MT6628_WMT_PATCH_INFO_OFFSET] & 0x0f;
+	if (!patch_num || !patch_seq || patch_seq > patch_num)
+		return -EPROTO;
+
+	memcpy(address, fw->data + MT6628_WMT_PATCH_INFO_OFFSET,
+	       sizeof(address));
+	address[0] = 0;
+
+	dev_info(&wmt->func->dev,
+		 "MT6628 patch %u/%u, address %02x%02x%02x%02x, size %zu\n",
+		 patch_seq, patch_num,
+		 address[0], address[1], address[2], address[3],
+		 fw->size - MT6628_WMT_PATCH_HDR_SIZE);
+
+	/*
+	 * WMT_PATCH_ADDRESS_CMD:
+	 *   write 0xffffffff to the patch-address register.
+	 */
+	{
+		u8 cmd[] = {
+			0x01, 0x08, 0x10, 0x00,
+			0x01, 0x01, 0x00, 0x01,
+			0xd4, 0x01, 0x09, 0xf0,
+			0x00, 0x00, 0x00, 0x00,
+			0xff, 0xff, 0xff, 0xff,
+		};
+
+		response_len = sizeof(response);
+		ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+				     response, &response_len);
+		if (ret)
+			return ret;
+
+		if (response_len != sizeof(mt6628_wmt_patch_addr_evt) ||
+		    memcmp(response, mt6628_wmt_patch_addr_evt,
+			   sizeof(mt6628_wmt_patch_addr_evt)))
+			return -EPROTO;
+	}
+
+	/*
+	 * WMT_PATCH_P_ADDRESS_CMD carries the address belonging to this
+	 * particular patch file.
+	 */
+	{
+		u8 cmd[] = {
+			0x01, 0x08, 0x10, 0x00,
+			0x01, 0x01, 0x00, 0x01,
+			0x48, 0x03, 0x09, 0xf0,
+			0x00, 0x00, 0x00, 0x00,
+			0xff, 0xff, 0xff, 0xff,
+		};
+
+		memcpy(cmd + 12, address, sizeof(address));
+
+		response_len = sizeof(response);
+		ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+				     response, &response_len);
+		if (ret)
+			return ret;
+
+		if (response_len != sizeof(mt6628_wmt_patch_addr_evt) ||
+		    memcmp(response, mt6628_wmt_patch_addr_evt,
+			   sizeof(mt6628_wmt_patch_addr_evt)))
+			return -EPROTO;
+	}
+
+	offset = MT6628_WMT_PATCH_HDR_SIZE;
+	while (offset < fw->size) {
+		u8 *cmd;
+
+		frag_size = min_t(size_t, MT6628_WMT_PATCH_FRAG_SIZE,
+				  fw->size - offset);
+		cmd_len = frag_size + 1;
+
+		cmd = kmalloc(frag_size + 5, GFP_KERNEL);
+		if (!cmd)
+			return -ENOMEM;
+
+		cmd[0] = 0x01;
+		cmd[1] = 0x01;
+		put_unaligned_le16(cmd_len, cmd + 2);
+
+		if (offset == MT6628_WMT_PATCH_HDR_SIZE)
+			cmd[4] = 0x01; /* first */
+		else if (offset + frag_size == fw->size)
+			cmd[4] = 0x03; /* last */
+		else
+			cmd[4] = 0x02; /* middle */
+
+		memcpy(cmd + 5, fw->data + offset, frag_size);
+
+		response_len = sizeof(response);
+		ret = mt6628_wmt_cmd(wmt, cmd, frag_size + 5,
+				     0x01, 1000, response, &response_len);
+		kfree(cmd);
+
+		if (ret)
+			return ret;
+
+		if (response_len != sizeof(mt6628_wmt_patch_evt) ||
+		    memcmp(response, mt6628_wmt_patch_evt,
+			   sizeof(mt6628_wmt_patch_evt)))
+			return -EPROTO;
+
+		offset += frag_size;
+	}
+
+	return 0;
+}
+
+static int mt6628_wmt_patch_download(struct mt6628_wmt *wmt,
+				     u16 hw_ver, u16 rom_ver)
+{
+	const char * const *names;
+	unsigned int name_count;
+	struct firmware *fw[ARRAY_SIZE(mt6628_e2_patch_names)] = { };
+	unsigned int patch_count;
+	unsigned int i;
+	unsigned int expected_seq = 1;
+	int ret;
+
+	/*
+	 * The downstream table requires a patch for every supported MT6628
+	 * ECO. E1 has its own patch; E2 and later ECOs use the two-part E2
+	 * patch set.
+	 */
+	if (hw_ver == 0x8a00) {
+		names = mt6628_e1_patch_names;
+		name_count = ARRAY_SIZE(mt6628_e1_patch_names);
+	} else if ((hw_ver & 0xff00) == 0x8a00 ||
+		   (hw_ver & 0xff00) == 0x8b00) {
+		names = mt6628_e2_patch_names;
+		name_count = ARRAY_SIZE(mt6628_e2_patch_names);
+	} else {
+		dev_err(&wmt->func->dev,
+			"unsupported MT6628 HW version %#x\n", hw_ver);
+		return -ENODEV;
+	}
+
+	/*
+	 * The Android combo launcher discovers all matching patch files.
+	 * Linux has no equivalent userspace launcher, so perform the same
+	 * discovery from the known MT6628 firmware names.
+	 */
+	for (i = 0; i < name_count; i++) {
+		ret = request_firmware(&fw[i], names[i], &wmt->func->dev);
+		if (ret) {
+			dev_err(&wmt->func->dev,
+				"failed to load %s: %d\n", names[i], ret);
+			goto out_release;
+		}
+
+		if (fw[i]->size < MT6628_WMT_PATCH_HDR_SIZE ||
+		    fw[i]->data[MT6628_WMT_PATCH_HWVER_OFFSET] !=
+			    (rom_ver & 0xff)) {
+			dev_err(&wmt->func->dev,
+				"invalid %s for ROM %#x\n",
+				names[i], rom_ver);
+			ret = -EINVAL;
+			goto out_release;
+		}
+
+		patch_count =
+			(fw[i]->data[MT6628_WMT_PATCH_INFO_OFFSET] >> 4) & 0x0f;
+		if (!patch_count || patch_count != name_count) {
+			dev_err(&wmt->func->dev,
+				"invalid patch count %u in %s\n",
+				patch_count, names[i]);
+			ret = -EPROTO;
+			goto out_release;
+		}
+	}
+
+	/*
+	 * The downstream launcher provides patches in arbitrary directory
+	 * order, but the kernel downloader consumes them by download
+	 * sequence. Validate and order the two known files explicitly.
+	 */
+	for (expected_seq = 1; expected_seq <= name_count; expected_seq++) {
+		unsigned int found = name_count;
+
+		for (i = 0; i < name_count; i++) {
+			u8 seq;
+
+			seq = fw[i]->data[MT6628_WMT_PATCH_INFO_OFFSET] & 0x0f;
+			if (seq == expected_seq) {
+				found = i;
+				break;
+			}
+		}
+
+		if (found == name_count) {
+			dev_err(&wmt->func->dev,
+				"missing MT6628 patch sequence %u\n",
+				expected_seq);
+			ret = -EPROTO;
+			goto out_release;
+		}
+
+		ret = mt6628_wmt_patch_download_one(wmt, fw[found], rom_ver);
+		if (ret) {
+			dev_err(&wmt->func->dev,
+				"MT6628 patch sequence %u failed: %d\n",
+				expected_seq, ret);
+			goto out_release;
+		}
+
+		/*
+		 * bq/aquaris-5 resets WMT after every multi-patch fragment
+		 * set. This is intentional and must not be collapsed into a
+		 * single reset after the whole patch set.
+		 */
+		ret = mt6628_wmt_reset(wmt);
+		if (ret)
+			goto out_release;
+	}
+
+	ret = 0;
+
+out_release:
+	for (i = 0; i < name_count; i++)
+		release_firmware(fw[i]);
+
+	return ret;
 }
 
 static int mt6628_wmt_reset(struct mt6628_wmt *wmt)
