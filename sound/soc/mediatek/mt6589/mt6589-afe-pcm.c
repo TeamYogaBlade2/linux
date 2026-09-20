@@ -65,9 +65,9 @@
 #define AFE_ADDA_DL_SRC2_CON0_BASE 0x03001802	/* SRC-disabled base */
 #define AFE_ADDA_DL_SRC2_CON0_RATE GENMASK(31, 28)
 #define AFE_ADDA_DL_SRC2_CON0_ON   BIT(0)
+#define AFE_ADDA_DL_SRC2_CON0_VOICE_MODE BIT(5)
 #define AFE_ADDA_DL_SRC2_CON1	0x010c
-#define AFE_ADDA_DL_SRC2_CON1_GAIN GENMASK(31, 16)
-#define AFE_DL_GAIN_DEFAULT	0x203b		/* ~-18dB */
+#define AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE 0xf74f0000
 #define AFE_ADDA_UL_DL_CON0	0x0124
 #define AFE_ADDA_UL_DL_CON0_ON	BIT(0)
 #define AFE_ADDA_PREDIS_CON0	0x0260		/* ADDA downlink pre-distortion */
@@ -91,7 +91,6 @@ struct mt6589_afe {
 	struct clk *clk;
 	struct clk *clk_i2s;
 	struct snd_pcm_substream *dl1_substream;	/* active DL1 stream */
-	unsigned int dl_gain;				/* "Playback Volume" */
 };
 
 /* Hz -> AFE sample-rate code. */
@@ -190,6 +189,7 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
 	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	u32 adda_con0;
 
 	if (adda_code < 0 || rate_code < 0)
 		return -EINVAL;
@@ -206,28 +206,18 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON0, 0);
 	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON1, 0);
 
-	/* ADDA downlink SRC + I2S, in stock's interleaving */
-	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-		     AFE_ADDA_DL_SRC2_CON0_BASE |
-		     FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code) |
-		     AFE_ADDA_DL_SRC2_CON0_ON);
+	/* Match the stock SetDLSrc2() sequence. */
+	adda_con0 = AFE_ADDA_DL_SRC2_CON0_BASE |
+		    FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code);
+	if (adda_code == 0 || adda_code == 3)
+		adda_con0 |= AFE_ADDA_DL_SRC2_CON0_VOICE_MODE;
+
+	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0, adda_con0);
 	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
-		     FIELD_PREP(AFE_ADDA_DL_SRC2_CON1_GAIN, afe->dl_gain));
+		     AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE);
 	regmap_write(afe->regmap, AFE_I2S_CON1,
 		     AFE_I2S_CON1_BASE | FIELD_PREP(AFE_I2S_CON1_RATE, rate_code));
-	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-		     AFE_ADDA_DL_SRC2_CON0_BASE |
-		     FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code) |
-		     AFE_ADDA_DL_SRC2_CON0_ON);
-	regmap_set_bits(afe->regmap, AFE_I2S_CON1, AFE_I2S_CON1_ON);
-	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-		     AFE_ADDA_DL_SRC2_CON0_BASE |
-		     FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code) |
-		     AFE_ADDA_DL_SRC2_CON0_ON);
-	regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0, AFE_ADDA_UL_DL_CON0_ON);
 
-	/* global AFE on, then the DL1 memif rate */
-	regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_AFE_ON);
 	regmap_update_bits(afe->regmap, AFE_DAC_CON1, AFE_DAC_CON1_DL1_RATE,
 			   FIELD_PREP(AFE_DAC_CON1_DL1_RATE, rate_code));
 
@@ -292,47 +282,8 @@ static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 					      comp->dev, size, size);
 }
 
-static const DECLARE_TLV_DB_LINEAR(dl_gain_tlv, TLV_DB_GAIN_MUTE, 0);
-
-static int mt6589_dl_gain_get(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
-
-	ucontrol->value.integer.value[0] = afe->dl_gain;
-	return 0;
-}
-
-static int mt6589_dl_gain_put(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
-	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
-	unsigned int gain = ucontrol->value.integer.value[0];
-
-	if (gain > 0xffff)
-		return -EINVAL;
-	if (gain == afe->dl_gain)
-		return 0;
-
-	afe->dl_gain = gain;
-	regmap_update_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
-			   AFE_ADDA_DL_SRC2_CON1_GAIN,
-			   FIELD_PREP(AFE_ADDA_DL_SRC2_CON1_GAIN, gain));
-	return 1;
-}
-
-/* DL digital gain, shadowed in afe->dl_gain so .prepare re-applies it. */
-static const struct snd_kcontrol_new mt6589_afe_controls[] = {
-	SOC_SINGLE_EXT_TLV("Playback Volume", SND_SOC_NOPM, 0, 0xffff, 0,
-			   mt6589_dl_gain_get, mt6589_dl_gain_put, dl_gain_tlv),
-};
-
 static const struct snd_soc_component_driver mt6589_afe_component = {
 	.name = "mt6589-afe-pcm",
-	.controls = mt6589_afe_controls,
-	.num_controls = ARRAY_SIZE(mt6589_afe_controls),
 	.open = mt6589_afe_pcm_open,
 	.hw_params = mt6589_afe_pcm_hw_params,
 	.prepare = mt6589_afe_pcm_prepare,
@@ -373,7 +324,6 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (!afe)
 		return -ENOMEM;
 	afe->dev = dev;
-	afe->dl_gain = AFE_DL_GAIN_DEFAULT;
 	platform_set_drvdata(pdev, afe);
 
 	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
