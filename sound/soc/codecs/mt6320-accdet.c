@@ -334,7 +334,6 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv;
 	int ret;
-	int irq;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
