@@ -113,7 +113,9 @@ err:
 }
 EXPORT_SYMBOL_GPL(fhctl_parse_dt);
 
-static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
+static int pllfh_init(struct mtk_fh *fh,
+		      struct mtk_pllfh_data *pllfh_data,
+		      void __iomem *pll_base)
 {
 	struct fh_pll_regs *regs = &fh->regs;
 	const struct fhctl_offset *offset;
@@ -124,7 +126,10 @@ static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
 	if (IS_ERR(offset))
 		return PTR_ERR(offset);
 
-	regs->reg_hp_en = base + offset->offset_hp_en;
+	if (pllfh_data->data.fh_ver == FHCTL_PLLFH_V3)
+		regs->reg_hp_en = pll_base + offset->offset_hp_en;
+	else
+		regs->reg_hp_en = base + offset->offset_hp_en;
 	regs->reg_clk_con = base + offset->offset_clk_con;
 	regs->reg_rst_con = base + offset->offset_rst_con;
 	regs->reg_slope0 = base + offset->offset_slope0;
@@ -161,7 +166,7 @@ mtk_clk_register_pllfh(struct device *dev, const struct mtk_pll_data *pll_data,
 	if (!fh)
 		return ERR_PTR(-ENOMEM);
 
-	ret = pllfh_init(fh, pllfh_data);
+	ret = pllfh_init(fh, pllfh_data, base);
 	if (ret) {
 		hw = ERR_PTR(ret);
 		goto out;
