@@ -101,12 +101,12 @@ static int mt6589_afe_rate_code(unsigned int rate)
 	case 8000:	return 0;
 	case 11025:	return 1;
 	case 12000:	return 2;
-	case 16000:	return 4;
-	case 22050:	return 5;
-	case 24000:	return 6;
-	case 32000:	return 8;
-	case 44100:	return 9;
-	case 48000:	return 10;
+	case 16000:	return 3;
+	case 22050:	return 4;
+	case 24000:	return 5;
+	case 32000:	return 6;
+	case 44100:	return 7;
+	case 48000:	return 8;
 	default:	return -EINVAL;
 	}
 }
