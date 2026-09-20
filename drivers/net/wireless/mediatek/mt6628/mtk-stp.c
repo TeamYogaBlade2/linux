@@ -128,6 +128,7 @@ struct mt6628_wmt {
 	bool co_clock_enabled;
 	bool sdio_driving_configured;
 	u32 sdio_driving_cfg;
+	u8 fm_strap_mode;
 };
 
 static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
@@ -1078,11 +1079,7 @@ static int mt6628_wmt_init(struct mt6628_wmt *wmt)
 	if (ret)
 		return ret;
 
-	/*
-	 * MT6589 downstream is configured for FM communication mode
-	 * (WMT_FM_COMM == 2) when the merge interface is used.
-	 */
-	ret = mt6628_wmt_set_fm_strap(wmt, 2);
+	ret = mt6628_wmt_set_fm_strap(wmt, wmt->fm_strap_mode);
 	if (ret)
 		return ret;
 
@@ -1268,6 +1265,11 @@ static int mt6628_stp_probe(struct sdio_func *func,
 				      "mediatek,sdio-driving-cfg",
 				      &wmt->sdio_driving_cfg))
 		wmt->sdio_driving_configured = true;
+
+	wmt->fm_strap_mode = 2;
+	device_property_read_u8(&func->dev,
+				"mediatek,fm-strap-mode",
+				&wmt->fm_strap_mode);
 
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
