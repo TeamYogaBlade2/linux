@@ -29,6 +29,7 @@ struct mtk_gnss {
 	struct mt6628_wmt *wmt;
 	struct mutex lock;
 	struct pinctrl *pinctrl;
+	struct pinctrl_state *pinctrl_default;
 	struct pinctrl_state *gps_sync;
 	bool open;
 };
@@ -78,8 +79,12 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 	if (!ret) {
 		ret = mt6628_wmt_func_ctrl(priv->wmt,
 					   MT6628_WMT_FUNC_GPS, true);
-		if (ret)
+		if (ret) {
 			mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+			if (priv->pinctrl_default)
+				pinctrl_select_state(priv->pinctrl,
+						     priv->pinctrl_default);
+		}
 	}
 	if (!ret)
 		priv->open = true;
@@ -99,8 +104,11 @@ static void mtk_gnss_close(struct gnss_device *gdev)
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
-		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
 		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		if (priv->pinctrl_default)
+			pinctrl_select_state(priv->pinctrl,
+					     priv->pinctrl_default);
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
 	}
 }
 
@@ -133,6 +141,11 @@ static int mtk_gnss_probe(struct platform_device *pdev)
 		return PTR_ERR(priv->pinctrl);
 
 	if (priv->pinctrl) {
+		priv->pinctrl_default = pinctrl_lookup_state(priv->pinctrl,
+						     PINCTRL_STATE_DEFAULT);
+		if (IS_ERR(priv->pinctrl_default))
+			priv->pinctrl_default = NULL;
+
 		priv->gps_sync = pinctrl_lookup_state(priv->pinctrl,
 						      "gps-sync");
 		if (IS_ERR(priv->gps_sync)) {
@@ -188,6 +201,9 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 
 	if (was_open) {
 		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		if (priv->pinctrl_default)
+			pinctrl_select_state(priv->pinctrl,
+					     priv->pinctrl_default);
 		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
 	}
 
