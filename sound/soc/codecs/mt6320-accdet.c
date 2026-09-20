@@ -331,17 +331,23 @@ static irqreturn_t mt6320_accdet_irq(int irq, void *data)
 static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 {
 	struct mt6320_accdet *priv = data;
-	bool inserted;
+	int inserted;
 	int ret;
 
 	inserted = gpiod_get_value_cansleep(priv->detect);
+	if (inserted < 0) {
+		dev_err_ratelimited(priv->dev,
+				    "failed to read detect GPIO: %d\n",
+				    inserted);
+		return IRQ_HANDLED;
+	}
 
 	mutex_lock(&priv->lock);
 
-	if (inserted == priv->plugged)
+	if (!!inserted == priv->plugged)
 		goto out;
 
-	if (inserted) {
+	if (!!inserted) {
 		ret = mt6320_accdet_enable(priv);
 		if (ret) {
 			dev_err_ratelimited(priv->dev,
@@ -461,7 +467,11 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, priv->eint_irq,
 				     "failed to map detect GPIO to IRQ\n");
 
-	priv->plugged = gpiod_get_value_cansleep(priv->detect);
+	ret = gpiod_get_value_cansleep(priv->detect);
+	if (ret < 0)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to read detect GPIO\n");
+	priv->plugged = !!ret;
 	priv->last_state = 3;
 
 	ret = irq_set_irq_type(priv->eint_irq,
