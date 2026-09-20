@@ -33,7 +33,7 @@
  * up cannot observe a fence that is signalled but whose BOs are still
  * being referenced.
  */
-static void prismrv_fence_release_bos(struct prismrv_fence *pf)
+void prismrv_fence_release_bos(struct prismrv_fence *pf)
 {
 	u32 i;
 
@@ -124,59 +124,39 @@ void prismrv_recovery_work(struct work_struct *work)
 	}
 
 	/*
-	 * Step 1: soft-reset the GPU immediately.
+	 * Step 1: take the submit write-lock FIRST.
 	 *
-	 * This stops all DMA activity from the GPU before we free any
-	 * DMA buffers or page tables.  Without this, a hung/wedged GPU
-	 * could still be reading the CCB or walking page tables while
-	 * we free them below — triggering IOMMU faults or memory
-	 * corruption.
+	 * down_write() waits until every concurrent submit_ioctl() has
+	 * released its read-lock.  Only after all in-flight submits have
+	 * returned from CCB/MMU operations do we reset the GPU.
 	 *
-	 * The soft reset clears EUR_CR_SOFT_RESET and disables the BIF,
-	 * so DMA is guaranteed to have stopped by the time we proceed.
-	 */
-	prismrv_soft_reset(pv);
-
-	/*
-	 * Step 2: take the submit write-lock (exclusive).
-	 *
-	 * This blocks until every concurrent prismrv_submit_ioctl() has
-	 * released its read-lock and returned.  After this point no new
-	 * submit can touch the CCB, HostCtl or MMU structures until we
-	 * reinitialise them and release the lock.
+	 * The previous order (soft_reset then down_write) allowed a
+	 * submit that already held the read-lock to touch CCB/MMU after
+	 * the GPU had been reset, corrupting whatever re-init followed.
 	 */
 	down_write(&pv->submit_rwsem);
 	mutex_lock(&pv->init_mutex);
 
-	/*
-	 * Step 3: mark hardware not ready so any submit that slipped
-	 * through the rwsem (e.g. checked hw_ready before we got the
-	 * write-lock) will bail out cleanly.
-	 */
 	WRITE_ONCE(pv->hw_ready, false);
 
 	/*
-	 * Step 4: invalidate all BO GPU VAs under mmu_lock.
+	 * Step 2: GPU soft-reset.
 	 *
-	 * hw_fini() will zero the page tables; clear bo->gpu_va on
-	 * every live BO first so that the next submit re-maps each BO
-	 * into the fresh MMU context.  Without this, pin_and_map()
-	 * would see gpu_va != 0 and skip the re-map, making the GPU
-	 * walk page tables that are now zeroed.
+	 * Now that no submit can be in-flight (write-lock is held), it
+	 * is safe to stop the GPU.  This halts all DMA so subsequent
+	 * teardown of CCB/MMU memory cannot race live GPU accesses.
+	 */
+	prismrv_soft_reset(pv);
+
+	/*
+	 * Step 3: invalidate all BO GPU VAs under mmu_lock.
 	 */
 	mutex_lock(&pv->mmu_lock);
 	prismrv_mmu_invalidate_all_bos(pv);
 	mutex_unlock(&pv->mmu_lock);
 
 	/*
-	 * Step 5: tear down old HW state and reinitialise.
-	 *
-	 * hw_fini() retires pending fences with -EIO (releasing their
-	 * BO refs and PM references), frees CCB/HostCtl/errata DMA
-	 * buffers and tears down the MMU page tables.
-	 *
-	 * hw_init() re-applies errata, rebuilds the MMU, reloads the
-	 * uKernel and waits for it to report ready.
+	 * Step 4: tear down old HW state and reinitialise.
 	 */
 	prismrv_hw_fini(pv);
 	prismrv_hw_init(pv);

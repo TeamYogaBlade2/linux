@@ -62,6 +62,11 @@ jobs:
 
       - name: Build kernel + driver (clang cross)
         run: |
+          # set -o pipefail: make the pipeline fail if 'make' fails.
+          # Without this, 'make ... | tee build.log' returns the exit
+          # code of 'tee' (always 0), hiding a real build failure and
+          # producing a false-green CI result.
+          set -o pipefail
           make ARCH=arm \
                CROSS_COMPILE=arm-linux-gnueabihf- \
                LLVM=1 LLVM_IAS=1 \

@@ -9,7 +9,8 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define PRISMRV_UAPI_VERSION		1
+/* Incremented when ABI-incompatible changes are made. */
+#define PRISMRV_UAPI_VERSION		2
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -48,8 +49,6 @@ struct drm_prismrv_get_param {
 	__u32 pad;
 	__u64 value;		/* out */
 };
-
-#define PRISMRV_UAPI_VERSION		2
 
 /*
  * PRISMRV_PARAM_GPU_ID (value 1) was the original combined param that

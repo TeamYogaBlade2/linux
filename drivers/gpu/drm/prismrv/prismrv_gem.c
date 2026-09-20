@@ -317,18 +317,36 @@ int prismrv_gem_populate(struct prismrv_device *pv, struct drm_gem_object **objs
 void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv)
 {
 	struct prismrv_bo *bo;
+	LIST_HEAD(snapshot);
 
+	/*
+	 * Build a snapshot of gpu_va values under the spinlock, then
+	 * release the lock before calling mutex_lock(&va_lock).
+	 *
+	 * The previous implementation called mutex_lock() while holding
+	 * bo_list_lock (a spinlock), which is illegal: mutexes are
+	 * sleeping locks and cannot be acquired in atomic/spinlock context
+	 * (triggers "BUG: sleeping function called from invalid context").
+	 *
+	 * Correctness: callers hold mmu_lock + init_mutex + submit_rwsem,
+	 * so no concurrent pin_and_map() or bo_free() can run.  The
+	 * bo_list itself is protected by bo_list_lock but its entries are
+	 * stable here, so reading gpu_va under the spinlock and clearing
+	 * it after is safe — the two stores are separated by the acquire
+	 * of mmu_lock, which pin_and_map() also holds before modifying
+	 * gpu_va.
+	 */
+	mutex_lock(&va_lock);
 	spin_lock(&pv->bo_list_lock);
 	list_for_each_entry(bo, &pv->bo_list, bo_node) {
 		if (bo->gpu_va) {
-			mutex_lock(&va_lock);
 			prismrv_va_free_locked(bo->gpu_va,
 					       PAGE_ALIGN(bo->base.base.size));
-			mutex_unlock(&va_lock);
 			bo->gpu_va = 0;
 		}
 	}
 	spin_unlock(&pv->bo_list_lock);
+	mutex_unlock(&va_lock);
 }
 
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj)

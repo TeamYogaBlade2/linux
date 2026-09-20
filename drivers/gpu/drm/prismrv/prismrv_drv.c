@@ -163,16 +163,24 @@ static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
 	/*
 	 * Unplug first: drm_dev_unplug() makes drm_dev_enter() fail for
 	 * every new ioctl, so no new submissions can start.  In-flight
-	 * ioctls keep the device alive through their own references.
+	 * ioctls keep the device alive through their own DRM file refs.
 	 */
 	drm_dev_unplug(&pv->drm);
 
 	/* stop accepting recovery re-inits before tearing down hw */
 	cancel_work_sync(&pv->recovery_work);
 
+	/*
+	 * Take the submit write-lock so any submit that slipped through
+	 * before drm_dev_unplug() has returned from CCB/MMU before we
+	 * start tearing them down.  After down_write() returns, no
+	 * submit_ioctl() can be accessing CCB or MMU structures.
+	 */
+	down_write(&pv->submit_rwsem);
 	mutex_lock(&pv->init_mutex);
-	pv->hw_ready = false;
+	WRITE_ONCE(pv->hw_ready, false);
 	mutex_unlock(&pv->init_mutex);
+	up_write(&pv->submit_rwsem);
 
 	/*
 	 * Retire pending fences BEFORE disabling runtime PM: hw_fini
@@ -196,7 +204,37 @@ static int prismrv_runtime_suspend(struct device *dev)
 {
 	struct prismrv_device *pv = dev_get_drvdata(dev);
 
-	pv->hw_ready = false;
+	/*
+	 * Take the submit write-lock so no new submits can start while
+	 * we tear down, and wait for any in-flight submit to finish.
+	 */
+	down_write(&pv->submit_rwsem);
+	mutex_lock(&pv->init_mutex);
+
+	WRITE_ONCE(pv->hw_ready, false);
+
+	/*
+	 * Invalidate every BO's gpu_va before zeroing the page tables
+	 * so that the next resume re-maps everything into the fresh MMU.
+	 * Without this, pin_and_map() sees gpu_va != 0 and skips re-map,
+	 * leaving the GPU to walk zeroed PTEs after resume.
+	 */
+	mutex_lock(&pv->mmu_lock);
+	prismrv_mmu_invalidate_all_bos(pv);
+	mutex_unlock(&pv->mmu_lock);
+
+	/*
+	 * Fully tear down hardware state: retires pending fences with
+	 * -EIO, frees CCB/HostCtl/errata DMA buffers, tears down the
+	 * MMU page tables.  This ensures resume starts from a clean
+	 * slate, and that all fixed GPU-VA mappings (CCB, HostCtl,
+	 * errata, uKernel) are re-established by hw_init().
+	 */
+	prismrv_hw_fini(pv);
+
+	mutex_unlock(&pv->init_mutex);
+	up_write(&pv->submit_rwsem);
+
 	/* assert the G3D reset line before gating the clocks */
 	reset_control_assert(pv->rstc);
 	clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
@@ -216,22 +254,28 @@ static int prismrv_runtime_resume(struct device *dev)
 	reset_control_deassert(pv->rstc);
 	udelay(2);
 
+	/*
+	 * Re-initialise hardware under the submit write-lock so no
+	 * submit can race the CCB/MMU rebuild.
+	 */
+	down_write(&pv->submit_rwsem);
+	mutex_lock(&pv->init_mutex);
+
 	if (!pv->hw_ready) {
-		mutex_lock(&pv->init_mutex);
 		if (!pv->ukernel_cpu)
 			prismrv_fw_load(pv);
 		if (pv->ukernel_cpu)
 			ret = prismrv_hw_init(pv);
 		else
 			ret = 0;   /* firmware still unavailable: idle */
-		mutex_unlock(&pv->init_mutex);
-		if (ret) {
-			clk_bulk_disable_unprepare(pv->nr_clocks,
-						   pv->clocks);
-			return ret;
-		}
 	}
-	return 0;
+
+	mutex_unlock(&pv->init_mutex);
+	up_write(&pv->submit_rwsem);
+
+	if (ret)
+		clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
+	return ret;
 }
 
 static const struct dev_pm_ops prismrv_pm_ops = {

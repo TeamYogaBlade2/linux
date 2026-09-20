@@ -22,7 +22,7 @@
 
 #include "prismrv_device.h"
 
-static void prismrv_soft_reset(struct prismrv_device *pv)
+void prismrv_soft_reset(struct prismrv_device *pv)
 {
 	u32 v;
 
@@ -64,7 +64,7 @@ static void prismrv_soft_reset(struct prismrv_device *pv)
 	udelay(100);
 }
 
-static void prismrv_bif_reset(struct prismrv_device *pv)
+void prismrv_bif_reset(struct prismrv_device *pv)
 {
 	writel(0, pv->regs + EUR_CR_BIF_CTRL);
 	writel(0, pv->regs + EUR_CR_BIF_BANK_SET);
@@ -299,5 +299,12 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 		pv->ukernel_cpu = NULL;
 	}
 
+	/*
+	 * Tear down the MMU under mmu_lock so that a concurrent bo_free()
+	 * (which also takes mmu_lock before calling mmu_unmap) cannot
+	 * race with pd_pts being set to NULL.
+	 */
+	mutex_lock(&pv->mmu_lock);
 	prismrv_mmu_fini(pv);
+	mutex_unlock(&pv->mmu_lock);
 }

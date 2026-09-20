@@ -262,6 +262,9 @@ static inline struct prismrv_device *to_prismrv(struct drm_device *d)
 
 int prismrv_hw_init(struct prismrv_device *pv);
 void prismrv_hw_fini(struct prismrv_device *pv);
+/* low-level reset helpers, also called from recovery_work() */
+void prismrv_soft_reset(struct prismrv_device *pv);
+void prismrv_bif_reset(struct prismrv_device *pv);
 int prismrv_fw_load(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);
 int prismrv_errata_apply(struct prismrv_device *pv);
