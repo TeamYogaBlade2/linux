@@ -4,6 +4,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/clk.h>
 #include <linux/gpio/consumer.h>
 #include <linux/iio/consumer.h>
 #include <linux/interrupt.h>
@@ -25,7 +26,6 @@
 #define MT6320_ACCDET_IRQ_CLR_BIT	BIT(8)
 #define MT6320_ACCDET_IRQ_STATUS_BIT	BIT(0)
 #define MT6320_ACCDET_IRQ_SET_BIT	BIT(2)
-#define MT6320_ACCDET_CLK_BIT		BIT(14)
 #define MT6320_ACCDET_RESET_BIT		BIT(4)
 
 #define MT6320_ACCDET_PWM_WIDTH_VALUE	0x0900
@@ -38,6 +38,7 @@
 struct mt6320_accdet {
 	struct device *dev;
 	struct regmap *regmap;
+	struct clk *clk_accdet;
 	struct gpio_desc *detect;
 	struct iio_channel *key;
 	struct snd_soc_jack *jack;
@@ -211,23 +212,30 @@ static int mt6320_accdet_enable(struct mt6320_accdet *priv)
 {
 	int ret;
 
-	ret = regmap_write(priv->regmap, MT6320_TOP_CKPDN_CLR,
-			   MT6320_ACCDET_CLK_BIT);
+	ret = clk_prepare_enable(priv->clk_accdet);
 	if (ret)
 		return ret;
 
 	ret = regmap_set_bits(priv->regmap, MT6320_ACCDET_STATE_SWCTRL,
 			      MT6320_ACCDET_SWCTRL_EN);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_set_bits(priv->regmap, MT6320_ACCDET_CTRL,
 			      MT6320_ACCDET_CTRL_EN);
 	if (ret)
-		return ret;
+		goto err_clk;
 
-	return regmap_write(priv->regmap, MT6320_INT_CON_ACCDET_SET,
-			    MT6320_ACCDET_IRQ_SET_BIT);
+	ret = regmap_write(priv->regmap, MT6320_INT_CON_ACCDET_SET,
+			   MT6320_ACCDET_IRQ_SET_BIT);
+	if (ret)
+		goto err_clk;
+
+	return 0;
+
+err_clk:
+	clk_disable_unprepare(priv->clk_accdet);
+	return ret;
 }
 
 static int mt6320_accdet_disable(struct mt6320_accdet *priv)
@@ -252,70 +260,76 @@ static int mt6320_accdet_disable(struct mt6320_accdet *priv)
 	if (ret)
 		return ret;
 
-	return regmap_write(priv->regmap, MT6320_TOP_CKPDN_SET,
-			    MT6320_ACCDET_CLK_BIT);
+	clk_disable_unprepare(priv->clk_accdet);
+	return 0;
 }
 
 static int mt6320_accdet_hw_init(struct mt6320_accdet *priv)
 {
 	int ret;
 
-	ret = regmap_write(priv->regmap, MT6320_TOP_CKPDN_CLR,
-			   MT6320_ACCDET_CLK_BIT);
+	ret = clk_prepare_enable(priv->clk_accdet);
 	if (ret)
 		return ret;
 
 	ret = regmap_write(priv->regmap, MT6320_TOP_RST_ACCDET_SET,
 			   MT6320_ACCDET_RESET_BIT);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_TOP_RST_ACCDET_CLR,
 			   MT6320_ACCDET_RESET_BIT);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_PWM_WIDTH,
 			   MT6320_ACCDET_PWM_WIDTH_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_PWM_THRESH,
 			   MT6320_ACCDET_PWM_THRESH_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_STATE_SWCTRL,
 			   MT6320_ACCDET_SWCTRL_EN);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_EN_DELAY_NUM,
 			   MT6320_ACCDET_EN_DELAY_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_DEBOUNCE0,
 			   MT6320_ACCDET_DEBOUNCE0_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_DEBOUNCE1,
 			   MT6320_ACCDET_DEBOUNCE1_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_ACCDET_DEBOUNCE3,
 			   MT6320_ACCDET_DEBOUNCE3_VALUE);
 	if (ret)
-		return ret;
+		goto err_clk;
 
 	ret = regmap_write(priv->regmap, MT6320_INT_CON_ACCDET_CLR,
 			   MT6320_ACCDET_IRQ_SET_BIT);
 	if (ret)
-		return ret;
+		goto err_clk;
 
-	return mt6320_accdet_clear_irq(priv);
+	ret = mt6320_accdet_clear_irq(priv);
+	clk_disable_unprepare(priv->clk_accdet);
+
+	return ret;
+
+err_clk:
+	clk_disable_unprepare(priv->clk_accdet);
+	return ret;
 }
 
 static irqreturn_t mt6320_accdet_irq(int irq, void *data)
@@ -429,8 +443,14 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	pmic = dev_get_drvdata(pdev->dev.parent);
 	if (!pmic || !pmic->regmap)
 		return dev_err_probe(&pdev->dev, -ENODEV,
-				"missing PMIC regmap\n");
+				     "missing PMIC regmap\n");
 	priv->regmap = pmic->regmap;
+
+	priv->clk_accdet = devm_clk_get(&pdev->dev, "accdet");
+	if (IS_ERR(priv->clk_accdet))
+		return dev_err_probe(&pdev->dev,
+				     PTR_ERR(priv->clk_accdet),
+				     "failed to get ACCDET clock\n");
 
 	mutex_init(&priv->lock);
 	INIT_DELAYED_WORK(&priv->key_work, mt6320_accdet_key_work);

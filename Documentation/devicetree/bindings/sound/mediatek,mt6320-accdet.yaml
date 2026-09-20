@@ -18,10 +18,18 @@ properties:
   io-channel-names:
     const: key
 
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: accdet
+
 required:
   - compatible
   - detect-gpios
   - io-channels
   - io-channel-names
+  - clocks
+  - clock-names
 
 additionalProperties: false

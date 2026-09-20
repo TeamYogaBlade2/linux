@@ -59,6 +59,8 @@
 
 		mt6320_accdet: accdet {
 			compatible = "mediatek,mt6320-accdet";
+			clocks = <&mt6320clock MT6320_TOPCKPDN_ACCDET_CK>;
+			clock-names = "accdet";
 		};
 
 		mt6320_adc: adc {
