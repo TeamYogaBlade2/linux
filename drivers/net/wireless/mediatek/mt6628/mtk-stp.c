@@ -450,7 +450,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	frame[4] = 0x80;
 	frame[5] = (task << 4) | ((len >> 8) & 0x0f);
 	frame[6] = len & 0xff;
-	frame[7] = 0;
+	frame[7] = (u8)(frame[4] + frame[5] + frame[6]);
 	memcpy(frame + MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE,
 	       buf, len);
 
