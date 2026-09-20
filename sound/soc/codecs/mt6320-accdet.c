@@ -411,6 +411,11 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 		if (ret)
 			return dev_err_probe(&pdev->dev, ret,
 					     "failed to enable ACCDET\n");
+	} else {
+		ret = mt6320_accdet_disable(priv);
+		if (ret)
+			return dev_err_probe(&pdev->dev, ret,
+					     "failed to disable idle ACCDET\n");
 	}
 
 	return devm_snd_soc_register_component(&pdev->dev,
