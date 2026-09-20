@@ -343,6 +343,15 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		if (!(wmt->rx_buf[pos] & BIT(7)))
 			break;
 
+		if (wmt->rx_buf[pos + 3] !=
+		    (u8)(wmt->rx_buf[pos] +
+			 wmt->rx_buf[pos + 1] +
+			 wmt->rx_buf[pos + 2])) {
+			dev_warn(&wmt->func->dev,
+				 "invalid STP header checksum\n");
+			break;
+		}
+
 		task = (wmt->rx_buf[pos + 1] >> 4) & 0x07;
 		len = ((wmt->rx_buf[pos + 1] & 0x0f) << 8) |
 			wmt->rx_buf[pos + 2];
