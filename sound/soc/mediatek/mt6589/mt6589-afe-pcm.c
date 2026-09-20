@@ -49,7 +49,7 @@
 #define AFE_IRQ_MCU_STATUS_IRQ1	BIT(0)
 #define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
 #define AFE_IRQ_MCU_CLR		0x03a8
-#define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | BIT(1) | BIT(0))	/* ack when STATUS=0 */
+#define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | GENMASK(4, 0))
 #define AFE_IRQ_MCU_CNT1	0x03ac
 
 /* DL1 -> interconnect -> ADDA downlink SRC -> AFE<->PMIC link. */
@@ -409,7 +409,7 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 
 	/* mask all AFE IRQs + clear stale status before hooking the GIC */
 	regmap_write(afe->regmap, AFE_IRQ_MCU_CON, 0);
-	regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, AFE_IRQ_MCU_STATUS_MASK);
+	regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, AFE_IRQ_MCU_CLR_NOSTATUS);
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
