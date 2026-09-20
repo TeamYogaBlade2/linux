@@ -7,7 +7,7 @@
  * (mt6589 AFE driver) and the sound card are separate drivers.
  *
  * Register map follows the MT6589 BSP AudDrv_ANA: the analog blocks sit
- * at 0x0700.. (AUDBUF/ZCD) and the ABB AFE bridge at 0x4000.., which
+ * at 0x0700.. (AUDBUF/ZCD) and the ABB AFE bridge at 0x2000.., which
  * differs from the MT6323 layout.  Audio clocks come from CCF through
  * the mt6320-clk provider instead of direct TOP_CKPDN poking.
  */
