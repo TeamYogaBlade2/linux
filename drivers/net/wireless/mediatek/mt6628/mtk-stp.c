@@ -551,9 +551,6 @@ static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
 	unsigned long timeout;
 	int ret;
 
-	if (response_len)
-		*response_len = 0;
-
 	mutex_lock(&wmt->tx_lock);
 	reinit_completion(&wmt->wmt_done);
 
