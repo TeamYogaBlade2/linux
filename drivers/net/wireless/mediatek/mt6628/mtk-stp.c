@@ -861,6 +861,10 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	if (ret)
 		goto err_irq;
 
+	ret = mt6628_wmt_init(wmt);
+	if (ret)
+		goto err_irq_disable;
+
 	ret = mfd_add_devices(&func->dev, PLATFORM_DEVID_AUTO,
 			      mt6628_stp_cells,
 			      ARRAY_SIZE(mt6628_stp_cells), NULL, 0, NULL);
