@@ -22,6 +22,7 @@
 #include <linux/unaligned.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <linux/property.h>
 
 #include <linux/mfd/mt6628.h>
 
@@ -121,6 +122,12 @@ struct mt6628_wmt {
 	int wmt_status;
 	u8 wmt_response[MT6628_WMT_RESPONSE_MAX];
 	u8 wmt_response_len;
+
+	bool coex_configured;
+	u8 coex_ant_mode;
+	bool co_clock_enabled;
+	bool sdio_driving_configured;
+	u32 sdio_driving_cfg;
 };
 
 static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
@@ -1059,6 +1066,14 @@ static int mt6628_wmt_init(struct mt6628_wmt *wmt)
 	if (ret)
 		return ret;
 
+	ret = mt6628_wmt_set_sdio_driving(wmt);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_co_clock_init(wmt);
+	if (ret)
+		return ret;
+
 	ret = mt6628_wmt_merge_if_init(wmt);
 	if (ret)
 		return ret;
@@ -1103,7 +1118,7 @@ static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
 
 static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt)
 {
-	static const u8 cmd[] = {
+	u8 cmd[] = {
 		0x01, 0x10, 0x02, 0x00,
 		0x01, 0x00,
 	};
@@ -1113,6 +1128,11 @@ static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt)
 	u8 response[MT6628_WMT_RESPONSE_MAX];
 	size_t response_len = sizeof(response);
 	int ret;
+
+	if (!wmt->coex_configured)
+		return 0;
+
+	cmd[5] = wmt->coex_ant_mode;
 
 	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x10, 1000,
 			     response, &response_len);
@@ -1124,6 +1144,55 @@ static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt)
 		return -EPROTO;
 
 	return 0;
+}
+
+static int mt6628_wmt_co_clock_init(struct mt6628_wmt *wmt)
+{
+	static const u8 cmd[] = {
+		0x01, 0x0a, 0x02, 0x00,
+		0x08, 0x03,
+	};
+	static const u8 expected[] = {
+		0x02, 0x0a, 0x01, 0x00, 0x00,
+	};
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	if (!wmt->co_clock_enabled)
+		return 0;
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x0a, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
+}
+
+static int mt6628_wmt_set_sdio_driving(struct mt6628_wmt *wmt)
+{
+	u8 cmd[] = {
+		0x01, 0x08, 0x10, 0x00,
+		0x01, 0x01, 0x00, 0x01,
+		0x50, 0x00, 0x05, 0x80,
+		0x00, 0x00, 0x00, 0x00,
+		0x77, 0x77, 0x07, 0x00,
+	};
+
+	if (!wmt->sdio_driving_configured)
+		return 0;
+
+	cmd[12] = wmt->sdio_driving_cfg & 0x77;
+	cmd[13] = (wmt->sdio_driving_cfg >> 8) & 0x77;
+	cmd[14] = (wmt->sdio_driving_cfg >> 16) & 0x07;
+
+	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+			      NULL, NULL);
 }
 
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
@@ -1185,6 +1254,20 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	wmt->tx_fifo_free = MT6628_STP_TX_FIFO_SIZE;
 	INIT_WORK(&wmt->rx_work, mt6628_stp_rx_work);
 	sdio_set_drvdata(func, wmt);
+
+	if (!device_property_read_u8(&func->dev,
+				     "mediatek,coex-ant-mode",
+				     &wmt->coex_ant_mode))
+		wmt->coex_configured = true;
+
+	wmt->co_clock_enabled =
+		device_property_read_bool(&func->dev,
+					  "mediatek,co-clock");
+
+	if (!device_property_read_u32(&func->dev,
+				      "mediatek,sdio-driving-cfg",
+				      &wmt->sdio_driving_cfg))
+		wmt->sdio_driving_configured = true;
 
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
