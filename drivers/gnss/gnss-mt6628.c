@@ -163,8 +163,10 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 	priv->open = false;
 	mutex_unlock(&priv->lock);
 
-	if (was_open)
+	if (was_open) {
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
 		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+	}
 
 	mt6628_stp_unregister_rx(priv->wmt, MT6628_STP_TASK_GPS,
 					 mtk_gnss_rx, priv);
