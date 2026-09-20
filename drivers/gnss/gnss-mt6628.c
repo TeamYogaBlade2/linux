@@ -64,7 +64,14 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
-	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
+
+	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
+	if (!ret) {
+		ret = mt6628_wmt_func_ctrl(priv->wmt,
+					   MT6628_WMT_FUNC_GPS, true);
+		if (ret)
+			mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+	}
 	if (!ret)
 		priv->open = true;
 	mutex_unlock(&priv->lock);
@@ -82,8 +89,10 @@ static void mtk_gnss_close(struct gnss_device *gdev)
 	priv->open = false;
 	mutex_unlock(&priv->lock);
 
-	if (was_open)
+	if (was_open) {
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
 		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+	}
 }
 
 static const struct gnss_operations mtk_gnss_ops = {
