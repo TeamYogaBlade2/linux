@@ -137,6 +137,13 @@ static void mt6320_accdet_key_work(struct work_struct *work)
 
 	state = FIELD_GET(GENMASK(7, 6), val);
 	if (state != 0) {
+		if (priv->last_state == 0) {
+			if (state == 1)
+				mt6320_accdet_report(priv,
+						    SND_JACK_HEADSET);
+			else if (state == 3)
+				mt6320_accdet_report(priv, 0);
+		}
 		priv->last_state = state;
 		goto out;
 	}
