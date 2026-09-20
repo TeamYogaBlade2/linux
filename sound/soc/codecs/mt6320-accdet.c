@@ -333,6 +333,7 @@ static const struct snd_soc_component_driver mt6320_accdet_component = {
 static int mt6320_accdet_probe(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv;
+	struct mt6397_chip *pmic;
 	int ret;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
@@ -340,10 +341,11 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	priv->dev = &pdev->dev;
-	priv->regmap = dev_get_regmap(pdev->dev.parent, NULL);
-	if (!priv->regmap)
+	pmic = dev_get_drvdata(pdev->dev.parent);
+	if (!pmic || !pmic->regmap)
 		return dev_err_probe(&pdev->dev, -ENODEV,
-				     "missing PMIC regmap\n");
+				"missing PMIC regmap\n");
+	priv->regmap = pmic->regmap;
 
 	mutex_init(&priv->lock);
 	platform_set_drvdata(pdev, priv);
