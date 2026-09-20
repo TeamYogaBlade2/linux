@@ -886,7 +886,7 @@ static int mt6628_wmt_patch_download(struct mt6628_wmt *wmt,
 {
 	const char * const *names;
 	unsigned int name_count;
-	struct firmware *fw[ARRAY_SIZE(mt6628_e2_patch_names)] = { };
+	const struct firmware *fw[ARRAY_SIZE(mt6628_e2_patch_names)] = { };
 	unsigned int patch_count;
 	unsigned int i;
 	unsigned int expected_seq = 1;
