@@ -641,17 +641,28 @@ static int mt6320_newif_event(struct snd_soc_dapm_widget *w,
 {
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	int ret;
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),  0x0001);
-		regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11), 0x0303);
-		break;
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),
+				   0x0001);
+		if (ret)
+			return ret;
+
+		return regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11),
+				    0x0303);
+
 	case SND_SOC_DAPM_POST_PMD:
-		regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11), 0x0000);
-		regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),  0x0000);
-		break;
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11),
+				   0x0000);
+		if (ret)
+			return ret;
+
+		return regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),
+				    0x0000);
 	}
+
 	return 0;
 }
 
