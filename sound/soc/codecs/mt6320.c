@@ -31,19 +31,19 @@
 #define MT6320_CODEC_FORMATS	SNDRV_PCM_FMTBIT_S16_LE
 
 /*
- * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x4000,
+ * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x2000,
  * AUDTOP analog DAC/headphone block @ 0x0700.
  */
-#define MT6320_ABB_AFE_CON(n)		(0x4000 + (n) * 2)
+#define MT6320_ABB_AFE_CON(n)		(0x2000 + (n) * 2)
 #define MT6320_AUDTOP_CON(n)		(0x0700 + (n) * 2)
-#define MT6320_ABB_AFE_UP8X_FIFO_CFG0	0x401e
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG0	0x4024
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG1	0x4026
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG2	0x4028
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG3	0x402a
+#define MT6320_ABB_AFE_UP8X_FIFO_CFG0	0x202c
+#define MT6320_ABB_AFE_PMIC_NEWIF_CFG0	0x2038
+#define MT6320_ABB_AFE_PMIC_NEWIF_CFG1	0x203a
+#define MT6320_ABB_AFE_PMIC_NEWIF_CFG2	0x203c
+#define MT6320_ABB_AFE_PMIC_NEWIF_CFG3	0x203e
 
 #define MT6320_CID			0x0100
-#define MT6320_AFUNC_AUD_CON2		0x4038
+#define MT6320_AFUNC_AUD_CON2		0x2020
 
 #define MT6320_AUDDAC_CON0		0x0700
 #define MT6320_AUDBUF_CFG0		0x0702
@@ -142,7 +142,7 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	 * sample rate as well as the NEWIF rate code.
 	 */
 	return regmap_update_bits(priv->regmap,
-				  0x4002,
+				  0x2002,
 				  GENMASK(15, 4),
 				  params_rate(params) & GENMASK(15, 4));
 }
@@ -281,7 +281,7 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		ret = regmap_write(priv->regmap, 0x4014, 0x0000);
+		ret = regmap_write(priv->regmap, 0x2014, 0x0000);
 		if (ret)
 			return ret;
 
@@ -294,7 +294,7 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x4034, 0xc3a1);
+		ret = regmap_write(priv->regmap, 0x201c, 0xc3a1);
 		if (ret)
 			return ret;
 
@@ -308,19 +308,19 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x4008, 0x001e);
+		ret = regmap_write(priv->regmap, 0x2008, 0x001e);
 		if (ret)
 			return ret;
 
-		ret = regmap_set_bits(priv->regmap, 0x4000, BIT(0));
+		ret = regmap_set_bits(priv->regmap, 0x2000, BIT(0));
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x4004, 0x1801);
+		ret = regmap_write(priv->regmap, 0x2004, 0x1801);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x4012, 0x0000);
+		ret = regmap_write(priv->regmap, 0x2012, 0x0000);
 		if (ret)
 			return ret;
 
