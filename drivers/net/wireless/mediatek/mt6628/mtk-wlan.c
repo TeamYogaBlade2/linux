@@ -612,3 +612,4 @@ module_sdio_driver(mt6628_wlan_driver);
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("MediaTek MT6628 WLAN driver");
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE(MT6628_FW_NAME);
