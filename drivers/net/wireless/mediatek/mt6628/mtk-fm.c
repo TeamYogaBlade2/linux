@@ -79,7 +79,7 @@ static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
 		return;
 
 	payload_len = get_unaligned_le16(buf + 2);
-	if (payload_len > len - 4)
+	if (payload_len != len - 4)
 		return;
 
 	if (buf[1] != fm->waiting_opcode)
