@@ -131,12 +131,11 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 		if (priv->last_state == 1) {
 			int button = mt6320_accdet_key(priv);
 
-			if (button >= 0) {
-				mt6320_accdet_report(priv, SND_JACK_HEADSET | button);
+			if (button >= 0)
+				mt6320_accdet_report(priv,
+						    SND_JACK_HEADSET | button);
+			else
 				mt6320_accdet_report(priv, SND_JACK_HEADSET);
-			} else {
-				mt6320_accdet_report(priv, SND_JACK_HEADSET);
-			}
 		} else {
 			mt6320_accdet_report(priv, SND_JACK_HEADPHONE);
 		}
