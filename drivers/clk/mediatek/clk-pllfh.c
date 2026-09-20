@@ -127,13 +127,20 @@ static int pllfh_init(struct mtk_fh *fh,
 		return PTR_ERR(offset);
 
 	if (pllfh_data->data.fh_ver == FHCTL_PLLFH_V3)
+	{
 		regs->reg_hp_en = pll_base + offset->offset_hp_en;
-	else
+		regs->reg_clk_con = NULL;
+		regs->reg_rst_con = NULL;
+		regs->reg_slope0 = NULL;
+		regs->reg_slope1 = NULL;
+	}
+	else {
 		regs->reg_hp_en = base + offset->offset_hp_en;
-	regs->reg_clk_con = base + offset->offset_clk_con;
-	regs->reg_rst_con = base + offset->offset_rst_con;
-	regs->reg_slope0 = base + offset->offset_slope0;
-	regs->reg_slope1 = base + offset->offset_slope1;
+		regs->reg_clk_con = base + offset->offset_clk_con;
+		regs->reg_rst_con = base + offset->offset_rst_con;
+		regs->reg_slope0 = base + offset->offset_slope0;
+		regs->reg_slope1 = base + offset->offset_slope1;
+	}
 
 	regs->reg_cfg = fhx_base + offset->offset_cfg;
 	regs->reg_updnlmt = fhx_base + offset->offset_updnlmt;

@@ -78,8 +78,10 @@ static void dump_hw(struct mtk_clk_pll *pll, struct fh_pll_regs *regs,
 		    const struct fh_pll_data *data)
 {
 	pr_info("hp_en<%x>,clk_con<%x>,slope0<%x>,slope1<%x>\n",
-		readl(regs->reg_hp_en), readl(regs->reg_clk_con),
-		readl(regs->reg_slope0), readl(regs->reg_slope1));
+		readl(regs->reg_hp_en),
+		regs->reg_clk_con ? readl(regs->reg_clk_con) : 0,
+		regs->reg_slope0 ? readl(regs->reg_slope0) : 0,
+		regs->reg_slope1 ? readl(regs->reg_slope1) : 0);
 	pr_info("cfg<%x>,lmt<%x>,dds<%x>,dvfs<%x>,mon<%x>\n",
 		readl(regs->reg_cfg), readl(regs->reg_updnlmt),
 		readl(regs->reg_dds), readl(regs->reg_dvfs),
@@ -152,8 +154,10 @@ static int hopping_hw_flow(struct mtk_clk_pll *pll, struct fh_pll_regs *regs,
 
 	writel(readl(regs->reg_cfg) | data->sfstrx_en, regs->reg_cfg);
 	writel(readl(regs->reg_cfg) | data->fhctlx_en, regs->reg_cfg);
-	writel(data->slope0_value, regs->reg_slope0);
-	writel(data->slope1_value, regs->reg_slope1);
+	if (regs->reg_slope0)
+		writel(data->slope0_value, regs->reg_slope0);
+	if (regs->reg_slope1)
+		writel(data->slope1_value, regs->reg_slope1);
 
 	writel(readl(regs->reg_hp_en) | BIT(data->fh_id), regs->reg_hp_en);
 	writel((new_dds) | (data->dvfs_tri), regs->reg_dvfs);
@@ -268,13 +272,15 @@ void fhctl_hw_init(struct mtk_fh *fh)
 	u32 val;
 
 	/* initial hw register */
-	val = readl(regs.reg_clk_con) | BIT(data.fh_id);
-	writel(val, regs.reg_clk_con);
+	if (regs.reg_clk_con && regs.reg_rst_con) {
+		val = readl(regs.reg_clk_con) | BIT(data.fh_id);
+		writel(val, regs.reg_clk_con);
 
-	val = readl(regs.reg_rst_con) & ~BIT(data.fh_id);
-	writel(val, regs.reg_rst_con);
-	val = readl(regs.reg_rst_con) | BIT(data.fh_id);
-	writel(val, regs.reg_rst_con);
+		val = readl(regs.reg_rst_con) & ~BIT(data.fh_id);
+		writel(val, regs.reg_rst_con);
+		val = readl(regs.reg_rst_con) | BIT(data.fh_id);
+		writel(val, regs.reg_rst_con);
+	}
 
 	writel(0x0, regs.reg_cfg);
 	writel(0x0, regs.reg_updnlmt);
