@@ -285,6 +285,7 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 {
 	struct mt6320_accdet *priv = data;
 	bool inserted;
+	int ret;
 
 	inserted = gpiod_get_value_cansleep(priv->detect);
 
@@ -294,15 +295,39 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		goto out;
 
 	if (inserted) {
-		if (!mt6320_accdet_enable(priv))
-			priv->plugged = true;
-		irq_set_irq_type(priv->eint_irq, IRQ_TYPE_LEVEL_HIGH);
+		ret = mt6320_accdet_enable(priv);
+		if (ret) {
+			dev_err_ratelimited(priv->dev,
+					    "failed to enable ACCDET: %d\n",
+					    ret);
+			goto out;
+		}
+
+		priv->plugged = true;
+
+		ret = irq_set_irq_type(priv->eint_irq,
+				       IRQ_TYPE_LEVEL_HIGH);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to configure plug-in IRQ: %d\n",
+					    ret);
 	} else {
-		mt6320_accdet_disable(priv);
+		ret = mt6320_accdet_disable(priv);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to disable ACCDET: %d\n",
+					    ret);
+
 		priv->plugged = false;
 		priv->last_state = 3;
 		mt6320_accdet_report(priv, 0);
-		irq_set_irq_type(priv->eint_irq, IRQ_TYPE_LEVEL_LOW);
+
+		ret = irq_set_irq_type(priv->eint_irq,
+				       IRQ_TYPE_LEVEL_LOW);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to configure plug-out IRQ: %d\n",
+					    ret);
 	}
 
 out:
