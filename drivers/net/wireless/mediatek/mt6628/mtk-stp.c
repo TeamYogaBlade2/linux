@@ -363,6 +363,19 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		if (frame_len > end - pos)
 			break;
 
+		if (crc16(0,
+			  wmt->rx_buf + pos +
+				  MT6628_STP_HEADER_SIZE,
+			  len) !=
+		    get_unaligned_le16(wmt->rx_buf + pos +
+				       MT6628_STP_HEADER_SIZE + len)) {
+			dev_warn(&wmt->func->dev,
+				 "invalid STP payload CRC\n");
+			padded_len = ALIGN(frame_len, 4);
+			pos += padded_len;
+			continue;
+		}
+
 		mt6628_stp_dispatch(wmt, task, wmt->rx_buf + pos +
 				    MT6628_STP_HEADER_SIZE, len);
 
