@@ -82,8 +82,8 @@
 #define MT6320_ZCD_CON3			0x073e	/* handset gain */
 #define MT6320_ZCD_CON4			0x0740	/* IV buffer gain */
 #define ZCD_GAIN_0DB			8
-#define ZCD_GAIN_CTL_MAX		0x12	/* +8dB .. -10dB */
-#define ZCD_GAIN_REG(g)			(((g) << 7) | (g))
+#define ZCD_GAIN_CTL_MAX		0x0c	/* +8dB .. -4dB */
+#define ZCD_GAIN_REG(g)			(((g) << 8) | (g))
 
 struct mt6320_codec_priv {
 	struct device *dev;
@@ -266,8 +266,7 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG1, 0x0018 },
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG2, 0x302f },	/* UL up8x rxif ADC */
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG3, 0xf872 },
-	/* Conservative default analog gains: headphone 0dB, lineout -10dB. */
-	{ MT6320_ZCD_CON1, ZCD_GAIN_REG(ZCD_GAIN_0DB - 10 + 18) },
+	/* Conservative default analog gain: headphone 0dB. */
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
 };
 
@@ -692,18 +691,12 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker", NULL, "Speaker Driver" },
 };
 
-/*
- * Output volume: -10dB .. +8dB in 1dB steps (the inverted ZCD gain field).
- * Same field layout as the MT6323, different register offsets.
- */
-static const DECLARE_TLV_DB_SCALE(mt6320_dl_tlv, -1000, 100, 0);
+/* Output volume: -4dB .. +8dB in 1dB steps. */
+static const DECLARE_TLV_DB_SCALE(mt6320_dl_tlv, -400, 100, 0);
 
 static const struct snd_kcontrol_new mt6320_snd_controls[] = {
 	SOC_DOUBLE_TLV("Headphone Volume",
-		       MT6320_ZCD_CON2, 0, 7, ZCD_GAIN_CTL_MAX, 1,
-		       mt6320_dl_tlv),
-	SOC_DOUBLE_TLV("Lineout Volume",
-		       MT6320_ZCD_CON1, 0, 7, ZCD_GAIN_CTL_MAX, 1,
+		       MT6320_ZCD_CON2, 0, 8, ZCD_GAIN_CTL_MAX, 1,
 		       mt6320_dl_tlv),
 };
 
