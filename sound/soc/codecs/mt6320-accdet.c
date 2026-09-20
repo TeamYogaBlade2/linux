@@ -319,7 +319,7 @@ static int mt6320_accdet_set_jack(struct snd_soc_component *component,
 	mutex_lock(&priv->lock);
 	priv->jack = jack;
 	if (priv->plugged)
-		mt6320_accdet_report(priv, SND_JACK_HEADPHONE);
+		mt6320_accdet_handle_state(priv);
 	mutex_unlock(&priv->lock);
 
 	return 0;
