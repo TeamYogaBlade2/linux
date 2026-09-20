@@ -13,9 +13,12 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/workqueue.h>
 
 #include <sound/jack.h>
 #include <sound/soc.h>
+
+#define MT6320_ACCDET_KEY_SAMPLE_MS	60
 
 #define MT6320_ACCDET_CTRL_EN		BIT(0)
 #define MT6320_ACCDET_SWCTRL_EN		0x07
@@ -39,6 +42,7 @@ struct mt6320_accdet {
 	struct iio_channel *key;
 	struct snd_soc_jack *jack;
 	struct mutex lock;
+	struct delayed_work key_work;
 	int accdet_irq;
 	int eint_irq;
 	int last_state;
@@ -114,11 +118,48 @@ static int mt6320_accdet_key(struct mt6320_accdet *priv)
 	return -1;
 }
 
+static void mt6320_accdet_key_work(struct work_struct *work)
+{
+	struct mt6320_accdet *priv =
+		container_of(to_delayed_work(work),
+			     struct mt6320_accdet, key_work);
+	unsigned int val;
+	int state;
+	int button;
+
+	mutex_lock(&priv->lock);
+
+	if (!priv->plugged || !priv->jack || priv->last_state != 0)
+		goto out;
+
+	if (regmap_read(priv->regmap, MT6320_ACCDET_STATE_RG, &val))
+		goto out;
+
+	state = FIELD_GET(GENMASK(7, 6), val);
+	if (state != 0) {
+		priv->last_state = state;
+		goto out;
+	}
+
+	button = mt6320_accdet_key(priv);
+	if (button >= 0)
+		mt6320_accdet_report(priv, SND_JACK_HEADSET | button);
+	else
+		mt6320_accdet_report(priv, SND_JACK_HEADSET);
+
+	schedule_delayed_work(&priv->key_work,
+			      msecs_to_jiffies(MT6320_ACCDET_KEY_SAMPLE_MS));
+
+out:
+	mutex_unlock(&priv->lock);
+}
+
 static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 {
 	unsigned int val;
 	int state;
 	int ret;
+	bool start_key_work = false;
 
 	ret = regmap_read(priv->regmap, MT6320_ACCDET_STATE_RG, &val);
 	if (ret)
@@ -136,7 +177,8 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 						    SND_JACK_HEADSET | button);
 			else
 				mt6320_accdet_report(priv, SND_JACK_HEADSET);
-		} else {
+			start_key_work = true;
+		} else if (priv->last_state != 0) {
 			mt6320_accdet_report(priv, SND_JACK_HEADPHONE);
 		}
 		break;
@@ -151,6 +193,11 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 	}
 
 	priv->last_state = state;
+
+	if (start_key_work)
+		schedule_delayed_work(&priv->key_work,
+				      msecs_to_jiffies(
+					      MT6320_ACCDET_KEY_SAMPLE_MS));
 }
 
 static int mt6320_accdet_enable(struct mt6320_accdet *priv)
@@ -373,6 +420,7 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	priv->regmap = pmic->regmap;
 
 	mutex_init(&priv->lock);
+	INIT_DELAYED_WORK(&priv->key_work, mt6320_accdet_key_work);
 	platform_set_drvdata(pdev, priv);
 
 	priv->detect = devm_gpiod_get(&pdev->dev, "detect", GPIOD_IN);
@@ -448,6 +496,14 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 					       NULL, 0);
 }
 
+static int mt6320_accdet_remove(struct platform_device *pdev)
+{
+	struct mt6320_accdet *priv = platform_get_drvdata(pdev);
+
+	cancel_delayed_work_sync(&priv->key_work);
+	return 0;
+}
+
 static const struct of_device_id mt6320_accdet_of_match[] = {
 	{ .compatible = "mediatek,mt6320-accdet" },
 	{ }
@@ -456,6 +512,7 @@ MODULE_DEVICE_TABLE(of, mt6320_accdet_of_match);
 
 static struct platform_driver mt6320_accdet_driver = {
 	.probe = mt6320_accdet_probe,
+	.remove = mt6320_accdet_remove,
 	.driver = {
 		.name = "mt6320-accdet",
 		.of_match_table = mt6320_accdet_of_match,
