@@ -255,7 +255,7 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(10), 0x0001 },
 	/* NewIF serial link to the SoC AFE (up8x FIFO + DL/UL config). */
 	{ MT6320_ABB_AFE_UP8X_FIFO_CFG0,  0x0001 },
-	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG0, 0x7330 },	/* DL rate<<12|0x330 */
+	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG0, 0x8330 },	/* 48 kHz idle rate */
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG1, 0x0018 },
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG2, 0x302f },	/* UL up8x rxif ADC */
 	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG3, 0xf872 },
