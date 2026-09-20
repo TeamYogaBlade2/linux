@@ -897,14 +897,19 @@ static int mt6628_wmt_patch_download(struct mt6628_wmt *wmt,
 	 * ECO. E1 has its own patch; E2 and later ECOs use the two-part E2
 	 * patch set.
 	 */
-	if (hw_ver == 0x8a00) {
+	switch (hw_ver) {
+	case 0x8a00:
 		names = mt6628_e1_patch_names;
 		name_count = ARRAY_SIZE(mt6628_e1_patch_names);
-	} else if ((hw_ver & 0xff00) == 0x8a00 ||
-		   (hw_ver & 0xff00) == 0x8b00) {
+		break;
+	case 0x8a10:
+	case 0x8b10:
+	case 0x8b11:
+	case 0x8a11:
 		names = mt6628_e2_patch_names;
 		name_count = ARRAY_SIZE(mt6628_e2_patch_names);
-	} else {
+		break;
+	default:
 		dev_err(&wmt->func->dev,
 			"unsupported MT6628 HW version %#x\n", hw_ver);
 		return -ENODEV;
