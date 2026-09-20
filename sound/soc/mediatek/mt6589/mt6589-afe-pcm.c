@@ -29,7 +29,7 @@
 
 /* AFE registers (classic mt65xx layout); stock magic values noted inline. */
 #define AUDIO_TOP_CON0		0x0000
-#define AUDIO_TOP_CON0_AFE_ON	0x60004000
+#define AUDIO_TOP_CON0_AFE_ON	0x00004000
 #define AFE_DAC_CON0		0x0010
 #define AFE_DAC_CON0_AFE_ON	BIT(0)
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
