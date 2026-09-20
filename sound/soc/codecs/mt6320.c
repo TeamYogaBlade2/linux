@@ -744,6 +744,10 @@ static int mt6320_codec_probe(struct platform_device *pdev)
 	struct mt6320_codec_priv *priv;
 	int ret;
 
+	if (!pmic || !pmic->regmap)
+		return dev_err_probe(&pdev->dev, -ENODEV,
+				     "missing PMIC regmap\n");
+
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
