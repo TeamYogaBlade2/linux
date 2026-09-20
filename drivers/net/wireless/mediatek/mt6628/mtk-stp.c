@@ -7,6 +7,7 @@
  */
 
 #include <linux/completion.h>
+#include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/bitfield.h>
 #include <linux/jiffies.h>
@@ -453,6 +454,10 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	frame[7] = (u8)(frame[4] + frame[5] + frame[6]);
 	memcpy(frame + MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE,
 	       buf, len);
+	put_unaligned_le16(
+		crc16(0, buf, len),
+		frame + MT6628_STP_SDIO_HDR_SIZE +
+			MT6628_STP_HEADER_SIZE + len);
 
 	ret = wait_event_interruptible_timeout(
 		wmt->tx_waitq,
