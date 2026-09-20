@@ -18,6 +18,7 @@
 #include <linux/module.h>
 #include <linux/mfd/mt6628.h>
 #include <linux/mutex.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -27,6 +28,8 @@ struct mtk_gnss {
 	struct gnss_device *gdev;
 	struct mt6628_wmt *wmt;
 	struct mutex lock;
+	struct pinctrl *pinctrl;
+	struct pinctrl_state *gps_sync;
 	bool open;
 };
 
@@ -66,6 +69,12 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 	}
 
 	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
+	if (!ret && priv->gps_sync) {
+		ret = pinctrl_select_state(priv->pinctrl,
+					   priv->gps_sync);
+		if (ret)
+			mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+	}
 	if (!ret) {
 		ret = mt6628_wmt_func_ctrl(priv->wmt,
 					   MT6628_WMT_FUNC_GPS, true);
@@ -90,8 +99,8 @@ static void mtk_gnss_close(struct gnss_device *gdev)
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
-		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
 		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
 	}
 }
 
@@ -118,6 +127,20 @@ static int mtk_gnss_probe(struct platform_device *pdev)
 
 	priv->wmt = wmt;
 	mutex_init(&priv->lock);
+
+	priv->pinctrl = devm_pinctrl_get_optional(&pdev->dev);
+	if (IS_ERR(priv->pinctrl))
+		return PTR_ERR(priv->pinctrl);
+
+	if (priv->pinctrl) {
+		priv->gps_sync = pinctrl_lookup_state(priv->pinctrl,
+						      "gps-sync");
+		if (IS_ERR(priv->gps_sync)) {
+			dev_dbg(&pdev->dev,
+				"GPS_SYNC pinctrl state not provided\n");
+			priv->gps_sync = NULL;
+		}
+	}
 
 	gdev = gnss_allocate_device(&pdev->dev);
 	if (IS_ERR(gdev))
