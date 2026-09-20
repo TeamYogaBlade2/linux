@@ -9,11 +9,13 @@
 
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/input.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 
 #include <sound/jack.h>
 #include <sound/soc.h>
+#include <sound/soc-jack.h>
 
 SND_SOC_DAILINK_DEFS(playback,
 	DAILINK_COMP_ARRAY(COMP_CPU("mt6589-afe-dl1")),
@@ -47,18 +49,18 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	if (ret)
 		return ret;
 
-	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
-				   SND_JACK_BTN_0, KEY_PLAYPAUSE);
+	ret = snd_jack_set_key(mt6589_mt6320_hp_jack.jack,
+			       SND_JACK_BTN_0, KEY_PLAYPAUSE);
 	if (ret)
 		return ret;
 
-	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
-				   SND_JACK_BTN_1, KEY_PREVIOUSSONG);
+	ret = snd_jack_set_key(mt6589_mt6320_hp_jack.jack,
+			       SND_JACK_BTN_1, KEY_PREVIOUSSONG);
 	if (ret)
 		return ret;
 
-	ret = snd_soc_jack_set_key(&mt6589_mt6320_hp_jack,
-				   SND_JACK_BTN_2, KEY_NEXTSONG);
+	ret = snd_jack_set_key(mt6589_mt6320_hp_jack.jack,
+			       SND_JACK_BTN_2, KEY_NEXTSONG);
 	if (ret)
 		return ret;
 
