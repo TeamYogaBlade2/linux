@@ -436,7 +436,7 @@
 
 /* SDIO */
 &mmc3 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
