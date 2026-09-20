@@ -516,9 +516,19 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 static int mt6320_accdet_remove(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv = platform_get_drvdata(pdev);
+	int ret = 0;
 
 	cancel_delayed_work_sync(&priv->key_work);
-	return 0;
+
+	mutex_lock(&priv->lock);
+	if (priv->plugged)
+		ret = mt6320_accdet_disable(priv);
+	priv->plugged = false;
+	priv->last_state = 3;
+	mt6320_accdet_report(priv, 0);
+	mutex_unlock(&priv->lock);
+
+	return ret;
 }
 
 static const struct of_device_id mt6320_accdet_of_match[] = {
