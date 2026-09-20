@@ -232,25 +232,31 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		afe->dl1_substream = substream;
-		/* atomic: memif start + period IRQ only (HW-IRQ driven) */
+
+		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
+		regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
+				AFE_ADDA_DL_SRC2_CON0_ON);
+		regmap_set_bits(afe->regmap, AFE_I2S_CON1,
+				AFE_I2S_CON1_ON);
+		regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
+				AFE_ADDA_UL_DL_CON0_ON);
 		regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON, AFE_IRQ_MCU_CON_IRQ1_ON);
 		regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_ON);
+		regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_AFE_ON);
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		/* minimal stop: DL1 memif + period IRQ only; .prepare re-asserts the rest */
 		regmap_clear_bits(afe->regmap, AFE_IRQ_MCU_CON, AFE_IRQ_MCU_CON_IRQ1_ON);
+		regmap_clear_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_ON);
 		regmap_clear_bits(afe->regmap, AFE_CONN1, AFE_CONN1_DL1_O3);
 		regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_DL1_O4);
-		regmap_clear_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_ON);
 		regmap_clear_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
 				  AFE_ADDA_DL_SRC2_CON0_ON);
 		regmap_clear_bits(afe->regmap, AFE_I2S_CON1, AFE_I2S_CON1_ON);
 		regmap_clear_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
 				  AFE_ADDA_UL_DL_CON0_ON);
+		regmap_clear_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_AFE_ON);
 		afe->dl1_substream = NULL;
 		return 0;
 	default:
