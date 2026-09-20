@@ -1032,11 +1032,23 @@ static int mt6628_wmt_init(struct mt6628_wmt *wmt)
 		 hw_ver, rom_ver);
 
 	/*
-	 * The downstream performs patch download before this reset.
-	 * Do not pretend that reset + merge configuration is a complete
-	 * WMT firmware bring-up until the multi-patch path is implemented.
+	 * MT6628 downstream performs combo patch download before the
+	 * normal WMT initialization sequence. E1 uses one patch while E2
+	 * and later supported ECOs use the E2 multi-patch set.
+	 */
+	ret = mt6628_wmt_patch_download(wmt, hw_ver, rom_ver);
+	if (ret)
+		return ret;
+
+	/*
+	 * bq/aquaris-5 performs another reset after the multi-patch loop.
+	 * mt6628_wmt_patch_download() already performs the per-patch reset.
 	 */
 	ret = mt6628_wmt_reset(wmt);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_coex_init(wmt);
 	if (ret)
 		return ret;
 
@@ -1082,8 +1094,33 @@ static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
 				    0x00000004, 0x00000004);
 }
 
+static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt)
+{
+	static const u8 cmd[] = {
+		0x01, 0x10, 0x02, 0x00,
+		0x01, 0x00,
+	};
+	static const u8 expected[] = {
+		0x02, 0x10, 0x01, 0x00, 0x00,
+	};
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x10, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
+}
+
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
-				enum mt6628_wmt_func func, bool on)
+			 enum mt6628_wmt_func func, bool on)
 {
 	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
 
