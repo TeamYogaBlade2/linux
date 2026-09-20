@@ -86,14 +86,17 @@ static void mt6320_accdet_report(struct mt6320_accdet *priv,
 
 static int mt6320_accdet_key(struct mt6320_accdet *priv)
 {
-	int mv, ret;
+	int raw, mv, ret;
 
 	if (!priv->key)
 		return -1;
 
-	ret = iio_read_channel_processed(priv->key, &mv);
+	ret = iio_read_channel_raw(priv->key, &raw);
 	if (ret)
 		return -1;
+
+	/* MT6320 AUXADC: 10-bit conversion, 1.2 V full-scale. */
+	mv = raw * 1200 / 1024;
 
 	/*
 	 * Blade BSP thresholds:
