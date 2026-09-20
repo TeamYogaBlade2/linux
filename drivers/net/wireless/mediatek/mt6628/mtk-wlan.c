@@ -36,6 +36,7 @@
 
 #define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
 #define MT6628_FW_DL_CHUNK		2048
+#define MT6628_WLAN_SDIO_BLK_SIZE	512
 /* CFG_FW_LOAD_ADDRESS of the downstream config.h */
 #define MT6628_FW_LOAD_ADDRESS		0x00060000
 #define MT6628_FW_SIGNATURE		0x574b544d
@@ -249,14 +250,22 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	struct sdio_func *func = wl->func;
 	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
 	size_t pkt_len = ALIGN(hdr_len + extra_len + data_len, 4);
+	size_t tx_len = ALIGN(pkt_len, MT6628_WLAN_SDIO_BLK_SIZE);
 	u8 seq_num;
 	u8 *pkt;
 	int ret;
 
-	pkt = kzalloc(pkt_len, GFP_KERNEL);
+	pkt = kzalloc(tx_len, GFP_KERNEL);
 	if (!pkt)
 		return -ENOMEM;
 
+	/*
+	 * u2TxByteCount describes the actual HIF packet and remains
+	 * 4-byte aligned.  The SDIO transfer itself must follow the
+	 * 512-byte block access used by the downstream MT6628 driver.
+	 * The zeroed tail is therefore transport padding, not part of
+	 * the HIF packet.
+	 */
 	put_unaligned_le16(pkt_len, pkt);
 	pkt[2] = 0;			/* ether type offset */
 	pkt[3] = 0;			/* checksum flags: none */
@@ -271,7 +280,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 		memcpy(pkt + hdr_len + extra_len, data, data_len);
 
 	sdio_claim_host(func);
-	ret = sdio_writesb(func, MT6628_MCR_WTDR0, pkt, pkt_len);
+	ret = sdio_writesb(func, MT6628_MCR_WTDR0, pkt, tx_len);
 	sdio_release_host(func);
 
 	kfree(pkt);
