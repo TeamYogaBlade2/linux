@@ -137,14 +137,7 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	if (ret)
 		return ret;
 
-	/*
-	 * The MT6589 BSP programs the PMIC-side DL SRC with the actual
-	 * sample rate as well as the NEWIF rate code.
-	 */
-	return regmap_update_bits(priv->regmap,
-				  0x2002,
-				  GENMASK(15, 4),
-				  params_rate(params) & GENMASK(15, 4));
+	return 0;
 }
 
 static const struct snd_soc_dai_ops mt6320_dai_ops = {
