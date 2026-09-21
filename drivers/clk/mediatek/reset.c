@@ -131,7 +131,7 @@ static int reset_xlate(struct reset_controller_dev *rcdev,
 int mtk_register_reset_controller_with_dev(struct device *dev,
 					   const struct mtk_clk_rst_desc *desc)
 {
-	struct device_node *np = dev->of_node;
+	struct device_node *np;
 	struct regmap *regmap;
 	const struct reset_control_ops *rcops = NULL;
 	struct mtk_clk_rst_data *data;
@@ -141,6 +141,12 @@ int mtk_register_reset_controller_with_dev(struct device *dev,
 		dev_err(dev, "mtk clock reset desc is NULL\n");
 		return -EINVAL;
 	}
+
+	np = dev->of_node;
+	if (!np && dev->parent)
+		np = dev->parent->of_node;
+	if (!np)
+		return -EINVAL;
 
 	switch (desc->version) {
 	case MTK_RST_SIMPLE:
