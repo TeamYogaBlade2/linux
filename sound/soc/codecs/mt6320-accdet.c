@@ -237,14 +237,18 @@ static int mt6320_accdet_enable(struct mt6320_accdet *priv)
 err_ctrl:
 	cleanup_ret = regmap_clear_bits(priv->regmap, MT6320_ACCDET_CTRL,
 					MT6320_ACCDET_CTRL_EN);
-	if (!ret)
-		ret = cleanup_ret;
+	if (cleanup_ret)
+		dev_err_ratelimited(priv->dev,
+				    "failed to roll back ACCDET control: %d\n",
+				    cleanup_ret);
 err_swctrl:
 	cleanup_ret = regmap_clear_bits(priv->regmap,
 					MT6320_ACCDET_STATE_SWCTRL,
 					MT6320_ACCDET_SWCTRL_EN);
-	if (!ret)
-		ret = cleanup_ret;
+	if (cleanup_ret)
+		dev_err_ratelimited(priv->dev,
+				    "failed to roll back ACCDET switch control: %d\n",
+				    cleanup_ret);
 err_clk:
 	clk_disable_unprepare(priv->clk_accdet);
 	return ret;
