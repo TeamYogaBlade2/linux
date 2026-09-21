@@ -3,6 +3,7 @@
  * MediaTek MT6320 headset accessory detection.
  */
 
+#include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/gpio/consumer.h>

@@ -12,6 +12,7 @@
  * the mt6320-clk provider instead of direct TOP_CKPDN poking.
  */
 
+#include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
