@@ -59,13 +59,14 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 	if (!wl->runtime_started || !wl->fw_running || !wl->netdev)
 		return;
 
-	if (wl->sta_rec_idx == 0xfe)
-		return;
+	if (wl->sta_rec_idx != 0xfe) {
+		mt6628_wlan_activate_bss(wl, false);
+		mt6628_wlan_remove_sta_record(wl, wl->conn_bssid);
+		wl->sta_rec_idx = 0xfe;
+	}
 
-	mt6628_wlan_activate_bss(wl, false);
-	mt6628_wlan_remove_sta_record(wl, wl->conn_bssid);
+	/* The channel privilege may outlive STA-REC setup failures. */
 	mt6628_wlan_release_channel(wl);
-	wl->sta_rec_idx = 0xfe;
 }
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
