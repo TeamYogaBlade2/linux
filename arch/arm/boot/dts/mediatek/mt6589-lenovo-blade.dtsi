@@ -211,6 +211,14 @@
 		interrupt-parent = <&pio>;
 		// mount-matrix = ?
 	};
+
+	light-sensor@1c {
+		compatible = "dynaimage,al3320b";
+		reg = <0x1c>;
+
+		vdd-supply = <&mt6320_buck_vio18>;
+		// EINT4_ALS[2]
+	};
 };
 
 &i2c4 {
