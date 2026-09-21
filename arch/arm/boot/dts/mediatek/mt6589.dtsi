@@ -137,7 +137,7 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
-			clocks = <&infracfg CLK_INFRA_ARMDIV1>,
+			clocks = <&infracfg CLK_INFRA_MUX1>,
 				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
@@ -157,7 +157,7 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
-			clocks = <&infracfg CLK_INFRA_ARMDIV1>,
+			clocks = <&infracfg CLK_INFRA_MUX1>,
 				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
@@ -177,7 +177,7 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
-			clocks = <&infracfg CLK_INFRA_ARMDIV1>,
+			clocks = <&infracfg CLK_INFRA_MUX1>,
 				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
@@ -197,7 +197,7 @@
 			d-cache-sets = <128>;
 			next-level-cache = <&l2>;
 
-			clocks = <&infracfg CLK_INFRA_ARMDIV1>,
+			clocks = <&infracfg CLK_INFRA_MUX1>,
 				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
