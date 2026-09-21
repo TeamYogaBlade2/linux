@@ -79,6 +79,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 /* Runtime command/event protocol. */
 #define MT6628_WIFI_CMD_HEADER_LEN	8
 #define MT6628_WIFI_EVENT_HEADER_LEN	8
+#define MT6628_HIF_RX_HEADER_LEN	12
 #define MT6628_HIF_TX_RESOURCE_OFFSET	2
 #define MT6628_HIF_TX_PACKET_TYPE_OFFSET	6
 #define MT6628_HIF_TX_PKT_TYPE_CMD	1
@@ -117,6 +118,20 @@ struct mt6628_wifi_event_hdr {
 
 static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
 static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
+
+struct mt6628_hif_rx_hdr {
+	__le16 packet_len;
+	__le16 packet_type;
+	u8 header_len_offset;
+	u8 reorder_pal_tcl;
+	__le16 seq_no_tid;
+	u8 sta_rec_idx;
+	u8 rcpi;
+	u8 hw_channel_num;
+	u8 reserved;
+} __packed;
+
+static_assert(sizeof(struct mt6628_hif_rx_hdr) == MT6628_HIF_RX_HEADER_LEN);
 
 /* WCIR */
 #define MT6628_WCIR_CHIP_ID		GENMASK(15, 0)

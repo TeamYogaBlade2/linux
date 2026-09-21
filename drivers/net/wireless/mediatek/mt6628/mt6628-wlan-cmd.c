@@ -177,6 +177,8 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		return -EPROTO;
 
 	eth_hw_addr_set(wl->netdev, response.mac);
+	if (wl->wiphy)
+		ether_addr_copy(wl->wiphy->perm_addr, response.mac);
 	return 0;
 }
 

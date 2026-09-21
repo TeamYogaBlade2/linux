@@ -13,7 +13,6 @@
 #include "mtk-wlan-hif.h"
 
 #define MT6628_HIF_TX_HEADER_LEN		16
-#define MT6628_HIF_RX_HEADER_LEN		12
 #define MT6628_HIF_TX_BYTE_COUNT_MASK	GENMASK(11, 0)
 #define MT6628_HIF_TX_USER_PRIO_OFFSET	12
 #define MT6628_HIF_TX_RESOURCE_OFFSET	2
@@ -44,20 +43,7 @@ struct mt6628_hif_tx_hdr {
 	u8 reserved[2];
 } __packed;
 
-struct mt6628_hif_rx_hdr {
-	__le16 packet_len;
-	__le16 packet_type;
-	u8 header_len_offset;
-	u8 reorder_pal_tcl;
-	__le16 seq_no_tid;
-	u8 sta_rec_idx;
-	u8 rcpi;
-	u8 hw_channel_num;
-	u8 reserved;
-} __packed;
-
 static_assert(sizeof(struct mt6628_hif_tx_hdr) == MT6628_HIF_TX_HEADER_LEN);
-static_assert(sizeof(struct mt6628_hif_rx_hdr) == MT6628_HIF_RX_HEADER_LEN);
 
 static const u8 mt6628_tx_default_resources[MT6628_WLAN_TX_TC_NUM] = {
 	1, 20, 1, 1, 4, 1,
@@ -638,8 +624,15 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	init_waitqueue_head(&wl->event_wait);
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);
+	mutex_init(&wl->cfg_mutex);
 	init_completion(&wl->cmd_done);
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
+	wl->event_handler = mt6628_cfg80211_event_handler;
+	wl->mgmt_handler = mt6628_cfg80211_mgmt_handler;
+
+	ret = mt6628_cfg80211_init(wl);
+	if (ret)
+		return ret;
 
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
@@ -657,11 +650,13 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	eth_hw_addr_random(ndev);
 	netif_carrier_off(ndev);
 	*(struct mt6628_wlan **)netdev_priv(ndev) = wl;
+	ndev->ieee80211_ptr = &wl->wdev;
+	wl->wdev.netdev = ndev;
 	netif_napi_add(ndev, &wl->napi, mt6628_napi_poll);
 
 	ret = register_netdev(ndev);
 	if (ret)
-		goto err_free_netdev;
+		goto err_cfg80211;
 	wl->netdev = ndev;
 
 	sdio_claim_host(wl->func);
@@ -707,10 +702,12 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 err_unregister:
 	unregister_netdev(ndev);
 	wl->netdev = NULL;
-	return ret;
-err_free_netdev:
+err_cfg80211:
+	ndev->ieee80211_ptr = NULL;
+	wl->wdev.netdev = NULL;
 	netif_napi_del(&wl->napi);
 	free_netdev(ndev);
+	mt6628_cfg80211_deinit(wl);
 	return ret;
 }
 
@@ -720,6 +717,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	unsigned long flags;
 
 	wl->runtime_started = false;
+	mt6628_cfg80211_abort_scan(wl);
 
 	spin_lock_irqsave(&wl->cmd_lock, flags);
 	if (wl->cmd_pending) {
@@ -747,10 +745,15 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	if (ndev) {
 		unregister_netdev(ndev);
 		netif_napi_del(&wl->napi);
+		ndev->ieee80211_ptr = NULL;
+		wl->wdev.netdev = NULL;
 		wl->netdev = NULL;
 	}
 
 	mt6628_runtime_free_queues(wl);
+	wl->event_handler = NULL;
+	wl->mgmt_handler = NULL;
+	mt6628_cfg80211_deinit(wl);
 }
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_start);

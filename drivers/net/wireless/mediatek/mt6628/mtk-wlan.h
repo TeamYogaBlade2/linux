@@ -16,6 +16,7 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <net/cfg80211.h>
 
 #define MT6628_WLAN_TX_TC_NUM		6
 
@@ -31,10 +32,17 @@ struct mt6628_wlan {
 	struct work_struct event_work;
 	struct work_struct mgmt_work;
 	struct net_device *netdev;
+	struct wiphy *wiphy;
+	struct wireless_dev wdev;
 	bool runtime_started;
 	bool irq_claimed;
 	bool connected;
 	u8 sta_rec_idx;
+
+	struct mutex cfg_mutex;
+	struct cfg80211_scan_request *scan_req;
+	u8 scan_seq;
+	bool scan_done_pending;
 
 	spinlock_t tx_lock;
 	u8 tx_free[MT6628_WLAN_TX_TC_NUM];
@@ -70,6 +78,14 @@ struct mt6628_wlan {
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl);
 void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl);
 int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
+
+int mt6628_cfg80211_init(struct mt6628_wlan *wl);
+void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
+void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
+					   struct sk_buff *skb);
+void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
+					  struct sk_buff *skb);
+void mt6628_cfg80211_abort_scan(struct mt6628_wlan *wl);
 
 int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 			 const void *payload, size_t payload_len,
