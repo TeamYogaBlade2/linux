@@ -15,6 +15,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/fs.h>
 #include <linux/firmware.h>
 #include <linux/completion.h>
 #include <linux/kernel.h>
@@ -63,11 +64,14 @@ struct mtk_fm {
 	struct mt6628_wmt *wmt;
 	struct completion cmd_done;
 	struct mutex cmd_lock;
+	struct mutex power_lock;
 	u8 waiting_opcode;
 	int cmd_status;
 	u8 cmd_data[4];
 	size_t cmd_data_len;
 	u32 freq;			/* in 10 kHz units */
+	unsigned int users;
+	bool powered;
 };
 
 static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
@@ -525,6 +529,93 @@ static int mtk_fm_power_down(struct mtk_fm *fm)
 	return ret;
 }
 
+static int mtk_fm_power_get(struct mtk_fm *fm)
+{
+	int ret;
+
+	mutex_lock(&fm->power_lock);
+
+	if (fm->users) {
+		fm->users++;
+		mutex_unlock(&fm->power_lock);
+		return 0;
+	}
+
+	ret = mt6628_wmt_func_ctrl(fm->wmt, MT6628_WMT_FUNC_FM, true);
+	if (ret)
+		goto out_unlock;
+
+	ret = mtk_fm_power_up(fm);
+	if (ret) {
+		mtk_fm_power_down(fm);
+		mt6628_wmt_func_ctrl(fm->wmt,
+				     MT6628_WMT_FUNC_FM, false);
+		goto out_unlock;
+	}
+
+	fm->powered = true;
+	fm->users = 1;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&fm->power_lock);
+	return ret;
+}
+
+static void mtk_fm_power_put(struct mtk_fm *fm)
+{
+	int ret;
+
+	mutex_lock(&fm->power_lock);
+
+	if (!fm->users) {
+		mutex_unlock(&fm->power_lock);
+		return;
+	}
+
+	fm->users--;
+	if (fm->users) {
+		mutex_unlock(&fm->power_lock);
+		return;
+	}
+
+	if (fm->powered) {
+		ret = mtk_fm_power_down(fm);
+		if (ret)
+			dev_warn(fm->dev,
+				 "FM power-down failed: %d\n", ret);
+		fm->powered = false;
+	}
+
+	ret = mt6628_wmt_func_ctrl(fm->wmt,
+				   MT6628_WMT_FUNC_FM, false);
+	if (ret)
+		dev_warn(fm->dev,
+			 "FM function-off failed: %d\n", ret);
+
+	mutex_unlock(&fm->power_lock);
+}
+
+static int mtk_fm_open(struct file *file)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+	int ret;
+
+	ret = nonseekable_open(file_inode(file), file);
+	if (ret)
+		return ret;
+
+	return mtk_fm_power_get(fm);
+}
+
+static int mtk_fm_release(struct file *file)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+
+	mtk_fm_power_put(fm);
+	return 0;
+}
+
 struct mtk_fm_chan_para {
 	u16 freq;
 	u8 value;
@@ -748,6 +839,8 @@ static const struct v4l2_ioctl_ops mtk_fm_ioctl_ops = {
 
 static const struct v4l2_file_operations mtk_fm_fops = {
 	.owner			= THIS_MODULE,
+	.open			= mtk_fm_open,
+	.release		= mtk_fm_release,
 	.unlocked_ioctl		= video_ioctl2,
 };
 
@@ -769,6 +862,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	fm->wmt = wmt;
 	init_completion(&fm->cmd_done);
 	mutex_init(&fm->cmd_lock);
+	mutex_init(&fm->power_lock);
 	fm->waiting_opcode = 0xff;
 
 	fm->freq = 8750;	/* 87.5 MHz in 10kHz units */
@@ -781,18 +875,6 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	ret = v4l2_device_register(&pdev->dev, &fm->v4l2_dev);
 	if (ret)
 		goto err_unregister_rx;
-
-	ret = mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, true);
-	if (ret)
-		goto err_v4l2;
-
-	ret = mtk_fm_power_up(fm);
-	if (ret) {
-		dev_err(&pdev->dev, "FM power-up failed: %d\n", ret);
-		mtk_fm_power_down(fm);
-		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
-		goto err_v4l2;
-	}
 
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
@@ -830,9 +912,8 @@ static void mtk_fm_remove(struct platform_device *pdev)
 		return;
 
 	video_unregister_device(&fm->vdev);
-	mtk_fm_power_down(fm);
+	mtk_fm_power_put(fm);
 	v4l2_device_unregister(&fm->v4l2_dev);
-	mt6628_wmt_func_ctrl(fm->wmt, MT6628_WMT_FUNC_FM, false);
 	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
 				 mtk_fm_rx, fm);
 }
