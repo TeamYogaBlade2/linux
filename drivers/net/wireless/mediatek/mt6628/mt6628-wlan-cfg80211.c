@@ -95,6 +95,66 @@ static struct ieee80211_supported_band mt6628_2ghz_band = {
 	.n_bitrates = ARRAY_SIZE(mt6628_2ghz_rates),
 };
 
+static struct ieee80211_channel mt6628_5ghz_channels[] = {
+	{ .center_freq = 5170, .hw_value = 34, .max_power = 30 },
+	{ .center_freq = 5180, .hw_value = 36, .max_power = 30 },
+	{ .center_freq = 5190, .hw_value = 38, .max_power = 30 },
+	{ .center_freq = 5200, .hw_value = 40, .max_power = 30 },
+	{ .center_freq = 5210, .hw_value = 42, .max_power = 30 },
+	{ .center_freq = 5220, .hw_value = 44, .max_power = 30 },
+	{ .center_freq = 5230, .hw_value = 46, .max_power = 30 },
+	{ .center_freq = 5240, .hw_value = 48, .max_power = 30 },
+	{ .center_freq = 5260, .hw_value = 52, .max_power = 30 },
+	{ .center_freq = 5280, .hw_value = 56, .max_power = 30 },
+	{ .center_freq = 5300, .hw_value = 60, .max_power = 30 },
+	{ .center_freq = 5320, .hw_value = 64, .max_power = 30 },
+	{ .center_freq = 5500, .hw_value = 100, .max_power = 30 },
+	{ .center_freq = 5520, .hw_value = 104, .max_power = 30 },
+	{ .center_freq = 5540, .hw_value = 108, .max_power = 30 },
+	{ .center_freq = 5560, .hw_value = 112, .max_power = 30 },
+	{ .center_freq = 5580, .hw_value = 116, .max_power = 30 },
+	{ .center_freq = 5600, .hw_value = 120, .max_power = 30 },
+	{ .center_freq = 5620, .hw_value = 124, .max_power = 30 },
+	{ .center_freq = 5640, .hw_value = 128, .max_power = 30 },
+	{ .center_freq = 5660, .hw_value = 132, .max_power = 30 },
+	{ .center_freq = 5680, .hw_value = 136, .max_power = 30 },
+	{ .center_freq = 5700, .hw_value = 140, .max_power = 30 },
+	{ .center_freq = 5745, .hw_value = 149, .max_power = 30 },
+	{ .center_freq = 5765, .hw_value = 153, .max_power = 30 },
+	{ .center_freq = 5785, .hw_value = 157, .max_power = 30 },
+	{ .center_freq = 5805, .hw_value = 161, .max_power = 30 },
+	{ .center_freq = 5825, .hw_value = 165, .max_power = 30 },
+	{ .center_freq = 5845, .hw_value = 169, .max_power = 30 },
+	{ .center_freq = 5865, .hw_value = 173, .max_power = 30 },
+	{ .center_freq = 5920, .hw_value = 184, .max_power = 30 },
+	{ .center_freq = 5940, .hw_value = 188, .max_power = 30 },
+	{ .center_freq = 5960, .hw_value = 192, .max_power = 30 },
+	{ .center_freq = 5980, .hw_value = 196, .max_power = 30 },
+	{ .center_freq = 6000, .hw_value = 200, .max_power = 30 },
+	{ .center_freq = 6020, .hw_value = 204, .max_power = 30 },
+	{ .center_freq = 6040, .hw_value = 208, .max_power = 30 },
+	{ .center_freq = 6060, .hw_value = 212, .max_power = 30 },
+	{ .center_freq = 6080, .hw_value = 216, .max_power = 30 },
+};
+
+static struct ieee80211_rate mt6628_5ghz_rates[] = {
+	{ .bitrate = 60, .hw_value = 4 },
+	{ .bitrate = 90, .hw_value = 5 },
+	{ .bitrate = 120, .hw_value = 6 },
+	{ .bitrate = 180, .hw_value = 7 },
+	{ .bitrate = 240, .hw_value = 8 },
+	{ .bitrate = 360, .hw_value = 9 },
+	{ .bitrate = 480, .hw_value = 10 },
+	{ .bitrate = 540, .hw_value = 11 },
+};
+
+static struct ieee80211_supported_band mt6628_5ghz_band = {
+	.channels = mt6628_5ghz_channels,
+	.n_channels = ARRAY_SIZE(mt6628_5ghz_channels),
+	.bitrates = mt6628_5ghz_rates,
+	.n_bitrates = ARRAY_SIZE(mt6628_5ghz_rates),
+};
+
 static const u32 mt6628_cipher_suites[] = {
 	WLAN_CIPHER_SUITE_CCMP,
 };
@@ -104,16 +164,19 @@ static struct mt6628_wlan *mt6628_wlan_from_wdev(struct wireless_dev *wdev)
 	return *(struct mt6628_wlan **)netdev_priv(wdev->netdev);
 }
 
-static int mt6628_channel_to_hif(const struct ieee80211_channel *channel,
-					struct mt6628_scan_channel *dst)
-{
-	if (channel->band != NL80211_BAND_2GHZ)
+	switch (channel->band) {
+	case NL80211_BAND_2GHZ:
+		if (channel->hw_value < 1 || channel->hw_value > 14)
+			return -EINVAL;
+		dst->band = MT6628_BAND_2GHZ;
+		break;
+	case NL80211_BAND_5GHZ:
+		dst->band = MT6628_BAND_5GHZ;
+		break;
+	default:
 		return -EOPNOTSUPP;
+	}
 
-	if (channel->hw_value < 1 || channel->hw_value > 14)
-		return -EINVAL;
-
-	dst->band = MT6628_SCAN_BAND_2GHZ;
 	dst->channel = channel->hw_value;
 	return 0;
 }
@@ -471,6 +534,7 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 	wl->wiphy->max_scan_ssids = MT6628_SCAN_MAX_SSIDS;
 	wl->wiphy->max_scan_ie_len = MT6628_SCAN_MAX_IE_LEN;
 	wl->wiphy->bands[NL80211_BAND_2GHZ] = &mt6628_2ghz_band;
+	wl->wiphy->bands[NL80211_BAND_5GHZ] = &mt6628_5ghz_band;
 	wl->wiphy->cipher_suites = mt6628_cipher_suites;
 	wl->wiphy->n_cipher_suites = ARRAY_SIZE(mt6628_cipher_suites);
 
