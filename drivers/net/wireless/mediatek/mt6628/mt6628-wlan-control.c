@@ -23,7 +23,6 @@
 #define MT6628_CMD_CH_ACTION_ABORT		1
 #define MT6628_EVENT_CH_STATUS_GRANT	0
 #define MT6628_CH_REQ_TYPE_JOIN		0
-#define MT6628_CH_RF_BAND_2GHZ		1
 #define MT6628_CH_MAX_INTERVAL_MS	5000
 
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
@@ -218,7 +217,7 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	cmd.action = MT6628_CMD_CH_ACTION_REQ;
 	cmd.primary_channel = channel->hw_value;
 	cmd.rf_sco = 0;
-	cmd.rf_band = MT6628_CH_RF_BAND_2GHZ;
+	cmd.rf_band = MT6628_BAND_2GHZ;
 	cmd.req_type = MT6628_CH_REQ_TYPE_JOIN;
 	cmd.max_interval = cpu_to_le32(MT6628_CH_MAX_INTERVAL_MS);
 	ether_addr_copy(cmd.bssid, bssid);
@@ -232,7 +231,7 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	    event.net_type_index != 0 || event.token_id != token ||
 	    event.status != MT6628_EVENT_CH_STATUS_GRANT ||
 	    event.primary_channel != channel->hw_value ||
-	    event.rf_band != MT6628_CH_RF_BAND_2GHZ)
+	    event.rf_band != MT6628_BAND_2GHZ)
 		return -EPROTO;
 
 	wl->channel_token = token;

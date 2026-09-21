@@ -23,7 +23,6 @@
 #define MT6628_SCAN_SSID_SPECIFIC	BIT(2)
 #define MT6628_SCAN_TYPE_PASSIVE	0
 #define MT6628_SCAN_TYPE_ACTIVE		1
-#define MT6628_SCAN_BAND_2GHZ		1
 
 struct mt6628_scan_ssid {
 	__le32 len;

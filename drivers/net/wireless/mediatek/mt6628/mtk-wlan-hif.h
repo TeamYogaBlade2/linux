@@ -106,6 +106,9 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_CMD_ID_CH_PRIVILEGE	0x20
 #define MT6628_CMD_ID_BASIC_CONFIG	0xc1
 
+#define MT6628_BAND_2GHZ		0
+#define MT6628_BAND_5GHZ		1
+
 struct mt6628_wifi_cmd_hdr {
 	__le16 tx_byte_count_user_priority;
 	u8 ether_type_offset;
