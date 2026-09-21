@@ -238,7 +238,7 @@ err_clk:
 	return ret;
 }
 
-static int mt6320_accdet_disable(struct mt6320_accdet *priv)
+static int mt6320_accdet_disable_hw(struct mt6320_accdet *priv)
 {
 	int ret;
 
@@ -256,12 +256,16 @@ static int mt6320_accdet_disable(struct mt6320_accdet *priv)
 	if (ret)
 		return ret;
 
-	ret = regmap_write(priv->regmap, MT6320_ACCDET_STATE_SWCTRL, 0);
-	if (ret)
-		return ret;
+	return regmap_write(priv->regmap, MT6320_ACCDET_STATE_SWCTRL, 0);
+}
 
+static int mt6320_accdet_disable(struct mt6320_accdet *priv)
+{
+	int ret;
+
+	ret = mt6320_accdet_disable_hw(priv);
 	clk_disable_unprepare(priv->clk_accdet);
-	return 0;
+	return ret;
 }
 
 static int mt6320_accdet_hw_init(struct mt6320_accdet *priv)
@@ -522,7 +526,11 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 			return dev_err_probe(&pdev->dev, ret,
 					     "failed to enable ACCDET\n");
 	} else {
-		ret = mt6320_accdet_disable(priv);
+		ret = clk_prepare_enable(priv->clk_accdet);
+		if (!ret) {
+			ret = mt6320_accdet_disable_hw(priv);
+			clk_disable_unprepare(priv->clk_accdet);
+		}
 		if (ret)
 			return dev_err_probe(&pdev->dev, ret,
 					     "failed to disable idle ACCDET\n");
