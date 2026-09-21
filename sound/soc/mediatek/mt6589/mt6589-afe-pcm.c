@@ -412,18 +412,32 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
 	struct mt6589_afe *afe = dev_id;
 	unsigned int status;
+	int ret;
 
-	regmap_read(afe->regmap, AFE_IRQ_MCU_STATUS, &status);
+	ret = regmap_read(afe->regmap, AFE_IRQ_MCU_STATUS, &status);
+	if (ret)
+		return IRQ_NONE;
+
 	status &= AFE_IRQ_MCU_STATUS_MASK;
 	if (!status) {
-		regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, AFE_IRQ_MCU_CLR_NOSTATUS);
+		ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+				   AFE_IRQ_MCU_CLR_NOSTATUS);
+		if (ret)
+			dev_err_ratelimited(afe->dev,
+					    "failed to clear AFE IRQ: %d\n",
+					    ret);
 		return IRQ_HANDLED;
 	}
 
 	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
 		snd_pcm_period_elapsed(afe->dl1_substream);
 
-	regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, status);
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, status);
+	if (ret)
+		dev_err_ratelimited(afe->dev,
+				    "failed to clear AFE IRQ status: %d\n",
+				    ret);
+
 	return IRQ_HANDLED;
 }
 
@@ -468,13 +482,35 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 				     "failed to init AFE regmap\n");
 
 	/* power on the AFE top + the SoC side of the AFE<->PMIC link */
-	regmap_write(afe->regmap, AUDIO_TOP_CON0, AUDIO_TOP_CON0_AFE_ON);
-	regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG0, AFE_ADDA_NEWIF_CFG0_VAL);
-	regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG1, AFE_ADDA_NEWIF_CFG1_VAL);
+	ret = regmap_write(afe->regmap, AUDIO_TOP_CON0,
+			   AUDIO_TOP_CON0_AFE_ON);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to enable AFE\n");
+
+	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG0,
+			   AFE_ADDA_NEWIF_CFG0_VAL);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to configure AFE NEWIF\n");
+
+	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG1,
+			   AFE_ADDA_NEWIF_CFG1_VAL);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to configure AFE NEWIF delay\n");
 
 	/* mask all AFE IRQs + clear stale status before hooking the GIC */
-	regmap_write(afe->regmap, AFE_IRQ_MCU_CON, 0);
-	regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, AFE_IRQ_MCU_CLR_NOSTATUS);
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CON, 0);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to mask AFE IRQs\n");
+
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+			   AFE_IRQ_MCU_CLR_NOSTATUS);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to clear AFE IRQ status\n");
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
