@@ -637,7 +637,7 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 		r = mtk_register_reset_controller_with_dev(&pdev->dev,
 							   mcd->rst_desc);
 		if (r)
-			goto unregister_clks;
+			goto del_provider;
 	}
 
 	if (mcd->need_runtime_pm)
@@ -645,6 +645,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 
 	return r;
 
+del_provider:
+	of_clk_del_provider(node);
 unregister_clks:
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
