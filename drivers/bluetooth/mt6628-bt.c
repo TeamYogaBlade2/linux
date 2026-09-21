@@ -10,11 +10,169 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
+#include <net/bluetooth/hci_sync.h>
 
 struct mt6628_bt {
 	struct mt6628_wmt *wmt;
 	struct hci_dev *hdev;
 };
+
+static int mt6628_bt_vendor_cmd(struct hci_dev *hdev, u16 opcode,
+				const void *param, u32 plen)
+{
+	int ret;
+
+	ret = __hci_cmd_sync_status(hdev, opcode, plen, param, 1000);
+	if (ret < 0)
+		return ret;
+	if (ret) {
+		bt_dev_err(hdev, "vendor opcode %#.4x failed, status %#x",
+			   opcode, ret);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int mt6628_bt_setup(struct hci_dev *hdev)
+{
+	static const u8 link_key_type[] = { 0x01 };
+	static const u8 unit_key[] = {
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	};
+	static const u8 encryption[] = { 0x00, 0x02, 0x10 };
+	static const u8 pin_code_type[] = { 0x00 };
+	static const u8 voice[] = { 0x60, 0x00 };
+	static const u8 pcm[] = { 0x63, 0x10, 0x00, 0x00 };
+	static const u8 radio[] = {
+		0x07, 0x80, 0x00, 0x06, 0x05, 0x07,
+	};
+	static const u8 tx_power_offset[] = {
+		0xff, 0xff, 0xff,
+	};
+	static const u8 sleep_timeout[] = {
+		0x03, 0x40, 0x1f, 0x40, 0x1f, 0x00, 0x04,
+	};
+	static const u8 bt_ftr[] = { 0x80, 0x00 };
+	static const u8 osc_info[] = {
+		0x01, 0x01, 0x14, 0x0a, 0x08,
+	};
+	static const u8 lpo_info[] = {
+		0x01, 0xfa, 0x0a, 0x02, 0x00,
+		0xa6, 0x0e, 0x00, 0x40, 0x00,
+	};
+	static const u8 pta[] = {
+		0xc9, 0x8b, 0xbf, 0x00, 0x00,
+		0x52, 0x0e, 0x0e, 0x1f, 0x1b,
+	};
+	static const u8 ble_pta[] = {
+		0x16, 0x0e, 0x0e, 0x00, 0x07,
+	};
+	int ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc1b,
+				   link_key_type, sizeof(link_key_type));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc75,
+				   unit_key, sizeof(unit_key));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc76,
+				   encryption, sizeof(encryption));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0x0c0a,
+				   pin_code_type, sizeof(pin_code_type));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0x0c26,
+				   voice, sizeof(voice));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc72,
+				   pcm, sizeof(pcm));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc79,
+				   radio, sizeof(radio));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc93,
+				   tx_power_offset, sizeof(tx_power_offset));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc7a,
+				   sleep_timeout, sizeof(sleep_timeout));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc7d,
+				   bt_ftr, sizeof(bt_ftr));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc7b,
+				   osc_info, sizeof(osc_info));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfc7c,
+				   lpo_info, sizeof(lpo_info));
+	if (ret)
+		return ret;
+
+	return mt6628_bt_vendor_cmd(hdev, 0xfc74,
+				    pta, sizeof(pta));
+}
+
+static int mt6628_bt_post_init(struct hci_dev *hdev)
+{
+	static const u8 ble_pta[] = {
+		0x16, 0x0e, 0x0e, 0x00, 0x07,
+	};
+	static const u8 internal_pta_1[] = {
+		0x00, 0x01, 0x0f, 0x0f, 0x01,
+		0x0f, 0x0f, 0x01, 0x0f, 0x0f,
+		0x01, 0x0f, 0x0f, 0x02, 0x01,
+	};
+	static const u8 internal_pta_2[] = {
+		0x01, 0x19, 0x19, 0x07, 0xd0, 0x00, 0x01,
+	};
+	static const u8 rf_reg_100[] = {
+		0x64, 0x01, 0x02, 0x00, 0x00, 0x00,
+	};
+	int ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfcfc,
+				   ble_pta, sizeof(ble_pta));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfcfb,
+				   internal_pta_1, sizeof(internal_pta_1));
+	if (ret)
+		return ret;
+
+	ret = mt6628_bt_vendor_cmd(hdev, 0xfcfb,
+				   internal_pta_2, sizeof(internal_pta_2));
+	if (ret)
+		return ret;
+
+	return mt6628_bt_vendor_cmd(hdev, 0xfcb0,
+				    rf_reg_100, sizeof(rf_reg_100));
+}
 
 static int mt6628_bt_open(struct hci_dev *hdev)
 {
@@ -137,6 +295,8 @@ static int mt6628_bt_probe(struct platform_device *pdev)
 	hdev->close = mt6628_bt_close;
 	hdev->flush = mt6628_bt_flush;
 	hdev->send = mt6628_bt_send_frame;
+	hdev->setup = mt6628_bt_setup;
+	hdev->post_init = mt6628_bt_post_init;
 	SET_HCIDEV_DEV(hdev, &pdev->dev);
 	hci_set_drvdata(hdev, bt);
 
