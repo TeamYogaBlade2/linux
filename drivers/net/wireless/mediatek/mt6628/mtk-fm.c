@@ -307,7 +307,7 @@ static int mtk_fm_download_versioned(struct mtk_fm *fm, u8 opcode,
 	if (ret != -ENOENT)
 		return ret;
 
-	for (version = 5; version >= 1; version--) {
+	for (version = 5; version > 0; version--) {
 		if (version == rom + 1)
 			continue;
 
@@ -759,17 +759,28 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 
 	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_TUNE_OPCODE, 5000);
 	if (ret < 0)
-		return ret;
+		goto restore_desense;
 
 	/*
 	 * MT6628's FM event parser reports TUNE_DONE as a one-byte payload
 	 * whose value must be 1.
 	 */
 	if (fm->cmd_data_len != 1 || fm->cmd_data[0] != 1)
-		return -EIO;
+	{
+		ret = -EIO;
+		goto restore_desense;
+	}
 
 	fm->freq = freq;
 	return 0;
+
+restore_desense:
+	/*
+	 * Desense state belongs to the actual tuned channel.  If the
+	 * hardware tune fails, restore the state for the previous channel.
+	 */
+	mtk_fm_update_desense(fm, fm->freq);
+	return ret;
 }
 
 static u16 mtk_fm_seek_spacing_code(u32 spacing)
@@ -984,6 +995,14 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 	if (tuner->index)
 		return -EINVAL;
 
+	switch (tuner->audmode) {
+	case V4L2_TUNER_MODE_MONO:
+	case V4L2_TUNER_MODE_STEREO:
+		break;
+	default:
+		return -EINVAL;
+	}
+
 	/*
 	 * MT6628's stereo/mono control register is accessed through the
 	 * same clock/control window used by the downstream driver.
@@ -1003,8 +1022,6 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 	case V4L2_TUNER_MODE_STEREO:
 		val &= ~FM_FORCE_MS;
 		break;
-	default:
-		return -EINVAL;
 	}
 
 	return mtk_fm_write_reg(fm, FM_REG_FORCE_MS, val);
