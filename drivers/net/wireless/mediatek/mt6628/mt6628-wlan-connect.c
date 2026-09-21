@@ -298,6 +298,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		*(struct mt6628_wlan **)netdev_priv(dev) : NULL;
 	const u8 *requested_bssid;
 	struct ieee80211_channel *channel;
+	enum ieee80211_privacy privacy;
 	bool secure;
 	int ret;
 
@@ -323,6 +324,8 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	} else if (sme->mfp != NL80211_MFP_NO ||
 		   sme->key_len || sme->key)
 		return -EOPNOTSUPP;
+
+	privacy = secure ? IEEE80211_PRIVACY_ON : IEEE80211_PRIVACY_OFF;
 
 	requested_bssid = sme->bssid ? sme->bssid : sme->bssid_hint;
 	channel = sme->channel ? sme->channel : sme->channel_hint;
@@ -358,7 +361,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	wl->conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
 					 sme->ssid, sme->ssid_len,
 					 IEEE80211_BSS_TYPE_ESS,
-					 IEEE80211_PRIVACY_OFF);
+					 privacy);
 	if (!wl->conn_bss)
 		return -ENOENT;
 	if (wl->conn_bss->channel->band != NL80211_BAND_2GHZ) {
