@@ -56,17 +56,33 @@ static void mt6628_conn_put_bss(struct mt6628_wlan *wl)
 
 static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 {
+	int ret;
+
 	if (!wl->runtime_started || !wl->fw_running || !wl->netdev)
 		return;
 
-	if (wl->sta_rec_idx != 0xfe) {
-		mt6628_wlan_activate_bss(wl, false);
-		mt6628_wlan_remove_sta_record(wl, wl->conn_bssid);
-		wl->sta_rec_idx = 0xfe;
+	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+		ret = mt6628_wlan_activate_bss(wl, false);
+		if (ret)
+			dev_warn(&wl->func->dev,
+				 "failed to deactivate BSS during cleanup: %d\n",
+				 ret);
+
+		ret = mt6628_wlan_remove_sta_record(wl, wl->conn_bssid);
+		if (ret) {
+			dev_warn(&wl->func->dev,
+				 "failed to remove STA-REC %u: %d\n",
+				 wl->sta_rec_idx, ret);
+		} else {
+			wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
+		}
 	}
 
 	/* The channel privilege may outlive STA-REC setup failures. */
-	mt6628_wlan_release_channel(wl);
+	ret = mt6628_wlan_release_channel(wl);
+	if (ret)
+		dev_warn(&wl->func->dev,
+			 "failed to release channel privilege: %d\n", ret);
 }
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
@@ -280,7 +296,25 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		mutex_unlock(&wl->cfg_mutex);
 		return -EBUSY;
 	}
-	mutex_unlock(&wl->cfg_mutex);
+	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+		mutex_unlock(&wl->cfg_mutex);
+
+		/*
+		 * A previous cleanup may have failed after disconnecting the
+		 * logical connection.  Retry the firmware-side cleanup before
+		 * allocating a new STA-REC.
+		 */
+		mt6628_conn_fw_cleanup(wl);
+
+		mutex_lock(&wl->cfg_mutex);
+		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+			mutex_unlock(&wl->cfg_mutex);
+			return -EIO;
+		}
+		mutex_unlock(&wl->cfg_mutex);
+	} else {
+		mutex_unlock(&wl->cfg_mutex);
+	}
 
 	if (requested_bssid && is_zero_ether_addr(requested_bssid))
 		requested_bssid = NULL;
