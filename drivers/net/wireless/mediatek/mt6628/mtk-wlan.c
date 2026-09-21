@@ -553,6 +553,9 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	return 0;
 
 err_disable:
+	{
+		int probe_err = ret;
+
 	if (wl->driver_owned) {
 		ret = mt6628_fw_own(wl);
 		if (ret)
@@ -568,7 +571,9 @@ err_disable:
 	sdio_release_host(func);
 	sdio_set_drvdata(func, NULL);
 
-	return dev_err_probe(&func->dev, ret, "MT6628 WLAN probe failed\n");
+		return dev_err_probe(&func->dev, probe_err,
+				     "MT6628 WLAN probe failed\n");
+	}
 }
 
 static void mt6628_wlan_sdio_remove(struct sdio_func *func)
