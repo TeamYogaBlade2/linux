@@ -31,7 +31,6 @@ struct mt6628_wlan {
 	struct work_struct event_work;
 	struct work_struct mgmt_work;
 	struct net_device *netdev;
-	struct napi_struct napi;
 	bool runtime_started;
 	bool irq_claimed;
 	bool connected;
