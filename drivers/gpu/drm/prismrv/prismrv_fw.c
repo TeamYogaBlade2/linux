@@ -105,3 +105,14 @@ int prismrv_fw_load(struct prismrv_device *pv)
 
 	return 0;
 }
+
+void prismrv_fw_release(struct prismrv_device *pv)
+{
+	if (pv->ukernel_cpu) {
+		dma_free_coherent(pv->drm.dev, pv->ukernel_size,
+				  pv->ukernel_cpu, pv->ukernel_dma);
+		pv->ukernel_cpu = NULL;
+		pv->ukernel_size = 0;
+		pv->ukernel_dma  = 0;
+	}
+}

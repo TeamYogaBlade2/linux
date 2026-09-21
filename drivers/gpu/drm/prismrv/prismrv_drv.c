@@ -105,12 +105,14 @@ static int prismrv_probe(struct platform_device *pdev)
 	if (IS_ERR(pv->rstc))
 		return PTR_ERR(pv->rstc);
 
+	pv->irq = -1;
 	irq = platform_get_irq(pdev, 0);
 	if (irq >= 0) {
 		ret = devm_request_irq(&pdev->dev, irq, prismrv_irq_handler,
 				       IRQF_SHARED, dev_name(&pdev->dev), pv);
 		if (ret)
 			return ret;
+		pv->irq = irq;
 	}
 
 	ret = drm_dev_register(&pv->drm, 0);
@@ -190,6 +192,7 @@ static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
 	pm_runtime_get_sync(&pdev->dev);
 	mutex_lock(&pv->init_mutex);
 	prismrv_hw_fini(pv);   /* retires pending fences */
+	prismrv_fw_release(pv); /* free uKernel DMA — device is going away */
 	mutex_unlock(&pv->init_mutex);
 
 	prismrv_devfreq_fini(pv);

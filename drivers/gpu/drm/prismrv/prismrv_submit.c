@@ -307,23 +307,25 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		return ret;
 
 	/*
-	 * Take the submit read-lock.  recovery_work() takes the write
-	 * side (exclusive) so that a concurrent recovery cannot free
-	 * the CCB/MMU/HostCtl structures while a submit is in flight.
-	 * hw_ready is checked while holding this lock so we see any
-	 * in-progress recovery that has already cleared the flag.
+	 * Phase 1 (outside submit_rwsem): validate args, look up BOs,
+	 * and wait for fences.
+	 *
+	 * fence waits (explicit in-fences and dma_resv implicit sync)
+	 * MUST be done before taking submit_rwsem, not after.  If we
+	 * waited under the read-lock and a fence belonged to a job that
+	 * was stuck (GPU hang), recovery_work() would try to take the
+	 * write-lock — but we hold the read-lock waiting for the hung
+	 * fence — which recovery needs to signal.  Deadlock.
+	 *
+	 * The window between this phase and Phase 2 is safe because:
+	 *  - GEM refs keep the BOs alive.
+	 *  - hw_ready is re-checked under the read-lock in Phase 2.
+	 *  - If a recovery runs between the two phases, hw_ready will
+	 *    be false and we return -ENODEV cleanly.
 	 */
-	down_read(&pv->submit_rwsem);
-
-	if (!pv->hw_ready) {
-		up_read(&pv->submit_rwsem);
-		pm_runtime_put_sync(pv->drm.dev);
-		return -ENODEV;
-	}
 	if (args->cmd_type >= PRISMRV_CMD_COUNT ||
 	    args->num_bos > PRISMRV_MAX_SUBMIT_BOS ||
 	    args->num_in_fences > PRISMRV_MAX_IN_FENCES) {
-		up_read(&pv->submit_rwsem);
 		pm_runtime_put_sync(pv->drm.dev);
 		return -EINVAL;
 	}
@@ -331,35 +333,30 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	/* slot 0 = command BO, 1..num_bos = user bos */
 	objs = kvcalloc(args->num_bos + 1, sizeof(*objs), GFP_KERNEL);
 	if (!objs) {
-		up_read(&pv->submit_rwsem);
 		pm_runtime_put_sync(pv->drm.dev);
 		return -ENOMEM;
 	}
 
-	/* block on explicit dependencies first */
+	/* block on explicit sync-file dependencies */
 	in_fds = u64_to_user_ptr(args->in_fences);
 	ret = prismrv_wait_in_fences(args->num_in_fences, in_fds);
 	if (ret)
-		goto out_put;
+		goto out_free_objs;
 
-	/* the command BO is always referenced object 0 */
+	/* look up the command BO */
 	objs[0] = drm_gem_object_lookup(file, args->cmd_handle);
 	if (!objs[0]) {
 		ret = -ENOENT;
-		goto out_put;
+		goto out_free_objs;
 	}
 	if (args->cmd_size > objs[0]->size) {
 		ret = -EINVAL;
 		drm_gem_object_put(objs[0]);
 		objs[0] = NULL;
-		goto out_put;
+		goto out_free_objs;
 	}
 
-	/*
-	 * Look up the user BO handles into objs[1..num_bos].
-	 * drm_gem_objects_lookup() allocates a fresh array; copy into
-	 * our layout then free the temporary array.
-	 */
+	/* look up user BOs */
 	if (args->num_bos > 0) {
 		struct drm_gem_object **user_objs = NULL;
 
@@ -367,7 +364,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			u64_to_user_ptr(args->bos), args->num_bos,
 			&user_objs);
 		if (ret)
-			goto out_put;
+			goto out_free_objs;
 
 		memcpy(objs + 1, user_objs,
 		       args->num_bos * sizeof(*user_objs));
@@ -375,21 +372,40 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	}
 
 	/*
-	 * Implicit sync: wait for any exclusive fence other drivers
-	 * left on the buffers we are about to read/write.
+	 * Implicit sync: wait for existing GPU fences on every BO.
+	 * Done outside submit_rwsem to avoid the deadlock described above.
 	 */
 	for (i = 0; i <= args->num_bos; i++) {
-		struct dma_resv *resv = objs[i]->resv;
-		long ret2 = dma_resv_wait_timeout(resv, DMA_RESV_USAGE_READ,
-						  true, MAX_SCHEDULE_TIMEOUT);
-		if (ret2 < 0) {
-			ret = ret2;
-			goto out_put;
+		if (!objs[i])
+			continue;
+		{
+			long ret2 = dma_resv_wait_timeout(
+				objs[i]->resv, DMA_RESV_USAGE_READ,
+				true, MAX_SCHEDULE_TIMEOUT);
+			if (ret2 < 0) {
+				ret = ret2;
+				goto out_free_objs;
+			}
 		}
 	}
+
+	/*
+	 * Phase 2 (inside submit_rwsem read-lock): verify hw_ready,
+	 * populate GPU VA mappings, and enqueue the CCB command.
+	 *
+	 * Nothing that can block on a GPU fence may run here.
+	 */
+	down_read(&pv->submit_rwsem);
+
+	if (!pv->hw_ready) {
+		up_read(&pv->submit_rwsem);
+		ret = -ENODEV;
+		goto out_free_objs;
+	}
+
 	ret = prismrv_gem_populate(pv, objs, args->num_bos + 1);
 	if (ret)
-		goto out_put;
+		goto out_unlock;
 
 	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(objs[0]));
 	cmd_data[1] = cpu_to_le32(args->cmd_size);
@@ -468,28 +484,51 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
 	if (ret) {
 		/*
-		 * CCB timeout: ccb_schedule() has already retired the
-		 * fence under event_lock (list_del + signal + put).
-		 * That retirement path does NOT touch busy_count or PM,
-		 * so we must do it here — but only if the fence was
-		 * actually retired by us rather than by a concurrent
-		 * recovery.  Use list_empty_careful() to detect this:
-		 * after list_del_init() the node is empty.
+		 * CCB timeout.  ccb_schedule() attempted to retire the
+		 * fence under event_lock, but the IRQ handler may have
+		 * beaten it.  We need to know who actually retired it
+		 * to avoid double-decrementing busy_count and double-
+		 * putting the PM reference.
 		 *
-		 * The BO refs are still in f->bos; they will be released
-		 * when f's last reference drops (the sync_file holds one).
+		 * prismrv_ccb_schedule() sets a local 'retired' flag
+		 * (returned via the fence's signal state): if the fence
+		 * is already signalled, the IRQ/recovery path won.
+		 *
+		 * Use dma_fence_is_signaled() as a proxy: if true, the
+		 * fence was already retired (by IRQ or recovery) and
+		 * those paths have already decremented busy_count and
+		 * put the PM ref.  We must not do it again.
+		 *
+		 * If the fence is NOT yet signalled, ccb_schedule()
+		 * retired it (list_del_init + signal_locked), so we
+		 * own the decrement and PM put.
+		 *
+		 * In both cases we must release the BO refs now, because
+		 * the fence may linger (sync_file still open) but the
+		 * GPU will never process this command.
 		 */
-		atomic_dec(&pv->busy_count);
-		pm_runtime_mark_last_busy(pv->drm.dev);
-		pm_runtime_put_autosuspend(pv->drm.dev);
+		bool we_retired = !dma_fence_is_signaled(&f->base);
+
+		if (we_retired) {
+			atomic_dec(&pv->busy_count);
+			pm_runtime_mark_last_busy(pv->drm.dev);
+			pm_runtime_put_autosuspend(pv->drm.dev);
+		}
+		/*
+		 * Release the BO refs regardless of who retired the fence.
+		 * Without this, the fence → bos[] → BO → dma_resv → fence
+		 * reference cycle prevents the BOs from ever being freed.
+		 */
+		prismrv_fence_release_bos(f);
 	}
 	/* success: PM reference kept until handle_completion() */
 	up_read(&pv->submit_rwsem);
 	kvfree(objs);	/* NULL after transfer to fence */
 	return ret;
 
-out_put:
+out_unlock:
 	up_read(&pv->submit_rwsem);
+out_free_objs:
 	pm_runtime_mark_last_busy(pv->drm.dev);
 	pm_runtime_put_autosuspend(pv->drm.dev);
 	for (i = 0; i <= args->num_bos && objs; i++)

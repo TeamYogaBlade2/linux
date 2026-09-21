@@ -17,6 +17,7 @@
 #include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/dma-mapping.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/pm_runtime.h>
 
@@ -244,6 +245,32 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 
 	pv->hw_ready = false;
 
+	/*
+	 * Stop the GPU from generating new host interrupts by zeroing
+	 * the EVENT_HOST_ENABLE register.  This prevents the IRQ handler
+	 * from firing for events we are about to stop tracking.
+	 */
+	if (pv->regs)
+		writel(0, pv->regs + EUR_CR_EVENT_HOST_ENABLE);
+
+	/*
+	 * Now synchronise with the Linux IRQ subsystem.
+	 *
+	 * disable_irq() + synchronize_irq() guarantee that after this
+	 * pair returns, no IRQ handler is running and no new invocation
+	 * can start.  This is necessary because the IRQ handler
+	 * (prismrv_handle_completion) dereferences pv->ccb and
+	 * pv->hostctl which we are about to free below.
+	 *
+	 * We must NOT hold any spinlock while calling synchronize_irq()
+	 * because it may sleep waiting for a running handler to finish.
+	 *
+	 * enable_irq() is called at the end of hw_fini() so that
+	 * hw_init() (if called afterwards) can arm the interrupt again.
+	 */
+	if (pv->irq >= 0)
+		disable_irq(pv->irq);
+
 	/* retire any fences that will never complete */
 	spin_lock(&pv->event_lock);
 	while (!list_empty(&pv->pending_fences)) {
@@ -293,11 +320,22 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	for (i = 0; i < PRISMRV_ERRATA_BUF_COUNT; i++)
 		pv->errata_buf[i].size = 0;
 
-	if (pv->ukernel_cpu) {
-		dma_free_coherent(pv->drm.dev, pv->ukernel_size,
-				  pv->ukernel_cpu, pv->ukernel_dma);
-		pv->ukernel_cpu = NULL;
-	}
+	/*
+	 * Do NOT free the uKernel DMA buffer here.
+	 *
+	 * uKernel firmware is a device-lifetime resource: loading it is
+	 * expensive (filesystem I/O) and the binary does not change across
+	 * runtime suspend/resume or GPU recovery cycles.  Freeing and
+	 * reloading it in hw_fini/hw_init would:
+	 *  1. Cause hw_init() to call prismrv_mmu_map(pv->ukernel_dma) on
+	 *     a DMA address that was just freed — mapping freed memory into
+	 *     the GPU MMU and potentially causing memory corruption.
+	 *  2. Make every recovery cycle hit the filesystem unnecessarily.
+	 *
+	 * The uKernel buffer is freed only in prismrv_remove() via
+	 * prismrv_fw_release() after drm_dev_unplug() has stopped all
+	 * new access.
+	 */
 
 	/*
 	 * Tear down the MMU under mmu_lock so that a concurrent bo_free()
@@ -307,4 +345,12 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	mutex_lock(&pv->mmu_lock);
 	prismrv_mmu_fini(pv);
 	mutex_unlock(&pv->mmu_lock);
+
+	/*
+	 * Re-enable the IRQ line so the next hw_init() → uKernel boot
+	 * can receive completion interrupts.  Paired with the
+	 * disable_irq() at the top of this function.
+	 */
+	if (pv->irq >= 0)
+		enable_irq(pv->irq);
 }

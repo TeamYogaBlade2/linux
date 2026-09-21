@@ -91,5 +91,9 @@ jobs:
           install include/uapi/drm/prismrv_drm.h /tmp/uapi/drm/
           gcc -fsyntax-only -I/tmp/uapi -x c - <<'HDREOF'
           #include <drm/prismrv_drm.h>
-          int main(void) { return PRISMRV_UAPI_VERSION == 1 ? 0 : 1; }
+          /* Use a preprocessor check so -fsyntax-only catches it
+           * (runtime checks are never executed during syntax-only passes). */
+          #if PRISMRV_UAPI_VERSION != 2
+          #error "UAPI version mismatch: expected 2"
+          #endif
           HDREOF

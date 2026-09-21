@@ -153,6 +153,7 @@ struct prismrv_device {
 	struct drm_device drm;		/* must be first */
 	struct platform_device *pdev;
 	const struct prismrv_chip_info *info;
+	int irq;			/* Linux IRQ number, -1 = polling only */
 
 	void __iomem *regs;
 	resource_size_t regs_size;
@@ -265,7 +266,8 @@ void prismrv_hw_fini(struct prismrv_device *pv);
 /* low-level reset helpers, also called from recovery_work() */
 void prismrv_soft_reset(struct prismrv_device *pv);
 void prismrv_bif_reset(struct prismrv_device *pv);
-int prismrv_fw_load(struct prismrv_device *pv);
+int  prismrv_fw_load(struct prismrv_device *pv);
+void prismrv_fw_release(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);
 int prismrv_errata_apply(struct prismrv_device *pv);
 void prismrv_errata_release(struct prismrv_device *pv);
