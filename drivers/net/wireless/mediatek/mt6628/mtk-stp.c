@@ -59,6 +59,7 @@
 #define MT6628_STP_TX_MAX_PENDING	7
 #define MT6628_STP_TX_TIMEOUT_MS		1000
 #define MT6628_WMT_RESPONSE_MAX		32
+#define MT6628_WMT_CRYSTAL_TRIM_OPCODE	0x12
 
 #define MT6628_WMT_GEN_HVR			0x80000000
 #define MT6628_WMT_GEN_FVR			0x80000004
@@ -128,6 +129,8 @@ struct mt6628_wmt {
 	bool sdio_driving_configured;
 	u32 sdio_driving_cfg;
 	u8 fm_strap_mode;
+	bool crystal_trim_configured;
+	u8 crystal_trim;
 };
 
 static bool mt6628_stp_tx_ready(struct mt6628_wmt *wmt, size_t frame_len)
@@ -690,6 +693,108 @@ static int mt6628_wmt_reg_read(struct mt6628_wmt *wmt,
 	return 0;
 }
 
+static int mt6628_wmt_crystal_trim_get(struct mt6628_wmt *wmt,
+				       u8 *timing)
+{
+	static const u8 cmd[] = {
+		0x01, MT6628_WMT_CRYSTAL_TRIM_OPCODE, 0x02, 0x00,
+		0x00, 0x00,
+	};
+	static const u8 expected[] = {
+		0x02, MT6628_WMT_CRYSTAL_TRIM_OPCODE, 0x02, 0x00,
+		0x00,
+	};
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	if (!timing)
+		return -EINVAL;
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd),
+			     MT6628_WMT_CRYSTAL_TRIM_OPCODE, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len != sizeof(expected) + 1 ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	*timing = response[5] & 0x7f;
+
+	return 0;
+}
+
+static int mt6628_wmt_crystal_trim_set(struct mt6628_wmt *wmt,
+				       u8 timing)
+{
+	u8 cmd[] = {
+		0x01, MT6628_WMT_CRYSTAL_TRIM_OPCODE, 0x02, 0x00,
+		0x01, timing,
+	};
+	static const u8 expected[] = {
+		0x02, MT6628_WMT_CRYSTAL_TRIM_OPCODE, 0x02, 0x00,
+		0x01,
+	};
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd),
+			     MT6628_WMT_CRYSTAL_TRIM_OPCODE, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len != sizeof(expected) + 1 ||
+	    memcmp(response, expected, sizeof(expected)) ||
+	    response[5] != timing)
+		return -EPROTO;
+
+	return 0;
+}
+
+static int mt6628_wmt_crystal_trim_init(struct mt6628_wmt *wmt)
+{
+	int offset;
+	int timing;
+	u8 current;
+	u8 readback;
+	int ret;
+
+	if (!wmt->crystal_trim_configured ||
+	    !(wmt->crystal_trim & BIT(7)))
+		return 0;
+
+	ret = mt6628_wmt_crystal_trim_get(wmt, &current);
+	if (ret)
+		return ret;
+
+	offset = wmt->crystal_trim & 0x7f;
+	if (offset & BIT(6))
+		offset -= 128;
+
+	timing = clamp_t(int, current + offset, 0, 0x7f);
+
+	ret = mt6628_wmt_crystal_trim_set(wmt, timing);
+	if (ret)
+		return ret;
+
+	ret = mt6628_wmt_crystal_trim_get(wmt, &readback);
+	if (ret)
+		return ret;
+
+	if (readback != timing)
+		return -EIO;
+
+	dev_info(&wmt->func->dev,
+		 "MT6628 crystal trim: %#x -> %#x (offset %d)\n",
+		 current, timing, offset);
+
+	return 0;
+}
+
 static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
 				    u16 *hw_ver, u16 *rom_ver)
 {
@@ -1040,6 +1145,10 @@ static int mt6628_wmt_init(struct mt6628_wmt *wmt)
 	if (ret)
 		return ret;
 
+	ret = mt6628_wmt_crystal_trim_init(wmt);
+	if (ret)
+		return ret;
+
 	ret = mt6628_wmt_set_sdio_driving(wmt);
 	if (ret)
 		return ret;
@@ -1243,6 +1352,11 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	device_property_read_u8(&func->dev,
 				"mediatek,fm-strap-mode",
 				&wmt->fm_strap_mode);
+
+	if (!device_property_read_u8(&func->dev,
+				     "mediatek,crystal-trim",
+				     &wmt->crystal_trim))
+		wmt->crystal_trim_configured = true;
 
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
