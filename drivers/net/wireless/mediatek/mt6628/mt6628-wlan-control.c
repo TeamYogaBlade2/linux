@@ -35,7 +35,14 @@
 #define MT6628_BASIC_PHY_TYPE_ERP	1
 
 #define MT6628_AUTH_MODE_OPEN		0
+#define MT6628_AUTH_MODE_WPA2_PSK	7
 #define MT6628_ENCRYPTION_DISABLED	1
+#define MT6628_ENCRYPTION3_KEY_ABSENT	7
+#define MT6628_CIPHER_SUITE_CCMP	4
+
+#define MT6628_KEY_INDEX_MAX		3
+#define MT6628_KEY_MATERIAL_LEN		32
+#define MT6628_KEY_RSC_LEN		16
 
 struct mt6628_cmd_ch_privilege {
 	u8 net_type_index;
@@ -159,6 +166,21 @@ struct mt6628_hif_mgmt_tx_hdr {
 	u8 reserved[2];
 } __packed;
 
+struct mt6628_cmd_add_remove_key {
+	u8 add_remove;
+	u8 tx_key;
+	u8 key_type;
+	u8 is_authenticator;
+	u8 peer_addr[ETH_ALEN];
+	u8 net_type_index;
+	u8 algorithm_id;
+	u8 key_id;
+	u8 key_len;
+	u8 reserved[2];
+	u8 key_material[MT6628_KEY_MATERIAL_LEN];
+	u8 key_rsc[MT6628_KEY_RSC_LEN];
+} __packed;
+
 static_assert(sizeof(struct mt6628_cmd_ch_privilege) == 20);
 static_assert(sizeof(struct mt6628_event_ch_privilege) == 12);
 static_assert(sizeof(struct mt6628_cmd_set_bss_rlm_param) == 16);
@@ -166,6 +188,7 @@ static_assert(sizeof(struct mt6628_cmd_set_bss_info) == 80);
 static_assert(sizeof(struct mt6628_cmd_update_sta_record) == 40);
 static_assert(sizeof(struct mt6628_cmd_bss_activate_ctrl) == 4);
 static_assert(sizeof(struct mt6628_cmd_remove_sta_record) == 8);
+static_assert(sizeof(struct mt6628_cmd_add_remove_key) == 68);
 static_assert(sizeof(struct mt6628_hif_mgmt_tx_hdr) == 16);
 
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
@@ -286,8 +309,10 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 	cmd.bss_basic_rate_set = cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
 	cmd.sta_rec_idx_of_ap = wl->sta_rec_idx;
 	cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_ERP;
-	cmd.auth_mode = MT6628_AUTH_MODE_OPEN;
-	cmd.enc_status = MT6628_ENCRYPTION_DISABLED;
+	cmd.auth_mode = wl->conn_secure ? MT6628_AUTH_MODE_WPA2_PSK :
+		MT6628_AUTH_MODE_OPEN;
+	cmd.enc_status = wl->conn_secure ? MT6628_ENCRYPTION3_KEY_ABSENT :
+		MT6628_ENCRYPTION_DISABLED;
 	cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BG;
 	ether_addr_copy(cmd.own_mac, wl->netdev->dev_addr);
 
@@ -326,6 +351,100 @@ int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl, const u8 *bssid)
 	ether_addr_copy(cmd.mac_addr, bssid);
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_REMOVE_STA_RECORD, 1,
 				    &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
+}
+
+int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, const u8 *mac_addr,
+			const struct key_params *params)
+{
+	struct mt6628_cmd_add_remove_key cmd = {};
+	const u8 *peer;
+	u8 response[4];
+	size_t response_len;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+	if (!wl->conn_secure)
+		return -ENOTCONN;
+	if (key_index > MT6628_KEY_INDEX_MAX)
+		return -EINVAL;
+	if (!params || params->cipher != WLAN_CIPHER_SUITE_CCMP)
+		return -EOPNOTSUPP;
+	if (params->key_len != 16)
+		return -EINVAL;
+	if (params->seq_len < 0 || params->seq_len > MT6628_KEY_RSC_LEN)
+		return -EINVAL;
+	if (!params->key)
+		return -EINVAL;
+
+	if (pairwise) {
+		if (!mac_addr || is_zero_ether_addr(mac_addr) ||
+		    is_multicast_ether_addr(mac_addr))
+			return -EINVAL;
+		peer = mac_addr;
+	} else {
+		peer = wl->conn_bssid;
+	}
+
+	cmd.add_remove = 1;
+	/*
+	 * A station's GTK is RX-only. The PTK is the station's TX key
+	 * unless cfg80211 explicitly requested a receive-only key.
+	 */
+	cmd.tx_key = pairwise && params->mode != NL80211_KEY_NO_TX;
+	cmd.key_type = pairwise;
+	cmd.is_authenticator = 0;
+	ether_addr_copy(cmd.peer_addr, peer);
+	cmd.net_type_index = 0;
+	cmd.algorithm_id = MT6628_CIPHER_SUITE_CCMP;
+	cmd.key_id = key_index;
+	cmd.key_len = params->key_len;
+	memcpy(cmd.key_material, params->key, params->key_len);
+	if (params->seq_len)
+		memcpy(cmd.key_rsc, params->seq, params->seq_len);
+
+	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
+				    &cmd, sizeof(cmd), response, sizeof(response),
+				    &response_len,
+				    MT6628_EVENT_ID_CMD_RESULT, 1000);
+}
+
+int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, const u8 *mac_addr)
+{
+	struct mt6628_cmd_add_remove_key cmd = {};
+	const u8 *peer;
+	u8 response[4];
+	size_t response_len;
+
+	/*
+	 * Key deletion is normally part of disconnect teardown. Treat it
+	 * as a no-op after the runtime/security state has already gone away.
+	 */
+	if (!wl->runtime_started || !wl->fw_running || !wl->conn_secure)
+		return 0;
+	if (key_index > MT6628_KEY_INDEX_MAX)
+		return -EINVAL;
+
+	if (pairwise) {
+		if (!mac_addr || is_zero_ether_addr(mac_addr) ||
+		    is_multicast_ether_addr(mac_addr))
+			return -EINVAL;
+		peer = mac_addr;
+	} else {
+		peer = wl->conn_bssid;
+	}
+
+	cmd.add_remove = 0;
+	cmd.is_authenticator = 0;
+	ether_addr_copy(cmd.peer_addr, peer);
+	cmd.net_type_index = 0;
+	cmd.key_id = key_index;
+
+	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
+				    &cmd, sizeof(cmd), response, sizeof(response),
+				    &response_len,
+				    MT6628_EVENT_ID_CMD_RESULT, 1000);
 }
 
 static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
@@ -421,4 +540,6 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_update_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_set_bss_info);
 EXPORT_SYMBOL_GPL(mt6628_wlan_activate_bss);
 EXPORT_SYMBOL_GPL(mt6628_wlan_remove_sta_record);
+EXPORT_SYMBOL_GPL(mt6628_wlan_add_key);
+EXPORT_SYMBOL_GPL(mt6628_wlan_del_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_mgmt_tx);

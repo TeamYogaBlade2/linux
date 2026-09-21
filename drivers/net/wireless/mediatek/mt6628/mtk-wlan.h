@@ -19,6 +19,7 @@
 #include <net/cfg80211.h>
 
 #define MT6628_WLAN_TX_TC_NUM		6
+#define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
 
 /*
  * Wire values used by CMD_UPDATE_STA_RECORD_T.ucStaState.
@@ -48,6 +49,7 @@ struct mt6628_wlan {
 	bool runtime_started;
 	bool irq_claimed;
 	bool connected;
+	bool conn_secure;
 	u8 sta_rec_idx;
 	u8 conn_state;
 	u8 conn_bssid[ETH_ALEN];
@@ -112,13 +114,18 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 					u16 assoc_id,
 					const u8 *bssid);
 int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
-				     const u8 *ssid, u8 ssid_len,
-				     const u8 *bssid, bool connected);
+			     const u8 *ssid, u8 ssid_len,
+			     const u8 *bssid, bool connected);
 int mt6628_wlan_activate_bss(struct mt6628_wlan *wl, bool active);
 int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl,
 					const u8 *bssid);
+int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, const u8 *mac_addr,
+			const struct key_params *params);
+int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, const u8 *mac_addr);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-				 size_t frame_len);
+			 size_t frame_len);
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);

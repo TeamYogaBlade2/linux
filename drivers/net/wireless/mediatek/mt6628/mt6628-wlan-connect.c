@@ -89,9 +89,35 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 {
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
 	wl->connected = false;
+	wl->conn_secure = false;
 	wl->conn_aid = 0;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
+}
+
+static bool mt6628_connect_is_wpa2_psk(
+	const struct cfg80211_connect_params *sme)
+{
+	const struct cfg80211_crypto_settings *crypto = &sme->crypto;
+
+	if (crypto->wpa_versions != NL80211_WPA_VERSION_2)
+		return false;
+	if (crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP)
+		return false;
+	if (crypto->n_ciphers_pairwise != 1 ||
+	    crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_CCMP)
+		return false;
+	if (crypto->n_akm_suites != 1 ||
+	    crypto->akm_suites[0] != WLAN_AKM_SUITE_PSK)
+		return false;
+	if (crypto->control_port || crypto->control_port_over_nl80211)
+		return false;
+	if (sme->mfp != NL80211_MFP_NO)
+		return false;
+	if (sme->key_len || sme->key)
+		return false;
+
+	return true;
 }
 
 static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
@@ -272,6 +298,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		*(struct mt6628_wlan **)netdev_priv(dev) : NULL;
 	const u8 *requested_bssid;
 	struct ieee80211_channel *channel;
+	bool secure;
 	int ret;
 
 	if (!wl || !wl->runtime_started || !wl->fw_running)
@@ -282,10 +309,19 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	if (sme->auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM &&
 	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC)
 		return -EOPNOTSUPP;
-	if (sme->privacy || sme->mfp != NL80211_MFP_NO ||
-	    sme->key_len || sme->key || sme->crypto.wpa_versions ||
-	    sme->crypto.cipher_group || sme->crypto.n_ciphers_pairwise ||
-	    sme->crypto.n_akm_suites || sme->crypto.control_port)
+
+	secure = sme->privacy || sme->crypto.wpa_versions ||
+		sme->crypto.cipher_group ||
+		sme->crypto.n_ciphers_pairwise ||
+		sme->crypto.n_akm_suites ||
+		sme->crypto.control_port ||
+		sme->crypto.control_port_over_nl80211;
+
+	if (secure) {
+		if (!mt6628_connect_is_wpa2_psk(sme))
+			return -EOPNOTSUPP;
+	} else if (sme->mfp != NL80211_MFP_NO ||
+		   sme->key_len || sme->key)
 		return -EOPNOTSUPP;
 
 	requested_bssid = sme->bssid ? sme->bssid : sme->bssid_hint;
@@ -338,7 +374,8 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	memcpy(wl->conn_ssid, sme->ssid, sme->ssid_len);
 	wl->conn_ssid_len = sme->ssid_len;
 	wl->conn_channel = wl->conn_bss->channel->hw_value;
-	wl->sta_rec_idx = 0xfe;
+	wl->conn_secure = secure;
+	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 	wl->conn_state = MT6628_CONN_AUTH;
 	mutex_unlock(&wl->cfg_mutex);
 
@@ -357,7 +394,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_1, 0,
 					    wl->conn_bssid);
 	if (ret) {
-		wl->sta_rec_idx = 0xfe;
+		wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 		goto err_reset;
 	}
 

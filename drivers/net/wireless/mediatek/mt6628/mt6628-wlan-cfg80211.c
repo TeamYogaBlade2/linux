@@ -95,6 +95,10 @@ static struct ieee80211_supported_band mt6628_2ghz_band = {
 	.n_bitrates = ARRAY_SIZE(mt6628_2ghz_rates),
 };
 
+static const u32 mt6628_cipher_suites[] = {
+	WLAN_CIPHER_SUITE_CCMP,
+};
+
 static struct mt6628_wlan *mt6628_wlan_from_wdev(struct wireless_dev *wdev)
 {
 	return *(struct mt6628_wlan **)netdev_priv(wdev->netdev);
@@ -254,11 +258,40 @@ static void mt6628_abort_scan(struct wiphy *wiphy, struct wireless_dev *wdev)
 	mt6628_cfg80211_abort_scan(wl);
 }
 
+static int mt6628_cfg80211_add_key(struct wiphy *wiphy,
+				    struct wireless_dev *wdev, int link_id,
+				    u8 key_index, bool pairwise,
+				    const u8 *mac_addr,
+				    struct key_params *params)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+
+	if (link_id != -1)
+		return -EOPNOTSUPP;
+
+	return mt6628_wlan_add_key(wl, key_index, pairwise, mac_addr, params);
+}
+
+static int mt6628_cfg80211_del_key(struct wiphy *wiphy,
+				    struct wireless_dev *wdev, int link_id,
+				    u8 key_index, bool pairwise,
+				    const u8 *mac_addr)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+
+	if (link_id != -1)
+		return -EOPNOTSUPP;
+
+	return mt6628_wlan_del_key(wl, key_index, pairwise, mac_addr);
+}
+
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
 	.connect = mt6628_cfg80211_connect,
 	.disconnect = mt6628_cfg80211_disconnect,
+	.add_key = mt6628_cfg80211_add_key,
+	.del_key = mt6628_cfg80211_del_key,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)
@@ -438,6 +471,8 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 	wl->wiphy->max_scan_ssids = MT6628_SCAN_MAX_SSIDS;
 	wl->wiphy->max_scan_ie_len = MT6628_SCAN_MAX_IE_LEN;
 	wl->wiphy->bands[NL80211_BAND_2GHZ] = &mt6628_2ghz_band;
+	wl->wiphy->cipher_suites = mt6628_cipher_suites;
+	wl->wiphy->n_cipher_suites = ARRAY_SIZE(mt6628_cipher_suites);
 
 	wl->wdev.wiphy = wl->wiphy;
 	wl->wdev.iftype = NL80211_IFTYPE_STATION;
