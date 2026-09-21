@@ -14,6 +14,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/nvmem-provider.h>
 #include <linux/platform_device.h>
@@ -36,6 +37,7 @@
 struct mt6320_efuse {
 	struct regmap *regmap;
 	struct nvmem_config config;
+	struct mutex lock;
 };
 
 static int mt6320_efuse_read_word(struct mt6320_efuse *efuse,
@@ -92,6 +94,8 @@ static int mt6320_efuse_read(void *context, unsigned int off,
 	    off + len > MT6320_EFUSE_NUM_WORDS * sizeof(*buf))
 		return -EINVAL;
 
+	guard(mutex)(&efuse->lock);
+
 	for (i = 0; i < len / sizeof(*buf); i++) {
 		ret = mt6320_efuse_read_word(efuse, off / 2 + i, &buf[i]);
 		if (ret)
@@ -121,6 +125,7 @@ static int mt6320_efuse_probe(struct platform_device *pdev)
 	efuse->config.size = MT6320_EFUSE_NUM_WORDS * 2;
 	efuse->config.reg_read = mt6320_efuse_read;
 	efuse->config.priv = efuse;
+	mutex_init(&efuse->lock);
 
 	nvmem = devm_nvmem_register(dev, &efuse->config);
 	if (IS_ERR(nvmem))
