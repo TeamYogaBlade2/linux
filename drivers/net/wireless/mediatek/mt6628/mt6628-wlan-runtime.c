@@ -604,7 +604,7 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 {
-	struct net_device *ndev;
+	struct net_device *ndev = NULL;
 	unsigned long flags;
 	unsigned int i;
 	int ret;
@@ -626,13 +626,14 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
 	init_completion(&wl->cmd_done);
+	wl->runtime_initialized = true;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 	wl->event_handler = mt6628_cfg80211_event_handler;
 	wl->mgmt_handler = mt6628_cfg80211_mgmt_handler;
 
 	ret = mt6628_cfg80211_init(wl);
 	if (ret)
-		return ret;
+		goto err_runtime;
 
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
@@ -642,8 +643,10 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
 
 	ndev = alloc_etherdev(sizeof(struct mt6628_wlan *));
-	if (!ndev)
-		return -ENOMEM;
+	if (!ndev) {
+		ret = -ENOMEM;
+		goto err_runtime;
+	}
 
 	SET_NETDEV_DEV(ndev, &wl->func->dev);
 	ndev->netdev_ops = &mt6628_netdev_ops;
@@ -656,7 +659,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 
 	ret = register_netdev(ndev);
 	if (ret)
-		goto err_cfg80211;
+		goto err_netdev;
 	wl->netdev = ndev;
 
 	sdio_claim_host(wl->func);
@@ -702,12 +705,17 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 err_unregister:
 	unregister_netdev(ndev);
 	wl->netdev = NULL;
-err_cfg80211:
+err_netdev:
 	ndev->ieee80211_ptr = NULL;
 	wl->wdev.netdev = NULL;
 	netif_napi_del(&wl->napi);
 	free_netdev(ndev);
+err_runtime:
+	mt6628_runtime_free_queues(wl);
+	wl->event_handler = NULL;
+	wl->mgmt_handler = NULL;
 	mt6628_cfg80211_deinit(wl);
+	wl->runtime_initialized = false;
 	return ret;
 }
 
@@ -715,6 +723,9 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 {
 	struct net_device *ndev = wl->netdev;
 	unsigned long flags;
+
+	if (!wl->runtime_initialized)
+		return;
 
 	mt6628_cfg80211_abort_scan(wl);
 
@@ -761,6 +772,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	wl->event_handler = NULL;
 	wl->mgmt_handler = NULL;
 	mt6628_cfg80211_deinit(wl);
+	wl->runtime_initialized = false;
 }
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_start);

@@ -44,6 +44,7 @@ struct mt6628_wlan {
 	struct net_device *netdev;
 	struct wiphy *wiphy;
 	struct wireless_dev wdev;
+	bool runtime_initialized;
 	bool runtime_started;
 	bool irq_claimed;
 	bool connected;
