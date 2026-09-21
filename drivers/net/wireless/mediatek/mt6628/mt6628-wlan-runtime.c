@@ -323,12 +323,11 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 {
 	unsigned long flags;
 	unsigned int i;
+	u8 released;
 	bool wake = false;
 
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
-		u8 released;
-
 		if (i < 4)
 			released = (wtsr0 >> (i * 8)) & 0xff;
 		else

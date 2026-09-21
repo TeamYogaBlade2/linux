@@ -530,7 +530,7 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 
 	if ((wcir & MT6628_WCIR_CHIP_ID) != 0x6628) {
 		dev_err(&func->dev, "unexpected chip ID %#x\n",
-			wcir & MT6628_WCIR_CHIP_ID);
+			(u32)(wcir & MT6628_WCIR_CHIP_ID));
 		ret = -ENODEV;
 		goto err_disable;
 	}
