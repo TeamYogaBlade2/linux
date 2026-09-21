@@ -37,6 +37,7 @@
 #define MT6320_ABB_AFE_CON(n)		(0x2000 + (n) * 2)
 #define MT6320_AUDTOP_CON(n)		(0x0700 + (n) * 2)
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H	0x2002
+#define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(3, 0)
 #define MT6320_ABB_AFE_UP8X_FIFO_CFG0	0x202c
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG0	0x2038
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG1	0x203a
@@ -142,8 +143,9 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 
 	return regmap_update_bits(priv->regmap,
 				  MT6320_ABB_AFE_DL_SRC2_CON0_H,
-				  GENMASK(15, 4),
-				  rate & GENMASK(15, 4));
+				  MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE,
+				  FIELD_PREP(MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE,
+					     rate_code));
 }
 
 static const struct snd_soc_dai_ops mt6320_dai_ops = {
