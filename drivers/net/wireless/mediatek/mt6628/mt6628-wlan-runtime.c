@@ -716,7 +716,6 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	struct net_device *ndev = wl->netdev;
 	unsigned long flags;
 
-	wl->runtime_started = false;
 	mt6628_cfg80211_abort_scan(wl);
 
 	spin_lock_irqsave(&wl->cmd_lock, flags);
@@ -727,6 +726,14 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 		complete(&wl->cmd_done);
 	}
 	spin_unlock_irqrestore(&wl->cmd_lock, flags);
+
+	/*
+	 * Keep the runtime command path and netdev alive while tearing
+	 * down firmware-side STA/BSS/channel state.  conn_fw_cleanup()
+	 * intentionally rejects cleanup after either one is cleared.
+	 */
+	mt6628_cfg80211_connect_deinit(wl);
+	wl->runtime_started = false;
 
 	if (wl->irq_claimed) {
 		sdio_claim_host(wl->func);
