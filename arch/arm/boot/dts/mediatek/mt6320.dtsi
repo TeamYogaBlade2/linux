@@ -46,12 +46,12 @@
 			};
 		};
 
-		mt6320clock: mt6320clock {
+		mt6320clock: clocks {
 			compatible = "mediatek,mt6320-clk";
 			#clock-cells = <1>;
 		};
 
-		sound {
+		audio-codec {
 			compatible = "mediatek,mt6320-sound";
 			clocks = <&mt6320clock MT6320_TOPCKPDN_AUD_26M>;
 			clock-names = "top-aud26m";
@@ -73,16 +73,11 @@
 		 * channel 4) as a hardware monitoring device so that the
 		 * thermal framework can pick it up.
 		 */
-		pmic-temp {
-			compatible = "iio-hwmon";
-			io-channels = <&mt6320_adc 4>;
-		};
-
 		efuse {
 			compatible = "mediatek,mt6320-efuse";
 		};
 
-		mt6320regulator: mt6320regulator {
+		mt6320regulator: regulators {
 			compatible = "mediatek,mt6320-regulator";
 
 			/* BUCK regulators */
@@ -327,6 +322,11 @@
 			};
 		};
 	};
+};
+
+pmic-temp {
+	compatible = "iio-hwmon";
+	io-channels = <&mt6320_adc 4>;
 };
 
 &pio6320 {
