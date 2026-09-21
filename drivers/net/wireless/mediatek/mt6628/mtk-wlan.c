@@ -17,8 +17,8 @@
  *   4. issue WIFI_START
  *   5. wait for WCIR_WLAN_READY
  *
- * The cfg80211/netdev and interrupt-driven runtime data path is not
- * implemented yet.
+ * The cfg80211/netdev and interrupt-driven runtime path is brought up
+ * after firmware start.
  */
 
 #include <linux/bitfield.h>
@@ -43,6 +43,8 @@
 #define MT6628_FW_SIGNATURE		0x574b544d
 #define MT6628_FW_HEADER_SIZE		16
 #define MT6628_FW_SECTION_SIZE		16
+#define MT6628_FW_DL_MODE_ENCRYPTION	BIT(0)
+#define MT6628_FW_DL_MODE_ACK		BIT(31)
 #define MT6628_INIT_EVENT_CMD_RESULT	1
 #define MT6628_INIT_EVENT_SIZE		8
 
@@ -318,7 +320,13 @@ static int mt6628_download_blob(struct mt6628_wlan *wl, u32 dest_addr,
 		dl.address = cpu_to_le32(dest_addr);
 		dl.length = cpu_to_le32(chunk);
 		dl.crc32 = cpu_to_le32(crc);
-		dl.data_mode = cpu_to_le32(BIT(0) | BIT(31));
+		/*
+		 * Request firmware encryption and a CMD_RESULT response for
+		 * each download chunk.  The latter is consumed by
+		 * mt6628_wait_init_cmd_result().
+		 */
+		dl.data_mode = cpu_to_le32(MT6628_FW_DL_MODE_ENCRYPTION |
+					   MT6628_FW_DL_MODE_ACK);
 
 		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_DOWNLOAD_BUF,
 				      &dl, sizeof(dl), data, chunk, true);
