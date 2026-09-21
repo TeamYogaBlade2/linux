@@ -173,12 +173,27 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned int bytes = params_buffer_bytes(params);
 	u32 base = lower_32_bits(runtime->dma_addr);
+	int ret;
 
 	/* program the DL1 memif DMA ring (in the AFE on-chip SRAM) */
-	regmap_write(afe->regmap, AFE_DL1_BASE, base);
-	regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
-	regmap_clear_bits(afe->regmap, AFE_MEMIF_MAXLEN, AFE_MEMIF_MAXLEN_DL1);
-	regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE, AFE_MEMIF_PBUF_SIZE_DL1);
+	ret = regmap_write(afe->regmap, AFE_DL1_BASE, base);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
+	if (ret)
+		return ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_MEMIF_MAXLEN,
+				AFE_MEMIF_MAXLEN_DL1);
+	if (ret)
+		return ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE,
+				AFE_MEMIF_PBUF_SIZE_DL1);
+	if (ret)
+		return ret;
+
 	return 0;
 }
 
@@ -190,21 +205,40 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
 	int rate_code = mt6589_afe_rate_code(runtime->rate);
 	u32 adda_con0;
+	int ret;
 
 	if (adda_code < 0 || rate_code < 0)
 		return -EINVAL;
 
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
-	regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON, AFE_IRQ_MCU_CON_IRQ1_RATE,
-			   FIELD_PREP(AFE_IRQ_MCU_CON_IRQ1_RATE, rate_code));
-	regmap_write(afe->regmap, AFE_IRQ_MCU_CNT1, runtime->period_size);
+	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				 AFE_IRQ_MCU_CON_IRQ1_RATE,
+				 FIELD_PREP(AFE_IRQ_MCU_CON_IRQ1_RATE,
+					    rate_code));
+	if (ret)
+		return ret;
+
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CNT1,
+			   runtime->period_size);
+	if (ret)
+		return ret;
 
 	/* interconnect: DL1 ch1/ch2 -> O3/O4 */
-	regmap_set_bits(afe->regmap, AFE_CONN1, AFE_CONN1_DL1_O3);
-	regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_DL1_O4);
+	ret = regmap_set_bits(afe->regmap, AFE_CONN1, AFE_CONN1_DL1_O3);
+	if (ret)
+		return ret;
 
-	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON0, 0);
-	regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON1, 0);
+	ret = regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_DL1_O4);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON0, 0);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(afe->regmap, AFE_ADDA_PREDIS_CON1, 0);
+	if (ret)
+		return ret;
 
 	/* Match the stock SetDLSrc2() sequence. */
 	adda_con0 = AFE_ADDA_DL_SRC2_CON0_BASE |
@@ -212,14 +246,26 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (adda_code == 0 || adda_code == 3)
 		adda_con0 |= AFE_ADDA_DL_SRC2_CON0_VOICE_MODE;
 
-	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0, adda_con0);
-	regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
-		     AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE);
-	regmap_write(afe->regmap, AFE_I2S_CON1,
-		     AFE_I2S_CON1_BASE | FIELD_PREP(AFE_I2S_CON1_RATE, rate_code));
+	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0, adda_con0);
+	if (ret)
+		return ret;
 
-	regmap_update_bits(afe->regmap, AFE_DAC_CON1, AFE_DAC_CON1_DL1_RATE,
-			   FIELD_PREP(AFE_DAC_CON1_DL1_RATE, rate_code));
+	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
+			   AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
+			   AFE_I2S_CON1_BASE |
+			   FIELD_PREP(AFE_I2S_CON1_RATE, rate_code));
+	if (ret)
+		return ret;
+
+	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_DL1_RATE,
+				 FIELD_PREP(AFE_DAC_CON1_DL1_RATE, rate_code));
+	if (ret)
+		return ret;
 
 	return 0;
 }
