@@ -31,9 +31,13 @@ static int mt6628_cmd_acquire_tc(struct mt6628_wlan *wl)
 	unsigned long flags;
 
 	if (!wait_event_timeout(wl->tx_wait,
+				!wl->runtime_started ||
 				mt6628_cmd_tc_available(wl),
 				msecs_to_jiffies(MT6628_CMD_TIMEOUT_MS)))
 		return -EBUSY;
+
+	if (!wl->runtime_started)
+		return -ESHUTDOWN;
 
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	if (!wl->tx_free[MT6628_TX_TC_CMD]) {

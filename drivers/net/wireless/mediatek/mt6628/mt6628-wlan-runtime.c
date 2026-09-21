@@ -756,6 +756,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	 */
 	mt6628_cfg80211_connect_deinit(wl);
 	wl->runtime_started = false;
+	wake_up_all(&wl->tx_wait);
 
 	if (wl->irq_claimed) {
 		sdio_claim_host(wl->func);

@@ -459,7 +459,7 @@ static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 }
 
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-				 size_t frame_len)
+			 size_t frame_len)
 {
 	struct mt6628_hif_mgmt_tx_hdr hdr = {};
 	unsigned long flags;
@@ -468,6 +468,8 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	u16 seq;
 	int ret;
 
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
 	if (!frame || frame_len < sizeof(struct ieee80211_hdr))
 		return -EINVAL;
 	if (frame_len > 4095 - MT6628_HIF_TX_HEADER_LEN)
@@ -476,9 +478,13 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 		return -EINVAL;
 
 	if (!wait_event_timeout(wl->tx_wait,
+				!wl->runtime_started ||
 				mt6628_mgmt_tc_available(wl),
 				msecs_to_jiffies(1000)))
 		return -EBUSY;
+
+	if (!wl->runtime_started)
+		return -ESHUTDOWN;
 
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	if (!wl->tx_free[MT6628_TX_TC_MGMT]) {
