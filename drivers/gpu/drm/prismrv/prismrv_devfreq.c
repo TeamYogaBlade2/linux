@@ -31,7 +31,7 @@ static int prismrv_read_gpu_grade(struct device *dev)
 
 	cell = devm_nvmem_cell_get(dev, "gpu_grade");
 	if (IS_ERR(cell)) {
-		/* no cell wired up: treat as unfused */
+		/* no cell wired up: treat as unfused (grade 0 = slowest) */
 		return 0;
 	}
 
@@ -40,7 +40,21 @@ static int prismrv_read_gpu_grade(struct device *dev)
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	grade = buf[0];
+	/*
+	 * Validate the returned buffer length.  The DT specifies
+	 *   bits = <28 4>   (4-bit field at bit 28 of a 32-bit word)
+	 * so the NVMEM provider should return exactly 1 byte after
+	 * bit-extraction.  Guard against a misconfigured provider
+	 * returning a shorter (0-byte) or wider buffer.
+	 */
+	if (len < 1) {
+		dev_warn(dev, "gpu_grade NVMEM cell returned %zu bytes (want 1)\n",
+			 len);
+		kfree(buf);
+		return 0;
+	}
+
+	grade = buf[0] & 0x0f;	/* 4-bit field: mask stray upper bits */
 	kfree(buf);
 	return grade;
 }
@@ -115,15 +129,14 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 
 	grade = prismrv_read_gpu_grade(pv->drm.dev);
 	if (grade < 0)
-		return grade;
+		return grade;	/* NVMEM read error */
 
 	/*
-	 * The eFuse cell is 4 bits wide but be defensive: a bogus value
-	 * (corrupt fuse readout, bad nvmem driver) must not shift into
-	 * UB territory.  Clamp to the documented 1..7 range and treat
-	 * anything else as unfused.
+	 * prismrv_read_gpu_grade() already masks to 4 bits (0..15).
+	 * Values 1..7 are documented speed grades; 0 means unfused.
+	 * Any value > 7 from a future part gets clamped to 0 (slowest).
 	 */
-	if (grade < 0 || grade > 7)
+	if (grade > 7)
 		grade = 0;
 	version = BIT(grade);
 	if (grade == 0)

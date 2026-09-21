@@ -102,8 +102,16 @@ void prismrv_mmu_fini(struct prismrv_device *pv)
 	}
 }
 
-int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
-		    dma_addr_t phys, size_t size)
+/*
+ * prismrv_mmu_map_locked() — map [vaddr, vaddr+size) → phys.
+ *
+ * Caller must hold pv->mmu_lock.  All internal callers (bo_pin_and_map,
+ * hw_init fixed-mapping paths, errata_apply, ccb_init) go through the
+ * locked variant directly; the public prismrv_mmu_map() acquires the
+ * lock for external callers that do not already hold it.
+ */
+int prismrv_mmu_map_locked(struct prismrv_device *pv, u32 vaddr,
+			    dma_addr_t phys, size_t size)
 {
 	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
 	unsigned long i;
@@ -148,7 +156,20 @@ int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
 	return 0;
 }
 
-void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size)
+/* public wrapper — acquires mmu_lock */
+int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
+		    dma_addr_t phys, size_t size)
+{
+	int ret;
+
+	mutex_lock(&pv->mmu_lock);
+	ret = prismrv_mmu_map_locked(pv, vaddr, phys, size);
+	mutex_unlock(&pv->mmu_lock);
+	return ret;
+}
+
+void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
+			       size_t size)
 {
 	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
 	unsigned long i;
@@ -176,4 +197,12 @@ void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size)
 		       pv->regs + EUR_CR_BIF_CTRL);
 		readl(pv->regs + EUR_CR_BIF_CTRL);
 	}
+}
+
+/* public wrapper — acquires mmu_lock */
+void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size)
+{
+	mutex_lock(&pv->mmu_lock);
+	prismrv_mmu_unmap_locked(pv, vaddr, size);
+	mutex_unlock(&pv->mmu_lock);
 }

@@ -178,10 +178,21 @@ struct prismrv_device {
 	dma_addr_t *pd_pt_dma;		/* matching dma addresses */
 	dma_addr_t pt_dma_addr;		/* scratch dma addr (PD alloc) */
 	/*
-	 * Serialises prismrv_mmu_map() / prismrv_mmu_unmap() and the
-	 * PDE-allocation critical section within mmu_map().  Without
-	 * this, concurrent submits from multiple threads can race on
-	 * PDE allocation and double-allocate a page table.
+	 * Serialises prismrv_mmu_map_locked() / prismrv_mmu_unmap_locked()
+	 * and the PDE-allocation critical section within mmu_map_locked().
+	 *
+	 * Lock discipline:
+	 *  - bo_pin_and_map() and bo_free() hold mmu_lock and call the
+	 *    _locked() variants directly.
+	 *  - hw_init() / errata_apply() / ccb_init() run under
+	 *    submit_rwsem (write) + init_mutex, which prevents concurrent
+	 *    bo_free(); they use the public prismrv_mmu_map/unmap() which
+	 *    acquire mmu_lock internally.
+	 *  - hw_fini() → mmu_fini() runs under mmu_lock (see hw_fini()).
+	 *
+	 * Always acquired AFTER submit_rwsem and init_mutex if those are
+	 * needed; never acquire init_mutex or submit_rwsem while holding
+	 * mmu_lock.
 	 */
 	struct mutex mmu_lock;
 
@@ -275,9 +286,15 @@ u32 prismrv_read_revision(struct prismrv_device *pv);
 
 int prismrv_mmu_init(struct prismrv_device *pv);
 void prismrv_mmu_fini(struct prismrv_device *pv);
-int prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
-		    dma_addr_t phys, size_t size);
+/* public wrappers — acquire pv->mmu_lock internally */
+int  prismrv_mmu_map(struct prismrv_device *pv, u32 vaddr,
+		     dma_addr_t phys, size_t size);
 void prismrv_mmu_unmap(struct prismrv_device *pv, u32 vaddr, size_t size);
+/* _locked variants for callers that already hold pv->mmu_lock */
+int  prismrv_mmu_map_locked(struct prismrv_device *pv, u32 vaddr,
+			     dma_addr_t phys, size_t size);
+void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
+			       size_t size);
 
 irqreturn_t prismrv_irq_handler(int irq, void *data);
 void prismrv_recovery_work(struct work_struct *work);

@@ -39,6 +39,7 @@ static u32 va_next = PRISMRV_VA_BASE;
 static void prismrv_va_free_locked(u32 base, size_t size)
 {
 	struct prismrv_va_range *range, *next, *new_range;
+	struct list_head *insert_before = &va_free_list; /* sentinel = tail */
 
 	/* merge into a lower neighbour that ends exactly at our base */
 	list_for_each_entry(range, &va_free_list, node) {
@@ -57,8 +58,24 @@ static void prismrv_va_free_locked(u32 base, size_t size)
 			}
 			return;
 		}
-		if (range->base > base)
+		if (range->base > base) {
+			/*
+			 * 'range' is the first existing entry that starts
+			 * after our new range.  We want to insert before it.
+			 * list_add_tail(new, &range->node) inserts before
+			 * range->node — exactly what we want.
+			 */
+			insert_before = &range->node;
 			break;
+		}
+		/*
+		 * 'range' starts before 'base' and does not end at 'base'
+		 * (merge above didn't fire).  Continue scanning.
+		 * If we exhaust the loop, insert_before stays as the
+		 * sentinel (va_free_list head), which list_add_tail treats
+		 * as "append to tail" — the correct behaviour for a new
+		 * range that is higher than all existing ones.
+		 */
 	}
 
 	new_range = kmalloc(sizeof(*new_range), GFP_KERNEL);
@@ -67,11 +84,8 @@ static void prismrv_va_free_locked(u32 base, size_t size)
 	new_range->base = base;
 	new_range->size = size;
 
-	if (&range->node != &va_free_list)
-		/* list_add_tail() inserts before the given head */
-		list_add_tail(&new_range->node, &range->node);
-	else
-		list_add_tail(&new_range->node, &va_free_list);
+	/* list_add_tail(new, head) inserts new BEFORE head */
+	list_add_tail(&new_range->node, insert_before);
 }
 
 struct prismrv_bo {
@@ -105,7 +119,7 @@ static void prismrv_bo_free(struct drm_gem_object *obj)
 		 * to unmap; skip silently.
 		 */
 		if (pv->pd_pts)
-			prismrv_mmu_unmap(pv, bo->gpu_va, obj->size);
+			prismrv_mmu_unmap_locked(pv, bo->gpu_va, obj->size);
 		mutex_lock(&va_lock);
 		prismrv_va_free_locked(bo->gpu_va, PAGE_ALIGN(obj->size));
 		mutex_unlock(&va_lock);
@@ -187,7 +201,7 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	for_each_sgtable_dma_sg(sgt, sg, i) {
 		size_t len = sg_dma_len(sg);
 
-		ret = prismrv_mmu_map(pv, bo->gpu_va + va_off,
+		ret = prismrv_mmu_map_locked(pv, bo->gpu_va + va_off,
 				      sg_dma_address(sg), len);
 		if (ret)
 			goto err_unmap;
@@ -198,7 +212,7 @@ static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
 	return 0;
 
 err_unmap:
-	prismrv_mmu_unmap(pv, bo->gpu_va, va_off);
+	prismrv_mmu_unmap_locked(pv, bo->gpu_va, va_off);
 	mutex_lock(&va_lock);
 	prismrv_va_free_locked(bo->gpu_va, want);
 	mutex_unlock(&va_lock);
