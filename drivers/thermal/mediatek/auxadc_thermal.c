@@ -823,9 +823,9 @@ static int raw_to_mcelsius_v1_5(struct mtk_thermal *mt, int sensno, s32 raw)
 	tmp = tmp * 15 / 18;
 
 	if (mt->o_slope_sign == 0)
-		tmp = (tmp * 1000) / (1528 + mt->o_slope * 10);
+		tmp = (tmp * 100) / (165 + mt->o_slope);
 	else
-		tmp = (tmp * 1000) / (1528 - mt->o_slope * 10);
+		tmp = (tmp * 100) / (165 - mt->o_slope);
 
 	tmp = tmp - (tmp << 1);
 	return (format_2 + tmp) * 100;
@@ -1196,8 +1196,8 @@ static int mtk_thermal_extract_efuse_mt6589(struct mtk_thermal *mt, u32 *buf)
 	mt->vts[VTSABB] = (buf[1] & 0x0000FF80) >> 7;
 
 	mt->degc_cali = (buf[0] & 0x0000007E) >> 1;
-	mt->o_slope = (buf[0] & 0xFC000000) >> 26;
-	/* The MT6589 always uses the TSMC slope table. */
+	/* The MT6589 uses the TSMC slope table. */
+	mt->o_slope = 0;
 	mt->o_slope_sign = 0;
 
 	if (!(buf[0] & 0x00000001)) {
