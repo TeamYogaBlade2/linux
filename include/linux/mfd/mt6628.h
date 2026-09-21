@@ -22,6 +22,13 @@ enum mt6628_wmt_func {
 	MT6628_WMT_FUNC_GPS = 2,
 };
 
+enum mt6628_wmt_dsns {
+	MT6628_WMT_DSNS_FM_DISABLE = 0,
+	MT6628_WMT_DSNS_FM_ENABLE = 1,
+	MT6628_WMT_DSNS_FM_GPS_DISABLE = 2,
+	MT6628_WMT_DSNS_FM_GPS_ENABLE = 3,
+};
+
 typedef void (*mt6628_stp_rx_cb)(void *priv, const u8 *buf, size_t len);
 
 int mt6628_stp_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
@@ -35,5 +42,7 @@ void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 				enum mt6628_wmt_func func, bool on);
 int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on);
+int mt6628_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
+			 enum mt6628_wmt_dsns type);
 
 #endif /* __LINUX_MFD_MT6628_H */

@@ -661,6 +661,15 @@ static const struct mtk_fm_chan_para mtk_fm_chan_para_map[] = {
 	{ 10770, 1 },
 };
 
+static const u16 mtk_fm_mcu_desense_channels[] = {
+	7630, 7800, 7940, 8320, 9260,
+	9600, 9710, 9920, 10400, 10410,
+};
+
+static const u16 mtk_fm_gps_desense_channels[] = {
+	7850, 7860,
+};
+
 static u8 mtk_fm_get_chan_para(u32 freq)
 {
 	unsigned int i;
@@ -677,6 +686,40 @@ static u8 mtk_fm_get_chan_para(u32 freq)
 	return 0;
 }
 
+static bool mtk_fm_freq_in_list(u32 freq, const u16 *list, size_t count)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++)
+		if (list[i] == freq)
+			return true;
+
+	return false;
+}
+
+static void mtk_fm_update_desense(struct mtk_fm *fm, u32 freq)
+{
+	int ret;
+
+	ret = mt6628_wmt_dsns_ctrl(
+		fm->wmt,
+		mtk_fm_freq_in_list(freq, mtk_fm_mcu_desense_channels,
+				    ARRAY_SIZE(mtk_fm_mcu_desense_channels)) ?
+		MT6628_WMT_DSNS_FM_ENABLE :
+		MT6628_WMT_DSNS_FM_DISABLE);
+	if (ret)
+		dev_warn(fm->dev, "failed to update FM MCU desense: %d\n", ret);
+
+	ret = mt6628_wmt_dsns_ctrl(
+		fm->wmt,
+		mtk_fm_freq_in_list(freq, mtk_fm_gps_desense_channels,
+				    ARRAY_SIZE(mtk_fm_gps_desense_channels)) ?
+		MT6628_WMT_DSNS_FM_GPS_ENABLE :
+		MT6628_WMT_DSNS_FM_GPS_DISABLE);
+	if (ret)
+		dev_warn(fm->dev, "failed to update FM GPS desense: %d\n", ret);
+}
+
 static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 {
 	u8 buf[64] = {};
@@ -687,6 +730,8 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 
 	if (freq < 7600 || freq > 10800)
 		return -EINVAL;
+
+	mtk_fm_update_desense(fm, freq);
 
 	tune_value = (freq - 6400) * 2 / 10;
 	chan_para = mtk_fm_get_chan_para(freq);

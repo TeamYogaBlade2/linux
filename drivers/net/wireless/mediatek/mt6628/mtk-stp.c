@@ -1303,6 +1303,37 @@ int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
 }
 EXPORT_SYMBOL_GPL(mt6628_wmt_gps_sync_ctrl);
 
+int mt6628_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
+			 enum mt6628_wmt_dsns type)
+{
+	static const u8 expected[] = {
+		0x02, 0x0e, 0x01, 0x00, 0x00,
+	};
+	u8 cmd[] = {
+		0x01, 0x0e, 0x02, 0x00,
+		MT6628_WMT_FUNC_FM,
+		type,
+	};
+	u8 response[sizeof(expected)];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	if (!wmt || type > MT6628_WMT_DSNS_FM_GPS_ENABLE)
+		return -EINVAL;
+
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x0e, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mt6628_wmt_dsns_ctrl);
+
 static const struct mfd_cell mt6628_stp_cells[] = {
 	{ .name = "mt6628-bt" },
 	{ .name = "mt6628-fm" },
