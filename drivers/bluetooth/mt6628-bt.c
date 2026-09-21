@@ -322,9 +322,9 @@ static void mt6628_bt_remove(struct platform_device *pdev)
 	if (!bt)
 		return;
 
+	hci_unregister_dev(bt->hdev);
 	mt6628_stp_unregister_rx(bt->wmt, MT6628_STP_TASK_BT,
 				 mt6628_bt_rx, bt);
-	hci_unregister_dev(bt->hdev);
 	hci_free_dev(bt->hdev);
 }
 
