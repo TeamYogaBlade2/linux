@@ -21,6 +21,17 @@
 	compatible = "mediatek,mt6589";
 	interrupt-parent = <&sysirq>;
 
+	aliases {
+		bls0 = &bls;
+		color0 = &color;
+		tdshp0 = &tdshp;
+		ovl0 = &ovl;
+		rdma0 = &rdma0;
+		rdma1 = &rdma1;
+		mutex0 = &mutex;
+		dsi0 = &dsi;
+	};
+
 	cpu_opp_table: opp-table-cpu {
 		compatible = "operating-points-v2";
 		opp-shared;
