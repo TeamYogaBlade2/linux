@@ -220,6 +220,7 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 	u8 *buf;
 	u16 packet_type;
 	unsigned int payload_len;
+	unsigned int header_offset;
 	int ret;
 
 	if (packet_len < 8 || packet_len > MT6628_RX_MAX_PACKET)
@@ -245,12 +246,14 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 	}
 
 	packet_type = le16_to_cpu(rx_hdr->packet_type) & GENMASK(1, 0);
+	header_offset = rx_hdr->header_len_offset & GENMASK(1, 0);
 	switch (packet_type) {
 	case MT6628_HIF_RX_PKT_TYPE_DATA:
-		if (packet_len < MT6628_HIF_RX_HEADER_LEN)
+		if (packet_len < MT6628_HIF_RX_HEADER_LEN + header_offset)
 			goto bad_packet;
 
-		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN;
+		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
+			header_offset;
 		if (skb_queue_len(&wl->rx_queue) >= MT6628_RUNTIME_QUEUE_LIMIT)
 			goto drop_packet;
 
@@ -260,7 +263,8 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 			goto out_free;
 		}
 		memcpy(skb_put(skb, payload_len),
-		       buf + MT6628_HIF_RX_HEADER_LEN, payload_len);
+		       buf + MT6628_HIF_RX_HEADER_LEN + header_offset,
+		       payload_len);
 		skb_queue_tail(&wl->rx_queue, skb);
 		ret = 0;
 		break;
