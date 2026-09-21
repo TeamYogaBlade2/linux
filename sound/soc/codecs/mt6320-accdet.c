@@ -553,7 +553,7 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 					       NULL, 0);
 }
 
-static int mt6320_accdet_remove(struct platform_device *pdev)
+static void mt6320_accdet_remove(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv = platform_get_drvdata(pdev);
 	int ret = 0;
@@ -568,7 +568,9 @@ static int mt6320_accdet_remove(struct platform_device *pdev)
 	mt6320_accdet_report(priv, 0);
 	mutex_unlock(&priv->lock);
 
-	return ret;
+	if (ret)
+		dev_err(&pdev->dev,
+			"failed to disable ACCDET during remove: %d\n", ret);
 }
 
 static const struct of_device_id mt6320_accdet_of_match[] = {
