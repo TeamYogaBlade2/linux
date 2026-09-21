@@ -38,6 +38,18 @@ struct mt6628_wlan {
 	bool irq_claimed;
 	bool connected;
 	u8 sta_rec_idx;
+	u8 conn_state;
+	u8 conn_bssid[ETH_ALEN];
+	u8 conn_ssid[IEEE80211_MAX_SSID_LEN];
+	u8 conn_ssid_len;
+	u8 conn_channel;
+	u16 conn_aid;
+	struct cfg80211_bss *conn_bss;
+	u8 *conn_req_ie;
+	size_t conn_req_ie_len;
+	u8 *conn_resp_ie;
+	size_t conn_resp_ie_len;
+	struct delayed_work conn_timeout_work;
 
 	struct mutex cfg_mutex;
 	struct cfg80211_scan_request *scan_req;
@@ -98,6 +110,14 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
+void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl);
+void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl);
+int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
+				struct cfg80211_connect_params *sme);
+int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
+				u16 reason_code);
+bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
+					     struct sk_buff *skb);
 void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb);
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,

@@ -242,6 +242,8 @@ static void mt6628_abort_scan(struct wiphy *wiphy, struct wireless_dev *wdev)
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
+	.connect = mt6628_cfg80211_connect,
+	.disconnect = mt6628_cfg80211_disconnect,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)
@@ -292,6 +294,9 @@ void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 	unsigned int offset;
 	unsigned int frame_len;
 	int freq;
+
+	if (mt6628_cfg80211_connection_mgmt(wl, skb))
+		return;
 
 	mutex_lock(&wl->cfg_mutex);
 	request = wl->scan_req;
@@ -421,9 +426,11 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 
 	wl->wdev.wiphy = wl->wiphy;
 	wl->wdev.iftype = NL80211_IFTYPE_STATION;
+	mt6628_cfg80211_connect_init(wl);
 
 	ret = wiphy_register(wl->wiphy);
 	if (ret) {
+		mt6628_cfg80211_connect_deinit(wl);
 		wiphy_free(wl->wiphy);
 		wl->wiphy = NULL;
 	}
@@ -436,6 +443,7 @@ void mt6628_cfg80211_deinit(struct mt6628_wlan *wl)
 	if (!wl->wiphy)
 		return;
 
+	mt6628_cfg80211_connect_deinit(wl);
 	wiphy_unregister(wl->wiphy);
 	wiphy_free(wl->wiphy);
 	wl->wiphy = NULL;
