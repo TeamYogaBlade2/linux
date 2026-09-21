@@ -13,6 +13,7 @@ if WLAN_VENDOR_MEDIATEK_MT6628
 config MTK_MT6628_WLAN
 	tristate "MediaTek MT6628 WLAN support"
 	depends on MMC
+	select FW_LOADER
 	help
 	  This enables the WLAN function of the MediaTek MT6628 combo chip.
 	  The driver performs the firmware bring-up.  The cfg80211/netdev
@@ -34,3 +35,4 @@ config MTK_MT6628_STP
 	tristate
 	depends on MMC
 	select MFD_CORE
+	select FW_LOADER
