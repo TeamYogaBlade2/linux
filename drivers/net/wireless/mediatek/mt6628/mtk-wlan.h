@@ -37,7 +37,7 @@ struct mt6628_wlan {
 	bool driver_owned;
 
 	struct work_struct irq_work;
-	struct work_struct tx_work;
+	struct delayed_work tx_work;
 	struct napi_struct napi;
 	struct work_struct event_work;
 	struct work_struct mgmt_work;

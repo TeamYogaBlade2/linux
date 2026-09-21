@@ -338,8 +338,13 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 
 	if (wake)
 		wake_up_all(&wl->tx_wait);
-	if (wake && wl->netdev)
-		netif_wake_queue(wl->netdev);
+	if (wake) {
+		if (wl->netdev)
+			netif_wake_queue(wl->netdev);
+
+		if (!skb_queue_empty(&wl->tx_queue))
+			mod_delayed_work(system_wq, &wl->tx_work, 0);
+	}
 }
 
 static unsigned int mt6628_runtime_tc_from_skb(struct sk_buff *skb)
@@ -444,7 +449,8 @@ err_resource:
 
 static void mt6628_runtime_tx_work(struct work_struct *work)
 {
-	struct mt6628_wlan *wl = container_of(work, struct mt6628_wlan, tx_work);
+	struct mt6628_wlan *wl =
+		container_of(to_delayed_work(work), struct mt6628_wlan, tx_work);
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&wl->tx_queue))) {
@@ -453,7 +459,9 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 		ret = mt6628_runtime_tx_frame(wl, skb);
 		if (ret == -EAGAIN) {
 			skb_queue_head(&wl->tx_queue, skb);
-			break;
+			mod_delayed_work(system_wq, &wl->tx_work,
+					 msecs_to_jiffies(10));
+			return;
 		}
 		if (ret)
 			dev_kfree_skb_any(skb);
@@ -610,7 +618,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	int ret;
 
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
-	INIT_WORK(&wl->tx_work, mt6628_runtime_tx_work);
+	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
 	spin_lock_init(&wl->tx_lock);
@@ -756,7 +764,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	}
 
 	cancel_work_sync(&wl->irq_work);
-	cancel_work_sync(&wl->tx_work);
+	cancel_delayed_work_sync(&wl->tx_work);
 	cancel_work_sync(&wl->event_work);
 	cancel_work_sync(&wl->mgmt_work);
 
