@@ -216,6 +216,7 @@ static const struct mtk_clk_divider infra_dividers[] = {
 		.id = CLK_INFRA_ARMDIV1,
 		.name = "armdiv1",
 		.parent_name = "infra_mux1_sel",
+		.flags = CLK_SET_RATE_PARENT,
 		.div_reg = TOP_CKDIV1,
 		.div_shift = 0,
 		.div_width = 5,
