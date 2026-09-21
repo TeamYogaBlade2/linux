@@ -58,9 +58,10 @@ static void mt6628_cmd_release_tc(struct mt6628_wlan *wl)
 }
 
 int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
-			 const void *payload, size_t payload_len,
-			 void *response, size_t response_capacity,
-			 size_t *response_len, unsigned int timeout_ms)
+				 const void *payload, size_t payload_len,
+				 void *response, size_t response_capacity,
+				 size_t *response_len, u8 expected_event_id,
+				 unsigned int timeout_ms)
 {
 	struct mt6628_wifi_cmd_hdr *cmd;
 	unsigned long flags;
@@ -105,6 +106,7 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 		wl->cmd_pending = true;
 		wl->cmd_pending_seq = cmd->seq_num;
 		wl->cmd_pending_id = cid;
+		wl->cmd_pending_eid = expected_event_id;
 		wl->cmd_response = response;
 		wl->cmd_response_capacity = response_capacity;
 		wl->cmd_response_len = 0;
@@ -165,7 +167,8 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_BASIC_CONFIG, 0,
 				   NULL, 0, &response, sizeof(response),
-				   &response_len, MT6628_CMD_TIMEOUT_MS);
+				   &response_len, MT6628_EVENT_ID_BASIC_CONFIG,
+				   MT6628_CMD_TIMEOUT_MS);
 	if (ret)
 		return ret;
 	if (response_len != sizeof(response) ||

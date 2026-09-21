@@ -59,6 +59,7 @@ struct mt6628_wlan {
 	bool cmd_pending;
 	u8 cmd_pending_seq;
 	u8 cmd_pending_id;
+	u8 cmd_pending_eid;
 	u8 cmd_seq_num;
 	u8 *cmd_response;
 	size_t cmd_response_len;
@@ -73,6 +74,7 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
 int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 			 const void *payload, size_t payload_len,
 			 void *response, size_t response_capacity,
-			 size_t *response_len, unsigned int timeout_ms);
+			 size_t *response_len, u8 expected_event_id,
+			 unsigned int timeout_ms);
 
 #endif /* __MTK6628_WLAN_H */
