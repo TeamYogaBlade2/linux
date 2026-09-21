@@ -27,6 +27,8 @@ struct mt6628_wlan {
 
 	struct work_struct irq_work;
 	struct work_struct tx_work;
+	struct work_struct event_work;
+	struct work_struct mgmt_work;
 	struct net_device *netdev;
 	bool runtime_started;
 	bool irq_claimed;
@@ -43,7 +45,11 @@ struct mt6628_wlan {
 	struct sk_buff_head rx_queue;
 	struct sk_buff_head event_queue;
 	struct sk_buff_head mgmt_queue;
+	struct sk_buff_head async_event_queue;
+	struct sk_buff_head async_mgmt_queue;
 	wait_queue_head_t event_wait;
+	void (*event_handler)(struct mt6628_wlan *, struct sk_buff *);
+	void (*mgmt_handler)(struct mt6628_wlan *, struct sk_buff *);
 
 	/* Runtime command/event state, used by later control-plane commits. */
 	struct mutex cmd_mutex;
@@ -51,6 +57,8 @@ struct mt6628_wlan {
 	struct completion cmd_done;
 	bool cmd_pending;
 	u8 cmd_pending_seq;
+	u8 cmd_pending_id;
+	u8 cmd_seq_num;
 	u8 *cmd_response;
 	size_t cmd_response_len;
 	size_t cmd_response_capacity;
@@ -59,5 +67,11 @@ struct mt6628_wlan {
 
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl);
 void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl);
+int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
+
+int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
+			 const void *payload, size_t payload_len,
+			 void *response, size_t response_capacity,
+			 size_t *response_len, unsigned int timeout_ms);
 
 #endif /* __MTK6628_WLAN_H */

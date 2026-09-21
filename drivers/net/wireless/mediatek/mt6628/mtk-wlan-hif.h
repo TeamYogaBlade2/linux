@@ -72,6 +72,48 @@
 					 MT6628_WHIER_RX1_DONE | \
 					 MT6628_WHIER_ABNORMAL)
 
+/* Runtime command/event protocol. */
+#define MT6628_WIFI_CMD_HEADER_LEN	8
+#define MT6628_WIFI_EVENT_HEADER_LEN	8
+#define MT6628_HIF_TX_RESOURCE_OFFSET	2
+#define MT6628_HIF_TX_PACKET_TYPE_OFFSET	6
+#define MT6628_HIF_TX_PKT_TYPE_CMD	1
+#define MT6628_TX_TC_CMD		4
+
+#define MT6628_EVENT_ID_CMD_RESULT	1
+#define MT6628_EVENT_ID_BASIC_CONFIG	9
+#define MT6628_EVENT_ID_SCAN_DONE	0x15
+#define MT6628_EVENT_ID_TX_DONE	0x17
+
+#define MT6628_CMD_ID_SCAN_REQ_V2	0x04
+#define MT6628_CMD_ID_SCAN_CANCEL	0x05
+#define MT6628_CMD_ID_BSS_ACTIVATE_CTRL	0x15
+#define MT6628_CMD_ID_SET_BSS_INFO	0x16
+#define MT6628_CMD_ID_UPDATE_STA_RECORD	0x17
+#define MT6628_CMD_ID_REMOVE_STA_RECORD	0x18
+#define MT6628_CMD_ID_BASIC_CONFIG	0xc1
+
+struct mt6628_wifi_cmd_hdr {
+	__le16 tx_byte_count_user_priority;
+	u8 ether_type_offset;
+	u8 resource_pkt_type_csflags;
+	u8 cid;
+	u8 set_query;
+	u8 seq_num;
+	u8 reserved;
+} __packed;
+
+struct mt6628_wifi_event_hdr {
+	__le16 packet_len;
+	__le16 packet_type;
+	u8 eid;
+	u8 seq_num;
+	u8 reserved[2];
+} __packed;
+
+static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
+static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
+
 /* WCIR */
 #define MT6628_WCIR_CHIP_ID		GENMASK(15, 0)
 #define MT6628_WCIR_WLAN_READY		BIT(21)

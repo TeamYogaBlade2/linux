@@ -87,6 +87,95 @@ static void mt6628_runtime_free_queues(struct mt6628_wlan *wl)
 	skb_queue_purge(&wl->rx_queue);
 	skb_queue_purge(&wl->event_queue);
 	skb_queue_purge(&wl->mgmt_queue);
+	skb_queue_purge(&wl->async_event_queue);
+	skb_queue_purge(&wl->async_mgmt_queue);
+}
+
+static void mt6628_runtime_event_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(work, struct mt6628_wlan, event_work);
+	struct mt6628_wifi_event_hdr *event;
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&wl->event_queue))) {
+		unsigned long flags;
+		size_t packet_len, body_len, copy_len;
+		bool matched = false;
+		int status = 0;
+
+		if (skb->len < MT6628_WIFI_EVENT_HEADER_LEN)
+			goto drop;
+
+		event = (struct mt6628_wifi_event_hdr *)skb->data;
+		packet_len = le16_to_cpu(event->packet_len);
+		if (packet_len < MT6628_WIFI_EVENT_HEADER_LEN ||
+		    packet_len > skb->len)
+			goto drop;
+
+		body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
+		spin_lock_irqsave(&wl->cmd_lock, flags);
+		if (wl->cmd_pending && event->seq_num == wl->cmd_pending_seq &&
+		    (event->eid != MT6628_EVENT_ID_CMD_RESULT || body_len >= 2) &&
+		    (event->eid != MT6628_EVENT_ID_CMD_RESULT ||
+		     skb->data[MT6628_WIFI_EVENT_HEADER_LEN] == wl->cmd_pending_id)) {
+			if (event->eid == MT6628_EVENT_ID_CMD_RESULT && body_len < 2) {
+				wl->cmd_status = -EPROTO;
+			} else {
+				copy_len = min(body_len, wl->cmd_response_capacity);
+				if (copy_len && wl->cmd_response)
+					memcpy(wl->cmd_response,
+					       skb->data + MT6628_WIFI_EVENT_HEADER_LEN,
+					       copy_len);
+				wl->cmd_response_len = copy_len;
+				if (event->eid == MT6628_EVENT_ID_CMD_RESULT &&
+				    skb->data[MT6628_WIFI_EVENT_HEADER_LEN + 1])
+					status = -EIO;
+				if (copy_len < body_len && !status)
+					status = -EMSGSIZE;
+				wl->cmd_status = status;
+			}
+			wl->cmd_pending = false;
+			complete(&wl->cmd_done);
+			matched = true;
+		}
+		spin_unlock_irqrestore(&wl->cmd_lock, flags);
+
+		if (matched)
+			goto drop;
+
+		if (wl->event_handler) {
+			wl->event_handler(wl, skb);
+			continue;
+		}
+		if (skb_queue_len(&wl->async_event_queue) >=
+		    256)
+			goto drop;
+		skb_queue_tail(&wl->async_event_queue, skb);
+		continue;
+
+drop:
+		kfree_skb(skb);
+	}
+}
+
+static void mt6628_runtime_mgmt_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(work, struct mt6628_wlan, mgmt_work);
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&wl->mgmt_queue))) {
+		if (wl->mgmt_handler) {
+			wl->mgmt_handler(wl, skb);
+			continue;
+		}
+		if (skb_queue_len(&wl->async_mgmt_queue) >= 256) {
+			kfree_skb(skb);
+			continue;
+		}
+		skb_queue_tail(&wl->async_mgmt_queue, skb);
+	}
 }
 
 static int mt6628_napi_poll(struct napi_struct *napi, int budget)
@@ -480,6 +569,11 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
 	sdio_release_host(wl->func);
 
+	if (!skb_queue_empty(&wl->event_queue))
+		schedule_work(&wl->event_work);
+	if (!skb_queue_empty(&wl->mgmt_queue))
+		schedule_work(&wl->mgmt_work);
+
 	mt6628_runtime_schedule_rx(wl);
 }
 
@@ -504,12 +598,16 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
 	INIT_WORK(&wl->tx_work, mt6628_runtime_tx_work);
+	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
+	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
 	spin_lock_init(&wl->tx_lock);
 	init_waitqueue_head(&wl->tx_wait);
 	skb_queue_head_init(&wl->tx_queue);
 	skb_queue_head_init(&wl->rx_queue);
 	skb_queue_head_init(&wl->event_queue);
 	skb_queue_head_init(&wl->mgmt_queue);
+	skb_queue_head_init(&wl->async_event_queue);
+	skb_queue_head_init(&wl->async_mgmt_queue);
 	init_waitqueue_head(&wl->event_wait);
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);
@@ -560,6 +658,11 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	if (ret)
 		goto err_unregister;
 
+	ret = mt6628_wlan_query_basic_config(wl);
+	if (ret)
+		dev_warn(&wl->func->dev,
+			"failed to read firmware MAC address: %d\n", ret);
+
 	return 0;
 
 err_unregister:
@@ -589,6 +692,8 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 
 	cancel_work_sync(&wl->irq_work);
 	cancel_work_sync(&wl->tx_work);
+	cancel_work_sync(&wl->event_work);
+	cancel_work_sync(&wl->mgmt_work);
 
 	if (ndev) {
 		unregister_netdev(ndev);
