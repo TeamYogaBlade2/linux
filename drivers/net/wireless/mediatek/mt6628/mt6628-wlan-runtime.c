@@ -667,6 +667,14 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	if (!ret)
 		wl->irq_claimed = true;
 	if (!ret) {
+		u32 whcr;
+
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHCR, &whcr);
+		if (!ret)
+			ret = mt6628_runtime_write32(wl, MT6628_MCR_WHCR,
+						     whcr & ~MT6628_WHCR_W_INT_CLR_CTRL);
+	}
+	if (!ret) {
 		wl->runtime_started = true;
 		ret = mt6628_runtime_write32(wl, MT6628_MCR_WHIER,
 					     MT6628_WHIER_RUNTIME);

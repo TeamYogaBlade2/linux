@@ -122,6 +122,9 @@ static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_L
 #define MT6628_WCIR_CHIP_ID		GENMASK(15, 0)
 #define MT6628_WCIR_WLAN_READY		BIT(21)
 
+/* WHCR */
+#define MT6628_WHCR_W_INT_CLR_CTRL	BIT(1)
+
 /* init command ids */
 enum mt6628_init_cmd_id {
 	MT6628_INIT_CMD_DOWNLOAD_BUF	= 1,
