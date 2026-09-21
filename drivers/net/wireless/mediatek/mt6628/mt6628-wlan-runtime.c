@@ -677,8 +677,18 @@ err_free_netdev:
 void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 {
 	struct net_device *ndev = wl->netdev;
+	unsigned long flags;
 
 	wl->runtime_started = false;
+
+	spin_lock_irqsave(&wl->cmd_lock, flags);
+	if (wl->cmd_pending) {
+		wl->cmd_status = -ESHUTDOWN;
+		wl->cmd_pending = false;
+		wl->cmd_response_len = 0;
+		complete(&wl->cmd_done);
+	}
+	spin_unlock_irqrestore(&wl->cmd_lock, flags);
 
 	if (wl->irq_claimed) {
 		sdio_claim_host(wl->func);
