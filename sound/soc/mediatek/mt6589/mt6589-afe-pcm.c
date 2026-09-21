@@ -327,6 +327,12 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
+		/*
+		 * Publish the substream before enabling IRQ1 so the first
+		 * period interrupt cannot race with this assignment.
+		 */
+		afe->dl1_substream = substream;
+
 		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
 		ret = regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
 				      AFE_ADDA_DL_SRC2_CON0_ON);
@@ -358,7 +364,6 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 		if (ret)
 			goto err_stop;
 
-		afe->dl1_substream = substream;
 		return 0;
 
 err_stop:
@@ -415,8 +420,12 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 	int ret;
 
 	ret = regmap_read(afe->regmap, AFE_IRQ_MCU_STATUS, &status);
-	if (ret)
-		return IRQ_NONE;
+	if (ret) {
+		dev_err_ratelimited(afe->dev,
+				    "failed to read AFE IRQ status: %d\n",
+				    ret);
+		return IRQ_HANDLED;
+	}
 
 	status &= AFE_IRQ_MCU_STATUS_MASK;
 	if (!status) {
