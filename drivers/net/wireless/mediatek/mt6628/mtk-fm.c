@@ -52,8 +52,10 @@
 #define FM_REG_ROM_VERSION		0x83
 #define FM_REG_ROM_CTRL			0x61
 #define FM_REG_CG_CTRL			0x60
+#define FM_REG_RSSI_IND			0x6c
 #define FM_REG_FORCE_MS			0x75
 #define FM_FORCE_MS			0x0008
+#define FM_STEREO_IND			BIT(12)
 
 #define FM_PATCH_SEG_LEN		512
 #define FM_CMD_TIMEOUT_MS		3000
@@ -933,8 +935,21 @@ static int mtk_fm_querycap(struct file *file, void *priv,
 static int mtk_fm_g_tuner(struct file *file, void *priv,
 			  struct v4l2_tuner *tuner)
 {
+	struct mtk_fm *fm = video_drvdata(file);
+	u16 force_ms;
+	u16 rssi_ind;
+	int ret;
+
 	if (tuner->index)
 		return -EINVAL;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &force_ms);
+	if (ret)
+		return ret;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_RSSI_IND, &rssi_ind);
+	if (ret)
+		return ret;
 
 	strscpy(tuner->name, "FM", sizeof(tuner->name));
 	tuner->type = V4L2_TUNER_RADIO;
@@ -949,9 +964,12 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	 */
 	tuner->rangelow = 76 * 16000;
 	tuner->rangehigh = 108 * 16000;
-	tuner->rxsubchans = V4L2_TUNER_SUB_MONO |
-			    V4L2_TUNER_SUB_STEREO;
-	tuner->audmode = V4L2_TUNER_MODE_STEREO;
+	tuner->rxsubchans = (rssi_ind & FM_STEREO_IND) ?
+			    V4L2_TUNER_SUB_STEREO :
+			    V4L2_TUNER_SUB_MONO;
+	tuner->audmode = (force_ms & FM_FORCE_MS) ?
+			 V4L2_TUNER_MODE_MONO :
+			 V4L2_TUNER_MODE_STEREO;
 
 	return 0;
 }
