@@ -195,66 +195,56 @@ static u16 mt6628_scan_dwell_time_tu(
 	return (u16)tu;
 }
 
-static int mt6628_scan_start(struct wiphy *wiphy,
-				     struct cfg80211_scan_request *request)
+static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
+				  struct cfg80211_scan_request *request)
 {
-	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(request->wdev);
 	struct mt6628_scan_cmd *cmd;
 	unsigned int i;
+	unsigned int start;
+	unsigned int n_channels;
 	unsigned int ssid_type;
-	bool passive;
+	bool passive = false;
 	u8 seq;
 	int ret;
 
-	if (!wl->runtime_started || !wl->fw_running)
-		return -ENODEV;
-	if (request->n_ssids > MT6628_SCAN_MAX_SSIDS)
-		return -E2BIG;
-	if (request->n_channels > MT6628_SCAN_MAX_CHANNELS)
-		return -E2BIG;
-	if (request->ie_len > MT6628_SCAN_MAX_IE_LEN)
-		return -E2BIG;
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->scan_req != request) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -ECANCELED;
+	}
+	start = wl->scan_chan_idx;
+	if (start >= request->n_channels) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -EINVAL;
+	}
+	n_channels = min_t(unsigned int, request->n_channels - start,
+					MT6628_SCAN_MAX_CHANNELS);
+	mutex_unlock(&wl->cfg_mutex);
 
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
 	if (!cmd)
 		return -ENOMEM;
 
-	passive = false;
-	for (i = 0; i < request->n_channels; i++) {
-		ret = mt6628_channel_to_hif(request->channels[i],
+	for (i = 0; i < n_channels; i++) {
+		ret = mt6628_channel_to_hif(request->channels[start + i],
 					    &cmd->channels[i]);
 		if (ret)
 			goto out_free;
-		if (request->channels[i]->flags & IEEE80211_CHAN_NO_IR)
+		if (request->channels[start + i]->flags & IEEE80211_CHAN_NO_IR)
 			passive = true;
 	}
 
-	mutex_lock(&wl->cfg_mutex);
-	if (wl->scan_req) {
-		mutex_unlock(&wl->cfg_mutex);
-		ret = -EBUSY;
-		goto out_free;
-	}
-
-	seq = ++wl->scan_seq;
-	if (!seq)
-		seq = ++wl->scan_seq;
-	wl->scan_req = request;
-	wl->scan_done_pending = false;
-	mutex_unlock(&wl->cfg_mutex);
-
-	cmd->seq_num = seq;
+	ssid_type = request->n_ssids ? MT6628_SCAN_SSID_SPECIFIC :
+		MT6628_SCAN_SSID_WILDCARD;
 	cmd->network_type = 0;
 	cmd->scan_type = passive ? MT6628_SCAN_TYPE_PASSIVE :
 		MT6628_SCAN_TYPE_ACTIVE;
-	ssid_type = request->n_ssids ? MT6628_SCAN_SSID_SPECIFIC :
-		MT6628_SCAN_SSID_WILDCARD;
 	cmd->ssid_type = ssid_type;
 	cmd->probe_delay_time = cpu_to_le16(0);
-	cmd->channel_dwell_time =
-		cpu_to_le16(mt6628_scan_dwell_time_tu(request));
+	cmd->channel_dwell_time = cpu_to_le16(
+		mt6628_scan_dwell_time_tu(request));
 	cmd->channel_type = 0;
-	cmd->channel_list_num = request->n_channels;
+	cmd->channel_list_num = n_channels;
 	cmd->ie_len = cpu_to_le16(request->ie_len);
 
 	for (i = 0; i < request->n_ssids; i++) {
@@ -265,8 +255,89 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 	if (request->ie_len)
 		memcpy(cmd->ie, request->ie, request->ie_len);
 
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->scan_req != request) {
+		mutex_unlock(&wl->cfg_mutex);
+		ret = -ECANCELED;
+		goto out_free;
+	}
+
+	seq = ++wl->scan_seq;
+	if (!seq)
+		seq = ++wl->scan_seq;
+	wl->scan_chan_idx = start + n_channels;
+	mutex_unlock(&wl->cfg_mutex);
+
+	cmd->seq_num = seq;
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SCAN_REQ_V2, 1,
-				   cmd, sizeof(*cmd), NULL, 0, NULL, 0, 0);
+					   cmd, sizeof(*cmd), NULL, 0, NULL, 0, 0);
+
+out_free:
+	kfree(cmd);
+	return ret;
+}
+
+static void mt6628_scan_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl = container_of(work, struct mt6628_wlan,
+						   scan_work);
+	struct cfg80211_scan_request *request;
+	struct cfg80211_scan_info info = {
+		.aborted = true,
+	};
+	bool report = false;
+	int ret;
+
+	mutex_lock(&wl->cfg_mutex);
+	request = wl->scan_req;
+	mutex_unlock(&wl->cfg_mutex);
+	if (!request)
+		return;
+
+	ret = mt6628_scan_send_chunk(wl, request);
+	if (!ret)
+		return;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->scan_req == request) {
+		wl->scan_req = NULL;
+		wl->scan_done_pending = false;
+		report = true;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (report)
+		cfg80211_scan_done(request, &info);
+}
+
+static int mt6628_scan_start(struct wiphy *wiphy,
+				     struct cfg80211_scan_request *request)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(request->wdev);
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+	if (request->n_ssids > MT6628_SCAN_MAX_SSIDS)
+		return -E2BIG;
+	if (!request->n_channels)
+		return -EINVAL;
+	if (request->ie_len > MT6628_SCAN_MAX_IE_LEN)
+		return -E2BIG;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->scan_req) {
+		mutex_unlock(&wl->cfg_mutex);
+		ret = -EBUSY;
+		return ret;
+	}
+
+	wl->scan_req = request;
+	wl->scan_chan_idx = 0;
+	wl->scan_done_pending = false;
+	mutex_unlock(&wl->cfg_mutex);
+
+	ret = mt6628_scan_send_chunk(wl, request);
 	if (ret) {
 		mutex_lock(&wl->cfg_mutex);
 		if (wl->scan_req == request)
@@ -274,8 +345,6 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 		mutex_unlock(&wl->cfg_mutex);
 	}
 
-out_free:
-	kfree(cmd);
 	return ret;
 }
 
@@ -301,6 +370,7 @@ void mt6628_cfg80211_abort_scan(struct mt6628_wlan *wl)
 	mutex_lock(&wl->cfg_mutex);
 	mt6628_abort_scan_locked(wl, &request, &seq);
 	mutex_unlock(&wl->cfg_mutex);
+	cancel_work_sync(&wl->scan_work);
 
 	if (!request)
 		return;
@@ -479,6 +549,7 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 	struct cfg80211_scan_info info = {
 		.aborted = false,
 	};
+	bool next_chunk = false;
 	size_t packet_len, body_len;
 
 	if (skb->len < MT6628_WIFI_EVENT_HEADER_LEN)
@@ -498,19 +569,27 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 
 	mutex_lock(&wl->cfg_mutex);
 	request = wl->scan_req;
-	if (request && skb->data[MT6628_WIFI_EVENT_HEADER_LEN] ==
-		wl->scan_seq) {
-		wl->scan_done_pending = true;
-		if (skb_queue_empty(&wl->mgmt_queue)) {
-			wl->scan_req = NULL;
-			wl->scan_done_pending = false;
+	if (request && event->seq_num == wl->scan_seq) {
+		if (wl->scan_chan_idx < request->n_channels) {
+			next_chunk = true;
 		} else {
-			request = NULL;
+			wl->scan_done_pending = true;
+			if (skb_queue_empty(&wl->mgmt_queue)) {
+				wl->scan_req = NULL;
+				wl->scan_done_pending = false;
+			} else {
+				request = NULL;
+			}
 		}
 	} else {
 		request = NULL;
 	}
 	mutex_unlock(&wl->cfg_mutex);
+
+	if (next_chunk) {
+		schedule_work(&wl->scan_work);
+		goto out;
+	}
 
 	if (request)
 		cfg80211_scan_done(request, &info);
@@ -528,6 +607,7 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 		return -ENOMEM;
 
 	set_wiphy_dev(wl->wiphy, &wl->func->dev);
+	INIT_WORK(&wl->scan_work, mt6628_scan_work);
 	wl->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	wl->wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	wl->wiphy->max_scan_ssids = MT6628_SCAN_MAX_SSIDS;
@@ -556,6 +636,7 @@ void mt6628_cfg80211_deinit(struct mt6628_wlan *wl)
 	if (!wl->wiphy)
 		return;
 
+	cancel_work_sync(&wl->scan_work);
 	mt6628_cfg80211_connect_deinit(wl);
 	wiphy_unregister(wl->wiphy);
 	wiphy_free(wl->wiphy);

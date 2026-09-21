@@ -39,6 +39,7 @@ struct mt6628_wlan {
 
 	struct work_struct irq_work;
 	struct delayed_work tx_work;
+	struct work_struct scan_work;
 	struct napi_struct napi;
 	struct work_struct event_work;
 	struct work_struct mgmt_work;
@@ -68,6 +69,7 @@ struct mt6628_wlan {
 	struct mutex cfg_mutex;
 	struct cfg80211_scan_request *scan_req;
 	u8 scan_seq;
+	unsigned int scan_chan_idx;
 	u8 channel_token;
 	bool scan_done_pending;
 
