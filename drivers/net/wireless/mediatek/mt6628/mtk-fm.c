@@ -1077,8 +1077,6 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	ret = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
 	if (ret) {
 		v4l2_err(&fm->v4l2_dev, "failed to register radio: %d\n", ret);
-		mtk_fm_power_down(fm);
-		mt6628_wmt_func_ctrl(wmt, MT6628_WMT_FUNC_FM, false);
 		v4l2_device_unregister(&fm->v4l2_dev);
 		goto err_unregister_rx;
 	}
