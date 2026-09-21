@@ -394,10 +394,6 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 					 privacy);
 	if (!wl->conn_bss)
 		return -ENOENT;
-	if (wl->conn_bss->channel->band != NL80211_BAND_2GHZ) {
-		mt6628_conn_put_bss(wl);
-		return -EOPNOTSUPP;
-	}
 
 	if (!requested_bssid)
 		requested_bssid = wl->conn_bss->bssid;
