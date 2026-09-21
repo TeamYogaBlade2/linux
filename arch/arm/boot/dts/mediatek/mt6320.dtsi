@@ -324,9 +324,15 @@
 	};
 };
 
-pmic-temp {
-	compatible = "iio-hwmon";
-	io-channels = <&mt6320_adc 4>;
+/ {
+	/*
+	 * Expose the PMIC's junction temperature AUXADC channel
+	 * through the generic IIO hwmon bridge.
+	 */
+	pmic-temp {
+		compatible = "iio-hwmon";
+		io-channels = <&mt6320_adc 4>;
+	};
 };
 
 &pio6320 {
