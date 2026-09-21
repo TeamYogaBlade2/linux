@@ -87,6 +87,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_TX_TC_CMD		4
 #define MT6628_TX_TC_MGMT		4
 #define MT6628_HIF_TX_80211_FORMAT	BIT(7)
+#define MT6628_HIF_TX_1X_FRAME		BIT(6)
 #define MT6628_HIF_TX_NEED_ACK	BIT(0)
 
 #define MT6628_EVENT_ID_CMD_RESULT	1

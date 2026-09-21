@@ -6,6 +6,7 @@
  */
 
 #include <linux/etherdevice.h>
+#include <linux/if_ether.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 
@@ -423,6 +424,8 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	hdr.wlan_header_length = ETH_HLEN;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.seq_no = cpu_to_le16(wl->tx_seq++);
+	if (skb->protocol == htons(ETH_P_PAE))
+		hdr.pkt_format_id_flags |= MT6628_HIF_TX_1X_FRAME;
 
 	memcpy(buf, &hdr, sizeof(hdr));
 	memcpy(buf + sizeof(hdr), skb->data, skb->len);
@@ -494,7 +497,7 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 	skb_queue_tail(&wl->tx_queue, skb);
 	if (skb_queue_len(&wl->tx_queue) >= MT6628_TX_QUEUE_LIMIT)
 		netif_stop_queue(ndev);
-	schedule_work(&wl->tx_work);
+	mod_delayed_work(system_wq, &wl->tx_work, 0);
 	return NETDEV_TX_OK;
 }
 
@@ -517,7 +520,7 @@ static int mt6628_ndo_stop(struct net_device *ndev)
 
 	netif_stop_queue(ndev);
 	napi_disable(&wl->napi);
-	cancel_work_sync(&wl->tx_work);
+	cancel_delayed_work_sync(&wl->tx_work);
 	skb_queue_purge(&wl->tx_queue);
 	return 0;
 }
