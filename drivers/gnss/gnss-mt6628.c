@@ -69,12 +69,20 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 		return 0;
 	}
 
-	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
-	if (!ret && priv->gps_sync) {
+	if (priv->gps_sync) {
 		ret = pinctrl_select_state(priv->pinctrl,
 					   priv->gps_sync);
-		if (ret)
-			mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		if (ret) {
+			mutex_unlock(&priv->lock);
+			return ret;
+		}
+	}
+
+	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
+	if (ret) {
+		if (priv->pinctrl_default)
+			pinctrl_select_state(priv->pinctrl,
+					     priv->pinctrl_default);
 	}
 	if (!ret) {
 		ret = mt6628_wmt_func_ctrl(priv->wmt,
