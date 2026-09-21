@@ -7,7 +7,6 @@
  */
 
 #include <linux/completion.h>
-#include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/bitfield.h>
 #include <linux/firmware.h>
@@ -51,7 +50,7 @@
 #define MT6628_STP_SDIO_HDR_SIZE	4
 #define MT6628_STP_BLK_SIZE		512
 #define MT6628_STP_HEADER_SIZE		4
-#define MT6628_STP_CRC_SIZE		2
+#define MT6628_STP_TRAILER_SIZE		2
 
 /* stp_core.c rejects payload lengths >= 2000 on MT6628. */
 #define MT6628_STP_MAX_PAYLOAD_LEN	1999
@@ -367,7 +366,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 	size_t pos = MT6628_STP_SDIO_HDR_SIZE;
 	size_t end = bus_len;
 
-	while (pos + MT6628_STP_HEADER_SIZE + MT6628_STP_CRC_SIZE <= end) {
+	while (pos + MT6628_STP_HEADER_SIZE + MT6628_STP_TRAILER_SIZE <= end) {
 		u16 len;
 		u8 task;
 		size_t frame_len;
@@ -376,15 +375,6 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		if (!(wmt->rx_buf[pos] & BIT(7)))
 			break;
 
-		if (wmt->rx_buf[pos + 3] !=
-		    (u8)(wmt->rx_buf[pos] +
-			 wmt->rx_buf[pos + 1] +
-			 wmt->rx_buf[pos + 2])) {
-			dev_warn(&wmt->func->dev,
-				 "invalid STP header checksum\n");
-			break;
-		}
-
 		task = (wmt->rx_buf[pos + 1] >> 4) & 0x07;
 		len = ((wmt->rx_buf[pos + 1] & 0x0f) << 8) |
 			wmt->rx_buf[pos + 2];
@@ -392,22 +382,9 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 			break;
 
 		frame_len = MT6628_STP_HEADER_SIZE + len +
-			MT6628_STP_CRC_SIZE;
+			MT6628_STP_TRAILER_SIZE;
 		if (frame_len > end - pos)
 			break;
-
-		if (crc16(0,
-			  wmt->rx_buf + pos +
-				  MT6628_STP_HEADER_SIZE,
-			  len) !=
-		    get_unaligned_le16(wmt->rx_buf + pos +
-				       MT6628_STP_HEADER_SIZE + len)) {
-			dev_warn(&wmt->func->dev,
-				 "invalid STP payload CRC\n");
-			padded_len = ALIGN(frame_len, 4);
-			pos += padded_len;
-			continue;
-		}
 
 		mt6628_stp_dispatch(wmt, task, wmt->rx_buf + pos +
 				    MT6628_STP_HEADER_SIZE, len);
@@ -487,7 +464,7 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	if (task >= MT6628_STP_TASK_MAX || len > MT6628_STP_MAX_PAYLOAD_LEN)
 		return -EMSGSIZE;
 
-	stp_len = MT6628_STP_HEADER_SIZE + len + MT6628_STP_CRC_SIZE;
+	stp_len = MT6628_STP_HEADER_SIZE + len + MT6628_STP_TRAILER_SIZE;
 	bus_len = MT6628_STP_SDIO_HDR_SIZE + stp_len;
 	fifo_len = ALIGN(bus_len, 4);
 	frame_len = fifo_len;
@@ -506,13 +483,9 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 	frame[4] = 0x80;
 	frame[5] = (task << 4) | ((len >> 8) & 0x0f);
 	frame[6] = len & 0xff;
-	frame[7] = (u8)(frame[4] + frame[5] + frame[6]);
+	frame[7] = 0x00;
 	memcpy(frame + MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE,
 	       buf, len);
-	put_unaligned_le16(
-		crc16(0, buf, len),
-		frame + MT6628_STP_SDIO_HDR_SIZE +
-			MT6628_STP_HEADER_SIZE + len);
 
 	ret = wait_event_interruptible_timeout(
 		wmt->tx_waitq,
