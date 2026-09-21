@@ -432,22 +432,6 @@
 	sd-uhs-sdr104;
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
-
-	mt6628-stp@2 {
-		reg = <2>;
-
-		bluetooth {
-			compatible = "mediatek,mt6628-bt";
-		};
-
-		fm {
-			compatible = "mediatek,mt6628-fm";
-		};
-
-		gnss {
-			compatible = "mediatek,mt6628-gnss";
-		};
-	};
 };
 
 /* SDIO */
@@ -471,6 +455,22 @@
 	sd-uhs-sdr104;
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
+
+	mt6628-stp@2 {
+		reg = <2>;
+
+		bluetooth {
+			compatible = "mediatek,mt6628-bt";
+		};
+
+		fm {
+			compatible = "mediatek,mt6628-fm";
+		};
+
+		gnss {
+			compatible = "mediatek,mt6628-gnss";
+		};
+	};
 };
 
 &keyboard {
