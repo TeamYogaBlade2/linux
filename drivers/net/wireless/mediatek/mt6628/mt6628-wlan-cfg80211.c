@@ -114,6 +114,21 @@ static int mt6628_channel_to_hif(const struct ieee80211_channel *channel,
 	return 0;
 }
 
+static u16 mt6628_scan_dwell_time_tu(
+	const struct cfg80211_scan_request *request)
+{
+	u64 tu;
+
+	if (request->duration <= 0)
+		return MT6628_SCAN_DWELL_TIME_TU;
+
+	/* Firmware uses TU (1024 us), cfg80211 uses milliseconds. */
+	tu = DIV_ROUND_UP_ULL((u64)request->duration * 1000, 1024);
+	tu = clamp_t(u64, tu, 1, U16_MAX);
+
+	return (u16)tu;
+}
+
 static int mt6628_scan_start(struct wiphy *wiphy,
 				     struct cfg80211_scan_request *request)
 {
@@ -170,8 +185,8 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 		MT6628_SCAN_SSID_WILDCARD;
 	cmd->ssid_type = ssid_type;
 	cmd->probe_delay_time = cpu_to_le16(0);
-	cmd->channel_dwell_time = cpu_to_le16(request->duration ?
-		request->duration : MT6628_SCAN_DWELL_TIME_TU);
+	cmd->channel_dwell_time =
+		cpu_to_le16(mt6628_scan_dwell_time_tu(request));
 	cmd->channel_type = 0;
 	cmd->channel_list_num = request->n_channels;
 	cmd->ie_len = cpu_to_le16(request->ie_len);
