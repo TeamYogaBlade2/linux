@@ -36,7 +36,6 @@
  * AUDTOP analog DAC/headphone block @ 0x0700.
  */
 #define MT6320_ABB_AFE_CON(n)		(0x2000 + (n) * 2)
-#define MT6320_AUDTOP_CON(n)		(0x0700 + (n) * 2)
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H	0x2002
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(3, 0)
 #define MT6320_ABB_AFE_UP8X_FIFO_CFG0	0x202c
@@ -45,7 +44,6 @@
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG2	0x203c
 #define MT6320_ABB_AFE_PMIC_NEWIF_CFG3	0x203e
 
-#define MT6320_CID			0x0100
 #define MT6320_AFUNC_AUD_CON2		0x2020
 
 #define MT6320_PMIC_TRIM_ADDRESS1	0x01c2
@@ -57,17 +55,6 @@
 #define MT6320_SPK_AUTO_TRIM_CTRL	0x013a
 #define MT6320_SPK_AUTO_TRIM		0x014e
 #define MT6320_SPK_TRIM_DEFAULT		0x0010
-#define MT6320_SPK_CON0			0x0600
-#define MT6320_SPK_CON1			0x0602
-#define MT6320_SPK_CON2			0x0604
-#define MT6320_SPK_CON9			0x0612
-#define MT6320_SPK_CON11		0x0616
-
-/* ZCD output gain block (different offsets from the MT6323!). */
-#define MT6320_ZCD_CON1			0x073a	/* lineout L/R gain */
-#define MT6320_ZCD_CON2			0x073c	/* headphone L/R gain */
-#define MT6320_ZCD_CON3			0x073e	/* handset gain */
-#define MT6320_ZCD_CON4			0x0740	/* IV buffer gain */
 #define ZCD_GAIN_0DB			8
 #define ZCD_GAIN_CTL_MAX		0x0c	/* +8dB .. -4dB */
 #define ZCD_GAIN_REG(g)			(((g) << 8) | (g))
@@ -309,18 +296,18 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
+		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG4, 0x0014);
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x7010);
+		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x7010);
 
 	case SND_SOC_DAPM_POST_PMD:
-		ret = regmap_write(priv->regmap, MT6320_AUDTOP_CON(0), 0x6010);
+		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x6010);
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_AUDTOP_CON(5), 0x0014);
+		return regmap_write(priv->regmap, MT6320_AUDBUF_CFG4, 0x0014);
 	}
 	return 0;
 }
