@@ -211,7 +211,7 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 
 static int mt6320_accdet_enable(struct mt6320_accdet *priv)
 {
-	int ret;
+	int ret, cleanup_ret;
 
 	ret = clk_prepare_enable(priv->clk_accdet);
 	if (ret)
@@ -225,15 +225,26 @@ static int mt6320_accdet_enable(struct mt6320_accdet *priv)
 	ret = regmap_set_bits(priv->regmap, MT6320_ACCDET_CTRL,
 			      MT6320_ACCDET_CTRL_EN);
 	if (ret)
-		goto err_clk;
+		goto err_swctrl;
 
 	ret = regmap_write(priv->regmap, MT6320_INT_CON_ACCDET_SET,
 			   MT6320_ACCDET_IRQ_SET_BIT);
 	if (ret)
-		goto err_clk;
+		goto err_ctrl;
 
 	return 0;
 
+err_ctrl:
+	cleanup_ret = regmap_clear_bits(priv->regmap, MT6320_ACCDET_CTRL,
+					MT6320_ACCDET_CTRL_EN);
+	if (!ret)
+		ret = cleanup_ret;
+err_swctrl:
+	cleanup_ret = regmap_clear_bits(priv->regmap,
+					MT6320_ACCDET_STATE_SWCTRL,
+					MT6320_ACCDET_SWCTRL_EN);
+	if (!ret)
+		ret = cleanup_ret;
 err_clk:
 	clk_disable_unprepare(priv->clk_accdet);
 	return ret;
