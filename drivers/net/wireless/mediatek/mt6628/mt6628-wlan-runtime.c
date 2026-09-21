@@ -547,11 +547,15 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		if (ret || !whisr)
 			break;
 
-		if (whisr & MT6628_WHISR_TX_DONE) {
-			if (!mt6628_runtime_read32(wl, MT6628_MCR_WTSR0, &wtsr0) &&
-			    !mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1))
-				mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
-		}
+		/*
+		 * The MT6628 downstream also treats non-zero WTSR values as a
+		 * TX-done indication.  In enhanced SDIO mode the status may be
+		 * observed before WHISR_TX_DONE is latched.
+		 */
+		if (!mt6628_runtime_read32(wl, MT6628_MCR_WTSR0, &wtsr0) &&
+		    !mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1) &&
+		    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
+			mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
 
 		if (whisr & MT6628_WHISR_ABNORMAL) {
 			u32 wasr;
