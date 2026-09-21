@@ -26,9 +26,6 @@
 #define MT6628_CH_RF_BAND_2GHZ		1
 #define MT6628_CH_MAX_INTERVAL_MS	5000
 
-#define MT6628_STA_STATE_1		1
-#define MT6628_STA_STATE_2		2
-#define MT6628_STA_STATE_3		3
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
 #define MT6628_STA_TYPE_LEGACY_AP	0x41
 
@@ -241,14 +238,15 @@ int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
 	return ret;
 }
 
-int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl, u8 state,
+int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
+					enum mt6628_sta_state state,
 					u16 assoc_id, const u8 *bssid)
 {
 	struct mt6628_cmd_update_sta_record cmd = {};
 
 	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND || !bssid)
 		return -EINVAL;
-	if (state < MT6628_STA_STATE_1 || state > MT6628_STA_STATE_3)
+	if (state > MT6628_STA_STATE_3)
 		return -EINVAL;
 
 	cmd.index = wl->sta_rec_idx;

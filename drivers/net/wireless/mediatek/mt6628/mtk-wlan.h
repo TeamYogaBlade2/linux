@@ -20,6 +20,16 @@
 
 #define MT6628_WLAN_TX_TC_NUM		6
 
+/*
+ * Wire values used by CMD_UPDATE_STA_RECORD_T.ucStaState.
+ * The MT6628 downstream encodes STA_STATE_1/2/3 as 0/1/2.
+ */
+enum mt6628_sta_state {
+	MT6628_STA_STATE_1,
+	MT6628_STA_STATE_2,
+	MT6628_STA_STATE_3,
+};
+
 struct mt6628_wlan {
 	struct sdio_func *func;
 	u8 seq_num;
@@ -97,7 +107,8 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const u8 *bssid);
 int mt6628_wlan_release_channel(struct mt6628_wlan *wl);
 int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
-					u8 state, u16 assoc_id,
+					enum mt6628_sta_state state,
+					u16 assoc_id,
 					const u8 *bssid);
 int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 				     const u8 *ssid, u8 ssid_len,

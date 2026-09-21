@@ -320,7 +320,8 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		goto err_reset;
 
 	wl->sta_rec_idx = 0;
-	ret = mt6628_wlan_update_sta_record(wl, 1, 0, wl->conn_bssid);
+	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_1, 0,
+					    wl->conn_bssid);
 	if (ret) {
 		wl->sta_rec_idx = 0xfe;
 		goto err_reset;
@@ -453,7 +454,8 @@ static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
 		return;
 	}
 
-	ret = mt6628_wlan_update_sta_record(wl, 2, 0, wl->conn_bssid);
+	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_2, 0,
+					    wl->conn_bssid);
 	if (ret)
 		goto timeout;
 
@@ -510,8 +512,8 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 	wl->conn_resp_ie_len = resp_ie_len;
 	wl->conn_aid = le16_to_cpu(mgmt->u.assoc_resp.aid) & 0x3fff;
 
-	ret = mt6628_wlan_update_sta_record(wl, 3, wl->conn_aid,
-						wl->conn_bssid);
+	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_3,
+					    wl->conn_aid, wl->conn_bssid);
 	if (ret)
 		goto timeout;
 	ret = mt6628_wlan_set_bss_info(wl, wl->conn_channel, wl->conn_ssid,
