@@ -19,6 +19,7 @@
 #define MT6628_HIF_TX_RESOURCE_OFFSET	2
 #define MT6628_HIF_TX_PACKET_TYPE_OFFSET	6
 #define MT6628_HIF_TX_PKT_TYPE_DATA	0
+#define MT6628_HIF_TX_BURST_END		BIT(5)
 #define MT6628_HIF_RX_PKT_TYPE_DATA	0
 #define MT6628_HIF_RX_PKT_TYPE_EVENT	1
 #define MT6628_HIF_RX_PKT_TYPE_MANAGEMENT	3
@@ -416,6 +417,12 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	hdr.resource_pkt_type_csflags =
 		(tc << MT6628_HIF_TX_RESOURCE_OFFSET) |
 		(MT6628_HIF_TX_PKT_TYPE_DATA << MT6628_HIF_TX_PACKET_TYPE_OFFSET);
+	/*
+	 * The netdev path passes one Ethernet frame at a time, so every
+	 * submitted frame terminates its HIF burst.
+	 */
+	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
+	hdr.wlan_header_length = ETH_HLEN;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.seq_no = cpu_to_le16(wl->tx_seq++);
 
