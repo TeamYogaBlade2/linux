@@ -322,10 +322,21 @@ static void mt2701_tlb_flush_range(struct mtk_iommu_v1_data *data,
 	writel_relaxed(0, base + REG_MMU_CPE_DONE);
 }
 
+static void mt6589_l2_clear_status(struct mtk_iommu_v1_data *data,
+				   unsigned int reg_offset, u32 mask)
+{
+	u32 reg;
+
+	reg = readl_relaxed(data->l2_base + reg_offset);
+	reg &= ~mask;
+	writel_relaxed(reg, data->l2_base + reg_offset);
+}
+
 /* MT6589 (global control, L2) */
 static void mt6589_tlb_flush_all(struct mtk_iommu_v1_data *data)
 {
 	u32 reg = F_MMUg_CTRL_INV_EN0 | F_MMUg_CTRL_INV_EN1;
+
 	if (data->l2_base)
 		reg |= F_MMUg_CTRL_INV_EN2;
 
@@ -334,11 +345,18 @@ static void mt6589_tlb_flush_all(struct mtk_iommu_v1_data *data)
 
 	if (data->l2_base) {
 		u32 event;
-		readl_poll_timeout_atomic(data->l2_base + REG_L2_GDC_STATE,
-					 event,
-					 event & F_L2_GDC_ST_EVENT_MSK,
-					 10, 100000);
-		writel_relaxed(0, data->l2_base + REG_L2_GDC_STATE);
+		int ret;
+
+		ret = readl_poll_timeout_atomic(data->l2_base + REG_L2_GDC_STATE,
+						event,
+						event & F_L2_GDC_ST_EVENT_MSK,
+						10, 100000);
+		if (ret)
+			dev_warn_ratelimited(data->dev,
+					     "MT6589 L2 full TLB invalidation timed out\n");
+
+		mt6589_l2_clear_status(data, REG_L2_GDC_STATE,
+				       F_L2_GDC_ST_EVENT_MSK);
 	}
 }
 
@@ -346,6 +364,7 @@ static void mt6589_tlb_flush_range(struct mtk_iommu_v1_data *data,
 				   unsigned long iova, size_t size)
 {
 	u32 reg = F_MMUg_CTRL_INV_EN0 | F_MMUg_CTRL_INV_EN1;
+
 	if (data->l2_base)
 		reg |= F_MMUg_CTRL_INV_EN2;
 
@@ -358,11 +377,23 @@ static void mt6589_tlb_flush_range(struct mtk_iommu_v1_data *data,
 
 	if (data->l2_base) {
 		u32 status;
-		readl_poll_timeout_atomic(data->l2_base + REG_L2_GPE_STATUS,
-					  status,
-					  status & F_L2_GPE_ST_RANGE_INV_DONE,
-					  10, 100000);
-		writel_relaxed(0, data->l2_base + REG_L2_GPE_STATUS);
+		int ret;
+
+		ret = readl_poll_timeout_atomic(
+			data->l2_base + REG_L2_GPE_STATUS, status,
+			status & F_L2_GPE_ST_RANGE_INV_DONE,
+			10, 100000);
+		if (ret) {
+			dev_warn_ratelimited(data->dev,
+					     "MT6589 L2 range TLB invalidation timed out; falling back to full flush\n");
+			mt6589_l2_clear_status(data, REG_L2_GPE_STATUS,
+					       F_L2_GPE_ST_RANGE_INV_DONE);
+			mt6589_tlb_flush_all(data);
+			return;
+		}
+
+		mt6589_l2_clear_status(data, REG_L2_GPE_STATUS,
+				       F_L2_GPE_ST_RANGE_INV_DONE);
 	}
 }
 
