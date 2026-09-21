@@ -473,8 +473,18 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "Failed to enable power\n");
 	}
 
-	if (priv->data->reset)
+	if (priv->data->reset) {
+		ret = clk_prepare_enable(priv->clk);
+		if (ret) {
+			pm_runtime_put_sync(dev);
+			pm_runtime_disable(dev);
+			return dev_err_probe(dev, ret,
+					     "Failed to enable RDMA clock\n");
+		}
+
 		priv->data->reset(priv);
+		clk_disable_unprepare(priv->clk);
+	}
 
 	pm_runtime_put_sync(dev);
 
