@@ -442,7 +442,7 @@ static int mt6320_apply_spk_trim(struct mt6320_codec_priv *priv)
 {
 	unsigned int cid, reg;
 	unsigned int polarity, trim;
-	int i, ret;
+	int i, ret, cleanup_ret;
 
 	ret = regmap_read(priv->regmap, MT6320_CID, &cid);
 	if (ret)
@@ -503,8 +503,15 @@ static int mt6320_apply_spk_trim(struct mt6320_codec_priv *priv)
 		trim = FIELD_GET(GENMASK(14, 10), reg);
 
 trim_stop:
-		regmap_write(priv->regmap, MT6320_SPK_CON9, 0x0000);
-		regmap_clear_bits(priv->regmap, MT6320_SPK_CON0, BIT(0));
+		cleanup_ret = regmap_write(priv->regmap, MT6320_SPK_CON9, 0x0000);
+		if (!ret)
+			ret = cleanup_ret;
+
+		cleanup_ret = regmap_clear_bits(priv->regmap,
+						MT6320_SPK_CON0, BIT(0));
+		if (!ret)
+			ret = cleanup_ret;
+
 		if (ret)
 			return ret;
 	}
