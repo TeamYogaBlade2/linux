@@ -187,8 +187,8 @@ struct mtk_iommu_v1_suspend_reg {
 	/* MT2701 fields */
 	u32			standard_axi_mode;
 	u32			dcm_dis;
-	u32			ctrl_reg;
-	u32			int_control0;
+	u32			ctrl_reg[MAX_M4U_CORES];
+	u32			int_control0[MAX_M4U_CORES];
 
 	/* MT6589 additional fields */
 	u32			mmug_ctrl;
@@ -1110,11 +1110,16 @@ static int __maybe_unused mtk_iommu_v1_suspend(struct device *dev)
 {
 	struct mtk_iommu_v1_data *data = dev_get_drvdata(dev);
 	struct mtk_iommu_v1_suspend_reg *reg = &data->reg;
-	void __iomem *base = data->cores[0].base;
+	void __iomem *base;
+	int i;
 
 	/* Common core registers */
-	reg->ctrl_reg = readl_relaxed(base + REG_MMU_CTRL_REG);
-	reg->int_control0 = readl_relaxed(base + REG_MMU_INT_CONTROL);
+	for (i = 0; i < data->soc->num_cores; i++) {
+		base = data->cores[i].base;
+		reg->ctrl_reg[i] = readl_relaxed(base + REG_MMU_CTRL_REG);
+		reg->int_control0[i] =
+			readl_relaxed(base + REG_MMU_INT_CONTROL);
+	}
 
 	if (data->soc->has_global_base) {
 		reg->mmug_ctrl = readl_relaxed(data->global_base + REG_MMUg_CTRL);
@@ -1152,8 +1157,9 @@ static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
 	/* Per-core restore (common) */
 	for (i = 0; i < data->soc->num_cores; i++) {
 		base = data->cores[i].base;
-		writel_relaxed(reg->ctrl_reg, base + REG_MMU_CTRL_REG);
-		writel_relaxed(reg->int_control0, base + REG_MMU_INT_CONTROL);
+		writel_relaxed(reg->ctrl_reg[i], base + REG_MMU_CTRL_REG);
+		writel_relaxed(reg->int_control0[i],
+			       base + REG_MMU_INT_CONTROL);
 		writel_relaxed(data->protect_base, base + REG_MMU_IVRP_PADDR);
 	}
 
