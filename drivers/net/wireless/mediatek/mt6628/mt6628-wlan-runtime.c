@@ -565,10 +565,20 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 
 		rx0_len = rx_len & 0xffff;
 		rx1_len = rx_len >> 16;
-		if (rx0_len)
-			mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
-		if (rx1_len)
-			mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
+		if (rx0_len) {
+			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
+			if (ret && ret != -ENOBUFS)
+				dev_warn_ratelimited(&wl->func->dev,
+						     "RX0 packet failed: %d\n",
+						     ret);
+		}
+		if (rx1_len) {
+			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
+			if (ret && ret != -ENOBUFS)
+				dev_warn_ratelimited(&wl->func->dev,
+						     "RX1 packet failed: %d\n",
+						     ret);
+		}
 	}
 
 	if (wl->runtime_started)
@@ -665,9 +675,13 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		goto err_unregister;
 
 	ret = mt6628_wlan_query_basic_config(wl);
-	if (ret)
-		dev_warn(&wl->func->dev,
-			"failed to read firmware MAC address: %d\n", ret);
+	if (ret) {
+		dev_err(&wl->func->dev,
+			"failed to read firmware basic configuration: %d\n",
+			ret);
+		mt6628_wlan_runtime_stop(wl);
+		return ret;
+	}
 
 	return 0;
 
