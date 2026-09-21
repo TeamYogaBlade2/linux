@@ -630,14 +630,19 @@ static s32 mtk_dsi_wait_for_irq_done(struct mtk_dsi *dsi, u32 irq_flag,
 	ret = wait_event_interruptible_timeout(dsi->irq_wait_queue,
 					       dsi->irq_data & irq_flag,
 					       jiffies);
+	if (ret < 0)
+		return ret;
+
 	if (ret == 0) {
 		DRM_WARN("Wait DSI IRQ(0x%08x) Timeout\n", irq_flag);
 
 		mtk_dsi_enable(dsi);
 		mtk_dsi_reset_engine(dsi);
+
+		return -ETIME;
 	}
 
-	return ret;
+	return 0;
 }
 
 static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
@@ -664,15 +669,17 @@ static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
 
 static s32 mtk_dsi_switch_to_cmd_mode(struct mtk_dsi *dsi, u8 irq_flag, u32 t)
 {
+	s32 ret;
+
 	mtk_dsi_irq_data_clear(dsi, irq_flag);
 	mtk_dsi_set_cmd_mode(dsi);
 
-	if (!mtk_dsi_wait_for_irq_done(dsi, irq_flag, t)) {
+	ret = mtk_dsi_wait_for_irq_done(dsi, irq_flag, t);
+	if (ret) {
 		DRM_ERROR("failed to switch cmd mode\n");
-		return -ETIME;
-	} else {
-		return 0;
 	}
+
+	return ret;
 }
 
 static void mtk_dsi_lane_ready(struct mtk_dsi *dsi)
@@ -702,7 +709,7 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	ret = mipi_dsi_pixel_format_to_bpp(dsi->format);
 	if (ret < 0) {
 		dev_err(dev, "Unknown MIPI DSI format %d\n", dsi->format);
-		return ret;
+		goto err_refcount;
 	}
 	bit_per_pixel = ret;
 
@@ -715,7 +722,11 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		goto err_refcount;
 	}
 
-	phy_power_on(dsi->phy);
+	ret = phy_power_on(dsi->phy);
+	if (ret) {
+		dev_err(dev, "Failed to power on DPHY: %d\n", ret);
+		goto err_refcount;
+	}
 
 	ret = clk_prepare_enable(dsi->engine_clk);
 	if (ret < 0) {
@@ -1054,7 +1065,7 @@ static u32 mtk_dsi_recv_cnt(u8 type, u8 *read_data)
 		return 2;
 	case MIPI_DSI_RX_GENERIC_LONG_READ_RESPONSE:
 	case MIPI_DSI_RX_DCS_LONG_READ_RESPONSE:
-		return read_data[1] + read_data[2] * 16;
+		return read_data[1] + read_data[2] * 256;
 	case MIPI_DSI_RX_ACKNOWLEDGE_AND_ERROR_REPORT:
 		DRM_INFO("type is 0x02, try again\n");
 		break;
@@ -1109,15 +1120,18 @@ static void mtk_dsi_cmdq(struct mtk_dsi *dsi, const struct mipi_dsi_msg *msg)
 static ssize_t mtk_dsi_host_send_cmd(struct mtk_dsi *dsi,
 				     const struct mipi_dsi_msg *msg, u8 flag)
 {
+	s32 ret;
+
 	mtk_dsi_wait_for_idle(dsi);
 	mtk_dsi_irq_data_clear(dsi, flag);
 	mtk_dsi_cmdq(dsi, msg);
 	mtk_dsi_start(dsi);
 
-	if (!mtk_dsi_wait_for_irq_done(dsi, flag, 2000))
-		return -ETIME;
-	else
-		return 0;
+	ret = mtk_dsi_wait_for_irq_done(dsi, flag, 2000);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
@@ -1149,7 +1163,7 @@ static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
 		goto restore_dsi_mode;
 
 	if (!MTK_DSI_HOST_IS_READ(msg->type)) {
-		recv_cnt = 0;
+		recv_cnt = msg->tx_len;
 		goto restore_dsi_mode;
 	}
 
