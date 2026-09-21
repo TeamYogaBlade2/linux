@@ -144,9 +144,14 @@ static int mtk_gnss_probe(struct platform_device *pdev)
 	priv->wmt = wmt;
 	mutex_init(&priv->lock);
 
-	priv->pinctrl = devm_pinctrl_get_optional(&pdev->dev);
-	if (IS_ERR(priv->pinctrl))
-		return PTR_ERR(priv->pinctrl);
+	priv->pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(priv->pinctrl)) {
+		ret = PTR_ERR(priv->pinctrl);
+		if (ret == -ENODEV)
+			priv->pinctrl = NULL;
+		else
+			return ret;
+	}
 
 	if (priv->pinctrl) {
 		priv->pinctrl_default = pinctrl_lookup_state(priv->pinctrl,

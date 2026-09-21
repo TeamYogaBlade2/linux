@@ -759,7 +759,7 @@ static int mt6628_wmt_crystal_trim_init(struct mt6628_wmt *wmt)
 {
 	int offset;
 	int timing;
-	u8 current;
+	u8 current_trim;
 	u8 readback;
 	int ret;
 
@@ -767,7 +767,7 @@ static int mt6628_wmt_crystal_trim_init(struct mt6628_wmt *wmt)
 	    !(wmt->crystal_trim & BIT(7)))
 		return 0;
 
-	ret = mt6628_wmt_crystal_trim_get(wmt, &current);
+	ret = mt6628_wmt_crystal_trim_get(wmt, &current_trim);
 	if (ret)
 		return ret;
 
@@ -775,7 +775,7 @@ static int mt6628_wmt_crystal_trim_init(struct mt6628_wmt *wmt)
 	if (offset & BIT(6))
 		offset -= 128;
 
-	timing = clamp_t(int, current + offset, 0, 0x7f);
+	timing = clamp_t(int, current_trim + offset, 0, 0x7f);
 
 	ret = mt6628_wmt_crystal_trim_set(wmt, timing);
 	if (ret)
@@ -790,7 +790,7 @@ static int mt6628_wmt_crystal_trim_init(struct mt6628_wmt *wmt)
 
 	dev_info(&wmt->func->dev,
 		 "MT6628 crystal trim: %#x -> %#x (offset %d)\n",
-		 current, timing, offset);
+		 current_trim, timing, offset);
 
 	return 0;
 }
@@ -819,6 +819,8 @@ static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt,
 static int mt6628_wmt_reset(struct mt6628_wmt *wmt);
 static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt);
 static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt);
+static int mt6628_wmt_co_clock_init(struct mt6628_wmt *wmt);
+static int mt6628_wmt_set_sdio_driving(struct mt6628_wmt *wmt);
 
 static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 					 const struct firmware *fw,

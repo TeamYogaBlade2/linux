@@ -10,7 +10,6 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
-#include <net/bluetooth/hci_sync.h>
 
 struct mt6628_bt {
 	struct mt6628_wmt *wmt;
@@ -207,7 +206,6 @@ static int mt6628_bt_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 		hdev->stat.sco_tx++;
 		break;
 	case HCI_ISODATA_PKT:
-		hdev->stat.iso_tx++;
 		break;
 	default:
 		return -EILSEQ;
