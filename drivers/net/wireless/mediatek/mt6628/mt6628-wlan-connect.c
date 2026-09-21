@@ -432,6 +432,7 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	struct mt6628_wlan *wl = *(struct mt6628_wlan **)netdev_priv(dev);
 	bool connected;
 	bool in_progress;
+	bool stale_sta;
 	u8 bssid[ETH_ALEN];
 	const u8 *req_ie;
 	size_t req_ie_len;
@@ -446,7 +447,12 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	in_progress = !connected &&
 		wl->conn_state != MT6628_CONN_DISCONNECTED;
 	if (wl->conn_state == MT6628_CONN_DISCONNECTED) {
+		stale_sta = wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND;
 		mutex_unlock(&wl->cfg_mutex);
+
+		if (stale_sta)
+			mt6628_conn_fw_cleanup(wl);
+
 		return 0;
 	}
 
