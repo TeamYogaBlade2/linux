@@ -44,6 +44,7 @@
 #define FM_FSPI_READ_OPCODE		0x03
 #define FM_FSPI_WRITE_OPCODE		0x04
 #define FM_TUNE_OPCODE			0x09
+#define FM_SEEK_OPCODE			0x0a
 #define FM_PATCH_DOWNLOAD_OPCODE	0x12
 #define FM_COEFF_DOWNLOAD_OPCODE	0x13
 
@@ -724,6 +725,152 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 	return 0;
 }
 
+static u16 mtk_fm_seek_spacing_code(u32 spacing)
+{
+	/*
+	 * MT6628 supports 50/100/200 kHz seek spacing.  V4L2 passes
+	 * spacing in Hz and permits the driver to select the nearest
+	 * supported value.
+	 */
+	if (!spacing || spacing < 75000)
+		return 0x1000;		/* 50 kHz */
+	if (spacing < 150000)
+		return 0x2000;		/* 100 kHz */
+
+	return 0x4000;			/* 200 kHz */
+}
+
+static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
+		       bool wrap_around, u32 rangelow, u32 rangehigh,
+		       u32 spacing)
+{
+	u32 min_freq;
+	u32 max_freq;
+	u32 original_freq = fm->freq;
+	u16 min_chan;
+	u16 max_chan;
+	u16 result;
+	u16 spacing_code;
+	u8 buf[128] = {};
+	int pkt = 4;
+	int ret;
+	bool repositioned = false;
+
+	/*
+	 * With V4L2_TUNER_CAP_LOW the range is expressed in 62.5 Hz
+	 * units.  MT6628 uses 10 kHz units internally.
+	 */
+	if (!rangelow)
+		rangelow = 76 * 16000;
+	if (!rangehigh)
+		rangehigh = 108 * 16000;
+
+	if (rangelow < 76 * 16000 ||
+	    rangehigh > 108 * 16000 ||
+	    rangelow > rangehigh)
+		return -EINVAL;
+
+	min_freq = DIV_ROUND_CLOSEST(rangelow, 160);
+	max_freq = DIV_ROUND_CLOSEST(rangehigh, 160);
+
+	if (min_freq < 7600 || max_freq > 10800 ||
+	    min_freq > max_freq)
+		return -EINVAL;
+
+	/*
+	 * VIDIOC_S_HW_FREQ_SEEK requires the current frequency to be
+	 * inside the requested band before searching.
+	 */
+	if (fm->freq < min_freq || fm->freq > max_freq) {
+		u32 freq = clamp_t(u32, fm->freq, min_freq, max_freq);
+
+		ret = mtk_fm_tune(fm, freq);
+		if (ret)
+			return ret;
+
+		repositioned = true;
+	}
+
+	min_chan = (min_freq - 6400) * 2 / 10;
+	max_chan = (max_freq - 6400) * 2 / 10;
+	spacing_code = mtk_fm_seek_spacing_code(spacing);
+
+	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
+	buf[1] = FM_SEEK_OPCODE;
+
+	/*
+	 * FM_MAIN_CFG1 (0x66):
+	 *   bit 10      seek direction
+	 *   bits 14:12  channel spacing
+	 *   bit 11      wrap
+	 *   bits 9:0    upper search bound
+	 *
+	 * FM_MAIN_CFG2 (0x67):
+	 *   bits 9:0    lower search bound
+	 */
+	pkt += fm_bop_modify(0x66, 0xfbff,
+			     seek_upward ? 0x0000 : 0x0400,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x66, 0x8fff, spacing_code,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x66, 0xf7ff,
+			     wrap_around ? 0x0800 : 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x66, 0xfc00, max_chan,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(0x67, 0xfc00, min_chan,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	/* FM_MAIN_CTRL[2:0] = SEEK. */
+	pkt += fm_bop_modify(0x63, 0xfff8, 0x0002,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	if (pkt > sizeof(buf)) {
+		ret = -E2BIG;
+		goto restore;
+	}
+
+	put_unaligned_le16(pkt - 4, buf + 2);
+
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_SEEK_OPCODE, 5000);
+	if (ret)
+		goto restore;
+
+	if (fm->cmd_data_len < sizeof(result)) {
+		ret = -EPROTO;
+		goto restore;
+	}
+
+	/*
+	 * The downstream FM event parser stores seek_result as a
+	 * little-endian 16-bit frequency in 10 kHz units.
+	 */
+	result = get_unaligned_le16(fm->cmd_data);
+	if (result < min_freq || result > max_freq) {
+		ret = -ENODATA;
+		goto restore;
+	}
+
+	fm->freq = result;
+	return 0;
+
+restore:
+	/*
+	 * V4L2 requires the original frequency to be restored after
+	 * an unsuccessful hardware seek.
+	 */
+	if (fm->freq != original_freq || repositioned) {
+		int restore_ret = mtk_fm_tune(fm, original_freq);
+
+		if (restore_ret)
+			dev_warn(fm->dev,
+				 "failed to restore FM frequency %u: %d\n",
+				 original_freq, restore_ret);
+	}
+
+	return ret;
+}
+
 /* ---- V4L2 ---- */
 
 static int mtk_fm_querycap(struct file *file, void *priv,
@@ -747,7 +894,10 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	strscpy(tuner->name, "FM", sizeof(tuner->name));
 	tuner->type = V4L2_TUNER_RADIO;
 	tuner->capability = V4L2_TUNER_CAP_LOW |
-			    V4L2_TUNER_CAP_STEREO;
+			    V4L2_TUNER_CAP_STEREO |
+			    V4L2_TUNER_CAP_HWSEEK_BOUNDED |
+			    V4L2_TUNER_CAP_HWSEEK_WRAP |
+			    V4L2_TUNER_CAP_HWSEEK_PROG_LIM;
 	/*
 	 * With V4L2_TUNER_CAP_LOW, frequency units are 62.5 Hz.
 	 * MT6628 internally uses 10 kHz units.
@@ -829,12 +979,51 @@ static int mtk_fm_s_frequency(struct file *file, void *priv,
 	return mtk_fm_tune(fm, freq);
 }
 
+static int mtk_fm_enum_freq_bands(struct file *file, void *priv,
+				  struct v4l2_frequency_band *band)
+{
+	if (band->tuner || band->index)
+		return -EINVAL;
+
+	if (band->type != V4L2_TUNER_RADIO)
+		return -EINVAL;
+
+	band->capability = V4L2_TUNER_CAP_LOW |
+			   V4L2_TUNER_CAP_STEREO |
+			   V4L2_TUNER_CAP_HWSEEK_BOUNDED |
+			   V4L2_TUNER_CAP_HWSEEK_WRAP |
+			   V4L2_TUNER_CAP_HWSEEK_PROG_LIM;
+	band->rangelow = 76 * 16000;
+	band->rangehigh = 108 * 16000;
+	band->modulation = V4L2_BAND_MODULATION_FM;
+
+	return 0;
+}
+
+static int mtk_fm_s_hw_freq_seek(struct file *file, void *priv,
+				 const struct v4l2_hw_freq_seek *seek)
+{
+	struct mtk_fm *fm = video_drvdata(file);
+
+	if (seek->tuner || seek->type != V4L2_TUNER_RADIO)
+		return -EINVAL;
+
+	if (file->f_flags & O_NONBLOCK)
+		return -EAGAIN;
+
+	return mtk_fm_seek(fm, !!seek->seek_upward,
+			   !!seek->wrap_around, seek->rangelow,
+			   seek->rangehigh, seek->spacing);
+}
+
 static const struct v4l2_ioctl_ops mtk_fm_ioctl_ops = {
 	.vidioc_querycap	= mtk_fm_querycap,
 	.vidioc_g_tuner		= mtk_fm_g_tuner,
 	.vidioc_s_tuner		= mtk_fm_s_tuner,
 	.vidioc_g_frequency	= mtk_fm_g_frequency,
 	.vidioc_s_frequency	= mtk_fm_s_frequency,
+	.vidioc_enum_freq_bands	= mtk_fm_enum_freq_bands,
+	.vidioc_s_hw_freq_seek	= mtk_fm_s_hw_freq_seek,
 };
 
 static const struct v4l2_file_operations mtk_fm_fops = {
@@ -879,7 +1068,9 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
 	fm->vdev.ioctl_ops = &mtk_fm_ioctl_ops;
-	fm->vdev.device_caps = V4L2_CAP_RADIO | V4L2_CAP_TUNER;
+	fm->vdev.device_caps = V4L2_CAP_RADIO |
+			       V4L2_CAP_TUNER |
+			       V4L2_CAP_HW_FREQ_SEEK;
 	fm->vdev.release = video_device_release_empty;
 	video_set_drvdata(&fm->vdev, fm);
 
