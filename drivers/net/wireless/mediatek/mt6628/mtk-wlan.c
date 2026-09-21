@@ -33,6 +33,7 @@
 #include <linux/unaligned.h>
 
 #include "mtk-wlan-hif.h"
+#include "mtk-wlan.h"
 
 #define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
 #define MT6628_FW_DL_CHUNK		2048
@@ -44,13 +45,6 @@
 #define MT6628_FW_SECTION_SIZE		16
 #define MT6628_INIT_EVENT_CMD_RESULT	1
 #define MT6628_INIT_EVENT_SIZE		8
-
-struct mt6628_wlan {
-	struct sdio_func *func;
-	u8 seq_num;
-	bool fw_running;
-	bool driver_owned;
-};
 
 struct mt6628_fw_section {
 	__le32 offset;
@@ -550,6 +544,10 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	if (ret)
 		goto err_disable;
 
+	ret = mt6628_wlan_runtime_start(wl);
+	if (ret)
+		goto err_disable;
+
 	return 0;
 
 err_disable:
@@ -557,6 +555,8 @@ err_disable:
 		int probe_err = ret;
 
 	if (wl->driver_owned) {
+		mt6628_wlan_runtime_stop(wl);
+
 		ret = mt6628_fw_own(wl);
 		if (ret)
 			dev_warn(&func->dev,
@@ -582,6 +582,8 @@ static void mt6628_wlan_sdio_remove(struct sdio_func *func)
 
 	if (!wl)
 		return;
+
+	mt6628_wlan_runtime_stop(wl);
 
 	if (wl->driver_owned) {
 		int ret = mt6628_fw_own(wl);
