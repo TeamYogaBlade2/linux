@@ -806,8 +806,9 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 	}
 
 	/*
-	 * Leave MMU translation disabled for now.
-	 * The actual enable will happen after LARBs are bound in mtk_iommu_v1_bind().
+	 * Program the MT6589 core and L2 defaults. The page-table base and
+	 * final TLB invalidation are installed during domain finalization,
+	 * while individual SMI ports are switched to IOMMU mode separately.
 	 */
 	writel_relaxed(F_MMUg_L2_SEL_FLUSH_EN(1) | F_MMUg_L2_SEL_L2_ULTRA(1) |
 		   F_MMUg_L2_SEL_L2_SHARE(0) | F_MMUg_L2_SEL_L2_BUS_SEL(1),
@@ -835,7 +836,6 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 
 		regval = data->soc->int_en_mask;
 		writel_relaxed(regval, base + REG_MMU_INT_CONTROL);
-		writel_relaxed(0xff, base + REG_MMU_FAULT_ST);
 		writel_relaxed(data->protect_base, base + REG_MMU_IVRP_PADDR);
 	}
 
