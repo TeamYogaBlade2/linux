@@ -35,6 +35,14 @@ static const u8 mt6628_extended_rates[] = {
 	0x30, 0x48, 0x60, 0x6c,
 };
 
+/*
+ * 5 GHz OFDM rates. 6/12/24 Mbps are basic rates, matching
+ * BASIC_RATE_SET_OFDM in the MT6628 downstream driver.
+ */
+static const u8 mt6628_assoc_5ghz_rates[] = {
+	0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c,
+};
+
 static void mt6628_conn_free_ies(struct mt6628_wlan *wl)
 {
 	kfree(wl->conn_req_ie);
@@ -121,17 +129,36 @@ static bool mt6628_connect_is_wpa2_psk(
 }
 
 static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
-					const struct cfg80211_connect_params *sme)
+				   const struct cfg80211_connect_params *sme)
 {
 	size_t len = 0;
+	const u8 *supported_rates;
+	size_t supported_rates_len;
+	bool use_extended_rates;
 	void *p;
+
+	switch (wl->conn_band) {
+	case NL80211_BAND_2GHZ:
+		supported_rates = mt6628_supported_rates;
+		supported_rates_len = sizeof(mt6628_supported_rates);
+		use_extended_rates = true;
+		break;
+	case NL80211_BAND_5GHZ:
+		supported_rates = mt6628_assoc_5ghz_rates;
+		supported_rates_len = sizeof(mt6628_assoc_5ghz_rates);
+		use_extended_rates = false;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
 
 	if (sme->ie_len > MT6628_CONNECT_MAX_IE_LEN - 64)
 		return -E2BIG;
 
 	len += 2 + sme->ssid_len;
-	len += 2 + sizeof(mt6628_supported_rates);
-	len += 2 + sizeof(mt6628_extended_rates);
+	len += 2 + supported_rates_len;
+	if (use_extended_rates)
+		len += 2 + sizeof(mt6628_extended_rates);
 	len += sme->ie_len;
 
 	if (len > MT6628_CONNECT_MAX_IE_LEN)
@@ -149,16 +176,19 @@ static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
 	p += sme->ssid_len;
 
 	*(u8 *)p = WLAN_EID_SUPP_RATES;
-	((u8 *)p)[1] = sizeof(mt6628_supported_rates);
+	((u8 *)p)[1] = supported_rates_len;
 	p += 2;
-	memcpy(p, mt6628_supported_rates, sizeof(mt6628_supported_rates));
-	p += sizeof(mt6628_supported_rates);
+	memcpy(p, supported_rates, supported_rates_len);
+	p += supported_rates_len;
 
-	*(u8 *)p = WLAN_EID_EXT_SUPP_RATES;
-	((u8 *)p)[1] = sizeof(mt6628_extended_rates);
-	p += 2;
-	memcpy(p, mt6628_extended_rates, sizeof(mt6628_extended_rates));
-	p += sizeof(mt6628_extended_rates);
+	if (use_extended_rates) {
+		*(u8 *)p = WLAN_EID_EXT_SUPP_RATES;
+		((u8 *)p)[1] = sizeof(mt6628_extended_rates);
+		p += 2;
+		memcpy(p, mt6628_extended_rates,
+		       sizeof(mt6628_extended_rates));
+		p += sizeof(mt6628_extended_rates);
+	}
 
 	if (sme->ie_len)
 		memcpy(p, sme->ie, sme->ie_len);
@@ -376,6 +406,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	ether_addr_copy(wl->conn_bssid, requested_bssid);
 	memcpy(wl->conn_ssid, sme->ssid, sme->ssid_len);
 	wl->conn_ssid_len = sme->ssid_len;
+	wl->conn_band = wl->conn_bss->channel->band;
 	wl->conn_channel = wl->conn_bss->channel->hw_value;
 	wl->conn_secure = secure;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;

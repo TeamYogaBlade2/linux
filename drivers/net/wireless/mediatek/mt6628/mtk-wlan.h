@@ -55,6 +55,7 @@ struct mt6628_wlan {
 	u8 conn_bssid[ETH_ALEN];
 	u8 conn_ssid[IEEE80211_MAX_SSID_LEN];
 	u8 conn_ssid_len;
+	u8 conn_band;
 	u8 conn_channel;
 	u16 conn_aid;
 	struct cfg80211_bss *conn_bss;

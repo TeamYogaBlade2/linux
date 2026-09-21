@@ -32,6 +32,10 @@
 #define MT6628_RATE_SET_11BG		0x3fcf
 #define MT6628_BASIC_RATE_SET_11BG	0x000f
 #define MT6628_BASIC_PHY_TYPE_ERP	1
+#define MT6628_PHY_TYPE_SET_11A		0x08
+#define MT6628_RATE_SET_11A		0x3fc0
+#define MT6628_BASIC_RATE_SET_11A	0x0540
+#define MT6628_BASIC_PHY_TYPE_OFDM	3
 
 #define MT6628_AUTH_MODE_OPEN		0
 #define MT6628_AUTH_MODE_WPA2_PSK	7
@@ -197,16 +201,30 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	struct mt6628_cmd_ch_privilege cmd = {};
 	struct mt6628_event_ch_privilege event = {};
 	size_t response_len;
+	u8 rf_band;
 	u8 token;
 	int ret;
 
-	if (!channel || channel->band != NL80211_BAND_2GHZ)
-		return -EOPNOTSUPP;
-	if (channel->hw_value < 1 || channel->hw_value > 14)
+	if (!channel)
 		return -EINVAL;
 	if (!bssid || is_multicast_ether_addr(bssid) ||
 	    is_zero_ether_addr(bssid))
 		return -EINVAL;
+
+	switch (channel->band) {
+	case NL80211_BAND_2GHZ:
+		if (channel->hw_value < 1 || channel->hw_value > 14)
+			return -EINVAL;
+		rf_band = MT6628_BAND_2GHZ;
+		break;
+	case NL80211_BAND_5GHZ:
+		if (!channel->hw_value || channel->hw_value > 216)
+			return -EINVAL;
+		rf_band = MT6628_BAND_5GHZ;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
 
 	token = wl->channel_token + 1;
 	if (!token)
@@ -217,7 +235,7 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	cmd.action = MT6628_CMD_CH_ACTION_REQ;
 	cmd.primary_channel = channel->hw_value;
 	cmd.rf_sco = 0;
-	cmd.rf_band = MT6628_BAND_2GHZ;
+	cmd.rf_band = rf_band;
 	cmd.req_type = MT6628_CH_REQ_TYPE_JOIN;
 	cmd.max_interval = cpu_to_le32(MT6628_CH_MAX_INTERVAL_MS);
 	ether_addr_copy(cmd.bssid, bssid);
@@ -231,7 +249,7 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	    event.net_type_index != 0 || event.token_id != token ||
 	    event.status != MT6628_EVENT_CH_STATUS_GRANT ||
 	    event.primary_channel != channel->hw_value ||
-	    event.rf_band != MT6628_BAND_2GHZ)
+	    event.rf_band != rf_band)
 		return -EPROTO;
 
 	wl->channel_token = token;
@@ -261,8 +279,8 @@ int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
 }
 
 int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
-					enum mt6628_sta_state state,
-					u16 assoc_id, const u8 *bssid)
+				enum mt6628_sta_state state,
+				u16 assoc_id, const u8 *bssid)
 {
 	struct mt6628_cmd_update_sta_record cmd = {};
 
@@ -277,9 +295,26 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	cmd.assoc_id = cpu_to_le16(assoc_id);
 	cmd.listen_interval = cpu_to_le16(10);
 	cmd.net_type_index = 0;
-	cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11BG;
-	cmd.desired_non_ht_rate_set = cpu_to_le16(MT6628_RATE_SET_11BG);
-	cmd.bss_basic_rate_set = cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
+
+	switch (wl->conn_band) {
+	case NL80211_BAND_2GHZ:
+		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11BG;
+		cmd.desired_non_ht_rate_set =
+			cpu_to_le16(MT6628_RATE_SET_11BG);
+		cmd.bss_basic_rate_set =
+			cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
+		break;
+	case NL80211_BAND_5GHZ:
+		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11A;
+		cmd.desired_non_ht_rate_set =
+			cpu_to_le16(MT6628_RATE_SET_11A);
+		cmd.bss_basic_rate_set =
+			cpu_to_le16(MT6628_BASIC_RATE_SET_11A);
+		break;
+	default:
+		return -EINVAL;
+	}
+
 	cmd.sta_state = state;
 	cmd.need_resp = 0;
 
@@ -288,14 +323,14 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 }
 
 int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
-				     const u8 *ssid, u8 ssid_len,
-				     const u8 *bssid, bool connected)
+			     const u8 *ssid, u8 ssid_len,
+			     const u8 *bssid, bool connected)
 {
 	struct mt6628_cmd_set_bss_info cmd = {};
 
 	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND ||
 	    !ssid || !ssid_len || ssid_len > IEEE80211_MAX_SSID_LEN ||
-	    !bssid || !channel || channel > 14)
+	    !bssid || !channel)
 		return -EINVAL;
 
 	cmd.net_type_index = 0;
@@ -304,24 +339,46 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 	cmd.ssid_len = ssid_len;
 	memcpy(cmd.ssid, ssid, ssid_len);
 	ether_addr_copy(cmd.bssid, bssid);
-	cmd.operational_rate_set = cpu_to_le16(MT6628_RATE_SET_11BG);
-	cmd.bss_basic_rate_set = cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
 	cmd.sta_rec_idx_of_ap = wl->sta_rec_idx;
-	cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_ERP;
 	cmd.auth_mode = wl->conn_secure ? MT6628_AUTH_MODE_WPA2_PSK :
 		MT6628_AUTH_MODE_OPEN;
 	cmd.enc_status = wl->conn_secure ? MT6628_ENCRYPTION3_KEY_ABSENT :
 		MT6628_ENCRYPTION_DISABLED;
-	cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BG;
 	ether_addr_copy(cmd.own_mac, wl->netdev->dev_addr);
 
 	cmd.rlm.net_type_index = 0;
-	cmd.rlm.rf_band = MT6628_CH_RF_BAND_2GHZ;
 	cmd.rlm.primary_channel = channel;
 	cmd.rlm.rf_sco = 0;
 	cmd.rlm.use_short_preamble = 1;
 	cmd.rlm.use_short_slot_time = 1;
 	cmd.rlm.check_id = 0x72;
+
+	switch (wl->conn_band) {
+	case NL80211_BAND_2GHZ:
+		if (channel > 14)
+			return -EINVAL;
+		cmd.operational_rate_set =
+			cpu_to_le16(MT6628_RATE_SET_11BG);
+		cmd.bss_basic_rate_set =
+			cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
+		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_ERP;
+		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BG;
+		cmd.rlm.rf_band = MT6628_BAND_2GHZ;
+		break;
+	case NL80211_BAND_5GHZ:
+		if (channel > 216)
+			return -EINVAL;
+		cmd.operational_rate_set =
+			cpu_to_le16(MT6628_RATE_SET_11A);
+		cmd.bss_basic_rate_set =
+			cpu_to_le16(MT6628_BASIC_RATE_SET_11A);
+		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_OFDM;
+		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11A;
+		cmd.rlm.rf_band = MT6628_BAND_5GHZ;
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SET_BSS_INFO, 1,
 				    &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
