@@ -1337,9 +1337,18 @@ int mt6628_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
 EXPORT_SYMBOL_GPL(mt6628_wmt_dsns_ctrl);
 
 static const struct mfd_cell mt6628_stp_cells[] = {
-	{ .name = "mt6628-bt" },
-	{ .name = "mt6628-fm" },
-	{ .name = "mt6628-gnss" },
+	{
+		.name = "mt6628-bt",
+		.of_compatible = "mediatek,mt6628-bt",
+	},
+	{
+		.name = "mt6628-fm",
+		.of_compatible = "mediatek,mt6628-fm",
+	},
+	{
+		.name = "mt6628-gnss",
+		.of_compatible = "mediatek,mt6628-gnss",
+	},
 };
 
 static int mt6628_stp_probe(struct sdio_func *func,
