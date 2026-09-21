@@ -42,6 +42,7 @@ struct mt6628_wlan {
 	struct mutex cfg_mutex;
 	struct cfg80211_scan_request *scan_req;
 	u8 scan_seq;
+	u8 channel_token;
 	bool scan_done_pending;
 
 	spinlock_t tx_lock;
@@ -78,6 +79,22 @@ struct mt6628_wlan {
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl);
 void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl);
 int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
+
+int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
+				const struct ieee80211_channel *channel,
+				const u8 *bssid);
+int mt6628_wlan_release_channel(struct mt6628_wlan *wl);
+int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
+					u8 state, u16 assoc_id,
+					const u8 *bssid);
+int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
+				     const u8 *ssid, u8 ssid_len,
+				     const u8 *bssid, bool connected);
+int mt6628_wlan_activate_bss(struct mt6628_wlan *wl, bool active);
+int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl,
+					const u8 *bssid);
+int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
+				 size_t frame_len);
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
