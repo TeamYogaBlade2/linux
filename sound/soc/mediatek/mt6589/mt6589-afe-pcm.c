@@ -270,41 +270,104 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	return 0;
 }
 
+static int mt6589_afe_stop(struct mt6589_afe *afe)
+{
+	int ret, first_err = 0;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				AFE_IRQ_MCU_CON_IRQ1_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+				AFE_DAC_CON0_DL1_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN1,
+				AFE_CONN1_DL1_O3);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN2,
+				AFE_CONN2_DL1_O4);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
+				AFE_ADDA_DL_SRC2_CON0_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON1,
+				AFE_I2S_CON1_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
+				AFE_ADDA_UL_DL_CON0_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+				AFE_DAC_CON0_AFE_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	afe->dl1_substream = NULL;
+	return first_err;
+}
+
 static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 				  struct snd_pcm_substream *substream, int cmd)
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+	int ret;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		afe->dl1_substream = substream;
-
 		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
-		regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				AFE_ADDA_DL_SRC2_CON0_ON);
-		regmap_set_bits(afe->regmap, AFE_I2S_CON1,
-				AFE_I2S_CON1_ON);
-		regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				AFE_ADDA_UL_DL_CON0_ON);
-		regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON, AFE_IRQ_MCU_CON_IRQ1_ON);
-		regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_ON);
-		regmap_set_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_AFE_ON);
+		ret = regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
+				      AFE_ADDA_DL_SRC2_CON0_ON);
+		if (ret)
+			return ret;
+
+		ret = regmap_set_bits(afe->regmap, AFE_I2S_CON1,
+				      AFE_I2S_CON1_ON);
+		if (ret)
+			goto err_stop;
+
+		ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
+				      AFE_ADDA_UL_DL_CON0_ON);
+		if (ret)
+			goto err_stop;
+
+		ret = regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				      AFE_IRQ_MCU_CON_IRQ1_ON);
+		if (ret)
+			goto err_stop;
+
+		ret = regmap_set_bits(afe->regmap, AFE_DAC_CON0,
+				      AFE_DAC_CON0_DL1_ON);
+		if (ret)
+			goto err_stop;
+
+		ret = regmap_set_bits(afe->regmap, AFE_DAC_CON0,
+				      AFE_DAC_CON0_AFE_ON);
+		if (ret)
+			goto err_stop;
+
+		afe->dl1_substream = substream;
 		return 0;
+
+err_stop:
+		mt6589_afe_stop(afe);
+		return ret;
+
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-		regmap_clear_bits(afe->regmap, AFE_IRQ_MCU_CON, AFE_IRQ_MCU_CON_IRQ1_ON);
-		regmap_clear_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_DL1_ON);
-		regmap_clear_bits(afe->regmap, AFE_CONN1, AFE_CONN1_DL1_O3);
-		regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_DL1_O4);
-		regmap_clear_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				  AFE_ADDA_DL_SRC2_CON0_ON);
-		regmap_clear_bits(afe->regmap, AFE_I2S_CON1, AFE_I2S_CON1_ON);
-		regmap_clear_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				  AFE_ADDA_UL_DL_CON0_ON);
-		regmap_clear_bits(afe->regmap, AFE_DAC_CON0, AFE_DAC_CON0_AFE_ON);
-		afe->dl1_substream = NULL;
-		return 0;
+		return mt6589_afe_stop(afe);
 	default:
 		return -EINVAL;
 	}
