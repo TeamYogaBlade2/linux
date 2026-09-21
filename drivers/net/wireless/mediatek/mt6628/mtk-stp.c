@@ -1472,6 +1472,14 @@ static void mt6628_stp_remove(struct sdio_func *func)
 	WRITE_ONCE(wmt->stopping, true);
 	wake_up_all(&wmt->tx_waitq);
 
+	mutex_lock(&wmt->wmt_lock);
+	if (wmt->wmt_waiting) {
+		wmt->wmt_status = -ESHUTDOWN;
+		wmt->wmt_waiting = false;
+		complete(&wmt->wmt_done);
+	}
+	mutex_unlock(&wmt->wmt_lock);
+
 	mt6628_stp_write8(wmt, MT6628_STP_CHLPCR,
 			  MT6628_STP_INT_EN_CLR);
 
