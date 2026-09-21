@@ -1026,11 +1026,8 @@
 			      <0x10205100 0x100>;
 			reg-names = "global", "m4u0", "m4u1", "l2cache";
 			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 107 IRQ_TYPE_LEVEL_LOW>,
-				     <GIC_SPI 108 IRQ_TYPE_LEVEL_LOW>;
-			interrupt-names = "m4u0", "m4u1", "m4ul2", "m4ul2-sec";
-			/* m4ul2 and m4ul2-sec are not used by driver */
+				     <GIC_SPI 106 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "m4u0", "m4u1";
 			clocks = <&infracfg CLK_INFRA_M4U>;
 			clock-names = "bclk";
 			mediatek,larbs = <&larb0>, <&larb1>, <&larb2>,
