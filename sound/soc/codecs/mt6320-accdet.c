@@ -256,23 +256,27 @@ err_clk:
 
 static int mt6320_accdet_disable_hw(struct mt6320_accdet *priv)
 {
-	int ret;
+	int ret, first_err = 0;
 
 	ret = regmap_write(priv->regmap, MT6320_INT_CON_ACCDET_CLR,
 			   MT6320_ACCDET_IRQ_SET_BIT);
-	if (ret)
-		return ret;
+	if (ret && !first_err)
+		first_err = ret;
 
 	ret = mt6320_accdet_clear_irq(priv);
-	if (ret)
-		return ret;
+	if (ret && !first_err)
+		first_err = ret;
 
 	ret = regmap_clear_bits(priv->regmap, MT6320_ACCDET_CTRL,
 				MT6320_ACCDET_CTRL_EN);
-	if (ret)
-		return ret;
+	if (ret && !first_err)
+		first_err = ret;
 
-	return regmap_write(priv->regmap, MT6320_ACCDET_STATE_SWCTRL, 0);
+	ret = regmap_write(priv->regmap, MT6320_ACCDET_STATE_SWCTRL, 0);
+	if (ret && !first_err)
+		first_err = ret;
+
+	return first_err;
 }
 
 static int mt6320_accdet_disable(struct mt6320_accdet *priv)
