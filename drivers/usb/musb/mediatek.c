@@ -425,24 +425,21 @@ static const struct musb_platform_ops mtk_musb_ops = {
 	.set_mode = mtk_musb_set_mode,
 };
 
-/*
- * Generic MediaTek FIFO configuration.
- */
 static const struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
-	{ .hw_ep_num = 1, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 1, .style = FIFO_RX,   .maxpacket = 512, },
-	{ .hw_ep_num = 2, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 2, .style = FIFO_RX,   .maxpacket = 512, },
-	{ .hw_ep_num = 3, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 3, .style = FIFO_RX,   .maxpacket = 512, },
-	{ .hw_ep_num = 4, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 4, .style = FIFO_RX,   .maxpacket = 512, },
-	{ .hw_ep_num = 5, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 5, .style = FIFO_RX,   .maxpacket = 512, },
-	{ .hw_ep_num = 6, .style = FIFO_TX,   .maxpacket = 1024, },
-	{ .hw_ep_num = 6, .style = FIFO_RX,   .maxpacket = 1024, },
-	{ .hw_ep_num = 7, .style = FIFO_TX,   .maxpacket = 512, },
-	{ .hw_ep_num = 7, .style = FIFO_RX,   .maxpacket = 64, },
+	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 2, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 2, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 3, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 3, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 4, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 5, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 5, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 6, .style = FIFO_TX, .maxpacket = 1024, },
+	{ .hw_ep_num = 6, .style = FIFO_RX, .maxpacket = 1024, },
+	{ .hw_ep_num = 7, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 7, .style = FIFO_RX, .maxpacket = 64, },
 };
 
 static const struct musb_hdrc_config mtk_musb_hdrc_config = {
