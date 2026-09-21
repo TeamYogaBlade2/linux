@@ -80,7 +80,7 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 		goto out_unlock;
 
 	packet_len = MT6628_WIFI_CMD_HEADER_LEN + payload_len;
-	xfer_len = ALIGN(packet_len, 4);
+	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;

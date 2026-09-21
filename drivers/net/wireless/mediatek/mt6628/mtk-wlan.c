@@ -26,6 +26,7 @@
 #include <linux/delay.h>
 #include <linux/firmware.h>
 #include <linux/jiffies.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/mmc/sdio_func.h>
@@ -37,7 +38,6 @@
 
 #define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
 #define MT6628_FW_DL_CHUNK		2048
-#define MT6628_WLAN_SDIO_BLK_SIZE	512
 /* CFG_FW_LOAD_ADDRESS of the downstream config.h */
 #define MT6628_FW_LOAD_ADDRESS		0x00060000
 #define MT6628_FW_SIGNATURE		0x574b544d
@@ -52,6 +52,14 @@ struct mt6628_fw_section {
 	__le32 length;
 	__le32 dest_addr;
 } __packed;
+
+size_t mt6628_sdio_xfer_len(size_t len)
+{
+	if (len <= MT6628_WLAN_SDIO_BLK_SIZE)
+		return len;
+
+	return roundup(len, MT6628_WLAN_SDIO_BLK_SIZE);
+}
 
 static u32 mt6628_crc32(const u8 *data, size_t len)
 {

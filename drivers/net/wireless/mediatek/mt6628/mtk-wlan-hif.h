@@ -27,6 +27,10 @@
 #include <linux/bits.h>
 #include <linux/mmc/sdio_func.h>
 
+#define MT6628_WLAN_SDIO_BLK_SIZE	512
+
+size_t mt6628_sdio_xfer_len(size_t len);
+
 /* register offsets */
 #define MT6628_MCR_WCIR			0x0000
 #define MT6628_MCR_WHLPCR		0x0004

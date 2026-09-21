@@ -212,11 +212,11 @@ static void mt6628_runtime_schedule_rx(struct mt6628_wlan *wl)
 }
 
 static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
-						 unsigned int port, u16 packet_len)
+							 unsigned int port, u16 packet_len)
 {
 	struct mt6628_hif_rx_hdr *rx_hdr;
 	struct sk_buff *skb;
-	size_t read_len;
+	size_t read_len, xfer_len;
 	u8 *buf;
 	u16 packet_type;
 	unsigned int payload_len;
@@ -227,13 +227,14 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 
 	/* MT6628 downstream reads ALIGN_4(packet_len) + one HW DWORD. */
 	read_len = ALIGN(packet_len, 4) + 4;
-	buf = kmalloc(read_len, GFP_KERNEL);
+	xfer_len = mt6628_sdio_xfer_len(read_len);
+	buf = kmalloc(xfer_len, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
 	ret = sdio_readsb(wl->func, buf,
 			  port ? MT6628_MCR_WRDR1 : MT6628_MCR_WRDR0,
-			  read_len);
+			  xfer_len);
 	if (ret)
 		goto out_free;
 
@@ -403,7 +404,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 		goto err_resource;
 	}
 
-	xfer_len = ALIGN(packet_len, 4);
+	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
