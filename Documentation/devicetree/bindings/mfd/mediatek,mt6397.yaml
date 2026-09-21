@@ -113,31 +113,39 @@ properties:
   accdet:
     type: object
     description:
-      Accessory detection support with MT6323.
-    additionalProperties: false
+      Accessory detection support with MT6320 or MT6323.
+    oneOf:
+      - $ref: /schemas/sound/mediatek,mt6320-accdet.yaml#
+      - properties:
+          compatible:
+            const: mediatek,mt6323-accdet
 
-    properties:
-      compatible:
-        const: mediatek,mt6323-accdet
+          interrupts:
+            minItems: 2
+            maxItems: 2
+            items:
+              - description: Interrupt from the GPIO to wake up accdet.
+              - description: PMIC interrupt for insertion, removal and keys events.
 
-      interrupts:
-        items:
-          - description: Interrupt from the GPIO to wake up accdet.
-          - description: PMIC interrupt for insertion, removal and keys events.
+          interrupt-names:
+            minItems: 2
+            maxItems: 2
+            items:
+              - const: eint
+              - const: pmic
 
-      interrupt-names:
-        items:
-          - const: eint
-          - const: pmic
-
-    required:
-      - compatible
-      - interrupts
-      - interrupt-names
+        required:
+          - compatible
+          - interrupts
+          - interrupt-names
+        additionalProperties: false
+    unevaluatedProperties: false
 
   adc:
     type: object
-    $ref: /schemas/iio/adc/mediatek,mt6359-auxadc.yaml#
+    oneOf:
+      - $ref: /schemas/iio/adc/mediatek,mt6323-auxadc.yaml#
+      - $ref: /schemas/iio/adc/mediatek,mt6359-auxadc.yaml#
     unevaluatedProperties: false
 
   efuse:
