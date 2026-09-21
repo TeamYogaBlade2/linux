@@ -4,42 +4,50 @@
  *
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
- * The MT6320 AUXADC is a simple 16-channel sampling ADC: writing the
- * channel bit in AUXADC_CON1 triggers a conversion, the result shows up
- * in AUXADC_ADC<n> (0x0512 + n * 2) with a ready bit at bit 12.  This is
- * the same programming model as the MT6589 SoC auxadc, unlike the
- * MT6323 which uses a different register layout.
+ * MT6320 AUXADC programming model based on the MT6589 downstream
+ * PMIC implementation.
  */
 
+#include <linux/array_size.h>
 #include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/cleanup.h>
+#include <linux/delay.h>
 #include <linux/iio/iio.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/stringify.h>
 
 #include <linux/mfd/mt6320/registers.h>
 
-#define AUXADC_CON2_IDLE	BIT(0)
-#define AUXADC_READY		BIT(15)
-#define AUXADC_DATA_MASK	GENMASK(9, 0)
-#define AUXADC_FULL_SCALE_MV	1200
-#define AUXADC_RESOLUTION	1024
+#define MT6320_AUXADC_AVG_NUM		GENMASK(6, 4)
+#define MT6320_AUXADC_BUF_PWD_ON	BIT(3)
+#define MT6320_AUXADC_BUF_PWD_B		BIT(1)
 
-/* Channel indices == CON1 bit position == ADC register index. */
-#define MT6320_AUXADC_BATSNS		0
-#define MT6320_AUXADC_ISENSE		1
-#define MT6320_AUXADC_VCDT		2
-#define MT6320_AUXADC_BAT_TEMP		3
-#define MT6320_AUXADC_CHIP_TEMP		4
-#define MT6320_AUXADC_ACCDET		5
-#define MT6320_AUXADC_THUMP		7
-#define MT6320_AUXADC_NUM_CHANNELS	16
+#define MT6320_AUXADC_CHSEL		GENMASK(10, 7)
+#define MT6320_AUXADC_START		BIT(0)
 
-#define MTK_PMIC_IIO_CHAN(_name, _chan)			\
+#define MT6320_AUXADC_READY		BIT(15)
+#define MT6320_AUXADC_DATA		GENMASK(9, 0)
+
+#define MT6320_AUXADC_VBUF_EN		BIT(4)
+#define MT6320_AUXADC_VBUF_BYP		BIT(2)
+#define MT6320_AUXADC_VBUF_CALEN	BIT(0)
+
+#define MT6320_CHR_BATON_TDET_EN	BIT(2)
+
+#define MT6320_AUXADC_AVG_NUM_VALUE	0x3
+#define MT6320_AUXADC_SPL_NUM_TEMP	0x1e
+
+#define MT6320_ACCDET_AUXADC_ENABLE	0x10b0
+
+#define MT6320_AUXADC_FULL_SCALE_MV	1200
+#define MT6320_AUXADC_RESOLUTION	1024
+
+#define MTK_PMIC_IIO_CHAN(_name, _chan)		\
 {							\
 	.type = IIO_VOLTAGE,				\
 	.indexed = 1,					\
@@ -48,6 +56,13 @@
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |	\
 			      BIT(IIO_CHAN_INFO_SCALE),	\
 }
+
+#define MT6320_AUXADC_BATSNS		0
+#define MT6320_AUXADC_ISENSE		1
+#define MT6320_AUXADC_VCDT		2
+#define MT6320_AUXADC_BAT_TEMP		3
+#define MT6320_AUXADC_CHIP_TEMP		4
+#define MT6320_AUXADC_ACCDET		5
 
 static const struct iio_chan_spec mt6320_auxadc_channels[] = {
 	MTK_PMIC_IIO_CHAN(batsns,    MT6320_AUXADC_BATSNS),
@@ -63,66 +78,194 @@ struct mt6320_auxadc {
 	struct mutex lock;
 };
 
-static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
-				  const struct iio_chan_spec *chan,
-	int *val, int *val2, long mask)
+static unsigned int mt6320_auxadc_hw_channel(unsigned int channel)
 {
-	struct mt6320_auxadc *auxadc = iio_priv(indio_dev);
-	unsigned int reg = MT6320_AUXADC_ADC0 + chan->channel * 2;
-	unsigned int val32;
-	u32 val16;
+	/*
+	 * The downstream PMIC implementation selects channel 0 when
+	 * reading the ISENSE path, while routing the source through
+	 * the channel-0 mux.
+	 */
+	return channel == MT6320_AUXADC_ISENSE ? MT6320_AUXADC_BATSNS :
+						 channel;
+}
+
+static unsigned int mt6320_auxadc_result_reg(unsigned int channel)
+{
+	/*
+	 * Raw conversion status/data is available in AUXADC_ADC0..ADC7.
+	 * The trim=1 path used by the downstream driver reads the
+	 * corresponding trimmed result from AUXADC_ADC11..ADC18.
+	 */
+	return MT6320_AUXADC_ADC11 + channel * 2;
+}
+
+static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
+				 unsigned int channel,
+				 unsigned int *hw_channel)
+{
+	struct regmap *map = auxadc->regmap;
 	int ret;
 
-	if (mask != IIO_CHAN_INFO_RAW && mask != IIO_CHAN_INFO_SCALE)
+	*hw_channel = mt6320_auxadc_hw_channel(channel);
+
+	if (channel == MT6320_AUXADC_ISENSE) {
+		ret = regmap_set_bits(map, MT6320_AUXADC_CON14,
+				      BIT(2) | BIT(0));
+		if (ret)
+			return ret;
+	}
+
+	ret = regmap_update_bits(map, MT6320_AUXADC_CON1,
+				 MT6320_AUXADC_CHSEL,
+				 FIELD_PREP(MT6320_AUXADC_CHSEL,
+					    *hw_channel));
+	if (ret)
+		return ret;
+
+	ret = regmap_update_bits(map, MT6320_AUXADC_CON0,
+				 MT6320_AUXADC_AVG_NUM,
+				 FIELD_PREP(MT6320_AUXADC_AVG_NUM,
+					    MT6320_AUXADC_AVG_NUM_VALUE));
+	if (ret)
+		return ret;
+
+	switch (channel) {
+	case MT6320_AUXADC_BAT_TEMP:
+		ret = regmap_set_bits(map, MT6320_AUXADC_CON0,
+				      MT6320_AUXADC_BUF_PWD_ON |
+				      MT6320_AUXADC_BUF_PWD_B);
+		if (ret)
+			return ret;
+
+		ret = regmap_set_bits(map, MT6320_CHR_CON7,
+				      MT6320_CHR_BATON_TDET_EN);
+		if (ret)
+			return ret;
+
+		msleep(20);
+		break;
+
+	case MT6320_AUXADC_CHIP_TEMP:
+		/*
+		 * Match PMIC_IMM_GetOneChannelValue(..., 4, ..., 2):
+		 * enable VBUF, disable bypass, select the PMIC-temperature
+		 * calibration path and increase the sample count.
+		 */
+		ret = regmap_update_bits(map, MT6320_AUXADC_CON12,
+					 MT6320_AUXADC_VBUF_EN |
+					 MT6320_AUXADC_VBUF_BYP |
+					 MT6320_AUXADC_VBUF_CALEN,
+					 MT6320_AUXADC_VBUF_EN);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(map, MT6320_AUXADC_CON0,
+					 GENMASK(11, 7),
+					 FIELD_PREP(GENMASK(11, 7),
+						    MT6320_AUXADC_SPL_NUM_TEMP));
+		if (ret)
+			return ret;
+
+		msleep(1);
+		break;
+
+	case MT6320_AUXADC_ACCDET:
+		ret = regmap_write(map, MT6320_ACCDET_CON0,
+				   MT6320_ACCDET_AUXADC_ENABLE);
+		if (ret)
+			return ret;
+		break;
+	}
+
+	return 0;
+}
+
+static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
+				  const struct iio_chan_spec *chan,
+				  int *val, int *val2, long mask)
+{
+	struct mt6320_auxadc *auxadc = iio_priv(indio_dev);
+	struct regmap *map = auxadc->regmap;
+	unsigned int hw_channel;
+	unsigned int status_reg;
+	unsigned int result_reg;
+	unsigned int regval;
+	int ret;
+
+	switch (mask) {
+	case IIO_CHAN_INFO_SCALE:
+		/*
+		 * MT6320 AUXADC has a 1.2V full-scale range and
+		 * 10-bit conversion result.
+		 */
+		*val = MT6320_AUXADC_FULL_SCALE_MV;
+		*val2 = MT6320_AUXADC_RESOLUTION;
+
+		return IIO_VAL_FRACTIONAL;
+
+	case IIO_CHAN_INFO_RAW:
+		break;
+
+	default:
 		return -EINVAL;
+	}
 
 	guard(mutex)(&auxadc->lock);
 
-	if (mask == IIO_CHAN_INFO_SCALE) {
-		/* MT6320 ADC: 1.2V full-scale, 10-bit conversion. */
-		*val = AUXADC_FULL_SCALE_MV;
-		*val2 = AUXADC_RESOLUTION;
+	ret = mt6320_auxadc_prepare(auxadc, chan->channel, &hw_channel);
+	if (ret)
+		return ret;
 
-		return IIO_VAL_FRACTIONAL;
-	}
+	status_reg = MT6320_AUXADC_ADC0 + hw_channel * 2;
+	result_reg = mt6320_auxadc_result_reg(hw_channel);
 
-	{
-		/* wait for the ADC to go idle */
-		ret = regmap_read_poll_timeout(auxadc->regmap,
-					       MT6320_AUXADC_CON2, val32,
-					       !(val32 & AUXADC_CON2_IDLE),
-					       10, 1000);
-		if (ret)
-			return ret;
+	/*
+	 * Match the downstream sequence:
+	 *
+	 *   START = 0
+	 *   START = 1
+	 *   delay 50 us
+	 *   wait for the raw channel ready bit
+	 *   read the trimmed result
+	 */
+	ret = regmap_clear_bits(map, MT6320_AUXADC_CON1,
+				MT6320_AUXADC_START);
+	if (ret)
+		return ret;
 
-		/* clear stale ready bit, then trigger */
-		ret = regmap_read(auxadc->regmap, reg, &val32);
-		if (ret)
-			return ret;
+	ret = regmap_set_bits(map, MT6320_AUXADC_CON1,
+			      MT6320_AUXADC_START);
+	if (ret)
+		return ret;
 
-		ret = regmap_set_bits(auxadc->regmap,
-				      MT6320_AUXADC_CON1,
-				      BIT(chan->channel));
-		if (ret)
-			return ret;
+	fsleep(50);
 
-		/* hardware needs a delay before the sample becomes ready */
-		fsleep(25);
+	ret = regmap_read_poll_timeout(map, status_reg, regval,
+				       regval & MT6320_AUXADC_READY,
+				       10, 10000);
+	if (ret)
+		goto stop;
 
-		ret = regmap_read_poll_timeout(auxadc->regmap, reg, val32,
-					       val32 & AUXADC_READY,
-					       10, USEC_PER_MSEC);
-		if (ret)
-			return ret;
+	ret = regmap_read(map, result_reg, &regval);
+	if (ret)
+		goto stop;
 
-		val16 = FIELD_GET(AUXADC_DATA_MASK, val32);
-		*val = val16;
+	*val = FIELD_GET(MT6320_AUXADC_DATA, regval);
 
-		/* stop the channel again */
-		return regmap_clear_bits(auxadc->regmap,
-					 MT6320_AUXADC_CON1,
-					 BIT(chan->channel));
-	}
+stop:
+	/*
+	 * Unlike the downstream implementation, clear START when the
+	 * conversion is finished so a failed read cannot leave the
+	 * conversion request asserted indefinitely.
+	 */
+	if (regmap_clear_bits(map, MT6320_AUXADC_CON1,
+			      MT6320_AUXADC_START) && !ret)
+		ret = -EIO;
+
+	if (ret)
+		return ret;
+
+	return IIO_VAL_INT;
 }
 
 static const struct iio_info mt6320_auxadc_iio_info = {
@@ -138,7 +281,8 @@ static int mt6320_auxadc_probe(struct platform_device *pdev)
 
 	regmap = dev_get_regmap(dev->parent->parent, NULL);
 	if (!regmap)
-		return dev_err_probe(dev, -ENODEV, "failed to get regmap\n");
+		return dev_err_probe(dev, -ENODEV,
+				    "failed to get regmap\n");
 
 	iio = devm_iio_device_alloc(dev, sizeof(*auxadc));
 	if (!iio)
@@ -168,7 +312,7 @@ static struct platform_driver mt6320_auxadc_driver = {
 		.name = "mt6320-auxadc",
 		.of_match_table = mt6320_auxadc_of_match,
 	},
-	.probe	= mt6320_auxadc_probe,
+	.probe = mt6320_auxadc_probe,
 };
 module_platform_driver(mt6320_auxadc_driver);
 
