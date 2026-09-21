@@ -147,7 +147,7 @@ static const struct mt6589_pll_config *mt6589_pll_find_closest(unsigned long rat
 
 	for (i = 0; i < ARRAY_SIZE(pll_config); i++) {
 		unsigned long r = mt6589_pll_rate(&pll_config[i]);
-		long diff = abs((long)(r - rate_hz));
+		unsigned long diff = r > rate_hz ? r - rate_hz : rate_hz - r;
 
 		if (diff < best_diff) {
 			best_diff = diff;
