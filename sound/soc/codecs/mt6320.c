@@ -265,7 +265,7 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		ret = regmap_write(priv->regmap, 0x2014, 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(10), 0x0000);
 		if (ret)
 			return ret;
 
@@ -278,7 +278,7 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x201c, 0xc3a1);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(14), 0xc3a1);
 		if (ret)
 			return ret;
 
@@ -292,19 +292,20 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x2008, 0x001e);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(4), 0x001e);
 		if (ret)
 			return ret;
 
-		ret = regmap_set_bits(priv->regmap, 0x2000, BIT(0));
+		ret = regmap_set_bits(priv->regmap,
+				      MT6320_ABB_AFE_CON(0), BIT(0));
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x2004, 0x1801);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(2), 0x1801);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, 0x2012, 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(9), 0x0000);
 		if (ret)
 			return ret;
 
