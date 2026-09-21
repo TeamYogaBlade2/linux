@@ -595,8 +595,10 @@ static int mtk_iommu_v1_map(struct iommu_domain *domain, unsigned long iova,
 
 	spin_lock_irqsave(&dom->pgtlock, flags);
 	for (i = 0; i < pgcount; i++) {
-		if (pgt_base_iova[i])
+		if (pgt_base_iova[i]) {
+			memset(pgt_base_iova, 0, i * sizeof(u32));
 			break;
+		}
 		pgt_base_iova[i] = pabase | F_DESC_VALID | F_DESC_NONSEC;
 		pabase += MT2701_IOMMU_PAGE_SIZE;
 	}
@@ -604,7 +606,8 @@ static int mtk_iommu_v1_map(struct iommu_domain *domain, unsigned long iova,
 	spin_unlock_irqrestore(&dom->pgtlock, flags);
 
 	*mapped = i * MT2701_IOMMU_PAGE_SIZE;
-	data->soc->tlb_flush_range(data, iova, *mapped);
+	if (*mapped)
+		data->soc->tlb_flush_range(data, iova, *mapped);
 
 	return i == pgcount ? 0 : -EEXIST;
 }
