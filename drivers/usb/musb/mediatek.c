@@ -390,7 +390,8 @@ static int mtk_musb_exit(struct musb *musb)
 	struct mtk_glue *glue = dev_get_drvdata(dev->parent);
 	int ret;
 
-	mtk_otg_switch_exit(glue);
+	if (musb->port_mode == MUSB_OTG)
+		mtk_otg_switch_exit(glue);
 	phy_power_off(glue->phy);
 	phy_exit(glue->phy);
 
