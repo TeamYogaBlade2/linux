@@ -9,12 +9,13 @@
  *                    AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
  */
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/delay.h>
 
 #include "clk-pll.h"
-#include "clk-gate.h"
 #include "clk-pllfh.h"
 #include "clk-fhctl.h"
 #include "clk-mtk.h"
@@ -216,68 +217,195 @@ static const struct mtk_pll_div_table mt6589_isppll_div_table[] = {
 };
 
 static const struct mtk_pll_data plls[] = {
-	PLL(CLK_APMIXED_ARMPLL, "armpll", ARMPLL_CON0, ARMPLL_PWR_CON0, 0x80000001,
+	/* *_OUT_EN / *_XXXM_EN are modeled as child gates below. */
+	PLL(CLK_APMIXED_ARMPLL, "armpll", ARMPLL_CON0, ARMPLL_PWR_CON0, BIT(0),
 		PLL_AO, 21, ARMPLL_CON1, 24, ARMPLL_CON1, 0, NULL, 1508 * MHZ, NULL),
-	PLL(CLK_APMIXED_MAINPLL, "mainpll", MAINPLL_CON0, MAINPLL_PWR_CON0, 0xf0000001,
+	PLL(CLK_APMIXED_MAINPLL, "mainpll", MAINPLL_CON0, MAINPLL_PWR_CON0, BIT(0),
 		HAVE_RST_BAR, 21, MAINPLL_CON0, 6, MAINPLL_CON1, 0, NULL, 1768 * MHZ, NULL),
-	PLL(CLK_APMIXED_UNIVPLL, "univpll", UNIVPLL_CON0, VOID_REG, 0xf3000001,
+	PLL(CLK_APMIXED_UNIVPLL, "univpll", UNIVPLL_CON0, VOID_REG, BIT(0),
 		HAVE_RST_BAR, 7, UNIVPLL_CON0, 6, UNIVPLL_CON0, 8,
 		&mt6589_fixed_lc_pll_ops, 1248 * MHZ, NULL),
-	PLL(CLK_APMIXED_MMPLL, "mmpll", MMPLL_CON0, VOID_REG, 0xf0000001,
+	PLL(CLK_APMIXED_MMPLL, "mmpll", MMPLL_CON0, VOID_REG, BIT(0),
 		HAVE_RST_BAR, 7, MMPLL_CON0, 6, MMPLL_CON0, 8,
 		&mt6589_fixed_lc_pll_ops, 1690 * MHZ, NULL),
-	PLL(CLK_APMIXED_ISPPLL, "isppll", ISPPLL_CON0, VOID_REG, 0x80000001,
+	PLL(CLK_APMIXED_ISPPLL, "isppll", ISPPLL_CON0, VOID_REG, BIT(0),
 		0, 7, ISPPLL_CON0, 6, ISPPLL_CON0, 8,
 		&mt6589_lc_pll_ops, 1664 * MHZ, mt6589_isppll_div_table),
-	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", MSDCPLL_CON0, MSDCPLL_PWR_CON0, 0x80000001,
+	PLL(CLK_APMIXED_MSDCPLL, "msdcpll", MSDCPLL_CON0, MSDCPLL_PWR_CON0, BIT(0),
 		0, 21, MSDCPLL_CON0, 6, MSDCPLL_CON1, 0, NULL, 1664 * MHZ, NULL),
-	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  TVDPLL_CON0, TVDPLL_PWR_CON0, 0x80000001,
+	PLL(CLK_APMIXED_TVDPLL,  "tvdpll",  TVDPLL_CON0, TVDPLL_PWR_CON0, BIT(0),
 		0, 21, TVDPLL_CON0, 6, TVDPLL_CON1, 0, NULL, 2376UL * MHZ, NULL),
-	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", LVDSPLL_CON0, LVDSPLL_PWR_CON0, 0x80000001,
+	PLL(CLK_APMIXED_LVDSPLL, "lvdspll", LVDSPLL_CON0, LVDSPLL_PWR_CON0, BIT(0),
 		0, 21, LVDSPLL_CON0, 6, LVDSPLL_CON1, 0, NULL, 1440 * MHZ, NULL),
 };
 
-/* TODO: convert to gate */
-static const struct mtk_fixed_factor pll_divs[] = {
-	FACTOR(CLK_APMIXED_ARMPLL_1300M, "armpll_1300m", "armpll", 1, 1),
-
-	FACTOR(CLK_APMIXED_MAINPLL_806M, "mainpll_806m", "mainpll", 1, 2),
-	FACTOR(CLK_APMIXED_MAINPLL_537P3M, "mainpll_537p3m", "mainpll", 1, 3),
-	FACTOR(CLK_APMIXED_MAINPLL_322P4M, "mainpll_322p4m", "mainpll", 1, 5),
-	FACTOR(CLK_APMIXED_MAINPLL_230P3M, "mainpll_230p3m", "mainpll", 1, 7),
-
-	FACTOR(CLK_APMIXED_UNIVPLL_624M, "univpll_624m", "univpll", 1, 2),
-	FACTOR(CLK_APMIXED_UNIVPLL_416M, "univpll_416m", "univpll", 1, 3),
-	FACTOR(CLK_APMIXED_UNIVPLL_249P6M, "univpll_249p6m", "univpll", 1, 5),
-	FACTOR(CLK_APMIXED_UNIVPLL_178P3M, "univpll_178p3m", "univpll", 1, 7),
-	FACTOR(CLK_APMIXED_UNIVPLL_48M, "univpll_48m", "univpll", 1, 26),
-	FACTOR(CLK_APMIXED_UNIVPLL_USB_48M, "univpll_usb_48m", "univpll", 1, 26),
-
-	FACTOR(CLK_APMIXED_MMPLL_D2, "mmpll_d2", "mmpll", 1, 2),
-	FACTOR(CLK_APMIXED_MMPLL_D3, "mmpll_d3", "mmpll", 1, 3),
-	FACTOR(CLK_APMIXED_MMPLL_D5, "mmpll_d5", "mmpll", 1, 5),
-	FACTOR(CLK_APMIXED_MMPLL_D7, "mmpll_d7", "mmpll", 1, 7),
-
-	FACTOR(CLK_APMIXED_ISPPLL_208M, "isppll_208m", "isppll", 1, 8),
-
-	FACTOR(CLK_APMIXED_MSDCPLL_208M, "msdcpll_208m", "msdcpll", 1, 8),
-
-	FACTOR(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m", "tvdpll", 1, 16),
-
-	FACTOR(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m", "lvdspll", 1, 8),
+struct mt6589_apmixed_output {
+	int id;
+	const char *name;
+	const char *factor_name;
+	const char *parent_name;
+	u32 mult;
+	u32 div;
+	u32 reg;
+	u8 shift;
 };
 
+#define APMIXED_OUTPUT(_id, _name, _factor, _parent, _mult, _div, _reg, _shift) \
+	{ \
+		.id = _id, .name = _name, .factor_name = _factor, \
+		.parent_name = _parent, .mult = _mult, .div = _div, \
+		.reg = _reg, .shift = _shift, \
+	}
+
+static const struct mt6589_apmixed_output apmixed_outputs[] = {
+	APMIXED_OUTPUT(CLK_APMIXED_ARMPLL_1300M, "armpll_1300m",
+		       "__mt6589_armpll_1300m_factor", "armpll", 1, 1,
+		       ARMPLL_CON0, 31),
+
+	APMIXED_OUTPUT(CLK_APMIXED_MAINPLL_806M, "mainpll_806m",
+		       "__mt6589_mainpll_806m_factor", "mainpll", 1, 2,
+		       MAINPLL_CON0, 31),
+	APMIXED_OUTPUT(CLK_APMIXED_MAINPLL_537P3M, "mainpll_537p3m",
+		       "__mt6589_mainpll_537p3m_factor", "mainpll", 1, 3,
+		       MAINPLL_CON0, 30),
+	APMIXED_OUTPUT(CLK_APMIXED_MAINPLL_322P4M, "mainpll_322p4m",
+		       "__mt6589_mainpll_322p4m_factor", "mainpll", 1, 5,
+		       MAINPLL_CON0, 29),
+	APMIXED_OUTPUT(CLK_APMIXED_MAINPLL_230P3M, "mainpll_230p3m",
+		       "__mt6589_mainpll_230p3m_factor", "mainpll", 1, 7,
+		       MAINPLL_CON0, 28),
+
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_624M, "univpll_624m",
+		       "__mt6589_univpll_624m_factor", "univpll", 1, 2,
+		       UNIVPLL_CON0, 31),
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_416M, "univpll_416m",
+		       "__mt6589_univpll_416m_factor", "univpll", 1, 3,
+		       UNIVPLL_CON0, 30),
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_249P6M, "univpll_249p6m",
+		       "__mt6589_univpll_249p6m_factor", "univpll", 1, 5,
+		       UNIVPLL_CON0, 29),
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_178P3M, "univpll_178p3m",
+		       "__mt6589_univpll_178p3m_factor", "univpll", 1, 7,
+		       UNIVPLL_CON0, 28),
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_48M, "univpll_48m",
+		       "__mt6589_univpll_48m_factor", "univpll", 1, 26,
+		       UNIVPLL_CON0, 25),
+	APMIXED_OUTPUT(CLK_APMIXED_UNIVPLL_USB_48M, "univpll_usb_48m",
+		       "__mt6589_univpll_usb_48m_factor", "univpll", 1, 26,
+		       UNIVPLL_CON0, 24),
+
+	APMIXED_OUTPUT(CLK_APMIXED_MMPLL_D2, "mmpll_d2",
+		       "__mt6589_mmpll_d2_factor", "mmpll", 1, 2,
+		       MMPLL_CON0, 31),
+	APMIXED_OUTPUT(CLK_APMIXED_MMPLL_D3, "mmpll_d3",
+		       "__mt6589_mmpll_d3_factor", "mmpll", 1, 3,
+		       MMPLL_CON0, 30),
+	APMIXED_OUTPUT(CLK_APMIXED_MMPLL_D5, "mmpll_d5",
+		       "__mt6589_mmpll_d5_factor", "mmpll", 1, 5,
+		       MMPLL_CON0, 29),
+	APMIXED_OUTPUT(CLK_APMIXED_MMPLL_D7, "mmpll_d7",
+		       "__mt6589_mmpll_d7_factor", "mmpll", 1, 7,
+		       MMPLL_CON0, 28),
+
+	APMIXED_OUTPUT(CLK_APMIXED_ISPPLL_208M, "isppll_208m",
+		       "__mt6589_isppll_208m_factor", "isppll", 1, 8,
+		       ISPPLL_CON0, 31),
+
+	APMIXED_OUTPUT(CLK_APMIXED_MSDCPLL_208M, "msdcpll_208m",
+		       "__mt6589_msdcpll_208m_factor", "msdcpll", 1, 8,
+		       MSDCPLL_CON0, 31),
+
+	APMIXED_OUTPUT(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m",
+		       "__mt6589_tvdpll_148p5m_factor", "tvdpll", 1, 16,
+		       TVDPLL_CON0, 31),
+
+	APMIXED_OUTPUT(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m",
+		       "__mt6589_lvdspll_180m_factor", "lvdspll", 1, 8,
+		       LVDSPLL_CON0, 31),
+};
+
+static DEFINE_SPINLOCK(mt6589_apmixed_clk_lock);
+
+struct mt6589_apmixed_priv {
+	struct clk_hw_onecell_data *clk_data;
+	struct clk_hw *factor_hws[ARRAY_SIZE(apmixed_outputs)];
+};
+
+static void mt6589_apmixed_unregister_outputs(struct mt6589_apmixed_priv *priv)
+{
+	int i;
+
+	for (i = ARRAY_SIZE(apmixed_outputs) - 1; i >= 0; i--) {
+		const struct mt6589_apmixed_output *output = &apmixed_outputs[i];
+		struct clk_hw *gate_hw = priv->clk_data->hws[output->id];
+
+		if (!IS_ERR_OR_NULL(gate_hw)) {
+			clk_hw_unregister_gate(gate_hw);
+			priv->clk_data->hws[output->id] = ERR_PTR(-ENOENT);
+		}
+
+		if (!IS_ERR_OR_NULL(priv->factor_hws[i])) {
+			clk_hw_unregister_fixed_factor(priv->factor_hws[i]);
+			priv->factor_hws[i] = NULL;
+		}
+	}
+}
+
+static int mt6589_apmixed_register_outputs(struct device *dev,
+					     void __iomem *base,
+					     struct mt6589_apmixed_priv *priv)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(apmixed_outputs); i++) {
+		const struct mt6589_apmixed_output *output = &apmixed_outputs[i];
+		struct clk_hw *hw;
+
+		hw = clk_hw_register_fixed_factor(dev, output->factor_name,
+						 output->parent_name,
+						 CLK_SET_RATE_PARENT,
+						 output->mult, output->div);
+		if (IS_ERR(hw)) {
+			mt6589_apmixed_unregister_outputs(priv);
+			return PTR_ERR(hw);
+		}
+		priv->factor_hws[i] = hw;
+
+		hw = clk_hw_register_gate(dev, output->name, output->factor_name,
+					  CLK_SET_RATE_PARENT, base + output->reg,
+					  output->shift, 0, &mt6589_apmixed_clk_lock);
+		if (IS_ERR(hw)) {
+			clk_hw_unregister_fixed_factor(priv->factor_hws[i]);
+			priv->factor_hws[i] = NULL;
+			mt6589_apmixed_unregister_outputs(priv);
+			return PTR_ERR(hw);
+		}
+
+		priv->clk_data->hws[output->id] = hw;
+	}
+
+	return 0;
+}
 
 static int clk_mt6589_apmixed_probe(struct platform_device *pdev)
 {
 	const u8 *fhctl_node = "mediatek,mt6589-fhctl";
+	struct mt6589_apmixed_priv *priv;
 	struct clk_hw_onecell_data *clk_data;
 	struct device *dev = &pdev->dev;
+	void __iomem *base;
 	int r;
 
 	clk_data = mtk_alloc_clk_data(CLK_APMIXED_NR_CLK);
 	if (!clk_data)
 		return -ENOMEM;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv) {
+		r = -ENOMEM;
+		goto free_clk_data;
+	}
+	priv->clk_data = clk_data;
 
 	fhctl_parse_dt(fhctl_node, pllfhs, ARRAY_SIZE(pllfhs));
 	r = mtk_clk_register_pllfhs(dev, plls, ARRAY_SIZE(plls), pllfhs,
@@ -285,22 +413,23 @@ static int clk_mt6589_apmixed_probe(struct platform_device *pdev)
 	if (r)
 		goto free_clk_data;
 
-	r = mtk_clk_register_factors(pll_divs,
-				     ARRAY_SIZE(pll_divs), clk_data);
+	base = mtk_clk_pll_get_base(clk_data->hws[CLK_APMIXED_ARMPLL],
+				    &plls[CLK_APMIXED_ARMPLL]);
+	r = mt6589_apmixed_register_outputs(dev, base, priv);
 	if (r)
 		goto unregister_plls;
 
 	r = of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get,
 				   clk_data);
 	if (r)
-		goto unregister_factors;
+		goto unregister_outputs;
 
-	platform_set_drvdata(pdev, clk_data);
+	platform_set_drvdata(pdev, priv);
 
 	return 0;
 
-unregister_factors:
-	mtk_clk_unregister_factors(pll_divs, ARRAY_SIZE(pll_divs), clk_data);
+unregister_outputs:
+	mt6589_apmixed_unregister_outputs(priv);
 unregister_plls:
 	mtk_clk_unregister_pllfhs(plls, ARRAY_SIZE(plls), pllfhs,
 				  ARRAY_SIZE(pllfhs), clk_data);
@@ -312,10 +441,11 @@ free_clk_data:
 static void clk_mt6589_apmixed_remove(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
-	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
+	struct mt6589_apmixed_priv *priv = platform_get_drvdata(pdev);
+	struct clk_hw_onecell_data *clk_data = priv->clk_data;
 
 	of_clk_del_provider(node);
-	mtk_clk_unregister_factors(pll_divs, ARRAY_SIZE(pll_divs), clk_data);
+	mt6589_apmixed_unregister_outputs(priv);
 	mtk_clk_unregister_pllfhs(plls, ARRAY_SIZE(plls), pllfhs,
 				  ARRAY_SIZE(pllfhs), clk_data);
 	mtk_free_clk_data(clk_data);
