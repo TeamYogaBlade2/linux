@@ -194,8 +194,6 @@
 		// TODO: check
 		vdd-supply = <&mt6320_ldo_vio28>;
 		vddio-supply = <&mt6320_buck_vio18>;
-		interrupts = <0 IRQ_TYPE_EDGE_RISING>;
-		interrupt-parent = <&pio>;
 		// mount-matrix = ?;
 	};
 
@@ -206,9 +204,6 @@
 		// TODO: check
 		vdd-supply = <&mt6320_ldo_vio28>;
 		vddio-supply = <&mt6320_buck_vio18>;
-		interrupts = <2 IRQ_TYPE_EDGE_RISING>; // ?
-		// and EINT6, EINT7? + EINT8?
-		interrupt-parent = <&pio>;
 		// mount-matrix = ?
 	};
 
@@ -217,7 +212,8 @@
 		reg = <0x1c>;
 
 		vdd-supply = <&mt6320_buck_vio18>;
-		// EINT4_ALS[2]
+		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-parent = <&pio>;
 	};
 };
 
@@ -233,9 +229,6 @@
 	bq27541: fuel-gauge@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
-
-		interrupts = <16 IRQ_TYPE_EDGE_RISING>; // ?
-		interrupt-parent = <&pio>;
 
 		// monitored-battery = ;
 	};
