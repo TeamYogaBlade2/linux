@@ -17,6 +17,7 @@
 #include "mtk_drm_drv.h"
 
 #define DISP_COLOR_CFG_MAIN			0x0400
+#define DISP_COLOR_WIN_X_MAIN			0x040c
 #define DISP_COLOR_START_MT2701			0x0f00
 #define DISP_COLOR_START_MT8167			0x0400
 #define DISP_COLOR_START_MT8173			0x0c00
@@ -75,7 +76,7 @@ void mtk_color_config(struct device *dev, unsigned int w,
 	/* The MT6589 COLOR wrapper processes from x=0 to x=0xffff. */
 	if (color->data->enable_main_bit29)
 		mtk_ddp_write(cmdq_pkt, 0xffff0000, &color->cmdq_reg,
-			      color->regs, DISP_COLOR_START(color) + 0x40c);
+			      color->regs, DISP_COLOR_WIN_X_MAIN);
 }
 
 /*
