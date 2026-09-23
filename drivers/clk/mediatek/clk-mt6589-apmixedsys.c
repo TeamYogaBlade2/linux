@@ -216,6 +216,22 @@ static const struct mtk_pll_div_table mt6589_isppll_div_table[] = {
 	{ }
 };
 
+/*
+ * TVDPLL_MODE is a dedicated output divider in TVDPLL_CON0[23:22].
+ *
+ * 00: /2
+ * 01: /4
+ * 10: /8
+ * 11: /16
+ */
+static const struct clk_div_table mt6589_tvdpll_mode_div_table[] = {
+	{ .val = 0, .div = 2 },
+	{ .val = 1, .div = 4 },
+	{ .val = 2, .div = 8 },
+	{ .val = 3, .div = 16 },
+	{ }
+};
+
 static const struct mtk_pll_data plls[] = {
 	/* *_OUT_EN / *_XXXM_EN are modeled as child gates below. */
 	PLL(CLK_APMIXED_ARMPLL, "armpll", ARMPLL_CON0, ARMPLL_PWR_CON0, BIT(0),
@@ -248,13 +264,24 @@ struct mt6589_apmixed_output {
 	u32 div;
 	u32 reg;
 	u8 shift;
+	const struct clk_div_table *div_table;
+	u8 width;
 };
 
 #define APMIXED_OUTPUT(_id, _name, _factor, _parent, _mult, _div, _reg, _shift) \
 	{ \
 		.id = _id, .name = _name, .factor_name = _factor, \
 		.parent_name = _parent, .mult = _mult, .div = _div, \
-		.reg = _reg, .shift = _shift, \
+		.reg = _reg, .shift = _shift, .div_table = NULL, .width = 0, \
+	}
+
+#define APMIXED_OUTPUT_DIVIDER(_id, _name, _factor, _parent, \
+			       _reg, _shift, _width, _table) \
+	{ \
+		.id = _id, .name = _name, .factor_name = _factor, \
+		.parent_name = _parent, .mult = 1, .div = 1, \
+		.reg = _reg, .shift = _shift, .div_table = _table, \
+		.width = _width, \
 	}
 
 static const struct mt6589_apmixed_output apmixed_outputs[] = {
@@ -315,9 +342,10 @@ static const struct mt6589_apmixed_output apmixed_outputs[] = {
 		       "__mt6589_msdcpll_208m_factor", "msdcpll", 1, 8,
 		       MSDCPLL_CON0, 31),
 
-	APMIXED_OUTPUT(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m",
-		       "__mt6589_tvdpll_148p5m_factor", "tvdpll", 1, 16,
-		       TVDPLL_CON0, 31),
+	APMIXED_OUTPUT_DIVIDER(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m",
+			       "__mt6589_tvdpll_148p5m_factor", "tvdpll",
+			       TVDPLL_CON0, 22, 2,
+			       mt6589_tvdpll_mode_div_table),
 
 	APMIXED_OUTPUT(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m",
 		       "__mt6589_lvdspll_180m_factor", "lvdspll", 1, 8,
@@ -345,7 +373,10 @@ static void mt6589_apmixed_unregister_outputs(struct mt6589_apmixed_priv *priv)
 		}
 
 		if (!IS_ERR_OR_NULL(priv->factor_hws[i])) {
-			clk_hw_unregister_fixed_factor(priv->factor_hws[i]);
+			if (output->div_table)
+				clk_hw_unregister_divider(priv->factor_hws[i]);
+			else
+				clk_hw_unregister_fixed_factor(priv->factor_hws[i]);
 			priv->factor_hws[i] = NULL;
 		}
 	}
@@ -361,10 +392,24 @@ static int mt6589_apmixed_register_outputs(struct device *dev,
 		const struct mt6589_apmixed_output *output = &apmixed_outputs[i];
 		struct clk_hw *hw;
 
-		hw = clk_hw_register_fixed_factor(dev, output->factor_name,
-						 output->parent_name,
-						 CLK_SET_RATE_PARENT,
-						 output->mult, output->div);
+		if (output->div_table) {
+			hw = clk_hw_register_divider_table(dev,
+							   output->factor_name,
+							   output->parent_name,
+							   CLK_SET_RATE_PARENT,
+							   base + output->reg,
+							   output->shift,
+							   output->width,
+							   0,
+							   output->div_table,
+							   &mt6589_apmixed_clk_lock);
+		} else {
+			hw = clk_hw_register_fixed_factor(dev,
+							  output->factor_name,
+							  output->parent_name,
+							  CLK_SET_RATE_PARENT,
+							  output->mult, output->div);
+		}
 		if (IS_ERR(hw)) {
 			mt6589_apmixed_unregister_outputs(priv);
 			return PTR_ERR(hw);
