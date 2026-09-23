@@ -45,6 +45,27 @@ properties:
     description:
       Delay to wait after resetting the device.
 
+  syna,initial-reset-control:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 0
+    maximum: 255
+    description:
+      Optional value written to RMI4 Function 01 Control 0 before the
+      initial reset command.
+
+  syna,initial-reset-delay-ms:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 1
+    description:
+      Delay to wait after the initial reset command.
+
+  syna,reset-after-power-on:
+    type: boolean
+    description:
+      Keep reset deasserted while powering the device, then pulse reset
+      after syna,startup-delay-ms. This is needed by devices whose power-on
+      sequence requires reset to be asserted only after the supplies settle.
+
   syna,startup-delay-ms:
     description:
       Delay to wait after powering on the device.
