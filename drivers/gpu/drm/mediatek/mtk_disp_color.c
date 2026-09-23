@@ -64,13 +64,18 @@ void mtk_color_clk_disable(struct device *dev)
 }
 
 void mtk_color_config(struct device *dev, unsigned int w,
-		      unsigned int h, unsigned int vrefresh,
-		      unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
+			      unsigned int h, unsigned int vrefresh,
+			      unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
 	struct mtk_disp_color *color = dev_get_drvdata(dev);
 
 	mtk_ddp_write(cmdq_pkt, w, &color->cmdq_reg, color->regs, DISP_COLOR_WIDTH(color));
 	mtk_ddp_write(cmdq_pkt, h, &color->cmdq_reg, color->regs, DISP_COLOR_HEIGHT(color));
+
+	/* The MT6589 COLOR wrapper processes from x=0 to x=0xffff. */
+	if (color->data->enable_main_bit29)
+		mtk_ddp_write(cmdq_pkt, 0xffff0000, &color->cmdq_reg,
+			      color->regs, DISP_COLOR_START(color) + 0x40c);
 }
 
 /*
@@ -125,8 +130,13 @@ void mtk_color_start(struct device *dev)
 	struct mtk_disp_color *color = dev_get_drvdata(dev);
 	u32 cfg_main = COLOR_BYPASS_ALL | COLOR_SEQ_SEL;
 
+	/*
+	 * MT6589 downstream uses CFG_MAIN = BIT(29) for normal operation.
+	 * In particular, BIT(7) would bypass the whole COLOR block and BIT(13)
+	 * is not part of the downstream initialization value.
+	 */
 	if (color->data->enable_main_bit29)
-		cfg_main |= COLOR_MAIN_EN;
+		cfg_main = COLOR_MAIN_EN;
 
 	writel(cfg_main, color->regs + DISP_COLOR_CFG_MAIN);
 
