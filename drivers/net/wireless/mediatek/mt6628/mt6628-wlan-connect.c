@@ -310,11 +310,37 @@ static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
 	return ret;
 }
 
+static int mt6628_wait_mgmt_tx(struct mt6628_wlan *wl)
+{
+	unsigned long flags;
+	long timeout;
+	int status;
+
+	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+	if (!wl->mgmt_tx_pending) {
+		status = wl->mgmt_tx_status;
+		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+		return status;
+	}
+	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+
+	timeout = wait_for_completion_timeout(&wl->mgmt_tx_done,
+					      msecs_to_jiffies(1000));
+	if (!timeout)
+		return -ETIMEDOUT;
+
+	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+	status = wl->mgmt_tx_status;
+	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+
+	return status;
+}
+
 static void mt6628_connect_timeout_work(struct work_struct *work)
 {
 	struct mt6628_wlan *wl = container_of(to_delayed_work(work),
-						     struct mt6628_wlan,
-						     conn_timeout_work);
+					     struct mt6628_wlan,
+					     conn_timeout_work);
 	u8 bssid[ETH_ALEN];
 	const u8 *req_ie;
 	size_t req_ie_len;
@@ -599,6 +625,10 @@ static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
 		mt6628_conn_free_ies(wl);
 		return;
 	}
+
+	ret = mt6628_wait_mgmt_tx(wl);
+	if (ret)
+		goto timeout;
 
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_2, 0,
 					    wl->conn_bssid);
