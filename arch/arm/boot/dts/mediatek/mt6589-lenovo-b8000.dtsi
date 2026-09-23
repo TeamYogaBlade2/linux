@@ -55,6 +55,9 @@
 		compatible = "innolux,hx8896-a01-panel";
 		reg = <0>;
 		power-supply = <&mt6320_ldo_vrf28_2>;
+		enable-gpios = <&pio 137 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_pins>;
 
 		port {
 			panel_in: endpoint {
