@@ -447,6 +447,22 @@ static int mt6628_cfg80211_del_key(struct wiphy *wiphy,
 	return mt6628_wlan_del_key(wl, key_index, pairwise, mac_addr);
 }
 
+static int mt6628_cfg80211_set_power_mgmt(struct wiphy *wiphy,
+					struct net_device *dev,
+					bool enabled, int timeout)
+{
+	struct mt6628_wlan *wl;
+
+	if (timeout < -1)
+		return -EINVAL;
+
+	wl = netdev_priv(dev) ? *(struct mt6628_wlan **)netdev_priv(dev) : NULL;
+	if (!wl)
+		return -ENODEV;
+
+	return mt6628_wlan_set_power_mgmt(wl, enabled);
+}
+
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
@@ -454,6 +470,7 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.disconnect = mt6628_cfg80211_disconnect,
 	.add_key = mt6628_cfg80211_add_key,
 	.del_key = mt6628_cfg80211_del_key,
+	.set_power_mgmt = mt6628_cfg80211_set_power_mgmt,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)

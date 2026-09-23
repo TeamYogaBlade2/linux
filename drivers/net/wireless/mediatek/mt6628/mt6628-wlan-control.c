@@ -47,6 +47,8 @@
 #define MT6628_ENCRYPTION_DISABLED	1
 #define MT6628_ENCRYPTION3_KEY_ABSENT	7
 #define MT6628_CIPHER_SUITE_CCMP	4
+#define MT6628_PS_PROFILE_CAM		0
+#define MT6628_PS_PROFILE_FAST_PSP	2
 
 #define MT6628_KEY_INDEX_MAX		3
 #define MT6628_KEY_MATERIAL_LEN		32
@@ -159,6 +161,12 @@ struct mt6628_cmd_remove_sta_record {
 	u8 mac_addr[ETH_ALEN];
 } __packed;
 
+struct mt6628_cmd_ps_profile {
+	u8 net_type_index;
+	u8 ps_profile;
+	u8 reserved[2];
+} __packed;
+
 struct mt6628_hif_mgmt_tx_hdr {
 	__le16 tx_byte_count_user_priority;
 	u8 ether_type_offset;
@@ -196,6 +204,7 @@ static_assert(sizeof(struct mt6628_cmd_set_bss_info) == 80);
 static_assert(sizeof(struct mt6628_cmd_update_sta_record) == 40);
 static_assert(sizeof(struct mt6628_cmd_bss_activate_ctrl) == 4);
 static_assert(sizeof(struct mt6628_cmd_remove_sta_record) == 8);
+static_assert(sizeof(struct mt6628_cmd_ps_profile) == 4);
 static_assert(sizeof(struct mt6628_cmd_add_remove_key) == 64);
 static_assert(sizeof(struct mt6628_hif_mgmt_tx_hdr) == 16);
 
@@ -512,6 +521,24 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 				    MT6628_EVENT_ID_CMD_RESULT, 1000);
 }
 
+int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
+{
+	struct mt6628_cmd_ps_profile cmd = {
+		.net_type_index = 0,
+		.ps_profile = enabled ? MT6628_PS_PROFILE_FAST_PSP :
+			MT6628_PS_PROFILE_CAM,
+	};
+	u8 response[4];
+	size_t response_len;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+
+	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_POWER_SAVE_MODE, 1,
+					&cmd, sizeof(cmd), response, sizeof(response),
+					&response_len, MT6628_EVENT_ID_CMD_RESULT, 1000);
+}
+
 static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 {
 	unsigned long flags;
@@ -611,4 +638,5 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_activate_bss);
 EXPORT_SYMBOL_GPL(mt6628_wlan_remove_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_add_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_del_key);
+EXPORT_SYMBOL_GPL(mt6628_wlan_set_power_mgmt);
 EXPORT_SYMBOL_GPL(mt6628_wlan_mgmt_tx);

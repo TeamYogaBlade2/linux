@@ -126,6 +126,7 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 			const struct key_params *params);
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);
+int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 			 size_t frame_len);
 
