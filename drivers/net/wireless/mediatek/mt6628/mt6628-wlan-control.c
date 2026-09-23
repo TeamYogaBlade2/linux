@@ -624,7 +624,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	memcpy(buf + sizeof(hdr), frame, frame_len);
 
 	sdio_claim_host(wl->func);
-	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR0, buf, xfer_len);
+	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);
 	sdio_release_host(wl->func);
 	kfree(buf);
 	if (ret)
