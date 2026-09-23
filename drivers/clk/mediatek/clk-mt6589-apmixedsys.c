@@ -265,6 +265,7 @@ struct mt6589_apmixed_output {
 	u32 div;
 	u32 reg;
 	u8 shift;
+	u8 gate_shift;
 	const struct clk_div_table *div_table;
 	u8 width;
 };
@@ -273,15 +274,17 @@ struct mt6589_apmixed_output {
 	{ \
 		.id = _id, .name = _name, .factor_name = _factor, \
 		.parent_name = _parent, .mult = _mult, .div = _div, \
-		.reg = _reg, .shift = _shift, .div_table = NULL, .width = 0, \
+		.reg = _reg, .shift = _shift, .gate_shift = _shift, \
+		.div_table = NULL, .width = 0, \
 	}
 
 #define APMIXED_OUTPUT_DIVIDER(_id, _name, _factor, _parent, \
-			       _reg, _shift, _width, _table) \
+		       _reg, _shift, _gate_shift, _width, _table) \
 	{ \
 		.id = _id, .name = _name, .factor_name = _factor, \
 		.parent_name = _parent, .mult = 1, .div = 1, \
-		.reg = _reg, .shift = _shift, .div_table = _table, \
+		.reg = _reg, .shift = _shift, .gate_shift = _gate_shift, \
+		.div_table = _table, \
 		.width = _width, \
 	}
 
@@ -344,9 +347,9 @@ static const struct mt6589_apmixed_output apmixed_outputs[] = {
 		       MSDCPLL_CON0, 31),
 
 	APMIXED_OUTPUT_DIVIDER(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m",
-		       "__mt6589_tvdpll_148p5m_factor", "tvdpll",
-			       TVDPLL_CON0, 22, 2,
-		       mt6589_tvdpll_mode_div_table),
+			       "__mt6589_tvdpll_148p5m_factor", "tvdpll",
+			       TVDPLL_CON0, 22, 31, 2,
+			       mt6589_tvdpll_mode_div_table),
 
 	APMIXED_OUTPUT(CLK_APMIXED_LVDSPLL_180M, "lvdspll_180m",
 		       "__mt6589_lvdspll_180m_factor", "lvdspll", 1, 2,
@@ -419,7 +422,7 @@ static int mt6589_apmixed_register_outputs(struct device *dev,
 
 		hw = clk_hw_register_gate(dev, output->name, output->factor_name,
 					  CLK_SET_RATE_PARENT, base + output->reg,
-					  output->shift, 0, &mt6589_apmixed_clk_lock);
+					  output->gate_shift, 0, &mt6589_apmixed_clk_lock);
 		if (IS_ERR(hw)) {
 			if (output->div_table)
 				clk_hw_unregister_divider(priv->factor_hws[i]);
