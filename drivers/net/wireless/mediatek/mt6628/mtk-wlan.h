@@ -76,7 +76,6 @@ struct mt6628_wlan {
 	spinlock_t tx_lock;
 	u8 tx_free[MT6628_WLAN_TX_TC_NUM];
 	u8 tx_max[MT6628_WLAN_TX_TC_NUM];
-	u16 tx_seq;
 	struct sk_buff_head tx_queue;
 	wait_queue_head_t tx_wait;
 

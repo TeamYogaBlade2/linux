@@ -431,7 +431,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
 	hdr.wlan_header_length = ETH_HLEN;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
-	hdr.seq_no = cpu_to_le16(wl->tx_seq++);
+	hdr.seq_no = 0;
 	if (skb->protocol == htons(ETH_P_PAE))
 		hdr.pkt_format_id_flags |= MT6628_HIF_TX_1X_FRAME;
 

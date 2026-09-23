@@ -530,7 +530,6 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	unsigned long flags;
 	size_t packet_len, xfer_len;
 	u8 *buf;
-	u16 seq;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -557,7 +556,6 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 		return -EBUSY;
 	}
 	wl->tx_free[MT6628_TX_TC_MGMT]--;
-	seq = wl->tx_seq++;
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
 
 	packet_len = MT6628_HIF_TX_HEADER_LEN + frame_len;
@@ -577,7 +575,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 		 MT6628_HIF_TX_PACKET_TYPE_OFFSET);
 	hdr.wlan_header_length = sizeof(struct ieee80211_hdr);
 	hdr.pkt_format_id_flags = MT6628_HIF_TX_80211_FORMAT;
-	hdr.seq_no = cpu_to_le16(seq & 0x0fff);
+	hdr.seq_no = 0;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
 	hdr.ack_bip_basic_rate = MT6628_HIF_TX_NEED_ACK |
