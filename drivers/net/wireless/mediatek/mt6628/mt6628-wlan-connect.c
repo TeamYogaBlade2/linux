@@ -373,7 +373,7 @@ static int mt6628_send_auth(struct mt6628_wlan *wl)
 	mgmt->u.auth.auth_transaction = cpu_to_le16(1);
 	mgmt->u.auth.status_code = cpu_to_le16(WLAN_STATUS_SUCCESS);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -430,7 +430,7 @@ static int mt6628_send_shared_auth_response(struct mt6628_wlan *wl,
 	mgmt->u.auth.variable[1] = challenge_len;
 	memcpy(&mgmt->u.auth.variable[2], challenge, challenge_len);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, out_len, true);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, out_len, true, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -457,7 +457,7 @@ static int mt6628_send_assoc(struct mt6628_wlan *wl)
 	memcpy(mgmt->u.assoc_req.variable, wl->conn_req_ie,
 	       wl->conn_req_ie_len);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -480,35 +480,9 @@ static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
 	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
 	mgmt->u.deauth.reason_code = cpu_to_le16(reason);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, false);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true, false);
 	kfree(mgmt);
 	return ret;
-}
-
-static int mt6628_wait_mgmt_tx(struct mt6628_wlan *wl)
-{
-	unsigned long flags;
-	long timeout;
-	int status;
-
-	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
-	if (!wl->mgmt_tx_pending) {
-		status = wl->mgmt_tx_status;
-		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
-		return status;
-	}
-	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
-
-	timeout = wait_for_completion_timeout(&wl->mgmt_tx_done,
-					      msecs_to_jiffies(1000));
-	if (!timeout)
-		return -ETIMEDOUT;
-
-	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
-	status = wl->mgmt_tx_status;
-	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
-
-	return status;
 }
 
 static void mt6628_connect_timeout_work(struct work_struct *work)

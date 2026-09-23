@@ -473,6 +473,7 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	*cookie = tx_cookie;
 
 	ret = mt6628_wlan_mgmt_tx(wl, params->buf, params->len,
+				  !params->dont_wait_for_ack,
 				  !params->dont_wait_for_ack);
 	if (ret)
 		return ret;

@@ -571,7 +571,7 @@ static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 }
 
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-			 size_t frame_len, bool wait_for_status)
+			 size_t frame_len, bool wait_for_status, bool need_ack)
 {
 	struct mt6628_hif_mgmt_tx_hdr hdr = {};
 	unsigned long flags;
@@ -648,7 +648,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
 	hdr.packet_seq_no = packet_seq;
 	hdr.ack_bip_basic_rate = MT6628_HIF_TX_BASIC_RATE;
-	if (wait_for_status)
+	if (need_ack)
 		hdr.ack_bip_basic_rate |= MT6628_HIF_TX_NEED_ACK;
 
 	memcpy(buf, &hdr, sizeof(hdr));
