@@ -191,7 +191,7 @@ static_assert(sizeof(struct mt6628_cmd_set_bss_info) == 80);
 static_assert(sizeof(struct mt6628_cmd_update_sta_record) == 40);
 static_assert(sizeof(struct mt6628_cmd_bss_activate_ctrl) == 4);
 static_assert(sizeof(struct mt6628_cmd_remove_sta_record) == 8);
-static_assert(sizeof(struct mt6628_cmd_add_remove_key) == 68);
+static_assert(sizeof(struct mt6628_cmd_add_remove_key) == 64);
 static_assert(sizeof(struct mt6628_hif_mgmt_tx_hdr) == 16);
 
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
