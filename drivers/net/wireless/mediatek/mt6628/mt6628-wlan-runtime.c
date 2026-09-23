@@ -260,28 +260,29 @@ int ret;
 		ret = 0;
 	break;
 
-case MT6628_HIF_RX_PKT_TYPE_EVENT:
-	if (packet_len < MT6628_HIF_RX_HEADER_LEN + header_offset +
-	    MT6628_WIFI_EVENT_HEADER_LEN)
-		goto bad_packet;
-	event_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
-		header_offset;
-	/* Event packets use the downstream 8-byte WIFI_EVENT_T overlay. */
-	if (skb_queue_len(&wl->event_queue) >=
-	    MT6628_RUNTIME_QUEUE_LIMIT)
-		goto drop_packet;
+	case MT6628_HIF_RX_PKT_TYPE_EVENT:
+		if (packet_len < MT6628_WIFI_EVENT_HEADER_LEN)
+			goto bad_packet;
 
-	skb = alloc_skb(event_len, GFP_KERNEL);
-	if (!skb) {
-		ret = -ENOMEM;
-		goto out_free;
-	}
-	memcpy(skb_put(skb, event_len),
-	       buf + MT6628_HIF_RX_HEADER_LEN + header_offset,
-	       event_len);
-	skb_queue_tail(&wl->event_queue, skb);
-	wake_up_all(&wl->event_wait);
-	ret = 0;
+		/*
+		 * WIFI_EVENT_T overlays the first eight bytes of HIF_RX_HEADER_T.
+		 * The remaining four HIF bytes are part of the event payload.
+		 */
+		event_len = packet_len;
+		if (skb_queue_len(&wl->event_queue) >=
+		    MT6628_RUNTIME_QUEUE_LIMIT)
+			goto drop_packet;
+
+		skb = alloc_skb(event_len, GFP_KERNEL);
+		if (!skb) {
+			ret = -ENOMEM;
+			goto out_free;
+		}
+		memcpy(skb_put(skb, event_len),
+		       buf, event_len);
+		skb_queue_tail(&wl->event_queue, skb);
+		wake_up_all(&wl->event_wait);
+		ret = 0;
 		break;
 
 	case MT6628_HIF_RX_PKT_TYPE_MANAGEMENT:
