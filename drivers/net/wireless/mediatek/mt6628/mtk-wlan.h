@@ -60,6 +60,12 @@ struct mt6628_wlan {
 	u8 conn_band;
 	u8 conn_channel;
 	u16 conn_aid;
+	u8 conn_auth_mode;
+	u8 conn_enc_status;
+	u8 conn_key_idx;
+	u8 conn_rf_sco;
+	u8 *conn_key;
+	size_t conn_key_len;
 	struct cfg80211_bss *conn_bss;
 	u8 *conn_req_ie;
 	size_t conn_req_ie_len;

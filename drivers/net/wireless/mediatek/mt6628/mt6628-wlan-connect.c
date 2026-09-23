@@ -51,6 +51,9 @@ static void mt6628_conn_free_ies(struct mt6628_wlan *wl)
 	kfree(wl->conn_resp_ie);
 	wl->conn_resp_ie = NULL;
 	wl->conn_resp_ie_len = 0;
+	kfree(wl->conn_key);
+	wl->conn_key = NULL;
+	wl->conn_key_len = 0;
 }
 
 static void mt6628_conn_put_bss(struct mt6628_wlan *wl)
@@ -99,6 +102,10 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 	wl->connected = false;
 	wl->conn_secure = false;
 	wl->conn_aid = 0;
+	wl->conn_auth_mode = MT6628_AUTH_MODE_OPEN;
+	wl->conn_enc_status = MT6628_ENCRYPTION_DISABLED;
+	wl->conn_key_idx = 0;
+	wl->conn_rf_sco = 0;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
 }
@@ -131,12 +138,15 @@ void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
 	mutex_unlock(&wl->cfg_mutex);
 }
 
-static bool mt6628_connect_is_wpa2_psk(
-	const struct cfg80211_connect_params *sme)
+static bool mt6628_connect_is_wpa_psk(
+	const struct cfg80211_connect_params *sme,
+	u8 *auth_mode, u8 *enc_status)
 {
 	const struct cfg80211_crypto_settings *crypto = &sme->crypto;
 
-	if (crypto->wpa_versions != NL80211_WPA_VERSION_2)
+	if (!crypto->wpa_versions ||
+	    crypto->wpa_versions & ~(NL80211_WPA_VERSION_1 |
+				     NL80211_WPA_VERSION_2))
 		return false;
 	if (crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP &&
 	    crypto->cipher_group != WLAN_CIPHER_SUITE_TKIP)
@@ -155,6 +165,56 @@ static bool mt6628_connect_is_wpa2_psk(
 	if (sme->key_len || sme->key)
 		return false;
 
+	if (crypto->wpa_versions & NL80211_WPA_VERSION_2) {
+		*auth_mode = MT6628_AUTH_MODE_WPA2_PSK;
+		*enc_status = MT6628_ENCRYPTION3_KEY_ABSENT;
+	} else {
+		*auth_mode = MT6628_AUTH_MODE_WPA_PSK;
+		*enc_status = MT6628_ENCRYPTION2_ENABLED;
+	}
+
+	return true;
+}
+
+static bool mt6628_connect_is_wep(
+	const struct cfg80211_connect_params *sme,
+	u8 *auth_mode, u8 *enc_status)
+{
+	const struct cfg80211_crypto_settings *crypto = &sme->crypto;
+
+	if (!sme->privacy || !sme->key)
+		return false;
+	if (crypto->wpa_versions ||
+	    crypto->n_ciphers_pairwise ||
+	    crypto->n_akm_suites ||
+	    crypto->control_port ||
+	    crypto->control_port_over_nl80211)
+		return false;
+	if (crypto->cipher_group != 0 &&
+	    crypto->cipher_group != WLAN_CIPHER_SUITE_WEP40 &&
+	    crypto->cipher_group != WLAN_CIPHER_SUITE_WEP104)
+		return false;
+	if (sme->mfp != NL80211_MFP_NO)
+		return false;
+	if (sme->key_len != WLAN_KEY_LEN_WEP40 &&
+	    sme->key_len != WLAN_KEY_LEN_WEP104)
+		return false;
+
+	switch (sme->auth_type) {
+	case NL80211_AUTHTYPE_SHARED_KEY:
+		*auth_mode = MT6628_AUTH_MODE_SHARED;
+		break;
+	case NL80211_AUTHTYPE_AUTOMATIC:
+		*auth_mode = MT6628_AUTH_MODE_AUTO_SWITCH;
+		break;
+	case NL80211_AUTHTYPE_OPEN_SYSTEM:
+		*auth_mode = MT6628_AUTH_MODE_OPEN;
+		break;
+	default:
+		return false;
+	}
+
+	*enc_status = MT6628_ENCRYPTION_WEP_ENABLED;
 	return true;
 }
 
@@ -279,11 +339,72 @@ static int mt6628_send_auth(struct mt6628_wlan *wl)
 	ether_addr_copy(mgmt->da, wl->conn_bssid);
 	ether_addr_copy(mgmt->sa, wl->netdev->dev_addr);
 	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
-	mgmt->u.auth.auth_alg = cpu_to_le16(WLAN_AUTH_OPEN);
+	mgmt->u.auth.auth_alg = cpu_to_le16(
+		wl->conn_auth_mode == MT6628_AUTH_MODE_SHARED ?
+		WLAN_AUTH_SHARED_KEY : WLAN_AUTH_OPEN);
 	mgmt->u.auth.auth_transaction = cpu_to_le16(1);
 	mgmt->u.auth.status_code = cpu_to_le16(WLAN_STATUS_SUCCESS);
 
 	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true);
+	kfree(mgmt);
+	return ret;
+}
+
+static int mt6628_send_shared_auth_response(struct mt6628_wlan *wl,
+					    const struct ieee80211_mgmt *rx,
+					    size_t frame_len)
+{
+	struct ieee80211_mgmt *mgmt;
+	const u8 *ies = rx->u.auth.variable;
+	size_t ie_len;
+	size_t pos = 0;
+	size_t challenge_len = 0;
+	const u8 *challenge = NULL;
+	size_t out_len;
+	int ret;
+
+	if (frame_len < offsetof(struct ieee80211_mgmt, u.auth.variable))
+		return -EINVAL;
+
+	ie_len = frame_len - offsetof(struct ieee80211_mgmt, u.auth.variable);
+	while (ie_len >= 2) {
+		size_t len = ies[1];
+
+		if (len + 2 > ie_len)
+			return -EPROTO;
+		if (ies[0] == 16) {
+			challenge = ies + 2;
+			challenge_len = len;
+			break;
+		}
+		ies += len + 2;
+		ie_len -= len + 2;
+		pos++;
+	}
+
+	if (!challenge || challenge_len == 0)
+		return -EPROTO;
+
+	out_len = offsetof(struct ieee80211_mgmt, u.auth.variable) +
+		2 + challenge_len;
+	mgmt = kzalloc(out_len, GFP_KERNEL);
+	if (!mgmt)
+		return -ENOMEM;
+
+	mgmt->frame_control = cpu_to_le16(
+		IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_AUTH |
+		IEEE80211_FCTL_PROTECTED);
+	ether_addr_copy(mgmt->da, wl->conn_bssid);
+	ether_addr_copy(mgmt->sa, wl->netdev->dev_addr);
+	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
+	mgmt->u.auth.auth_alg = cpu_to_le16(WLAN_AUTH_SHARED_KEY);
+	mgmt->u.auth.auth_transaction = cpu_to_le16(3);
+	mgmt->u.auth.status_code = cpu_to_le16(WLAN_STATUS_SUCCESS);
+	mgmt->u.auth.variable[0] = 16;
+	mgmt->u.auth.variable[1] = challenge_len;
+	memcpy(&mgmt->u.auth.variable[2], challenge, challenge_len);
+
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, out_len, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -400,6 +521,12 @@ void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl)
 {
 	INIT_DELAYED_WORK(&wl->conn_timeout_work, mt6628_connect_timeout_work);
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
+	wl->conn_auth_mode = MT6628_AUTH_MODE_OPEN;
+	wl->conn_enc_status = MT6628_ENCRYPTION_DISABLED;
+	wl->conn_key_idx = 0;
+	wl->conn_rf_sco = 0;
+	wl->conn_key = NULL;
+	wl->conn_key_len = 0;
 	wl->conn_bss = NULL;
 	wl->conn_req_ie = NULL;
 	wl->conn_resp_ie = NULL;
@@ -423,6 +550,10 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	struct ieee80211_channel *channel;
 	enum ieee80211_privacy privacy;
 	bool secure;
+	bool wep;
+	u8 auth_mode = MT6628_AUTH_MODE_OPEN;
+	u8 enc_status = MT6628_ENCRYPTION_DISABLED;
+	u8 *conn_key = NULL;
 	int ret;
 
 	if (!wl || !wl->runtime_started || !wl->fw_running)
@@ -431,6 +562,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	    sme->ssid_len > IEEE80211_MAX_SSID_LEN)
 		return -EINVAL;
 	if (sme->auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM &&
+	    sme->auth_type != NL80211_AUTHTYPE_SHARED_KEY &&
 	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC)
 		return -EOPNOTSUPP;
 
@@ -441,8 +573,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		sme->crypto.control_port ||
 		sme->crypto.control_port_over_nl80211;
 
-	if (secure) {
-		if (!mt6628_connect_is_wpa2_psk(sme))
+	wep = mt6628_connect_is_wep(sme, &auth_mode, &enc_status);
+	if (wep) {
+		conn_key = kmemdup(sme->key, sme->key_len, GFP_KERNEL);
+		if (!conn_key)
+			return -ENOMEM;
+	} else if (secure) {
+		if (!mt6628_connect_is_wpa_psk(sme, &auth_mode, &enc_status))
 			return -EOPNOTSUPP;
 	} else if (sme->mfp != NL80211_MFP_NO ||
 		   sme->key_len || sme->key)
@@ -498,6 +635,14 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	wl->conn_band = wl->conn_bss->channel->band;
 	wl->conn_channel = wl->conn_bss->channel->hw_value;
 	wl->conn_secure = secure;
+	wl->conn_auth_mode = auth_mode;
+	wl->conn_enc_status = enc_status;
+	wl->conn_key_idx = sme->key_idx;
+	wl->conn_rf_sco = 0;
+	kfree(wl->conn_key);
+	wl->conn_key = conn_key;
+	wl->conn_key_len = conn_key ? sme->key_len : 0;
+	conn_key = NULL;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 	wl->conn_state = MT6628_CONN_AUTH;
 	mutex_unlock(&wl->cfg_mutex);
@@ -530,6 +675,21 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	if (ret)
 		goto err_reset;
 
+	if (wl->conn_key) {
+		struct key_params key = {
+			.cipher = wl->conn_key_len == WLAN_KEY_LEN_WEP40 ?
+				WLAN_CIPHER_SUITE_WEP40 :
+				WLAN_CIPHER_SUITE_WEP104,
+			.key = wl->conn_key,
+			.key_len = wl->conn_key_len,
+		};
+
+		ret = mt6628_wlan_add_key(wl, wl->conn_key_idx, false,
+					  NULL, &key);
+		if (ret)
+			goto err_reset;
+	}
+
 	ret = mt6628_send_auth(wl);
 	if (ret)
 		goto err_reset;
@@ -546,6 +706,7 @@ err_reset:
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 	mutex_unlock(&wl->cfg_mutex);
+	kfree(conn_key);
 	return ret;
 }
 
@@ -780,15 +941,53 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 	}
 
 	if (ieee80211_is_auth(fc) && wl->conn_state == MT6628_CONN_AUTH) {
+		u16 transaction;
+
 		if (frame_len < offsetof(struct ieee80211_mgmt,
-					 u.auth.variable) ||
-		    le16_to_cpu(mgmt->u.auth.auth_transaction) != 2) {
+					 u.auth.variable)) {
 			mutex_unlock(&wl->cfg_mutex);
 			return true;
 		}
+
+		transaction = le16_to_cpu(mgmt->u.auth.auth_transaction);
+
+		if (wl->conn_auth_mode == MT6628_AUTH_MODE_SHARED) {
+			if (transaction == 2) {
+				int ret;
+
+				if (le16_to_cpu(mgmt->u.auth.status_code) !=
+				    WLAN_STATUS_SUCCESS) {
+					relevant = true;
+					mt6628_connect_auth_result(wl,
+						le16_to_cpu(
+							mgmt->u.auth.status_code));
+					goto auth_done;
+				}
+
+				ret = mt6628_send_shared_auth_response(wl, mgmt,
+								       frame_len);
+				if (ret)
+					dev_warn(&wl->func->dev,
+						 "failed to send WEP challenge response: %d\n",
+						 ret);
+				relevant = true;
+				goto auth_done;
+			}
+
+			if (transaction != 4) {
+				mutex_unlock(&wl->cfg_mutex);
+				return true;
+			}
+		} else if (transaction != 2) {
+			mutex_unlock(&wl->cfg_mutex);
+			return true;
+		}
+
 		relevant = true;
 		mt6628_connect_auth_result(wl,
 				le16_to_cpu(mgmt->u.auth.status_code));
+auth_done:
+		;
 	} else if (ieee80211_is_assoc_resp(fc) &&
 		   wl->conn_state == MT6628_CONN_ASSOC) {
 		if (frame_len < offsetof(struct ieee80211_mgmt,
