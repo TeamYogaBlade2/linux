@@ -143,7 +143,7 @@ int mt6628_wlan_activate_bss(struct mt6628_wlan *wl, bool active);
 int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl,
 					const u8 *bssid);
 int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
-			bool pairwise, const u8 *mac_addr,
+			bool pairwise, bool tx_key, const u8 *mac_addr,
 			const struct key_params *params);
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);

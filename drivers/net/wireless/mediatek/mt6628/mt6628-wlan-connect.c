@@ -385,7 +385,6 @@ static int mt6628_send_shared_auth_response(struct mt6628_wlan *wl,
 	struct ieee80211_mgmt *mgmt;
 	const u8 *ies = rx->u.auth.variable;
 	size_t ie_len;
-	size_t pos = 0;
 	size_t challenge_len = 0;
 	const u8 *challenge = NULL;
 	size_t out_len;
@@ -407,7 +406,6 @@ static int mt6628_send_shared_auth_response(struct mt6628_wlan *wl,
 		}
 		ies += len + 2;
 		ie_len -= len + 2;
-		pos++;
 	}
 
 	if (!challenge || challenge_len == 0)
@@ -712,7 +710,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			.key_len = wl->conn_key_len,
 		};
 
-		ret = mt6628_wlan_add_key(wl, wl->conn_key_idx, false,
+		ret = mt6628_wlan_add_key(wl, wl->conn_key_idx, false, true,
 					  NULL, &key);
 		if (ret)
 			goto err_reset;

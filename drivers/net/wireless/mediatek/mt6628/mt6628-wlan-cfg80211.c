@@ -421,7 +421,9 @@ static int mt6628_cfg80211_add_key(struct wiphy *wiphy,
 	if (link_id != -1)
 		return -EOPNOTSUPP;
 
-	return mt6628_wlan_add_key(wl, key_index, pairwise, mac_addr, params);
+	return mt6628_wlan_add_key(wl, key_index, pairwise,
+				   pairwise && params->mode != NL80211_KEY_NO_TX,
+				   mac_addr, params);
 }
 
 static int mt6628_cfg80211_del_key(struct wiphy *wiphy,

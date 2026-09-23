@@ -423,7 +423,7 @@ int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl, const u8 *bssid)
 }
 
 int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
-			bool pairwise, const u8 *mac_addr,
+			bool pairwise, bool tx_key, const u8 *mac_addr,
 			const struct key_params *params)
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
@@ -458,7 +458,7 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	 * A station's GTK is RX-only. The PTK is the station's TX key
 	 * unless cfg80211 explicitly requested a receive-only key.
 	 */
-	cmd.tx_key = pairwise && params->mode != NL80211_KEY_NO_TX;
+	cmd.tx_key = tx_key;
 	cmd.key_type = pairwise;
 	cmd.is_authenticator = 0;
 	ether_addr_copy(cmd.peer_addr, peer);
