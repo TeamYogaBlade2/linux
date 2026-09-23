@@ -808,6 +808,20 @@ int rmi_initial_reset(struct rmi_device *rmi_dev, void *ctx,
 			return RMI_SCAN_DONE;
 		}
 
+		if (pdata->initial_reset_control) {
+			u8 ctrl_buf = pdata->initial_reset_control;
+			u16 ctrl_addr =
+				pdt->page_start + pdt->control_base_addr;
+
+			error = rmi_write_block(rmi_dev, ctrl_addr, &ctrl_buf, 1);
+			if (error) {
+				dev_err(&rmi_dev->dev,
+					"Initial reset control write failed. Code = %d.\n",
+					error);
+				return error;
+			}
+		}
+
 		rmi_dbg(RMI_DEBUG_CORE, &rmi_dev->dev, "Sending reset\n");
 		error = rmi_write_block(rmi_dev, cmd_addr, &cmd_buf, 1);
 		if (error) {
@@ -816,7 +830,8 @@ int rmi_initial_reset(struct rmi_device *rmi_dev, void *ctx,
 			return error;
 		}
 
-		mdelay(pdata->reset_delay_ms ?: DEFAULT_RESET_DELAY_MS);
+		mdelay(pdata->initial_reset_delay_ms ?:
+				pdata->reset_delay_ms ?: DEFAULT_RESET_DELAY_MS);
 
 		return RMI_SCAN_DONE;
 	}
@@ -998,7 +1013,13 @@ static int rmi_driver_of_probe(struct device *dev,
 	if (retval)
 		return retval;
 
-	return 0;
+	retval = rmi_of_property_read_u32(dev, &pdata->initial_reset_control,
+					"syna,initial-reset-control", 1);
+	if (retval)
+		return retval;
+
+	return rmi_of_property_read_u32(dev, &pdata->initial_reset_delay_ms,
+					"syna,initial-reset-delay-ms", 1);
 }
 #else
 static inline int rmi_driver_of_probe(struct device *dev,
