@@ -78,6 +78,7 @@
 		.pcwbits = _pcwbits,					\
 		.pd_reg = _pd_reg,					\
 		.pd_mask = 0x3,						\
+		.pd_valid_mask = GENMASK(2, 0),			\
 		.pd_shift = _pd_shift,					\
 		.tuner_reg = VOID_REG,					\
 		.pcw_reg = _pcw_reg,					\
