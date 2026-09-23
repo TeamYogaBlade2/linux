@@ -23,17 +23,17 @@
 #define DISP_REG_OVL_INTEN					0x0004
 #define OVL_FME_CPL_INT							BIT(1)
 #define OVL_FME_UND_INT							BIT(2)
-#define OVL_RDMA0_EOF_ABNORMAL_INT	BIT(5)
-#define OVL_RDMA1_EOF_ABNORMAL_INT	BIT(6)
-#define OVL_RDMA0_FIFO_UND_INT			BIT(9)
-#define OVL_RDMA1_FIFO_UND_INT			BIT(10)
+#define OVL_RDMA0_EOF_ABNORMAL_INT	BIT(4)
+#define OVL_RDMA1_EOF_ABNORMAL_INT	BIT(5)
+#define OVL_RDMA0_FIFO_UND_INT			BIT(8)
+#define OVL_RDMA1_FIFO_UND_INT			BIT(9)
 
 #define DISP_REG_OVL_INTSTA			0x0008
 #define OVL_FME_UND							BIT(2)
-#define OVL_RDMA0_EOF_ABNORMAL	BIT(5)
-#define OVL_RDMA1_EOF_ABNORMAL	BIT(6)
-#define OVL_RDMA0_FIFO_UND			BIT(9)
-#define OVL_RDMA1_FIFO_UND			BIT(10)
+#define OVL_RDMA0_EOF_ABNORMAL	BIT(4)
+#define OVL_RDMA1_EOF_ABNORMAL	BIT(5)
+#define OVL_RDMA0_FIFO_UND			BIT(8)
+#define OVL_RDMA1_FIFO_UND			BIT(9)
 
 #define DISP_REG_OVL_EN				0x000c
 #define DISP_REG_OVL_RST			0x0014
@@ -402,7 +402,8 @@ static void mt6589_ovl_write_yuv_matrix(struct mtk_disp_ovl *ovl,
 	mtk_ddp_write(cmdq_pkt,
 		      (mt6589_yuv2rgb_coef[3][1] << 16) | mt6589_yuv2rgb_coef[3][0],
 		      &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A0);
-	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A1);
+	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[3][2],
+			      &ovl->cmdq_reg, base, reg_base + Y2R_YUV_A1);
 	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[4][0],
 		      &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A0);
 	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, base, reg_base + Y2R_RGB_A1);
