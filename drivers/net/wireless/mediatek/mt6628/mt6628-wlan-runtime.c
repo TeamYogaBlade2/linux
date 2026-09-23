@@ -134,6 +134,26 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 		if (matched)
 			goto drop;
 
+		if (event->eid == MT6628_EVENT_ID_TX_DONE) {
+			const struct mt6628_event_tx_done *tx_done;
+
+			if (body_len != sizeof(*tx_done))
+				goto drop;
+
+			tx_done = (const struct mt6628_event_tx_done *)
+				(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
+
+			spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+			if (wl->mgmt_tx_pending &&
+			    tx_done->packet_seq == wl->mgmt_tx_packet_seq) {
+				wl->mgmt_tx_status = tx_done->status ? -EIO : 0;
+				wl->mgmt_tx_pending = false;
+				complete(&wl->mgmt_tx_done);
+			}
+			spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+			goto drop;
+		}
+
 		if (wl->event_handler) {
 			wl->event_handler(wl, skb);
 			continue;
@@ -670,6 +690,12 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	skb_queue_head_init(&wl->async_mgmt_queue);
 	init_waitqueue_head(&wl->event_wait);
 	atomic_set(&wl->mgmt_pending, 0);
+	spin_lock_init(&wl->mgmt_tx_lock);
+	init_completion(&wl->mgmt_tx_done);
+	wl->mgmt_tx_pending = false;
+	wl->mgmt_tx_seq = 0;
+	wl->mgmt_tx_packet_seq = 0;
+	wl->mgmt_tx_status = 0;
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
@@ -792,6 +818,15 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	 * intentionally rejects cleanup after either one is cleared.
 	 */
 	mt6628_cfg80211_connect_deinit(wl);
+
+	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+	if (wl->mgmt_tx_pending) {
+		wl->mgmt_tx_status = -ESHUTDOWN;
+		wl->mgmt_tx_pending = false;
+		complete(&wl->mgmt_tx_done);
+	}
+	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+
 	wl->runtime_started = false;
 	wake_up_all(&wl->tx_wait);
 

@@ -563,12 +563,14 @@ static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 }
 
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-			 size_t frame_len)
+			 size_t frame_len, bool wait_for_status)
 {
 	struct mt6628_hif_mgmt_tx_hdr hdr = {};
 	unsigned long flags;
 	size_t packet_len, xfer_len;
 	u8 *buf;
+	u8 packet_seq = 0;
+	long timeout;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -597,6 +599,25 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	wl->tx_free[MT6628_TX_TC_MGMT]--;
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
 
+	if (wait_for_status) {
+		spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+		if (wl->mgmt_tx_pending) {
+			spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+			ret = -EBUSY;
+			goto err_resource;
+		}
+
+		packet_seq = ++wl->mgmt_tx_seq;
+		if (!packet_seq)
+			packet_seq = ++wl->mgmt_tx_seq;
+
+		reinit_completion(&wl->mgmt_tx_done);
+		wl->mgmt_tx_packet_seq = packet_seq;
+		wl->mgmt_tx_status = -ETIMEDOUT;
+		wl->mgmt_tx_pending = true;
+		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+	}
+
 	packet_len = MT6628_HIF_TX_HEADER_LEN + frame_len;
 	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
@@ -617,6 +638,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	hdr.seq_no = 0;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
+	hdr.packet_seq_no = packet_seq;
 	hdr.ack_bip_basic_rate = MT6628_HIF_TX_NEED_ACK |
 		MT6628_HIF_TX_BASIC_RATE;
 
@@ -627,8 +649,41 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);
 	sdio_release_host(wl->func);
 	kfree(buf);
-	if (ret)
+	if (ret) {
+		if (wait_for_status) {
+			spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+			if (wl->mgmt_tx_pending &&
+			    wl->mgmt_tx_packet_seq == packet_seq) {
+				wl->mgmt_tx_status = ret;
+				wl->mgmt_tx_pending = false;
+				complete(&wl->mgmt_tx_done);
+			}
+			spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+		}
 		goto err_resource;
+	}
+
+	if (wait_for_status) {
+		timeout = wait_for_completion_timeout(&wl->mgmt_tx_done,
+						      msecs_to_jiffies(1000));
+
+		spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+		if (!timeout && wl->mgmt_tx_pending &&
+		    wl->mgmt_tx_packet_seq == packet_seq) {
+			wl->mgmt_tx_status = -ETIMEDOUT;
+			wl->mgmt_tx_pending = false;
+		}
+		ret = wl->mgmt_tx_status;
+		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+
+		/*
+		 * Do not restore the TC4 resource here.  A timed-out frame
+		 * is still in the firmware TX path and its resource is
+		 * released later by WTSR0/WTSR1.
+		 */
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 

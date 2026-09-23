@@ -255,7 +255,7 @@ static int mt6628_send_auth(struct mt6628_wlan *wl)
 	mgmt->u.auth.auth_transaction = cpu_to_le16(1);
 	mgmt->u.auth.status_code = cpu_to_le16(WLAN_STATUS_SUCCESS);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -282,7 +282,7 @@ static int mt6628_send_assoc(struct mt6628_wlan *wl)
 	memcpy(mgmt->u.assoc_req.variable, wl->conn_req_ie,
 	       wl->conn_req_ie_len);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true);
 	kfree(mgmt);
 	return ret;
 }
@@ -305,7 +305,7 @@ static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
 	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
 	mgmt->u.deauth.reason_code = cpu_to_le16(reason);
 
-	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len);
+	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, false);
 	kfree(mgmt);
 	return ret;
 }

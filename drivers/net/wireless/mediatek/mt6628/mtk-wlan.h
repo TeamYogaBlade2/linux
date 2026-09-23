@@ -90,6 +90,13 @@ struct mt6628_wlan {
 	void (*event_handler)(struct mt6628_wlan *, struct sk_buff *);
 	void (*mgmt_handler)(struct mt6628_wlan *, struct sk_buff *);
 
+	spinlock_t mgmt_tx_lock;
+	struct completion mgmt_tx_done;
+	bool mgmt_tx_pending;
+	u8 mgmt_tx_seq;
+	u8 mgmt_tx_packet_seq;
+	int mgmt_tx_status;
+
 	/* Runtime command/event state, used by later control-plane commits. */
 	struct mutex cmd_mutex;
 	spinlock_t cmd_lock;
@@ -130,7 +137,7 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-			 size_t frame_len);
+			 size_t frame_len, bool wait_for_status);
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);

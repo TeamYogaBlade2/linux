@@ -134,8 +134,18 @@ struct mt6628_wifi_event_hdr {
 	u8 reserved[2];
 } __packed;
 
+struct mt6628_event_tx_done {
+	u8 packet_seq;
+	u8 status;
+	__le16 sequence_number;
+	__le32 reserved1;
+	__le32 reserved2;
+	__le32 reserved3;
+} __packed;
+
 static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
 static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
+static_assert(sizeof(struct mt6628_event_tx_done) == 16);
 
 struct mt6628_hif_rx_hdr {
 	__le16 packet_len;
