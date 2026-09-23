@@ -18,7 +18,6 @@
 #define MT6628_SCAN_MAX_CHANNELS	32
 #define MT6628_SCAN_MAX_IE_LEN		600
 #define MT6628_SCAN_DWELL_TIME_TU	20
-#define MT6628_EVENT_SCAN_DONE_LEN	4
 #define MT6628_SCAN_SSID_WILDCARD	BIT(0)
 #define MT6628_SCAN_SSID_SPECIFIC	BIT(2)
 #define MT6628_SCAN_CHANNEL_SPECIFIED	4
@@ -54,6 +53,13 @@ struct mt6628_scan_cancel_cmd {
 	u8 seq_num;
 	u8 is_ext_channel;
 	u8 reserved[2];
+} __packed;
+
+struct mt6628_event_scan_done {
+	u8 seq_num;
+	u8 sparse_channel_valid;
+	u8 sparse_channel_band;
+	u8 sparse_channel;
 } __packed;
 
 static const struct ieee80211_sta_ht_cap mt6628_ht_cap = {
@@ -601,6 +607,7 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb)
 {
 	struct mt6628_wifi_event_hdr *event;
+	const struct mt6628_event_scan_done *scan_done;
 	struct cfg80211_scan_request *request;
 	bool next_chunk = false;
 	size_t packet_len, body_len;
@@ -617,12 +624,15 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 	body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
 	if (event->eid != MT6628_EVENT_ID_SCAN_DONE)
 		goto out;
-	if (body_len != MT6628_EVENT_SCAN_DONE_LEN)
+	if (body_len != sizeof(*scan_done))
 		goto out;
+
+	scan_done = (const struct mt6628_event_scan_done *)
+		(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
 
 	mutex_lock(&wl->cfg_mutex);
 	request = wl->scan_req;
-	if (request && event->seq_num == wl->scan_seq) {
+	if (request && scan_done->seq_num == wl->scan_seq) {
 		if (wl->scan_chan_idx < request->n_channels) {
 			next_chunk = true;
 		} else {
