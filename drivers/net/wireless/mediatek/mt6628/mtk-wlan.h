@@ -39,6 +39,7 @@ struct mt6628_wlan {
 	bool driver_owned;
 
 	struct work_struct irq_work;
+	struct work_struct recovery_work;
 	struct delayed_work tx_work;
 	struct work_struct scan_work;
 	struct napi_struct napi;
@@ -50,6 +51,7 @@ struct mt6628_wlan {
 	bool runtime_initialized;
 	bool runtime_started;
 	bool irq_claimed;
+	atomic_t recovery_pending;
 	bool connected;
 	bool conn_secure;
 	u8 sta_rec_idx;
@@ -122,6 +124,9 @@ struct mt6628_wlan {
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl);
 void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl);
 int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
+int mt6628_wlan_force_firmware_reset(struct mt6628_wlan *wl);
+int mt6628_wlan_take_driver_own(struct mt6628_wlan *wl);
+int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl);
 
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const struct ieee80211_channel *channel,

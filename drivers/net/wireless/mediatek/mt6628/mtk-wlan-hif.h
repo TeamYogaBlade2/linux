@@ -53,6 +53,8 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_MCR_D2HRM2R		0x0048
 #define MT6628_MCR_WRPLR		0x0050
 
+#define MT6628_WSICR_H2D_SW_INT_SET	GENMASK(31, 16)
+
 /* WHLPCR */
 #define MT6628_FW_OWN_REQ_CLR		BIT(9)
 #define MT6628_FW_OWN_REQ_SET		BIT(8)

@@ -149,6 +149,11 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 	return -ETIMEDOUT;
 }
 
+int mt6628_wlan_take_driver_own(struct mt6628_wlan *wl)
+{
+	return mt6628_driver_own(wl);
+}
+
 static int mt6628_fw_own(struct mt6628_wlan *wl)
 {
 	u32 val;
@@ -178,6 +183,21 @@ static int mt6628_fw_own(struct mt6628_wlan *wl)
 	dev_warn(&wl->func->dev,
 		 "firmware ownership request was not accepted\n");
 	return -EBUSY;
+}
+
+int mt6628_wlan_force_firmware_reset(struct mt6628_wlan *wl)
+{
+	int ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WSICR,
+			     MT6628_WSICR_H2D_SW_INT_SET);
+	if (ret)
+		return ret;
+
+	msleep(10);
+
+	return mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			      MT6628_FW_OWN_REQ_SET);
 }
 
 static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
@@ -510,6 +530,11 @@ out_restore_seq:
 	return ret;
 }
 
+int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl)
+{
+	return mt6628_download_firmware(wl);
+}
+
 static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 				  const struct sdio_device_id *id)
 {
@@ -599,6 +624,7 @@ static void mt6628_wlan_sdio_remove(struct sdio_func *func)
 	if (!wl)
 		return;
 
+	cancel_work_sync(&wl->recovery_work);
 	mt6628_wlan_runtime_stop(wl);
 
 	if (wl->driver_owned) {

@@ -220,6 +220,57 @@ static void mt6628_runtime_schedule_rx(struct mt6628_wlan *wl)
 		napi_schedule(&wl->napi);
 }
 
+static void mt6628_runtime_recovery_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(work, struct mt6628_wlan, recovery_work);
+	bool notify_disconnect;
+	int ret;
+
+	if (!wl->runtime_started || !wl->driver_owned) {
+		atomic_set(&wl->recovery_pending, 0);
+		return;
+	}
+
+	mutex_lock(&wl->cfg_mutex);
+	notify_disconnect = wl->connected;
+	wl->fw_running = false;
+	wl->connected = false;
+	wl->conn_state = 0;
+	wl->conn_secure = false;
+	wl->conn_aid = 0;
+	if (wl->netdev)
+		netif_carrier_off(wl->netdev);
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (notify_disconnect)
+		cfg80211_disconnected(wl->netdev, WLAN_REASON_UNSPECIFIED,
+				      NULL, 0, true, GFP_KERNEL);
+
+	/*
+	 * fw_running is cleared before runtime_stop() so the connection
+	 * cleanup path does not try to send commands to the asserted
+	 * firmware.
+	 */
+	mt6628_wlan_runtime_stop(wl);
+
+	ret = mt6628_wlan_force_firmware_reset(wl);
+	if (!ret)
+		ret = mt6628_wlan_take_driver_own(wl);
+	if (!ret)
+		ret = mt6628_wlan_reload_firmware(wl);
+	if (!ret)
+		ret = mt6628_wlan_runtime_start(wl);
+
+	if (ret)
+		dev_err(&wl->func->dev,
+			"MT6628 firmware recovery failed: %d\n", ret);
+	else
+		dev_info(&wl->func->dev, "MT6628 firmware recovery complete\n");
+
+	atomic_set(&wl->recovery_pending, 0);
+}
+
 static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 							 unsigned int port, u16 packet_len)
 {
@@ -611,12 +662,15 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 
 			if (!sw_ret)
 				dev_err_ratelimited(&wl->func->dev,
-						     "firmware assert: D2HRM0=%#x D2HRM1=%#x D2HRM2=%#x\n",
-						     d2hrm0, d2hrm1, d2hrm2);
+					"firmware assert: D2HRM0=%#x D2HRM1=%#x D2HRM2=%#x\n",
+					d2hrm0, d2hrm1, d2hrm2);
 			else
 				dev_err_ratelimited(&wl->func->dev,
-						     "firmware assert: failed to read D2H mailbox: %d\n",
-						     sw_ret);
+					"firmware assert: failed to read D2H mailbox: %d\n",
+					sw_ret);
+
+			if (atomic_cmpxchg(&wl->recovery_pending, 0, 1) == 0)
+				schedule_work(&wl->recovery_work);
 		}
 
 		if (!(whisr & (MT6628_WHISR_RX0_DONE | MT6628_WHISR_RX1_DONE)))
@@ -676,6 +730,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	int ret;
 
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
+	INIT_WORK(&wl->recovery_work, mt6628_runtime_recovery_work);
 	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
@@ -700,6 +755,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
 	init_completion(&wl->cmd_done);
+	atomic_set(&wl->recovery_pending, 0);
 	wl->runtime_initialized = true;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 	wl->event_handler = mt6628_cfg80211_event_handler;
