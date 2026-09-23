@@ -871,7 +871,7 @@
 			#size-cells = <0>;
 			reg = <0x11016000 0x1000>;
 			interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_LOW>;
-			clocks = <&clk26m>, /* FIXME */
+			clocks = <&topckgen CLK_TOP_SYSPLL_D6>,
 				 <&topckgen CLK_TOP_MUX_SPI>,
 				 <&pericfg CLK_PERI1_SPI1>;
 			clock-names = "parent-clk", "sel-clk", "spi-clk";

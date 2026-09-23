@@ -313,7 +313,7 @@ static const struct mtk_pin_field_calc mt6589_pin_drv_range[] = {
 	PINS_FIELD_DRV(44, 49, DRV_CON1, 16, 0),
 
 	/* ADC */
-	PINS_FIELD_DRV(50, 53, DRV_CON1, 20, 0),
+	PINS_FIELD_DRV(50, 52, DRV_CON1, 20, 0),
 
 	/* DAC */
 	PINS_FIELD_DRV(53, 55, DRV_CON1, 24, 0),
