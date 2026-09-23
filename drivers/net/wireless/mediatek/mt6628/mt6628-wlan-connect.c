@@ -619,6 +619,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->conn_state != MT6628_CONN_DISCONNECTED) {
 		mutex_unlock(&wl->cfg_mutex);
+		kfree(conn_key);
 		return -EBUSY;
 	}
 	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
@@ -634,6 +635,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		mutex_lock(&wl->cfg_mutex);
 		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
 			mutex_unlock(&wl->cfg_mutex);
+			kfree(conn_key);
 			return -EIO;
 		}
 		mutex_unlock(&wl->cfg_mutex);
@@ -648,8 +650,10 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 					 sme->ssid, sme->ssid_len,
 					 IEEE80211_BSS_TYPE_ESS,
 					 privacy);
-	if (!wl->conn_bss)
+	if (!wl->conn_bss) {
+		kfree(conn_key);
 		return -ENOENT;
+	}
 
 	if (!requested_bssid)
 		requested_bssid = wl->conn_bss->bssid;
