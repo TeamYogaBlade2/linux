@@ -551,7 +551,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		u16 rx0_len, rx1_len;
 
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
-		if (ret || !whisr)
+		if (ret)
 			break;
 
 		/*
@@ -563,6 +563,8 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		    !mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1) &&
 		    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
 			mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
+		if (!whisr)
+			break;
 
 		if (whisr & MT6628_WHISR_ABNORMAL) {
 			u32 wasr;
