@@ -101,6 +101,7 @@ struct mt6628_wlan {
 	bool mgmt_tx_pending;
 	u8 mgmt_tx_seq;
 	u8 mgmt_tx_packet_seq;
+	u64 mgmt_tx_cookie;
 	int mgmt_tx_status;
 
 	/* Runtime command/event state, used by later control-plane commits. */

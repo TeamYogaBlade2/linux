@@ -643,8 +643,9 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
 	hdr.packet_seq_no = packet_seq;
-	hdr.ack_bip_basic_rate = MT6628_HIF_TX_NEED_ACK |
-		MT6628_HIF_TX_BASIC_RATE;
+	hdr.ack_bip_basic_rate = MT6628_HIF_TX_BASIC_RATE;
+	if (wait_for_status)
+		hdr.ack_bip_basic_rate |= MT6628_HIF_TX_NEED_ACK;
 
 	memcpy(buf, &hdr, sizeof(hdr));
 	memcpy(buf + sizeof(hdr), frame, frame_len);

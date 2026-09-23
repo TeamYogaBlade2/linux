@@ -694,6 +694,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->mgmt_tx_pending = false;
 	wl->mgmt_tx_seq = 0;
 	wl->mgmt_tx_packet_seq = 0;
+	wl->mgmt_tx_cookie = 0;
 	wl->mgmt_tx_status = 0;
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);

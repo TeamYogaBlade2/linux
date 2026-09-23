@@ -453,6 +453,35 @@ static int mt6628_cfg80211_set_power_mgmt(struct wiphy *wiphy,
 	return mt6628_wlan_set_power_mgmt(wl, enabled);
 }
 
+static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
+				   struct wireless_dev *wdev,
+				   struct cfg80211_mgmt_tx_params *params,
+				   u64 *cookie)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+	u64 tx_cookie;
+	int ret;
+
+	if (!params->buf || params->len < sizeof(struct ieee80211_hdr))
+		return -EINVAL;
+
+	tx_cookie = ++wl->mgmt_tx_cookie;
+	if (!tx_cookie)
+		tx_cookie = ++wl->mgmt_tx_cookie;
+	*cookie = tx_cookie;
+
+	ret = mt6628_wlan_mgmt_tx(wl, params->buf, params->len,
+				  !params->dont_wait_for_ack);
+	if (ret)
+		return ret;
+
+	if (!params->dont_wait_for_ack)
+		cfg80211_mgmt_tx_status(wdev, tx_cookie, params->buf,
+					params->len, true, GFP_KERNEL);
+
+	return 0;
+}
+
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
@@ -461,6 +490,7 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.add_key = mt6628_cfg80211_add_key,
 	.del_key = mt6628_cfg80211_del_key,
 	.set_power_mgmt = mt6628_cfg80211_set_power_mgmt,
+	.mgmt_tx = mt6628_cfg80211_mgmt_tx,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)
