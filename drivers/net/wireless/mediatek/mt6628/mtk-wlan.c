@@ -151,7 +151,6 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 
 static int mt6628_fw_own(struct mt6628_wlan *wl)
 {
-	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 	u32 val;
 	int ret;
 
@@ -160,24 +159,25 @@ static int mt6628_fw_own(struct mt6628_wlan *wl)
 	if (ret)
 		return ret;
 
-	while (time_before(jiffies, timeout)) {
-		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
-		if (ret)
-			return ret;
+	ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
+	if (ret)
+		return ret;
 
-		/*
-		 * The request bit is also the driver-own indication.  A
-		 * successful FW ownership transition clears it.
-		 */
-		if (!(val & MT6628_FW_OWN_REQ_SET))
-			return 0;
+	/*
+	 * The downstream driver treats a still-set FW-own request as a
+	 * failed ownership transition and rolls it back immediately.
+	 */
+	if (!(val & MT6628_FW_OWN_REQ_SET))
+		return 0;
 
-		usleep_range(500, 1000);
-	}
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret)
+		return ret;
 
-	dev_err(&wl->func->dev,
-		"timed out waiting for firmware ownership\n");
-	return -ETIMEDOUT;
+	dev_warn(&wl->func->dev,
+		 "firmware ownership request was not accepted\n");
+	return -EBUSY;
 }
 
 static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
