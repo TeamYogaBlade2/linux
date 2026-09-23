@@ -21,6 +21,7 @@
 #define MT6628_EVENT_SCAN_DONE_LEN	4
 #define MT6628_SCAN_SSID_WILDCARD	BIT(0)
 #define MT6628_SCAN_SSID_SPECIFIC	BIT(2)
+#define MT6628_SCAN_CHANNEL_SPECIFIED	4
 #define MT6628_SCAN_TYPE_PASSIVE	0
 #define MT6628_SCAN_TYPE_ACTIVE		1
 
@@ -224,6 +225,7 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	unsigned int n_channels;
 	unsigned int max_channels;
 	unsigned int ssid_type;
+	size_t cmd_len;
 	bool passive;
 	u8 seq;
 	int ret;
@@ -274,7 +276,7 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	cmd->probe_delay_time = cpu_to_le16(0);
 	cmd->channel_dwell_time = cpu_to_le16(
 		mt6628_scan_dwell_time_tu(request));
-	cmd->channel_type = 0;
+	cmd->channel_type = MT6628_SCAN_CHANNEL_SPECIFIED;
 	cmd->channel_list_num = n_channels;
 	cmd->ie_len = cpu_to_le16(request->ie_len);
 
@@ -285,6 +287,8 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	}
 	if (request->ie_len)
 		memcpy(cmd->ie, request->ie, request->ie_len);
+
+	cmd_len = offsetof(struct mt6628_scan_cmd, ie) + request->ie_len;
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->scan_req != request) {
@@ -301,7 +305,7 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 
 	cmd->seq_num = seq;
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SCAN_REQ_V2, 1,
-					   cmd, sizeof(*cmd), NULL, 0, NULL, 0, 0);
+					   cmd, cmd_len, NULL, 0, NULL, 0, 0);
 
 out_free:
 	kfree(cmd);
