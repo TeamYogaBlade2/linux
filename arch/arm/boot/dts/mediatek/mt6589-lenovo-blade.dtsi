@@ -143,7 +143,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&ts_pins>;
 
-		interrupts = <5 IRQ_TYPE_EDGE_FALLING>;
+		interrupts = <5 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-parent = <&pio>;
 
 		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
@@ -151,7 +151,7 @@
 		vdd-supply = <&mt6320_ldo_vgp4>;
 		vio-supply = <&mt6320_ldo_vgp6>;
 
-		syna,startup-delay-ms = <100>;
+		syna,startup-delay-ms = <10>;
 		syna,reset-delay-ms = <50>;
 
 		rmi4-f01@1 {
