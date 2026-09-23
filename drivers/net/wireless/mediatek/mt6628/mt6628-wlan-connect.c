@@ -593,7 +593,7 @@ static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
 				     wl->conn_req_ie, wl->conn_req_ie_len, NULL, 0,
 				     status_code, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
-		wl->conn_bss = NULL;
+		mt6628_conn_put_bss(wl);
 		mt6628_conn_fw_cleanup(wl);
 		mt6628_conn_set_disconnected(wl);
 		mt6628_conn_free_ies(wl);
@@ -642,7 +642,7 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 							     u.assoc_resp.variable),
 				     le16_to_cpu(mgmt->u.assoc_resp.status_code),
 				     GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
-		wl->conn_bss = NULL;
+		mt6628_conn_put_bss(wl);
 		mt6628_conn_fw_cleanup(wl);
 		mt6628_conn_set_disconnected(wl);
 		mt6628_conn_free_ies(wl);
@@ -678,7 +678,7 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 			     wl->conn_resp_ie, wl->conn_resp_ie_len,
 			     WLAN_STATUS_SUCCESS, GFP_KERNEL,
 			     NL80211_TIMEOUT_UNSPECIFIED);
-	wl->conn_bss = NULL;
+	mt6628_conn_put_bss(wl);
 	mt6628_wlan_release_channel(wl);
 	mt6628_conn_free_ies(wl);
 	return;
@@ -769,7 +769,7 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 				     wl->conn_req_ie, wl->conn_req_ie_len, NULL, 0,
 				     WLAN_STATUS_UNSPECIFIED_FAILURE, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
-			wl->conn_bss = NULL;
+			mt6628_conn_put_bss(wl);
 			mt6628_conn_fw_cleanup(wl);
 			mt6628_conn_set_disconnected(wl);
 			mt6628_conn_free_ies(wl);
