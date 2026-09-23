@@ -265,12 +265,32 @@ static int prismrv_runtime_resume(struct device *dev)
 	mutex_lock(&pv->init_mutex);
 
 	if (!pv->hw_ready) {
-		if (!pv->ukernel_cpu)
-			prismrv_fw_load(pv);
-		if (pv->ukernel_cpu)
-			ret = prismrv_hw_init(pv);
-		else
-			ret = 0;   /* firmware still unavailable: idle */
+		if (!pv->ukernel_cpu) {
+			ret = prismrv_fw_load(pv);
+			if (ret) {
+				/*
+				 * Firmware unavailable: fail the PM resume.
+				 * The previous behaviour (ret=0, idle) left
+				 * the GPU clocks on and hw_ready=false, mixing
+				 * PM success with device unavailability.
+				 *
+				 * Returning an error here causes the PM core
+				 * to mark the device as suspended again, so
+				 * the next submit will trigger another resume
+				 * attempt (which may succeed if the filesystem
+				 * is now available).
+				 */
+				mutex_unlock(&pv->init_mutex);
+				up_write(&pv->submit_rwsem);
+				clk_bulk_disable_unprepare(pv->nr_clocks,
+							   pv->clocks);
+				dev_err(pv->drm.dev,
+					"resume: firmware load failed (%d)\n",
+					ret);
+				return ret;
+			}
+		}
+		ret = prismrv_hw_init(pv);
 	}
 
 	mutex_unlock(&pv->init_mutex);
