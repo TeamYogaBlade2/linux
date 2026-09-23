@@ -39,6 +39,7 @@
 #define MT6628_BASIC_RATE_SET_11A	0x0540
 #define MT6628_BASIC_PHY_TYPE_OFDM	3
 #define MT6628_HT_CAP_SGI_20		BIT(5)
+#define MT6628_HT_CAP_SUP_WIDTH_20_40	BIT(1)
 #define MT6628_HT_MCS_SET		0xff
 #define MT6628_HT_AMPDU_PARAM		3
 
@@ -328,7 +329,8 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	cmd.mcs_set = MT6628_HT_MCS_SET;
 	cmd.sup_mcs32 = 0;
 	cmd.ampdu_param = MT6628_HT_AMPDU_PARAM;
-	cmd.ht_cap_info = cpu_to_le16(MT6628_HT_CAP_SGI_20);
+	cmd.ht_cap_info = cpu_to_le16(MT6628_HT_CAP_SGI_20 |
+				       MT6628_HT_CAP_SUP_WIDTH_20_40);
 	cmd.need_resp = 0;
 
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_UPDATE_STA_RECORD, 1,
@@ -359,7 +361,7 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 
 	cmd.rlm.net_type_index = 0;
 	cmd.rlm.primary_channel = channel;
-	cmd.rlm.rf_sco = 0;
+	cmd.rlm.rf_sco = wl->conn_rf_sco;
 	cmd.rlm.use_short_preamble = 1;
 	cmd.rlm.use_short_slot_time = 1;
 	cmd.rlm.check_id = 0x72;

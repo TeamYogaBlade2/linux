@@ -235,13 +235,41 @@ static bool mt6628_assoc_has_ie(const u8 *ies, size_t len, u8 eid)
 }
 
 static const struct ieee80211_ht_cap mt6628_assoc_ht_cap = {
-	.cap_info = cpu_to_le16(IEEE80211_HT_CAP_SGI_20),
+	.cap_info = cpu_to_le16(IEEE80211_HT_CAP_SGI_20 |
+				IEEE80211_HT_CAP_SUP_WIDTH_20_40),
 	.ampdu_params_info = IEEE80211_HT_MAX_AMPDU_64K,
 	.mcs = {
 		.rx_mask = { 0xff },
 		.tx_params = IEEE80211_HT_MCS_TX_DEFINED,
 	},
 };
+
+static u8 mt6628_assoc_ht_sco(const u8 *ies, size_t len)
+{
+	while (len >= 2) {
+		size_t ie_len = ies[1];
+
+		if (ie_len + 2 > len)
+			return 0;
+
+		if (ies[0] == WLAN_EID_HT_OPERATION) {
+			u8 sco;
+
+			if (ie_len < 2)
+				return 0;
+
+			sco = ies[3] & 0x3;
+			if (sco == 1 || sco == 3)
+				return sco;
+			return 0;
+		}
+
+		ies += ie_len + 2;
+		len -= ie_len + 2;
+	}
+
+	return 0;
+}
 
 static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
 				   const struct cfg80211_connect_params *sme)
@@ -876,6 +904,7 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 		goto timeout;
 	wl->conn_resp_ie_len = resp_ie_len;
 	wl->conn_aid = le16_to_cpu(mgmt->u.assoc_resp.aid) & 0x3fff;
+	wl->conn_rf_sco = mt6628_assoc_ht_sco(resp_ie, resp_ie_len);
 
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_3,
 					    wl->conn_aid, wl->conn_bssid);

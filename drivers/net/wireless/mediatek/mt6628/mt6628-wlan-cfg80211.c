@@ -64,7 +64,8 @@ struct mt6628_event_scan_done {
 
 static const struct ieee80211_sta_ht_cap mt6628_ht_cap = {
 	.ht_supported = true,
-	.cap = IEEE80211_HT_CAP_SGI_20,
+	.cap = IEEE80211_HT_CAP_SGI_20 |
+	       IEEE80211_HT_CAP_SUP_WIDTH_20_40,
 	.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K,
 	.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE,
 	.mcs = {
