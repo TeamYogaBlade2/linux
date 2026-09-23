@@ -46,6 +46,7 @@
 #define MT6628_AUTH_MODE_WPA2_PSK	7
 #define MT6628_ENCRYPTION_DISABLED	1
 #define MT6628_ENCRYPTION3_KEY_ABSENT	7
+#define MT6628_CIPHER_SUITE_TKIP	2
 #define MT6628_CIPHER_SUITE_CCMP	4
 #define MT6628_PS_PROFILE_CAM		0
 #define MT6628_PS_PROFILE_FAST_PSP	2
@@ -442,10 +443,8 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 		return -ENOTCONN;
 	if (key_index > MT6628_KEY_INDEX_MAX)
 		return -EINVAL;
-	if (!params || params->cipher != WLAN_CIPHER_SUITE_CCMP)
+	if (!params)
 		return -EOPNOTSUPP;
-	if (params->key_len != 16)
-		return -EINVAL;
 	if (params->seq_len < 0 || params->seq_len > MT6628_KEY_RSC_LEN)
 		return -EINVAL;
 	if (!params->key)
@@ -470,7 +469,20 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	cmd.is_authenticator = 0;
 	ether_addr_copy(cmd.peer_addr, peer);
 	cmd.net_type_index = 0;
-	cmd.algorithm_id = MT6628_CIPHER_SUITE_CCMP;
+	switch (params->cipher) {
+	case WLAN_CIPHER_SUITE_CCMP:
+		if (params->key_len != 16)
+			return -EINVAL;
+		cmd.algorithm_id = MT6628_CIPHER_SUITE_CCMP;
+		break;
+	case WLAN_CIPHER_SUITE_TKIP:
+		if (params->key_len != 32)
+			return -EINVAL;
+		cmd.algorithm_id = MT6628_CIPHER_SUITE_TKIP;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
 	cmd.key_id = key_index;
 	cmd.key_len = params->key_len;
 	memcpy(cmd.key_material, params->key, params->key_len);

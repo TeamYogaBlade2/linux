@@ -168,6 +168,7 @@ static struct ieee80211_supported_band mt6628_5ghz_band = {
 };
 
 static const u32 mt6628_cipher_suites[] = {
+	WLAN_CIPHER_SUITE_TKIP,
 	WLAN_CIPHER_SUITE_CCMP,
 };
 

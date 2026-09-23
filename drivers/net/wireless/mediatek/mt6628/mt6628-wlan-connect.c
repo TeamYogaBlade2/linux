@@ -110,10 +110,12 @@ static bool mt6628_connect_is_wpa2_psk(
 
 	if (crypto->wpa_versions != NL80211_WPA_VERSION_2)
 		return false;
-	if (crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP)
+	if (crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP &&
+	    crypto->cipher_group != WLAN_CIPHER_SUITE_TKIP)
 		return false;
 	if (crypto->n_ciphers_pairwise != 1 ||
-	    crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_CCMP)
+	    (crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_CCMP &&
+	     crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_TKIP))
 		return false;
 	if (crypto->n_akm_suites != 1 ||
 	    crypto->akm_suites[0] != WLAN_AKM_SUITE_PSK)
