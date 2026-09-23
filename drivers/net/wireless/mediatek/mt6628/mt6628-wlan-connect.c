@@ -103,6 +103,34 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 		netif_carrier_off(wl->netdev);
 }
 
+void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
+{
+	bool connected;
+
+	mutex_lock(&wl->cfg_mutex);
+	connected = wl->conn_state == MT6628_CONN_CONNECTED;
+	if (connected)
+		mt6628_conn_set_disconnected(wl);
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!connected)
+		return;
+
+	/*
+	 * The firmware has already declared beacon loss.  Do not transmit
+	 * a deauthentication frame here: the firmware event is precisely
+	 * the indication that the AP is no longer reachable.
+	 */
+	mt6628_conn_fw_cleanup(wl);
+	cfg80211_disconnected(wl->netdev, WLAN_REASON_UNSPECIFIED,
+			      NULL, 0, false, GFP_KERNEL);
+
+	mutex_lock(&wl->cfg_mutex);
+	mt6628_conn_put_bss(wl);
+	mt6628_conn_free_ies(wl);
+	mutex_unlock(&wl->cfg_mutex);
+}
+
 static bool mt6628_connect_is_wpa2_psk(
 	const struct cfg80211_connect_params *sme)
 {

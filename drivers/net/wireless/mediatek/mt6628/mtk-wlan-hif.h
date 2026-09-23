@@ -101,6 +101,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_EVENT_ID_SCAN_DONE	0x15
 #define MT6628_EVENT_ID_TX_DONE	0x17
 #define MT6628_EVENT_ID_CH_PRIVILEGE	0x18
+#define MT6628_EVENT_ID_BSS_BEACON_TIMEOUT	0x1b
 
 #define MT6628_CMD_ID_SCAN_REQ_V2	0x04
 #define MT6628_CMD_ID_POWER_SAVE_MODE	0x06
@@ -143,9 +144,15 @@ struct mt6628_event_tx_done {
 	__le32 reserved3;
 } __packed;
 
+struct mt6628_event_bss_beacon_timeout {
+	u8 net_type_index;
+	u8 reserved[3];
+} __packed;
+
 static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
 static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
 static_assert(sizeof(struct mt6628_event_tx_done) == 16);
+static_assert(sizeof(struct mt6628_event_bss_beacon_timeout) == 4);
 
 struct mt6628_hif_rx_hdr {
 	__le16 packet_len;

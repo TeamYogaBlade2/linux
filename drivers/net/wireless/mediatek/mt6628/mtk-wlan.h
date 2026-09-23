@@ -151,6 +151,7 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 					     struct sk_buff *skb);
 bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb);
+void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl);
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 					  struct sk_buff *skb);
 void mt6628_cfg80211_mgmt_rx_done(struct mt6628_wlan *wl);

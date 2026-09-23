@@ -584,6 +584,7 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 {
 	struct mt6628_wifi_event_hdr *event;
 	const struct mt6628_event_scan_done *scan_done;
+	const struct mt6628_event_bss_beacon_timeout *beacon_timeout;
 	struct cfg80211_scan_request *request;
 	bool next_chunk = false;
 	size_t packet_len, body_len;
@@ -598,6 +599,20 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 		goto drop;
 
 	body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
+
+	if (event->eid == MT6628_EVENT_ID_BSS_BEACON_TIMEOUT) {
+		if (body_len != sizeof(*beacon_timeout))
+			goto drop;
+
+		beacon_timeout = (const struct mt6628_event_bss_beacon_timeout *)
+			(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
+		if (beacon_timeout->net_type_index == 0)
+			mt6628_cfg80211_fw_beacon_timeout(wl);
+
+		kfree_skb(skb);
+		return true;
+	}
+
 	if (event->eid != MT6628_EVENT_ID_SCAN_DONE)
 		return false;
 	if (body_len != sizeof(*scan_done))
