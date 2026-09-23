@@ -202,8 +202,9 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	unsigned int i;
 	unsigned int start;
 	unsigned int n_channels;
+	unsigned int max_channels;
 	unsigned int ssid_type;
-	bool passive = false;
+	bool passive;
 	u8 seq;
 	int ret;
 
@@ -217,8 +218,20 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 		mutex_unlock(&wl->cfg_mutex);
 		return -EINVAL;
 	}
-	n_channels = min_t(unsigned int, request->n_channels - start,
-					MT6628_SCAN_MAX_CHANNELS);
+	max_channels = min_t(unsigned int, request->n_channels - start,
+					     MT6628_SCAN_MAX_CHANNELS);
+	passive = !!(request->channels[start]->flags & IEEE80211_CHAN_NO_IR);
+	n_channels = 0;
+	while (n_channels < max_channels) {
+		bool channel_passive =
+			(request->channels[start + n_channels]->flags &
+			 IEEE80211_CHAN_NO_IR);
+
+		if (n_channels && channel_passive != passive)
+			break;
+
+		n_channels++;
+	}
 	mutex_unlock(&wl->cfg_mutex);
 
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
@@ -230,8 +243,6 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 					    &cmd->channels[i]);
 		if (ret)
 			goto out_free;
-		if (request->channels[start + i]->flags & IEEE80211_CHAN_NO_IR)
-			passive = true;
 	}
 
 	ssid_type = request->n_ssids ? MT6628_SCAN_SSID_SPECIFIC :
