@@ -511,6 +511,28 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
 	return dbm * 100;
 }
 
+void mt6628_cfg80211_mgmt_rx_done(struct mt6628_wlan *wl)
+{
+	struct cfg80211_scan_request *request = NULL;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->scan_done_pending && wl->scan_req &&
+	    atomic_read(&wl->mgmt_pending) == 0) {
+		request = wl->scan_req;
+		wl->scan_req = NULL;
+		wl->scan_done_pending = false;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (request) {
+		struct cfg80211_scan_info info = {
+			.aborted = false,
+		};
+
+		cfg80211_scan_done(request, &info);
+	}
+}
+
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 					  struct sk_buff *skb)
 {
@@ -568,24 +590,6 @@ void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 		cfg80211_put_bss(wl->wiphy, bss);
 
 out:
-	mutex_lock(&wl->cfg_mutex);
-	if (wl->scan_done_pending && skb_queue_empty(&wl->mgmt_queue)) {
-		request = wl->scan_req;
-		wl->scan_req = NULL;
-		wl->scan_done_pending = false;
-	} else {
-		request = NULL;
-	}
-	mutex_unlock(&wl->cfg_mutex);
-
-	if (request) {
-		struct cfg80211_scan_info info = {
-			.aborted = false,
-		};
-
-		cfg80211_scan_done(request, &info);
-	}
-
 	kfree_skb(skb);
 }
 
@@ -594,9 +598,6 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 {
 	struct mt6628_wifi_event_hdr *event;
 	struct cfg80211_scan_request *request;
-	struct cfg80211_scan_info info = {
-		.aborted = false,
-	};
 	bool next_chunk = false;
 	size_t packet_len, body_len;
 
@@ -622,12 +623,7 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 			next_chunk = true;
 		} else {
 			wl->scan_done_pending = true;
-			if (skb_queue_empty(&wl->mgmt_queue)) {
-				wl->scan_req = NULL;
-				wl->scan_done_pending = false;
-			} else {
-				request = NULL;
-			}
+			request = NULL;
 		}
 	} else {
 		request = NULL;
@@ -639,8 +635,7 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 		goto out;
 	}
 
-	if (request)
-		cfg80211_scan_done(request, &info);
+	mt6628_cfg80211_mgmt_rx_done(wl);
 
 out:
 	kfree_skb(skb);

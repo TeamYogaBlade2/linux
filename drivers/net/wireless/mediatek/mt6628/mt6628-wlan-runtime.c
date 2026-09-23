@@ -158,13 +158,14 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
 	while ((skb = skb_dequeue(&wl->mgmt_queue))) {
 		if (wl->mgmt_handler) {
 			wl->mgmt_handler(wl, skb);
-			continue;
-		}
-		if (skb_queue_len(&wl->async_mgmt_queue) >= 256) {
+		} else if (skb_queue_len(&wl->async_mgmt_queue) >= 256) {
 			kfree_skb(skb);
-			continue;
+		} else {
+			skb_queue_tail(&wl->async_mgmt_queue, skb);
 		}
-		skb_queue_tail(&wl->async_mgmt_queue, skb);
+
+		if (atomic_dec_and_test(&wl->mgmt_pending))
+			mt6628_cfg80211_mgmt_rx_done(wl);
 	}
 }
 
@@ -297,6 +298,7 @@ case MT6628_HIF_RX_PKT_TYPE_EVENT:
 			goto out_free;
 		}
 		memcpy(skb_put(skb, packet_len), buf, packet_len);
+		atomic_inc(&wl->mgmt_pending);
 		skb_queue_tail(&wl->mgmt_queue, skb);
 		ret = 0;
 		break;
@@ -666,6 +668,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	skb_queue_head_init(&wl->async_event_queue);
 	skb_queue_head_init(&wl->async_mgmt_queue);
 	init_waitqueue_head(&wl->event_wait);
+	atomic_set(&wl->mgmt_pending, 0);
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);

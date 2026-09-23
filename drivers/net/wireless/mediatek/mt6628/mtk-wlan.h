@@ -8,6 +8,7 @@
 #ifndef __MTK6628_WLAN_H
 #define __MTK6628_WLAN_H
 
+#include <linux/atomic.h>
 #include <linux/completion.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/mutex.h>
@@ -84,6 +85,7 @@ struct mt6628_wlan {
 	struct sk_buff_head mgmt_queue;
 	struct sk_buff_head async_event_queue;
 	struct sk_buff_head async_mgmt_queue;
+	atomic_t mgmt_pending;
 	wait_queue_head_t event_wait;
 	void (*event_handler)(struct mt6628_wlan *, struct sk_buff *);
 	void (*mgmt_handler)(struct mt6628_wlan *, struct sk_buff *);
@@ -144,6 +146,7 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb);
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 					  struct sk_buff *skb);
+void mt6628_cfg80211_mgmt_rx_done(struct mt6628_wlan *wl);
 void mt6628_cfg80211_abort_scan(struct mt6628_wlan *wl);
 
 int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
