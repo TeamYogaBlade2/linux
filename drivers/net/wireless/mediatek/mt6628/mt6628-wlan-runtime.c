@@ -206,11 +206,12 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 	struct mt6628_hif_rx_hdr *rx_hdr;
 	struct sk_buff *skb;
 	size_t read_len, xfer_len;
-	u8 *buf;
-	u16 packet_type;
-	unsigned int payload_len;
-	unsigned int header_offset;
-	int ret;
+u8 *buf;
+u16 packet_type;
+unsigned int payload_len;
+unsigned int event_len;
+unsigned int header_offset;
+int ret;
 
 	if (packet_len < 8 || packet_len > MT6628_RX_MAX_PACKET)
 		return -EMSGSIZE;
@@ -256,23 +257,30 @@ static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
 		       payload_len);
 		skb_queue_tail(&wl->rx_queue, skb);
 		ret = 0;
-		break;
+	break;
 
-	case MT6628_HIF_RX_PKT_TYPE_EVENT:
-		/* Event packets use the downstream 8-byte WIFI_EVENT_T overlay. */
-		if (skb_queue_len(&wl->event_queue) >=
-		    MT6628_RUNTIME_QUEUE_LIMIT)
-			goto drop_packet;
+case MT6628_HIF_RX_PKT_TYPE_EVENT:
+	if (packet_len < MT6628_HIF_RX_HEADER_LEN + header_offset +
+	    MT6628_WIFI_EVENT_HEADER_LEN)
+		goto bad_packet;
+	event_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
+		header_offset;
+	/* Event packets use the downstream 8-byte WIFI_EVENT_T overlay. */
+	if (skb_queue_len(&wl->event_queue) >=
+	    MT6628_RUNTIME_QUEUE_LIMIT)
+		goto drop_packet;
 
-		skb = alloc_skb(packet_len, GFP_KERNEL);
-		if (!skb) {
-			ret = -ENOMEM;
-			goto out_free;
-		}
-		memcpy(skb_put(skb, packet_len), buf, packet_len);
-		skb_queue_tail(&wl->event_queue, skb);
-		wake_up_all(&wl->event_wait);
-		ret = 0;
+	skb = alloc_skb(event_len, GFP_KERNEL);
+	if (!skb) {
+		ret = -ENOMEM;
+		goto out_free;
+	}
+	memcpy(skb_put(skb, event_len),
+	       buf + MT6628_HIF_RX_HEADER_LEN + header_offset,
+	       event_len);
+	skb_queue_tail(&wl->event_queue, skb);
+	wake_up_all(&wl->event_wait);
+	ret = 0;
 		break;
 
 	case MT6628_HIF_RX_PKT_TYPE_MANAGEMENT:
