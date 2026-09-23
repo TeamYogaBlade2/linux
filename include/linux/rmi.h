@@ -208,6 +208,9 @@ struct rmi_device_platform_data_spi {
  * @reset_delay_ms - after issuing a reset command to the touch sensor, the
  * driver waits a few milliseconds to give the firmware a chance to
  * re-initialize.  You can override the default wait period here.
+ * @initial_reset_control - optional F01 Control 0 value written before the
+ * reset command.
+ * @initial_reset_delay_ms - delay after the initial reset command.
  * @irq: irq associated with the attn gpio line, or negative
  */
 struct rmi_device_platform_data {
@@ -220,6 +223,8 @@ struct rmi_device_platform_data {
 	struct rmi_2d_sensor_platform_data sensor_pdata;
 	struct rmi_f01_power_management power_management;
 	struct rmi_gpio_data gpio_data;
+	u32 initial_reset_control;
+	u32 initial_reset_delay_ms;
 };
 
 /**

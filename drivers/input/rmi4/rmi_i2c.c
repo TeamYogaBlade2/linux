@@ -30,6 +30,7 @@
  * @reset_gpio: Reference to the reset GPIO
  * @startup_delay: Milliseconds to pause after powering up the regulators
  * @reset_delay: Milliseconds to pause after resetting the device
+ * @reset_after_power_on: Pulse reset only after the regulators are enabled
  */
 struct rmi_i2c_xport {
 	struct rmi_transport_dev xport;
@@ -45,6 +46,7 @@ struct rmi_i2c_xport {
 	struct gpio_desc *reset_gpio;
 	u32 startup_delay;
 	u32 reset_delay;
+	bool reset_after_power_on;
 };
 
 #define RMI_PAGE_SELECT_REGISTER 0xff
@@ -232,8 +234,13 @@ static int rmi_i2c_probe(struct i2c_client *client)
 		return -ENODEV;
 	}
 
+	rmi_i2c->reset_after_power_on = client->dev.of_node &&
+		of_property_read_bool(client->dev.of_node,
+				      "syna,reset-after-power-on");
+
 	rmi_i2c->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
-						      GPIOD_OUT_HIGH);
+						      rmi_i2c->reset_after_power_on ?
+						      GPIOD_OUT_LOW : GPIOD_OUT_HIGH);
 	if (IS_ERR(rmi_i2c->reset_gpio)) {
 		error = PTR_ERR(rmi_i2c->reset_gpio);
 		dev_err(&client->dev, "failed to get reset GPIO: %d\n", error);
