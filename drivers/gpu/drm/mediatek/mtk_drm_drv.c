@@ -75,6 +75,7 @@ static const unsigned int mt2701_mtk_ddp_ext[] = {
 static const unsigned int mt6589_mtk_ddp_main[] = {
 	DDP_COMPONENT_OVL0,
 	DDP_COMPONENT_COLOR0,
+	DDP_COMPONENT_TDSHP,
 	DDP_COMPONENT_BLS,
 	DDP_COMPONENT_RDMA0,
 	DDP_COMPONENT_DSI0,

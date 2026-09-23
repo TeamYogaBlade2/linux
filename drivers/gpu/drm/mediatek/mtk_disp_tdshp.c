@@ -121,7 +121,9 @@ void mtk_tdshp_start(struct device *dev)
 
 void mtk_tdshp_stop(struct device *dev)
 {
-	/* The MT6589 TDSHP has no stop bit; EN is cleared instead. */
+	struct mtk_disp_tdshp *tdshp = dev_get_drvdata(dev);
+
+	writel(0, tdshp->regs + DISP_REG_TDSHP_EN);
 }
 
 static int mtk_tdshp_bind(struct device *dev, struct device *master, void *data)
