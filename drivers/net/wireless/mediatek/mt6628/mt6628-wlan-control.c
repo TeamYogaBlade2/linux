@@ -29,13 +29,18 @@
 #define MT6628_STA_TYPE_LEGACY_AP	0x41
 
 #define MT6628_PHY_TYPE_SET_11BG	0x03
+#define MT6628_PHY_TYPE_SET_11BGN	0x0b
 #define MT6628_RATE_SET_11BG		0x3fcf
 #define MT6628_BASIC_RATE_SET_11BG	0x000f
 #define MT6628_BASIC_PHY_TYPE_ERP	1
 #define MT6628_PHY_TYPE_SET_11A		0x08
+#define MT6628_PHY_TYPE_SET_11AN	0x0c
 #define MT6628_RATE_SET_11A		0x3fc0
 #define MT6628_BASIC_RATE_SET_11A	0x0540
 #define MT6628_BASIC_PHY_TYPE_OFDM	3
+#define MT6628_HT_CAP_SGI_20		BIT(5)
+#define MT6628_HT_MCS_SET		0xff
+#define MT6628_HT_AMPDU_PARAM		3
 
 #define MT6628_AUTH_MODE_OPEN		0
 #define MT6628_AUTH_MODE_WPA2_PSK	7
@@ -298,14 +303,14 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 
 	switch (wl->conn_band) {
 	case NL80211_BAND_2GHZ:
-		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11BG;
+		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11BGN;
 		cmd.desired_non_ht_rate_set =
 			cpu_to_le16(MT6628_RATE_SET_11BG);
 		cmd.bss_basic_rate_set =
 			cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
 		break;
 	case NL80211_BAND_5GHZ:
-		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11A;
+		cmd.desired_phy_type_set = MT6628_PHY_TYPE_SET_11AN;
 		cmd.desired_non_ht_rate_set =
 			cpu_to_le16(MT6628_RATE_SET_11A);
 		cmd.bss_basic_rate_set =
@@ -316,6 +321,10 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	}
 
 	cmd.sta_state = state;
+	cmd.mcs_set = MT6628_HT_MCS_SET;
+	cmd.sup_mcs32 = 0;
+	cmd.ampdu_param = MT6628_HT_AMPDU_PARAM;
+	cmd.ht_cap_info = cpu_to_le16(MT6628_HT_CAP_SGI_20);
 	cmd.need_resp = 0;
 
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_UPDATE_STA_RECORD, 1,
@@ -362,7 +371,7 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 		cmd.bss_basic_rate_set =
 			cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
 		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_ERP;
-		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BG;
+		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BGN;
 		cmd.rlm.rf_band = MT6628_BAND_2GHZ;
 		break;
 	case NL80211_BAND_5GHZ:
@@ -373,7 +382,7 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 		cmd.bss_basic_rate_set =
 			cpu_to_le16(MT6628_BASIC_RATE_SET_11A);
 		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_OFDM;
-		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11A;
+		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11AN;
 		cmd.rlm.rf_band = MT6628_BAND_5GHZ;
 		break;
 	default:

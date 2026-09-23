@@ -55,6 +55,17 @@ struct mt6628_scan_cancel_cmd {
 	u8 reserved[2];
 } __packed;
 
+static const struct ieee80211_sta_ht_cap mt6628_ht_cap = {
+	.ht_supported = true,
+	.cap = IEEE80211_HT_CAP_SGI_20,
+	.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K,
+	.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE,
+	.mcs = {
+		.rx_mask = { 0xff },
+		.tx_params = IEEE80211_HT_MCS_TX_DEFINED,
+	},
+};
+
 static struct ieee80211_rate mt6628_2ghz_rates[] = {
 	{ .bitrate = 10, .hw_value = 0, .flags = IEEE80211_RATE_SHORT_PREAMBLE },
 	{ .bitrate = 20, .hw_value = 1, .flags = IEEE80211_RATE_SHORT_PREAMBLE },
@@ -92,6 +103,7 @@ static struct ieee80211_supported_band mt6628_2ghz_band = {
 	.n_channels = ARRAY_SIZE(mt6628_2ghz_channels),
 	.bitrates = mt6628_2ghz_rates,
 	.n_bitrates = ARRAY_SIZE(mt6628_2ghz_rates),
+	.ht_cap = mt6628_ht_cap,
 };
 
 static struct ieee80211_channel mt6628_5ghz_channels[] = {
@@ -152,6 +164,7 @@ static struct ieee80211_supported_band mt6628_5ghz_band = {
 	.n_channels = ARRAY_SIZE(mt6628_5ghz_channels),
 	.bitrates = mt6628_5ghz_rates,
 	.n_bitrates = ARRAY_SIZE(mt6628_5ghz_rates),
+	.ht_cap = mt6628_ht_cap,
 };
 
 static const u32 mt6628_cipher_suites[] = {

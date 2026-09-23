@@ -128,6 +128,31 @@ static bool mt6628_connect_is_wpa2_psk(
 	return true;
 }
 
+static bool mt6628_assoc_has_ie(const u8 *ies, size_t len, u8 eid)
+{
+	while (len >= 2) {
+		size_t ie_len = ies[1];
+
+		if (ie_len + 2 > len)
+			return false;
+		if (ies[0] == eid)
+			return true;
+		ies += ie_len + 2;
+		len -= ie_len + 2;
+	}
+
+	return false;
+}
+
+static const struct ieee80211_ht_cap mt6628_assoc_ht_cap = {
+	.cap_info = cpu_to_le16(IEEE80211_HT_CAP_SGI_20),
+	.ampdu_params_info = IEEE80211_HT_MAX_AMPDU_64K,
+	.mcs = {
+		.rx_mask = { 0xff },
+		.tx_params = IEEE80211_HT_MCS_TX_DEFINED,
+	},
+};
+
 static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
 				   const struct cfg80211_connect_params *sme)
 {
@@ -159,6 +184,9 @@ static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
 	len += 2 + supported_rates_len;
 	if (use_extended_rates)
 		len += 2 + sizeof(mt6628_extended_rates);
+	if (!mt6628_assoc_has_ie(sme->ie, sme->ie_len,
+				 WLAN_EID_HT_CAPABILITY))
+		len += 2 + sizeof(mt6628_assoc_ht_cap);
 	len += sme->ie_len;
 
 	if (len > MT6628_CONNECT_MAX_IE_LEN)
@@ -188,6 +216,15 @@ static int mt6628_build_assoc_ies(struct mt6628_wlan *wl,
 		memcpy(p, mt6628_extended_rates,
 		       sizeof(mt6628_extended_rates));
 		p += sizeof(mt6628_extended_rates);
+	}
+
+	if (!mt6628_assoc_has_ie(sme->ie, sme->ie_len,
+				WLAN_EID_HT_CAPABILITY)) {
+		*(u8 *)p = WLAN_EID_HT_CAPABILITY;
+		((u8 *)p)[1] = sizeof(mt6628_assoc_ht_cap);
+		p += 2;
+		memcpy(p, &mt6628_assoc_ht_cap, sizeof(mt6628_assoc_ht_cap));
+		p += sizeof(mt6628_assoc_ht_cap);
 	}
 
 	if (sme->ie_len)
