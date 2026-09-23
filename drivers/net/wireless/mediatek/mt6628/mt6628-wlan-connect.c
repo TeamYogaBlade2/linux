@@ -819,10 +819,6 @@ static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
 		return;
 	}
 
-	ret = mt6628_wait_mgmt_tx(wl);
-	if (ret)
-		goto timeout;
-
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_2, 0,
 					    wl->conn_bssid);
 	if (ret)
