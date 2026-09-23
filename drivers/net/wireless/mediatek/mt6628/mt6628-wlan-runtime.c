@@ -564,6 +564,29 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 						     "abnormal WLAN status %#x\n", wasr);
 		}
 
+		if (whisr & MT6628_WHISR_D2H_SW_ASSERT_INFO) {
+			u32 d2hrm0, d2hrm1, d2hrm2;
+			int sw_ret;
+
+			sw_ret = mt6628_runtime_read32(wl, MT6628_MCR_D2HRM0R,
+						       &d2hrm0);
+			if (!sw_ret)
+				sw_ret = mt6628_runtime_read32(wl,
+						       MT6628_MCR_D2HRM1R, &d2hrm1);
+			if (!sw_ret)
+				sw_ret = mt6628_runtime_read32(wl,
+						       MT6628_MCR_D2HRM2R, &d2hrm2);
+
+			if (!sw_ret)
+				dev_err_ratelimited(&wl->func->dev,
+						     "firmware assert: D2HRM0=%#x D2HRM1=%#x D2HRM2=%#x\n",
+						     d2hrm0, d2hrm1, d2hrm2);
+			else
+				dev_err_ratelimited(&wl->func->dev,
+						     "firmware assert: failed to read D2H mailbox: %d\n",
+						     sw_ret);
+		}
+
 		if (!(whisr & (MT6628_WHISR_RX0_DONE | MT6628_WHISR_RX1_DONE)))
 			continue;
 

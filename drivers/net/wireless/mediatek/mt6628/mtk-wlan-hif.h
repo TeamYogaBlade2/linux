@@ -48,6 +48,9 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_MCR_WRDR1		0x0034
 #define MT6628_MCR_H2DSM0R		0x0038
 #define MT6628_MCR_H2DSM1R		0x003c
+#define MT6628_MCR_D2HRM0R		0x0040
+#define MT6628_MCR_D2HRM1R		0x0044
+#define MT6628_MCR_D2HRM2R		0x0048
 #define MT6628_MCR_WRPLR		0x0050
 
 /* WHLPCR */
@@ -63,6 +66,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_WHISR_RX1_DONE		BIT(2)
 #define MT6628_WHISR_ABNORMAL		BIT(3)
 #define MT6628_WHISR_FW_OWN_BACK	BIT(4)
+#define MT6628_WHISR_D2H_SW_ASSERT_INFO	BIT(31)
 
 /* WHIER */
 #define MT6628_WHIER_TX_DONE		BIT(0)
@@ -70,11 +74,12 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_WHIER_RX1_DONE		BIT(2)
 #define MT6628_WHIER_ABNORMAL		BIT(3)
 #define MT6628_WHIER_FW_OWN_BACK	BIT(4)
+#define MT6628_WHIER_D2H_SW_ASSERT_INFO	BIT(31)
 
 #define MT6628_WHIER_RUNTIME		(MT6628_WHIER_TX_DONE | \
 					 MT6628_WHIER_RX0_DONE | \
 					 MT6628_WHIER_RX1_DONE | \
-					 MT6628_WHIER_ABNORMAL)
+					 MT6628_WHIER_ABNORMAL | \
 
 /* Runtime command/event protocol. */
 #define MT6628_WIFI_CMD_HEADER_LEN	8
