@@ -163,6 +163,12 @@ static struct mt6628_wlan *mt6628_wlan_from_wdev(struct wireless_dev *wdev)
 	return *(struct mt6628_wlan **)netdev_priv(wdev->netdev);
 }
 
+static int mt6628_channel_to_hif(const struct ieee80211_channel *channel,
+					struct mt6628_scan_channel *dst)
+{
+	if (!channel || !dst)
+		return -EINVAL;
+
 	switch (channel->band) {
 	case NL80211_BAND_2GHZ:
 		if (channel->hw_value < 1 || channel->hw_value > 14)
