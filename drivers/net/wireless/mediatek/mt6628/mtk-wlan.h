@@ -87,7 +87,7 @@ struct mt6628_wlan {
 	struct sk_buff_head async_mgmt_queue;
 	atomic_t mgmt_pending;
 	wait_queue_head_t event_wait;
-	void (*event_handler)(struct mt6628_wlan *, struct sk_buff *);
+	bool (*event_handler)(struct mt6628_wlan *, struct sk_buff *);
 	void (*mgmt_handler)(struct mt6628_wlan *, struct sk_buff *);
 
 	spinlock_t mgmt_tx_lock;
@@ -149,7 +149,7 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 				u16 reason_code);
 bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 					     struct sk_buff *skb);
-void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
+bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb);
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 					  struct sk_buff *skb);

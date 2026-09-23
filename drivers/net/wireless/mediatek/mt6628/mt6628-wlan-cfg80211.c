@@ -603,7 +603,7 @@ out:
 	kfree_skb(skb);
 }
 
-void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
+bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb)
 {
 	struct mt6628_wifi_event_hdr *event;
@@ -613,19 +613,19 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 	size_t packet_len, body_len;
 
 	if (skb->len < MT6628_WIFI_EVENT_HEADER_LEN)
-		goto out;
+		goto drop;
 
 	event = (struct mt6628_wifi_event_hdr *)skb->data;
 	packet_len = le16_to_cpu(event->packet_len);
 	if (packet_len < MT6628_WIFI_EVENT_HEADER_LEN ||
 	    packet_len > skb->len)
-		goto out;
+		goto drop;
 
 	body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
 	if (event->eid != MT6628_EVENT_ID_SCAN_DONE)
-		goto out;
+		return false;
 	if (body_len != sizeof(*scan_done))
-		goto out;
+		goto drop;
 
 	scan_done = (const struct mt6628_event_scan_done *)
 		(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
@@ -646,13 +646,18 @@ void mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 
 	if (next_chunk) {
 		schedule_work(&wl->scan_work);
-		goto out;
+		kfree_skb(skb);
+		return true;
 	}
 
 	mt6628_cfg80211_mgmt_rx_done(wl);
 
-out:
 	kfree_skb(skb);
+	return true;
+
+drop:
+	kfree_skb(skb);
+	return true;
 }
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl)

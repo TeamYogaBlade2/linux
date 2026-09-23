@@ -154,10 +154,9 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			goto drop;
 		}
 
-		if (wl->event_handler) {
-			wl->event_handler(wl, skb);
+		if (wl->event_handler && wl->event_handler(wl, skb))
 			continue;
-		}
+
 		if (skb_queue_len(&wl->async_event_queue) >=
 		    256)
 			goto drop;
