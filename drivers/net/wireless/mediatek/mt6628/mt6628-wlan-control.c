@@ -428,6 +428,7 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
+	u8 broadcast[ETH_ALEN];
 	u8 response[4];
 	size_t response_len;
 
@@ -450,7 +451,8 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 			return -EINVAL;
 		peer = mac_addr;
 	} else {
-		peer = wl->conn_bssid;
+		eth_broadcast_addr(broadcast);
+		peer = broadcast;
 	}
 
 	cmd.add_remove = 1;
@@ -504,6 +506,7 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
+	u8 broadcast[ETH_ALEN];
 	u8 response[4];
 	size_t response_len;
 
@@ -522,7 +525,8 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			return -EINVAL;
 		peer = mac_addr;
 	} else {
-		peer = wl->conn_bssid;
+		eth_broadcast_addr(broadcast);
+		peer = broadcast;
 	}
 
 	cmd.add_remove = 0;
