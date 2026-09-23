@@ -153,6 +153,9 @@
 
 		syna,startup-delay-ms = <10>;
 		syna,reset-delay-ms = <50>;
+		syna,reset-after-power-on;
+		syna,initial-reset-control = <0x80>;
+		syna,initial-reset-delay-ms = <200>;
 
 		rmi4-f01@1 {
 			reg = <0x1>;
