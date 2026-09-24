@@ -19,6 +19,7 @@ on:
   pull_request:
     branches:
       - 'dev/v7.1/prismrv-drm'
+      - 'blade/v7.1'
 
 permissions:
   contents: read
