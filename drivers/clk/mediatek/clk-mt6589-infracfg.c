@@ -17,6 +17,8 @@
 #define INFRA_PDN_CLR	0x0044
 #define INFRA_PDN_STA	0x0048
 
+static DEFINE_SPINLOCK(mt6589_infra_clk_lock);
+
 static const char * const infra_mux1_parents[] = {
 	"clk26m",
 	"armpll",
@@ -73,6 +75,7 @@ static const struct mtk_clk_desc infra_desc = {
 	.cpumuxes = cpu_muxes,
 	.num_cpumuxes = ARRAY_SIZE(cpu_muxes),
 	.rst_desc = &infra_clk_rst_desc,
+	.clk_lock = &mt6589_infra_clk_lock,
 };
 
 static const struct of_device_id of_match_clk_mt6589_infracfg[] = {
