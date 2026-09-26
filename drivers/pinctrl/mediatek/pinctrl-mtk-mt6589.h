@@ -6,6 +6,7 @@
 #ifndef __PINCTRL_MTK_MT6589_H
 #define __PINCTRL_MTK_MT6589_H
 
+#include "pinctrl-mtk-common-v2.h"
 #include "pinctrl-paris.h"
 
 static const struct mtk_pin_desc mtk_pins_mt6589[] = {
