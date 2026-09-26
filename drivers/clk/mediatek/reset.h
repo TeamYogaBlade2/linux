@@ -21,11 +21,13 @@
 /**
  * enum mtk_reset_version - Version of MediaTek clock reset controller.
  * @MTK_RST_SIMPLE: Use the same registers for bit set and clear.
+ * @MTK_RST_SIMPLE_RSTB: Use the same registers and active low (reset bar).
  * @MTK_RST_SET_CLR: Use separate registers for bit set and clear.
  * @MTK_RST_MAX: Total quantity of version for MediaTek clock reset controller.
  */
 enum mtk_reset_version {
 	MTK_RST_SIMPLE = 0,
+	MTK_RST_SIMPLE_RSTB,
 	MTK_RST_SET_CLR,
 	MTK_RST_MAX,
 };

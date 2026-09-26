@@ -186,6 +186,17 @@ config POWER_RESET_LTC2952
 	  This driver supports an external powerdown trigger and board power
 	  down via the LTC2952. Bindings are made in the device tree.
 
+config POWER_RESET_MT6320
+	bool "MediaTek MT6320 power-off driver"
+	depends on MFD_MT6397
+	help
+	  Power-off driver for the MT6320 PMIC found on MT6589-based boards
+	  (e.g. Aquaris 5).  Implements the full shutdown sequence required
+	  by the MT6320 RTC: PMIC poweroff-sequence enable, RTC write-interface
+	  unlock, 32K GPIO export disable, and BBPU pull-low.
+
+	  Say Y if you have a board with an MT6320 PMIC (e.g. MT6589 SoC).
+
 config POWER_RESET_MT6323
 	bool "MediaTek MT6323 power-off driver"
 	depends on MFD_MT6397

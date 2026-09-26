@@ -227,6 +227,13 @@ config NVMEM_MTK_EFUSE
 	  This driver can also be built as a module. If so, the module
 	  will be called efuse-mtk.
 
+config NVMEM_MT6320_EFUSE
+	tristate "MediaTek MT6320 PMIC EFUSE support"
+	depends on MFD_MT6397
+	help
+	  This is a driver to access the one-time-programmable array in
+	  the MediaTek MT6320 PMIC, e.g. battery calibration data.
+
 config NVMEM_MXS_OCOTP
 	tristate "Freescale MXS On-Chip OTP Memory Support"
 	depends on ARCH_MXS || COMPILE_TEST

@@ -161,6 +161,14 @@ void mtk_rdma_disable_vblank(struct device *dev);
 const u32 *mtk_rdma_get_formats(struct device *dev);
 size_t mtk_rdma_get_num_formats(struct device *dev);
 
+int mtk_tdshp_clk_enable(struct device *dev);
+void mtk_tdshp_clk_disable(struct device *dev);
+void mtk_tdshp_config(struct device *dev, unsigned int w,
+		      unsigned int h, unsigned int vrefresh,
+		      unsigned int bpc, struct cmdq_pkt *cmdq_pkt);
+void mtk_tdshp_start(struct device *dev);
+void mtk_tdshp_stop(struct device *dev);
+
 int mtk_mdp_rdma_power_on(struct device *dev);
 void mtk_mdp_rdma_power_off(struct device *dev);
 int mtk_mdp_rdma_clk_enable(struct device *dev);

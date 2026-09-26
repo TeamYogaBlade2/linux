@@ -39,13 +39,12 @@
 #define AL3320A_CONFIG_DISABLE		0x00
 #define AL3320A_CONFIG_ENABLE		0x01
 
-#define AL3320A_GAIN_MASK		GENMASK(2, 1)
-
 /* chip params default values */
 #define AL3320A_DEFAULT_MEAN_TIME	4
 #define AL3320A_DEFAULT_WAIT_TIME	0 /* no waiting */
 
 #define AL3320A_SCALE_AVAILABLE "0.512 0.128 0.032 0.01"
+#define AL3320B_SCALE_AVAILABLE "1.53 0.512 0.38 0.128 0.096 0.032 0.03 0.01"
 
 enum al3320a_range {
 	AL3320A_RANGE_1, /* 33.28 Klx */
@@ -58,6 +57,54 @@ static const int al3320a_scales[][2] = {
 	{0, 512000}, {0, 128000}, {0, 32000}, {0, 10000}
 };
 
+static const int al3320b_scales[][2] = {
+	{1, 530000}, {0, 512000}, {0, 380000}, {0, 128000},
+	{0, 96000}, {0, 32000}, {0, 30000}, {0, 10000}
+};
+
+static const u8 al3320a_scale_regs[] = {
+	0x00, 0x02, 0x04, 0x06
+};
+
+static const u8 al3320b_scale_regs[] = {
+	0x00, 0x01, 0x02, 0x03,
+	0x04, 0x05, 0x06, 0x07
+};
+
+struct al3320_variant {
+	const char *name;
+	const int (*scales)[2];
+	const u8 *scale_regs;
+	const char *scale_available;
+	unsigned int num_scales;
+	unsigned int default_scale;
+	u8 scale_mask;
+	u8 mean_time;
+};
+
+static const struct al3320_variant al3320a_variant = {
+	.name = "al3320a",
+	.scales = al3320a_scales,
+	.scale_regs = al3320a_scale_regs,
+	.scale_available = AL3320A_SCALE_AVAILABLE,
+	.num_scales = ARRAY_SIZE(al3320a_scales),
+	.default_scale = AL3320A_RANGE_3,
+	.scale_mask = GENMASK(2, 1),
+	.mean_time = AL3320A_DEFAULT_MEAN_TIME,
+};
+
+static const struct al3320_variant al3320b_variant = {
+	.name = "al3320b",
+	.scales = al3320b_scales,
+	.scale_regs = al3320b_scale_regs,
+	.scale_available = AL3320B_SCALE_AVAILABLE,
+	.num_scales = ARRAY_SIZE(al3320b_scales),
+	/* Stock AL3320B programs 0x07 = 0x04 by default. */
+	.default_scale = 4,
+	.scale_mask = GENMASK(2, 0),
+	.mean_time = 0x0f,
+};
+
 static const struct regmap_config al3320a_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -66,6 +113,7 @@ static const struct regmap_config al3320a_regmap_config = {
 
 struct al3320a_data {
 	struct regmap *regmap;
+	const struct al3320_variant *variant;
 };
 
 static const struct iio_chan_spec al3320a_channels[] = {
@@ -76,10 +124,21 @@ static const struct iio_chan_spec al3320a_channels[] = {
 	}
 };
 
-static IIO_CONST_ATTR(in_illuminance_scale_available, AL3320A_SCALE_AVAILABLE);
+static ssize_t al3320a_show_scale_available(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct al3320a_data *data = iio_priv(indio_dev);
+
+	return sysfs_emit(buf, "%s\n", data->variant->scale_available);
+}
+
+static DEVICE_ATTR(in_illuminance_scale_available, 0444,
+		   al3320a_show_scale_available, NULL);
 
 static struct attribute *al3320a_attributes[] = {
-	&iio_const_attr_in_illuminance_scale_available.dev_attr.attr,
+	&dev_attr_in_illuminance_scale_available.attr,
 	NULL,
 };
 
@@ -106,6 +165,7 @@ static void al3320a_set_pwr_off(void *_data)
 static int al3320a_init(struct al3320a_data *data)
 {
 	struct device *dev = regmap_get_device(data->regmap);
+	const struct al3320_variant *variant = data->variant;
 	int ret;
 
 	ret = al3320a_set_pwr_on(data);
@@ -117,12 +177,12 @@ static int al3320a_init(struct al3320a_data *data)
 		return ret;
 
 	ret = regmap_write(data->regmap, AL3320A_REG_CONFIG_RANGE,
-			   FIELD_PREP(AL3320A_GAIN_MASK, AL3320A_RANGE_3));
+			   variant->scale_regs[variant->default_scale]);
 	if (ret)
 		return ret;
 
 	ret = regmap_write(data->regmap, AL3320A_REG_MEAN_TIME,
-			   AL3320A_DEFAULT_MEAN_TIME);
+			   variant->mean_time);
 	if (ret)
 		return ret;
 
@@ -135,7 +195,10 @@ static int al3320a_read_raw(struct iio_dev *indio_dev,
 			    int *val2, long mask)
 {
 	struct al3320a_data *data = iio_priv(indio_dev);
-	int ret, gain, raw;
+	const struct al3320_variant *variant = data->variant;
+	unsigned int i;
+	int ret, gain;
+	__le16 raw;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
@@ -144,11 +207,12 @@ static int al3320a_read_raw(struct iio_dev *indio_dev,
 		 * - low byte of output is stored at AL3320A_REG_DATA_LOW
 		 * - high byte of output is stored at AL3320A_REG_DATA_LOW + 1
 		 */
-		ret = regmap_read(data->regmap, AL3320A_REG_DATA_LOW, &raw);
+		ret = regmap_bulk_read(data->regmap, AL3320A_REG_DATA_LOW,
+				       &raw, sizeof(raw));
 		if (ret)
 			return ret;
 
-		*val = raw;
+		*val = le16_to_cpu(raw);
 
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
@@ -156,11 +220,16 @@ static int al3320a_read_raw(struct iio_dev *indio_dev,
 		if (ret)
 			return ret;
 
-		gain = FIELD_GET(AL3320A_GAIN_MASK, gain);
-		*val = al3320a_scales[gain][0];
-		*val2 = al3320a_scales[gain][1];
+		for (i = 0; i < variant->num_scales; i++) {
+			if ((gain & variant->scale_mask) != variant->scale_regs[i])
+				continue;
 
-		return IIO_VAL_INT_PLUS_MICRO;
+			*val = variant->scales[i][0];
+			*val2 = variant->scales[i][1];
+			return IIO_VAL_INT_PLUS_MICRO;
+		}
+
+		return -EINVAL;
 	}
 	return -EINVAL;
 }
@@ -170,17 +239,18 @@ static int al3320a_write_raw(struct iio_dev *indio_dev,
 			     int val2, long mask)
 {
 	struct al3320a_data *data = iio_priv(indio_dev);
+	const struct al3320_variant *variant = data->variant;
 	unsigned int i;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_SCALE:
-		for (i = 0; i < ARRAY_SIZE(al3320a_scales); i++) {
-			if (val != al3320a_scales[i][0] ||
-			    val2 != al3320a_scales[i][1])
+		for (i = 0; i < variant->num_scales; i++) {
+			if (val != variant->scales[i][0] ||
+			    val2 != variant->scales[i][1])
 				continue;
 
 			return regmap_write(data->regmap, AL3320A_REG_CONFIG_RANGE,
-					    FIELD_PREP(AL3320A_GAIN_MASK, i));
+					    variant->scale_regs[i]);
 		}
 		break;
 	}
@@ -198,7 +268,12 @@ static int al3320a_probe(struct i2c_client *client)
 	struct al3320a_data *data;
 	struct device *dev = &client->dev;
 	struct iio_dev *indio_dev;
+	const struct al3320_variant *variant;
 	int ret;
+
+	variant = i2c_get_match_data(client);
+	if (!variant)
+		variant = &al3320a_variant;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
 	if (!indio_dev)
@@ -206,6 +281,7 @@ static int al3320a_probe(struct i2c_client *client)
 
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
+	data->variant = variant;
 
 	data->regmap = devm_regmap_init_i2c(client, &al3320a_regmap_config);
 	if (IS_ERR(data->regmap))
@@ -213,7 +289,7 @@ static int al3320a_probe(struct i2c_client *client)
 				     "cannot allocate regmap\n");
 
 	indio_dev->info = &al3320a_info;
-	indio_dev->name = "al3320a";
+	indio_dev->name = variant->name;
 	indio_dev->channels = al3320a_channels;
 	indio_dev->num_channels = ARRAY_SIZE(al3320a_channels);
 	indio_dev->modes = INDIO_DIRECT_MODE;
@@ -246,13 +322,15 @@ static DEFINE_SIMPLE_DEV_PM_OPS(al3320a_pm_ops, al3320a_suspend,
 				al3320a_resume);
 
 static const struct i2c_device_id al3320a_id[] = {
-	{ "al3320a" },
+	{ .name = "al3320a", .driver_data = (kernel_ulong_t)&al3320a_variant },
+	{ .name = "al3320b", .driver_data = (kernel_ulong_t)&al3320b_variant },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, al3320a_id);
 
 static const struct of_device_id al3320a_of_match[] = {
-	{ .compatible = "dynaimage,al3320a", },
+	{ .compatible = "dynaimage,al3320a", .data = &al3320a_variant },
+	{ .compatible = "dynaimage,al3320b", .data = &al3320b_variant },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, al3320a_of_match);
@@ -277,5 +355,5 @@ static struct i2c_driver al3320a_driver = {
 module_i2c_driver(al3320a_driver);
 
 MODULE_AUTHOR("Daniel Baluta <daniel.baluta@intel.com>");
-MODULE_DESCRIPTION("AL3320A Ambient Light Sensor driver");
+MODULE_DESCRIPTION("AL3320A/AL3320B Ambient Light Sensor driver");
 MODULE_LICENSE("GPL v2");

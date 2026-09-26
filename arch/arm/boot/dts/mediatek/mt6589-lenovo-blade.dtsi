@@ -5,6 +5,7 @@
 
 /dts-v1/;
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
 
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
@@ -33,6 +34,11 @@
 			reg = <0xbf600000 0xa00000>;
 			no-map;
 		};
+	};
+
+	sound {
+		compatible = "mediatek,mt6589-mt6320-sound";
+		mediatek,platform = <&afe>;
 	};
 };
 
@@ -90,6 +96,12 @@
 	};
 };
 
+&mt6320_accdet {
+	detect-gpios = <&pio 115 GPIO_ACTIVE_LOW>;
+	io-channels = <&mt6320_adc 5>;
+	io-channel-names = "key";
+};
+
 &mt6320_ldo_vgp4 {
 	regulator-min-microvolt = <2800000>;
 	regulator-max-microvolt = <2800000>;
@@ -131,7 +143,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&ts_pins>;
 
-		interrupts = <5 IRQ_TYPE_EDGE_FALLING>;
+		interrupts = <5 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-parent = <&pio>;
 
 		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
@@ -139,8 +151,11 @@
 		vdd-supply = <&mt6320_ldo_vgp4>;
 		vio-supply = <&mt6320_ldo_vgp6>;
 
-		syna,startup-delay-ms = <100>;
+		syna,startup-delay-ms = <10>;
 		syna,reset-delay-ms = <50>;
+		syna,reset-after-power-on;
+		syna,initial-reset-control = <0x80>;
+		syna,initial-reset-delay-ms = <200>;
 
 		rmi4-f01@1 {
 			reg = <0x1>;
@@ -182,8 +197,6 @@
 		// TODO: check
 		vdd-supply = <&mt6320_ldo_vio28>;
 		vddio-supply = <&mt6320_buck_vio18>;
-		interrupts = <0 IRQ_TYPE_EDGE_RISING>;
-		interrupt-parent = <&pio>;
 		// mount-matrix = ?;
 	};
 
@@ -194,10 +207,16 @@
 		// TODO: check
 		vdd-supply = <&mt6320_ldo_vio28>;
 		vddio-supply = <&mt6320_buck_vio18>;
-		interrupts = <2 IRQ_TYPE_EDGE_RISING>; // ?
-		// and EINT6, EINT7? + EINT8?
-		interrupt-parent = <&pio>;
 		// mount-matrix = ?
+	};
+
+	light-sensor@1c {
+		compatible = "dynaimage,al3320b";
+		reg = <0x1c>;
+
+		vdd-supply = <&mt6320_buck_vio18>;
+		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-parent = <&pio>;
 	};
 };
 
@@ -213,9 +232,6 @@
 	bq27541: fuel-gauge@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
-
-		interrupts = <16 IRQ_TYPE_EDGE_RISING>; // ?
-		interrupt-parent = <&pio>;
 
 		// monitored-battery = ;
 	};
@@ -424,7 +440,7 @@
 
 /* SDIO */
 &mmc3 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
@@ -443,6 +459,22 @@
 	sd-uhs-sdr104;
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
+
+	mt6628-stp@2 {
+		reg = <2>;
+
+		bluetooth {
+			compatible = "mediatek,mt6628-bt";
+		};
+
+		fm {
+			compatible = "mediatek,mt6628-fm";
+		};
+
+		gnss {
+			compatible = "mediatek,mt6628-gnss";
+		};
+	};
 };
 
 &keyboard {
@@ -455,5 +487,9 @@
 };
 
 &pwm {
+	status = "okay";
+};
+
+&bls {
 	status = "okay";
 };

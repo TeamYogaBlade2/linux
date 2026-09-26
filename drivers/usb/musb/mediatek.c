@@ -8,9 +8,11 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/usb/role.h>
@@ -424,9 +426,6 @@ static const struct musb_platform_ops mtk_musb_ops = {
 	.set_mode = mtk_musb_set_mode,
 };
 
-#define MTK_MUSB_MAX_EP_NUM	8
-#define MTK_MUSB_RAM_BITS	11
-
 static const struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
 	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512, },
 	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512, },
@@ -449,8 +448,55 @@ static const struct musb_hdrc_config mtk_musb_hdrc_config = {
 	.fifo_cfg_size = ARRAY_SIZE(mtk_musb_mode_cfg),
 	.multipoint = true,
 	.dyn_fifo = true,
-	.num_eps = MTK_MUSB_MAX_EP_NUM,
-	.ram_bits = MTK_MUSB_RAM_BITS,
+	.num_eps = 8,
+	.ram_bits = 11,
+};
+
+/*
+ * MT6589 FIFO layout from the downstream BSP.
+ *
+ * EP1..4: 512-byte double-buffered TX/RX
+ * EP5..7: 512-byte single-buffered TX/RX
+ * EP8:    512-byte double-buffered TX/RX
+ *
+ * Total FIFO usage: 13312 bytes.
+ */
+static const struct musb_fifo_cfg mt6589_musb_mode_cfg[] = {
+	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 1, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 2, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 2, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 3, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 3, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 4, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 5, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 5, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 6, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 6, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 7, .style = FIFO_TX, .maxpacket = 512, },
+	{ .hw_ep_num = 7, .style = FIFO_RX, .maxpacket = 512, },
+	{ .hw_ep_num = 8, .style = FIFO_TX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+	{ .hw_ep_num = 8, .style = FIFO_RX, .maxpacket = 512,
+	  .mode = BUF_DOUBLE, },
+};
+
+static const struct musb_hdrc_config mt6589_musb_hdrc_config = {
+	.fifo_cfg = mt6589_musb_mode_cfg,
+	.fifo_cfg_size = ARRAY_SIZE(mt6589_musb_mode_cfg),
+	.multipoint = true,
+	.dyn_fifo = true,
+	.num_eps = 9,
+	.ram_bits = 12,
 };
 
 static const struct platform_device_info mtk_dev_info = {
@@ -464,6 +510,7 @@ static int mtk_musb_probe(struct platform_device *pdev)
 	struct musb_hdrc_platform_data *pdata;
 	struct mtk_glue *glue;
 	struct platform_device_info pinfo;
+	const struct musb_hdrc_config *config;
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
 	int ret;
@@ -491,11 +538,26 @@ static int mtk_musb_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(glue->rstc),
 				"failed to get reset control\n");
 
-	ret = reset_control_reset(glue->rstc);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to reset usb ip\n");
+	if (glue->rstc) {
+		ret = reset_control_assert(glue->rstc);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					"failed to assert usb ip reset\n");
 
-	pdata->config = &mtk_musb_hdrc_config;
+		msleep(10);
+
+		ret = reset_control_deassert(glue->rstc);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					"failed to deassert usb ip reset\n");
+	}
+
+	config = of_device_get_match_data(dev);
+	if (!config)
+		return dev_err_probe(dev, -EINVAL,
+				"missing MUSB hardware configuration\n");
+
+	pdata->config = (struct musb_hdrc_config *)config;
 	pdata->platform_ops = &mtk_musb_ops;
 	pdata->mode = usb_get_dr_mode(dev);
 
@@ -596,7 +658,14 @@ static void mtk_musb_remove(struct platform_device *pdev)
 
 #ifdef CONFIG_OF
 static const struct of_device_id mtk_musb_match[] = {
-	{.compatible = "mediatek,mtk-musb",},
+	{
+		.compatible = "mediatek,mt6589-musb",
+		.data = &mt6589_musb_hdrc_config,
+	},
+	{
+		.compatible = "mediatek,mtk-musb",
+		.data = &mtk_musb_hdrc_config,
+	},
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_musb_match);

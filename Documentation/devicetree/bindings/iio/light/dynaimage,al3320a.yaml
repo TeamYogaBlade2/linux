@@ -4,14 +4,16 @@
 $id: http://devicetree.org/schemas/iio/light/dynaimage,al3320a.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Dyna-Image AL3320A sensor
+title: Dyna-Image AL3320A and AL3320B sensors
 
 maintainers:
   - David Heidelberg <david@ixit.cz>
 
 properties:
   compatible:
-    const: dynaimage,al3320a
+    enum:
+      - dynaimage,al3320a
+      - dynaimage,al3320b
 
   reg:
     maxItems: 1
@@ -41,5 +43,17 @@ examples:
             reg = <0x1c>;
             vdd-supply = <&vdd_reg>;
             interrupts = <99 IRQ_TYPE_LEVEL_HIGH>;
+        };
+    };
+
+  - |
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        light-sensor@1c {
+            compatible = "dynaimage,al3320b";
+            reg = <0x1c>;
+            vdd-supply = <&vdd_reg>;
         };
     };
