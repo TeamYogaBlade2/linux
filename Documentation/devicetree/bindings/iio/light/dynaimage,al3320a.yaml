@@ -11,7 +11,9 @@ maintainers:
 
 properties:
   compatible:
-    const: dynaimage,al3320a
+    enum:
+      - dynaimage,al3320a
+      - dynaimage,al3320b
 
   reg:
     maxItems: 1
