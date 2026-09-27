@@ -131,7 +131,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&ts_pins>;
 
-		interrupts = <5 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <5 IRQ_TYPE_EDGE_FALLING>;
 		interrupt-parent = <&pio>;
 
 		reset-gpios = <&pio 140 GPIO_ACTIVE_LOW>;
