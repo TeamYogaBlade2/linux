@@ -14,4 +14,40 @@
 		stride = <(1280 * 2)>;
 		format = "r5g6b5";
 	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion-polymer";
+
+		charge-full-design-microamp-hours = <9000000>;
+		energy-full-design-microwatt-hours = <33750000>;
+
+		/*
+		 * Stock fuel-gauge voltage/SOC table uses 3400mV as 0%.
+		 * This is a vendor software threshold, not a proven
+		 * physical cell absolute minimum voltage.
+		 */
+		voltage-min-design-microvolt = <3400000>;
+
+		/*
+		 * Battery nominal/design voltage.
+		 * 4352mV is the BQ24196 charge regulation voltage and
+		 * therefore belongs to constant-charge-voltage-max below.
+		 */
+		voltage-max-design-microvolt = <3750000>;
+
+		/* BQ24196 stock configuration. */
+		precharge-current-microamp = <512000>;
+		charge-term-current-microamp = <256000>;
+
+		constant-charge-voltage-max-microvolt = <4352000>;
+	};
+};
+
+&bq27541 {
+	monitored-battery = <&battery>;
+};
+
+&bq24196 {
+	monitored-battery = <&battery>;
 };
