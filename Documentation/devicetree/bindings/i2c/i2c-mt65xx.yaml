@@ -96,6 +96,14 @@ properties:
     description:
       SCL frequency to use (in Hz). If omitted, 100kHz is used.
 
+  resets:
+    maxItems: 1
+
+  reset-names:
+    items:
+      - const: reset
+    maxItems: 1
+
   mediatek,have-pmic:
     description: Platform controls I2C from PMIC side
     type: boolean
