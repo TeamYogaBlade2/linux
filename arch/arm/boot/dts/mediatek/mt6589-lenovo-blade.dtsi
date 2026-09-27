@@ -64,6 +64,14 @@
 		};
 	};
 
+	alsps_eint_pins: alsps-eint-pins {
+		pin-alsps-int {
+			pinmux = <MT6589_GPIO38__FUNC_EINT4>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
 	usb_pins: usb-pins {
 		pins_iddig {
 			pinmux = <MT6589_GPIO57__FUNC_GPIO57>;
@@ -213,6 +221,8 @@
 	light-sensor@1c {
 		compatible = "dynaimage,al3320b";
 		reg = <0x1c>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&alsps_eint_pins>;
 
 		vdd-supply = <&mt6320_buck_vio18>;
 		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
