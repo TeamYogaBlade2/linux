@@ -427,10 +427,13 @@
 				bits = <0 3>;
 			};
 
-			/* GPU speed grade: devinfo index 3, bits[31:28] */
+			/*
+			 * GPU speed grade: devinfo index 3, bits[30:28]
+			 *   ((devinfo[3] & 0x7fffffff) >> 28)
+			 */
 			gpu_grade: gpu-grade@c {
-				reg = <0xc 0x4>;
-				bits = <28 4>;
+			        reg = <0xc 0x4>;
+			        bits = <28 3>;
 			};
 
 			core_count_flag: core-count@40 {
