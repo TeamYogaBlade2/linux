@@ -502,7 +502,7 @@
 			 */
 			usb_term_vref: usb-term-vref@170 {
 				reg = <0x170 0x2>;
-				bits = <7 3>;
+				bits = <13 3>;
 			};
 
 			usb_clkref: usb-clkref@170 {
@@ -512,7 +512,7 @@
 
 			usb_vrt_vref: usb-vrt-vref@170 {
 				reg = <0x170 0x2>;
-				bits = <13 3>;
+				bits = <7 3>;
 			};
 
 			cell@170 {
@@ -572,6 +572,11 @@
 				bits = <24 8>;
 			};
 
+			ptp_agedelta: ptp-agedelta@184 {
+				reg = <0x184 0x4>;
+				bits = <0 8>;
+			};
+
 			ptp_dvtfixed: ptp-dvtfixed@184 {
 				reg = <0x184 0x4>;
 				bits = <8 8>;
@@ -601,6 +606,10 @@
 
 			cell@184 {
 				reg = <0x184 0x4>;
+			};
+
+			cell@188 {
+				reg = <0x188 0x4>;
 			};
 		};
 
