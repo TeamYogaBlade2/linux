@@ -61,6 +61,7 @@
 		pin-pmic-eint {
 			pinmux = <MT6589_GPIO37__FUNC_EINT3>;
 			input-enable;
+			input-debounce = <1000>;
 		};
 	};
 
