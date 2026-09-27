@@ -157,7 +157,7 @@
 #define CLK_INFRA_SMI		2
 #define CLK_INFRA_SPI0		3
 #define CLK_INFRA_AUDIO		4
-#define CLK_INFRA_CEC   	5
+#define CLK_INFRA_DEVAPC   	5
 #define CLK_INFRA_MFGAXI	6
 #define CLK_INFRA_M4U		7
 #define CLK_INFRA_MD1MCUAXI	8

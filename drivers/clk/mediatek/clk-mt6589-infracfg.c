@@ -149,6 +149,8 @@ static const struct clk_ops mt6589_armdiv_ops = {
 #define INFRA_PDN_CLR	0x0044
 #define INFRA_PDN_STA	0x0048
 
+static DEFINE_SPINLOCK(mt6589_infra_clk_lock);
+
 static const char * const infra_mux1_parents[] = {
 	"clk26m",
 	"armpll",
@@ -174,7 +176,7 @@ static const struct mtk_gate infra_clks[] = {
 	GATE_INFRA(CLK_INFRA_SMI, "infra_smi", "smi_sel", 1), /* mt8135 */
 	GATE_INFRA(CLK_INFRA_SPI0, "infra_spi0", "spi_sel", 2), /* maybe, is it infra_mfg_bus? */
 	GATE_INFRA(CLK_INFRA_AUDIO, "infra_audio", "audintbus_sel", 5),
-	GATE_MTK(CLK_INFRA_CEC, "infra_cec", "axi_sel", &infra_cg_regs, 6, &mtk_clk_gate_ops_setclr_inv), /* or devapc */
+	GATE_INFRA(CLK_INFRA_DEVAPC, "infra_devapc", "axi_sel", 6), /* axi_sel? */
 	GATE_INFRA(CLK_INFRA_MFGAXI, "infra_mfgaxi", "axi_sel", 7), /* mt8135 */
 	/*
 	 * The M4U clock is critical: stopping it while the IOMMU is
@@ -232,6 +234,7 @@ static const struct mtk_clk_desc infra_desc = {
 	.divider_clks = infra_dividers,
 	.num_divider_clks = ARRAY_SIZE(infra_dividers),
 	.rst_desc = &infra_clk_rst_desc,
+	.clk_lock = &mt6589_infra_clk_lock,
 };
 
 static const struct of_device_id of_match_clk_mt6589_infracfg[] = {
