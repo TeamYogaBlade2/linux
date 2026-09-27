@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/regulator/consumer.h>
 #include <linux/scatterlist.h>
 #include <linux/sched.h>
@@ -299,6 +300,7 @@ struct mtk_i2c {
 					 * when dma_separate_rx is 0
 					 */
 	struct clk_bulk_data clocks[I2C_MT65XX_CLK_MAX]; /* clocks for i2c */
+	struct reset_control *reset;
 	bool have_pmic;			/* can use i2c pins from PMIC */
 	bool use_push_pull;		/* IO config push-pull mode */
 
@@ -1405,6 +1407,14 @@ static int mtk_i2c_parse_dt(struct device_node *np, struct mtk_i2c *i2c)
 	return 0;
 }
 
+static int mtk_i2c_reset(struct mtk_i2c *i2c)
+{
+	if (!i2c->reset)
+		return 0;
+
+	return reset_control_reset(i2c->reset);
+}
+
 static int mtk_i2c_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -1430,6 +1440,13 @@ static int mtk_i2c_probe(struct platform_device *pdev)
 	init_completion(&i2c->msg_complete);
 
 	i2c->dev_comp = of_device_get_match_data(&pdev->dev);
+
+	i2c->reset = devm_reset_control_get_optional_exclusive(&pdev->dev,
+							       "reset");
+	if (IS_ERR(i2c->reset)) {
+		dev_err(&pdev->dev, "cannot get reset\n");
+		return PTR_ERR(i2c->reset);
+	}
 
 	if (i2c->dev_comp->dma_separate_rx) {
 		i2c->pdmabase_rx = devm_platform_ioremap_resource(pdev, 2);
@@ -1517,6 +1534,14 @@ static int mtk_i2c_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "clock enable failed!\n");
 		return ret;
 	}
+
+	ret = mtk_i2c_reset(i2c);
+	if (ret) {
+		dev_err(&pdev->dev, "reset failed!\n");
+		clk_bulk_disable(I2C_MT65XX_CLK_MAX, i2c->clocks);
+		return ret;
+	}
+
 	mtk_i2c_init_hw(i2c);
 	clk_bulk_disable(I2C_MT65XX_CLK_MAX, i2c->clocks);
 
@@ -1571,6 +1596,13 @@ static int mtk_i2c_resume_noirq(struct device *dev)
 	ret = clk_bulk_prepare_enable(I2C_MT65XX_CLK_MAX, i2c->clocks);
 	if (ret) {
 		dev_err(dev, "clock enable failed!\n");
+		return ret;
+	}
+
+	ret = mtk_i2c_reset(i2c);
+	if (ret) {
+		dev_err(dev, "reset failed!\n");
+		clk_bulk_disable(I2C_MT65XX_CLK_MAX, i2c->clocks);
 		return ret;
 	}
 
