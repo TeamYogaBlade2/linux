@@ -675,6 +675,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C0_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -689,6 +691,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C1_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -703,6 +707,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C2_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -717,6 +723,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C3_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -729,6 +737,8 @@
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C4_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -742,6 +752,8 @@
 			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C5_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -755,6 +767,8 @@
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C6_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
