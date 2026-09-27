@@ -57,6 +57,13 @@
 };
 
 &pio {
+	pmic_eint_pins: pmic-eint-pins {
+		pin-pmic-eint {
+			pinmux = <MT6589_GPIO37__FUNC_EINT3>;
+			input-enable;
+		};
+	};
+
 	usb_pins: usb-pins {
 		pins_iddig {
 			pinmux = <MT6589_GPIO57__FUNC_GPIO57>;
@@ -88,6 +95,11 @@
 			output-high;
 		};
 	};
+};
+
+&pmic {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pmic_eint_pins>;
 };
 
 &mt6320_ldo_vgp4 {
