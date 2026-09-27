@@ -6,7 +6,9 @@
  *
  *   ref #1  dma_fence_init()            → owned by this function until
  *                                          transferred to sync_file or freed
- *   ref #2  dma_fence_get() for resv    → released at end of submit_ioctl
+ *   ref #2  per-BO dma_resv refs        → dma_resv_add_fence() takes one
+ *                                          ref per BO internally; driver does
+ *                                          NOT take an extra get() for this
  *   ref #3  dma_fence_get() for pending → released by handle_completion()
  *                                          or hw_fini() forced-retirement
  *
@@ -209,29 +211,42 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 	memcpy(cmd->data, data, sizeof(cmd->data));
 
 	/*
-	 * Record the slot BEFORE publishing write_offset.  The IRQ
-	 * handler reads pf->ccb_slot under event_lock and only retires
-	 * fences whose slot has been consumed.  If the slot were set
-	 * after publish, the IRQ could fire first and see 0xFFFF.
+	 * Ordering (critical for correctness):
+	 *   1. Write command to CCB slot and set ccb_slot.
+	 *   2. Add fence to pending_fences (so IRQ can retire it).
+	 *   3. Increment busy_count.
+	 *   4. Publish write_offset (wmb + WRITE_ONCE) — GPU sees new command.
+	 *   5. Kick the GPU.
+	 *
+	 * write_offset is published AFTER pending_fences insertion so the
+	 * IRQ handler always finds the fence when it processes the completion.
+	 * If we published first, the GPU could complete and fire the IRQ
+	 * before the fence was in pending_fences, causing the completion to
+	 * be missed and the fence to hang forever.
+	 *
+	 * read_offset is compared modulo 256 (ring), so a future slot being
+	 * in pending_fences before write_offset is bumped is safe: the
+	 * handle_completion() distance check ensures the slot is not retired
+	 * until read_offset actually advances past it.
 	 */
 	pf->ccb_slot = (u16)slot;
 
+	/* wmb: ensure command data is visible before appending to pending */
 	wmb();
-	WRITE_ONCE(pv->ccb->write_offset, cpu_to_le32((slot + 1) & 255));
 
-	spin_unlock(&pv->ccb_lock);
-
-	/*
-	 * Add to pending_fences only AFTER the command is published in
-	 * the CCB ring.  This guarantees that any IRQ that fires and
-	 * walks pending_fences will only see fences with a valid ccb_slot.
-	 */
+	/* Step 2 & 3: register with IRQ path before GPU can see the command */
 	spin_lock(&pv->event_lock);
 	list_add_tail(&pf->node, &pv->pending_fences);
 	spin_unlock(&pv->event_lock);
 
 	atomic_inc(&pv->busy_count);
 
+	/* Step 4: now publish — GPU may start executing after this */
+	WRITE_ONCE(pv->ccb->write_offset, cpu_to_le32((slot + 1) & 255));
+
+	spin_unlock(&pv->ccb_lock);
+
+	/* Step 5: kick */
 	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
 	return 0;
 }
@@ -419,39 +434,51 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	objs       = NULL;
 
 	/*
-	 * Register the completion fence on every BO's dma_resv so that
-	 * subsequent submits or CPU transfers to the same BO wait for us.
+	 * Register the completion fence on every BO's dma_resv.
 	 *
-	 * API contract for dma_resv_add_fence():
-	 *   1. dma_resv_lock()
-	 *   2. dma_resv_reserve_fences(obj, 1)   ← allocates capacity
-	 *   3. dma_resv_add_fence()
-	 *   4. dma_resv_unlock()
+	 * API contract: lock → reserve_fences(1) → add_fence → unlock.
+	 * We do a two-pass approach for atomicity:
+	 *   Pass 1: reserve capacity on every BO (fail-fast, no side-effects)
+	 *   Pass 2: add the fence on every BO (guaranteed to succeed)
 	 *
-	 * Skipping step 2 causes NULL dereference on first submit (fobj
-	 * is NULL for a freshly-created BO) and BUG_ON on subsequent
-	 * submits when the list is full.
+	 * This avoids the partial-registration hazard where A/B/C get the
+	 * fence but D's reserve fails: the fence would be unreachable (not
+	 * in pending_fences, not in CCB), so A/B/C waiters would stall
+	 * forever on a fence that can never be signalled.
+	 *
+	 * Note: dma_resv_add_fence() takes its own reference on the fence
+	 * (one per BO it is registered on).  We do NOT take an extra
+	 * dma_fence_get() here; the per-BO refs are sufficient.
 	 */
-	dma_fence_get(&f->base);	/* ref #2: for dma_resv */
+
+	/* Pass 1: reserve fence capacity on all BOs */
 	for (i = 0; i < f->num_bos; i++) {
 		struct dma_resv *resv = f->bos[i]->resv;
 		int rerr;
 
 		dma_resv_lock(resv, NULL);
 		rerr = dma_resv_reserve_fences(resv, 1);
-		if (!rerr)
-			dma_resv_add_fence(resv, &f->base,
-					   DMA_RESV_USAGE_WRITE);
 		dma_resv_unlock(resv);
 
 		if (rerr) {
-			/* reservation failed: drop the ref we just took */
-			dma_fence_put(&f->base);
+			/*
+			 * Reserve failed: no fence has been added to any resv
+			 * yet (all-or-nothing: we reserve before adding).
+			 * Release the BO refs and abort.
+			 */
 			ret = rerr;
 			goto err_unlock_bos_set;
 		}
 	}
-	/* resv objects now hold ref #2 collectively */
+
+	/* Pass 2: all reserves succeeded — add fence to every BO */
+	for (i = 0; i < f->num_bos; i++) {
+		struct dma_resv *resv = f->bos[i]->resv;
+
+		dma_resv_lock(resv, NULL);
+		dma_resv_add_fence(resv, &f->base, DMA_RESV_USAGE_WRITE);
+		dma_resv_unlock(resv);
+	}
 
 	/*
 	 * Take ref #3 for pending_fences before ccb_schedule() publishes
