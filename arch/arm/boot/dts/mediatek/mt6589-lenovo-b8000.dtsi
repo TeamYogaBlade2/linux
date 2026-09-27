@@ -30,11 +30,10 @@
 		voltage-min-design-microvolt = <3400000>;
 
 		/*
-		 * Battery nominal/design voltage.
-		 * 4352mV is the BQ24196 charge regulation voltage and
-		 * therefore belongs to constant-charge-voltage-max below.
+		 * Full-charge/design maximum voltage.  The stock BQ24196
+		 * configuration programs VREG to 4.352V.
 		 */
-		voltage-max-design-microvolt = <3750000>;
+		voltage-max-design-microvolt = <4352000>;
 
 		/* BQ24196 stock configuration. */
 		precharge-current-microamp = <512000>;
