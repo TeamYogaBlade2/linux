@@ -274,6 +274,8 @@
 
 		// ce-gpios = ??; // KP col7 P5?
 
+		ti,system-minimum-microvolt = <3700000>;
+
 		usb_otg_vbus: usb-otg-vbus { };
 	};
 };
