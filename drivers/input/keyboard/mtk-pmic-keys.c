@@ -56,6 +56,8 @@ struct mtk_pmic_regs {
 	const struct mtk_pmic_keys_regs keys_regs[MTK_PMIC_MAX_KEY_COUNT];
 	u32 pmic_rst_reg;
 	u32 rst_lprst_mask; /* Long-press reset timeout bitmask */
+	u32 homekey_puen_reg;
+	u32 homekey_puen_mask;
 	bool key_release_irq;
 };
 
@@ -68,6 +70,8 @@ static const struct mtk_pmic_regs mt6320_regs = {
 		0x10, MT6320_INT_RSV, 0x8, MTK_PMIC_HOMEKEY_RST),
 	.pmic_rst_reg = MT6320_TOP_RST_MISC,
 	.rst_lprst_mask = MTK_PMIC_RST_DU_MASK,
+	.homekey_puen_reg = MT6320_GPIO_SMT_CON3,
+	.homekey_puen_mask = BIT(8),
 };
 
 static const struct mtk_pmic_regs mt6397_regs = {
@@ -418,6 +422,15 @@ static int mtk_pmic_keys_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"register input device failed (%d)\n", error);
 		return error;
+	}
+
+	if (mtk_pmic_regs->homekey_puen_reg) {
+		error = regmap_update_bits(keys->regmap,
+					   mtk_pmic_regs->homekey_puen_reg,
+					   mtk_pmic_regs->homekey_puen_mask,
+					   mtk_pmic_regs->homekey_puen_mask);
+		if (error)
+			return error;
 	}
 
 	mtk_pmic_keys_lp_reset_setup(keys, mtk_pmic_regs);
