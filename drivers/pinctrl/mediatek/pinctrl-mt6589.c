@@ -72,11 +72,11 @@ static const struct mtk_pin_field_calc mt6589_pin_dir_range[] = {
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_di_range[] = {
-	PIN_FIELD_CALC(0, 231, 0, 0x0800, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(0, 231, 0, 0x0a00, 0x10, 0, 1, 16, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_do_range[] = {
-	PIN_FIELD_CALC(0, 231, 0, 0x0a00, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(0, 231, 0, 0x0800, 0x10, 0, 1, 16, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
