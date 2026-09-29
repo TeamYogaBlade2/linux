@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of.h>
@@ -268,6 +269,11 @@ enum mtk_thermal_version {
 /* The calibration coefficient of sensor  */
 #define MT6572_CALIBRATION		165
 
+/* TS_CON0 */
+#define MT6572_TS2AUXADC_MASK		GENMASK(7, 6)
+#define MT6572_TS2AUXADC_TSMCU		(0 << 6)
+#define MT6572_TS2AUXADC_TSABB		(1 << 6)
+
 #define MT7622_TEMP_AUXADC_CHANNEL	11
 #define MT7622_NUM_SENSORS		1
 #define MT7622_NUM_ZONES		1
@@ -368,7 +374,11 @@ struct mtk_thermal_data {
 	u32 apmixed_buffer_ctl_reg;
 	u32 apmixed_buffer_ctl_mask;
 	u32 apmixed_buffer_ctl_set;
+	/* sensor mux register and bits, 0 means the whole TS_CON1 */
+	u32 apmixed_pnp_mux_reg;
+	u32 apmixed_pnp_mux_mask;
 	int (*extract_efuse)(struct mtk_thermal *mt, u32 *buf);
+	int (*raw_to_mcelsius)(struct mtk_thermal *mt, int sensno, s32 raw);
 };
 
 struct mtk_thermal {
@@ -491,7 +501,9 @@ static const int mt6572_adcpnp[MT6572_NUM_SENSORS_PER_ZONE] = {
 	TEMP_ADCPNP0, TEMP_ADCPNP1
 };
 
-static const int mt6572_mux_values[MT6572_NUM_SENSORS] = { 0, 1 };
+static const int mt6572_mux_values[MT6572_NUM_SENSORS] = {
+	MT6572_TS2AUXADC_TSMCU, MT6572_TS2AUXADC_TSABB
+};
 static const int mt6572_tc_offset[MT6572_NUM_CONTROLLER] = { 0x0 };
 
 static const int mt6572_vts_index[MT6572_NUM_SENSORS] = {
@@ -638,6 +650,19 @@ static int raw_to_mcelsius_v3(struct mtk_thermal *mt, int sensno, s32 raw)
 	return mt->degc_cali * 500 - tmp;
 }
 
+static int raw_to_mcelsius_mt6572(struct mtk_thermal *mt, int sensno, s32 raw)
+{
+	s32 gain = 4096 + mt->adc_ge - 512;
+	s32 slope = mt->conf->cali_val + mt->o_slope;
+	s32 vts = mt->vts[mt->conf->vts_index[sensno]];
+	s64 tmp;
+
+	raw &= 0xfff;
+	tmp = (s64)(raw - vts - 3350) * 500000000;
+
+	return mt->degc_cali * 500 - div_s64(tmp, 6 * gain * slope);
+}
+
 /**
  * mtk_thermal_get_bank - get bank
  * @bank:	The bank
@@ -731,11 +756,14 @@ static const struct thermal_zone_device_ops mtk_thermal_ops = {
 };
 
 static void mtk_thermal_init_bank(struct mtk_thermal *mt, int num,
+				  void __iomem *apmixed_base,
 				  u32 apmixed_phys_base, u32 auxadc_phys_base,
 				  int ctrl_id)
 {
 	struct mtk_thermal_bank *bank = &mt->banks[num];
 	const struct mtk_thermal_data *conf = mt->conf;
+	u32 pnp_mux_reg = conf->apmixed_pnp_mux_reg ?: APMIXED_SYS_TS_CON1;
+	u32 val = 0;
 	int i;
 
 	int offset = mt->conf->controller_offset[ctrl_id];
@@ -793,7 +821,7 @@ static void mtk_thermal_init_bank(struct mtk_thermal *mt, int num,
 	if (mt->conf->version == MTK_THERMAL_V1 || 
 	    mt->conf->version == MTK_THERMAL_V1_5) {
 		/* AHB address for pnp sensor mux selection */
-		writel(apmixed_phys_base + APMIXED_SYS_TS_CON1,
+		writel(apmixed_phys_base + pnp_mux_reg,
 		       controller_base + TEMP_PNPMUXADDR);
 	}
 
@@ -826,8 +854,13 @@ static void mtk_thermal_init_bank(struct mtk_thermal *mt, int num,
 	writel(TEMP_ADCWRITECTRL_ADC_MUX_WRITE,
 		controller_base + TEMP_ADCWRITECTRL);
 
+	if (conf->apmixed_pnp_mux_mask)
+		val = readl(apmixed_base + pnp_mux_reg) &
+		      ~conf->apmixed_pnp_mux_mask;
+
 	for (i = 0; i < conf->bank_data[num].num_sensors; i++)
-		writel(conf->sensor_mux_values[conf->bank_data[num].sensors[i]],
+		writel(val |
+		       conf->sensor_mux_values[conf->bank_data[num].sensors[i]],
 		       mt->thermal_base + conf->adcpnp[i]);
 
 	writel((1 << conf->bank_data[num].num_sensors) - 1,
@@ -933,23 +966,24 @@ static int mtk_thermal_extract_efuse_v3(struct mtk_thermal *mt, u32 *buf)
 
 static int mtk_thermal_extract_efuse_mt6572(struct mtk_thermal *mt, u32 *buf)
 {
-	int i, ver;
-	bool calibrate = true;
+	int i, ver, adc_oe = 0;
+	bool calibrate = false;
 
-	mt->adc_ge = CALIB_BUF1_ADC_GE_MT6572(buf[1]);
 	ver = CALIB_BUF1_THERMAL_VER_MT6572(buf[1]);
 	if (ver == 0) {
-		mt->adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER0(buf[1]);
+		adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER0(buf[1]);
 		calibrate = CALIB_BUF1_ADC_CALI_EN_MT6572_VER0(buf[1]);
 	} else if (ver == 1) {
-		mt->adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER1(buf[1]);
+		adc_oe = CALIB_BUF1_ADC_OE_MT6572_VER1(buf[1]);
 		calibrate = CALIB_BUF1_ADC_CALI_EN_MT6572_VER1(buf[1]);
 	}
 
-	if (ver > 1 || !calibrate) {
-		/* otherwise efuse may be not blown, use default values */
+	/* otherwise efuse may be not blown, use default values */
+	if (!calibrate)
 		return -EINVAL;
-	}
+
+	mt->adc_ge = CALIB_BUF1_ADC_GE_MT6572(buf[1]);
+	mt->adc_oe = adc_oe;
 
 	for (i = 0; i < mt->conf->num_sensors; i++) {
 		switch (mt->conf->vts_index[i]) {
@@ -965,8 +999,10 @@ static int mtk_thermal_extract_efuse_mt6572(struct mtk_thermal *mt, u32 *buf)
 	}
 
 	mt->degc_cali = CALIB_BUF0_DEGC_CALI_MT6572(buf[0]);
-	if (CALIB_BUF0_ID_MT6572(buf[0]) &
-	    CALIB_BUF0_O_SLOPE_SIGN_MT6572(buf[0]))
+	/* O_SLOPE is only valid with the ID bit set */
+	if (!CALIB_BUF0_ID_MT6572(buf[0]))
+		mt->o_slope = 0;
+	else if (CALIB_BUF0_O_SLOPE_SIGN_MT6572(buf[0]))
 		mt->o_slope = -CALIB_BUF0_O_SLOPE_MT6572(buf[0]);
 	else
 		mt->o_slope = CALIB_BUF0_O_SLOPE_MT6572(buf[0]);
@@ -985,7 +1021,7 @@ static int mtk_thermal_get_calibration_data(struct device *dev,
 	/* Start with default values */
 	mt->adc_ge = 512;
 	mt->adc_oe = 512;
-	for (i = 0; i < mt->conf->num_sensors; i++)
+	for (i = 0; i < ARRAY_SIZE(mt->vts); i++)
 		mt->vts[i] = 260;
 	mt->degc_cali = 40;
 	mt->o_slope = 0;
@@ -1189,7 +1225,13 @@ static const struct mtk_thermal_data mt6572_thermal_data = {
 	.adcpnp = mt6572_adcpnp,
 	.sensor_mux_values = mt6572_mux_values,
 	.version = MTK_THERMAL_V1_5,
+	.apmixed_buffer_ctl_reg = APMIXED_SYS_TS_CON0,
+	.apmixed_buffer_ctl_mask = (u32)~MT6572_TS2AUXADC_MASK,
+	.apmixed_buffer_ctl_set = MT6572_TS2AUXADC_TSMCU,
+	.apmixed_pnp_mux_reg = APMIXED_SYS_TS_CON0,
+	.apmixed_pnp_mux_mask = MT6572_TS2AUXADC_MASK,
 	.extract_efuse = mtk_thermal_extract_efuse_mt6572,
+	.raw_to_mcelsius = raw_to_mcelsius_mt6572,
 };
 
 /*
@@ -1429,7 +1471,9 @@ static int mtk_thermal_probe(struct platform_device *pdev)
 	    mt->conf->version != MTK_THERMAL_V1_5)
 		mtk_thermal_release_periodic_ts(mt, auxadc_base);
 
-	if (mt->conf->version == MTK_THERMAL_V1)
+	if (mt->conf->raw_to_mcelsius)
+		mt->raw_to_mcelsius = mt->conf->raw_to_mcelsius;
+	else if (mt->conf->version == MTK_THERMAL_V1)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v1;
 	else if (mt->conf->version == MTK_THERMAL_V1_5)
 		mt->raw_to_mcelsius = raw_to_mcelsius_v1_5;
@@ -1440,7 +1484,8 @@ static int mtk_thermal_probe(struct platform_device *pdev)
 
 	for (ctrl_id = 0; ctrl_id < mt->conf->num_controller ; ctrl_id++)
 		for (i = 0; i < mt->conf->num_banks; i++)
-			mtk_thermal_init_bank(mt, i, apmixed_phys_base,
+			mtk_thermal_init_bank(mt, i, apmixed_base,
+					      apmixed_phys_base,
 					      auxadc_phys_base, ctrl_id);
 
 	for (i = 0; i < mt->conf->num_banks; i++) {
