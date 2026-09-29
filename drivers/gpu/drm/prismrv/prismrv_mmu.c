@@ -9,6 +9,7 @@
  */
 #include <linux/dma-mapping.h>
 #include <linux/dma-direct.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 
 #include "prismrv_device.h"
@@ -16,6 +17,25 @@
 #define PD_ENTRIES	1024
 #define PT_ENTRIES	1024
 #define PT_SIZE		(PT_ENTRIES * sizeof(u32))
+
+/*
+ * prismrv_mmu_invalidate() - flush the BIF page-table/directory caches.
+ *
+ * Vendor MMU_InvalidateDirectoryCache()/MMU_InvalidatePageTableCache()
+ * set INVALDC (and FLUSH for the PTE cache) in EUR_CR_BIF_CTRL, then
+ * restore the control register.  The driver keeps every other BIF_CTRL
+ * bit at 0 (no bypass bits, no PAUSE), so restoring means writing 0.
+ * Needed after *both* unmap (stale translation) and map (the BIF may
+ * have cached the not-present state of a PDE/PTE it walked earlier).
+ */
+static void prismrv_mmu_invalidate(struct prismrv_device *pv)
+{
+	writel(EUR_CR_BIF_CTRL_INVALDC_MASK | EUR_CR_BIF_CTRL_FLUSH_MASK,
+	       pv->regs + EUR_CR_BIF_CTRL);
+	readl(pv->regs + EUR_CR_BIF_CTRL);
+	writel(0, pv->regs + EUR_CR_BIF_CTRL);
+	readl(pv->regs + EUR_CR_BIF_CTRL);
+}
 
 int prismrv_mmu_init(struct prismrv_device *pv)
 {
@@ -42,11 +62,12 @@ int prismrv_mmu_init(struct prismrv_device *pv)
 						   DMA_TO_DEVICE);
 		}
 		memset(pv->pd_cpu, 0, PAGE_SIZE);
-		/* Reprogram the BIF DIR_LIST register (may have been cleared
-		 * by the soft reset in prismrv_hw_init). */
-		writel(pv->pd_gpu_addr | SGX_MMU_PDE_VALID,
-		       pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+		/* Reprogram the BIF DIR_LIST register (cleared by BIF reset).
+		 * The register takes a bare 4 KiB aligned address: the
+		 * valid bit only exists inside PDEs. */
+		writel(pv->pd_gpu_addr, pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
 		readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+		prismrv_mmu_invalidate(pv);
 		return 0;
 	}
 
@@ -73,6 +94,7 @@ int prismrv_mmu_init(struct prismrv_device *pv)
 
 	writel(pv->pd_gpu_addr, pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
 	readl(pv->regs + EUR_CR_BIF_DIR_LIST_BASE0);
+	prismrv_mmu_invalidate(pv);
 
 	return 0;
 }
@@ -116,6 +138,12 @@ int prismrv_mmu_map_locked(struct prismrv_device *pv, u32 vaddr,
 	unsigned long n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
 	unsigned long i;
 
+	if (!pv->pd_cpu || !pv->pd_pts)
+		return -ENODEV;
+	/* PTEs hold a 32-bit physical page address (non-36bit MMU) */
+	if ((u64)phys + size > SZ_4G)
+		return -EINVAL;
+
 	for (i = 0; i < n_pages; i++) {
 		u32 va = vaddr + i * PAGE_SIZE;
 		u32 pd_idx = va >> 22;
@@ -134,8 +162,9 @@ int prismrv_mmu_map_locked(struct prismrv_device *pv, u32 vaddr,
 				 * (init/errata paths) don't leave valid
 				 * mappings pointing at nothing.
 				 */
-				prismrv_mmu_unmap(pv, vaddr,
-						  (u32)i * PAGE_SIZE);
+				/* mmu_lock is already held: use _locked */
+				prismrv_mmu_unmap_locked(pv, vaddr,
+							 (size_t)i * PAGE_SIZE);
 				return -ENOMEM;
 			}
 			memset(pt, 0, PT_SIZE);
@@ -152,6 +181,10 @@ int prismrv_mmu_map_locked(struct prismrv_device *pv, u32 vaddr,
 					  SGX_MMU_PTE_ADDR_MASK) |
 					 SGX_MMU_PTE_VALID);
 	}
+
+	/* make the new translations visible to the BIF */
+	wmb();
+	prismrv_mmu_invalidate(pv);
 
 	return 0;
 }
@@ -175,6 +208,9 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 	unsigned long i;
 	bool flushed = false;
 
+	if (!pv->pd_pts)
+		return;
+
 	for (i = 0; i < n_pages; i++) {
 		u32 va = vaddr + i * PAGE_SIZE;
 		u32 pd_idx = va >> 22;
@@ -192,11 +228,8 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 	 * VA range can be read through the old mapping (data leak across
 	 * GEM clients).  FLUSH is self-clearing.
 	 */
-	if (flushed) {
-		writel(EUR_CR_BIF_CTRL_FLUSH_MASK,
-		       pv->regs + EUR_CR_BIF_CTRL);
-		readl(pv->regs + EUR_CR_BIF_CTRL);
-	}
+	if (flushed)
+		prismrv_mmu_invalidate(pv);
 }
 
 /* public wrapper — acquires mmu_lock */

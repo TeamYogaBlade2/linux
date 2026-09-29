@@ -14,6 +14,7 @@
 #include <linux/workqueue.h>
 #include <linux/io.h>
 #include <drm/drm_device.h>
+#include <drm/drm_mm.h>
 #include <drm/gpu_scheduler.h>
 #include "prismrv_regs.h"
 
@@ -28,6 +29,8 @@
 
 /* uKernel upload address inside GPU virtual space */
 #define PRISMRV_UKERNEL_VADDR	0x0c000000u
+/* the stock image is ~105 KiB; leave room for growth, stay below 1 MiB */
+#define PRISMRV_UKERNEL_MAX_SIZE	(1024u * 1024u)
 
 /*
  * Fixed GPU-VA layout for uKernel shared structures.  The base addresses
@@ -138,6 +141,13 @@ struct prismrv_fence {
 	u16 ccb_slot;
 
 	/*
+	 * 32-bit monotonic CCB command counter value of this command
+	 * (see prismrv_handle_completion()).  The fence is retired once
+	 * the consumed-command counter has advanced past it.
+	 */
+	u32 ccb_seq;
+
+	/*
 	 * GEM object references held for the lifetime of this job.
 	 * The submit ioctl drops its own refs from objs[] immediately
 	 * after enqueuing; these refs keep the BOs alive (and their GPU
@@ -153,7 +163,7 @@ struct prismrv_device {
 	struct drm_device drm;		/* must be first */
 	struct platform_device *pdev;
 	const struct prismrv_chip_info *info;
-	int irq;			/* Linux IRQ number, -1 = polling only */
+	int irq;			/* Linux IRQ number (required) */
 
 	void __iomem *regs;
 	resource_size_t regs_size;
@@ -161,6 +171,8 @@ struct prismrv_device {
 
 	struct clk_bulk_data *clocks;	/* from devm_clk_bulk_get_all_enabled */
 	int nr_clocks;
+	struct clk *clk_core;	/* "core" (frequency-scaled) clock */
+	struct clk *clk_hyd;	/* "hyd": enabled first, disabled last (vendor order) */
 
 	/* runtime-detected hardware revision */
 	u32 core_id;		/* raw EUR_CR_CORE_ID: designer/core fields */
@@ -205,6 +217,10 @@ struct prismrv_device {
 	struct list_head bo_list;
 	spinlock_t bo_list_lock;
 
+	/* GPU virtual address heap for BOs (prismrv_gem.c) */
+	struct drm_mm va_mm;
+	struct mutex va_lock;
+
 	/* uKernel */
 	size_t ukernel_size;
 	dma_addr_t ukernel_dma;
@@ -226,6 +242,8 @@ struct prismrv_device {
 	dma_addr_t ccb_dma;
 	struct prismrv_ccb *ccb;
 	spinlock_t ccb_lock;
+	u32 ccb_submitted;	/* commands published; protected by ccb_lock */
+	u32 ccb_completed;	/* commands consumed by the uKernel; event_lock */
 
 	dma_addr_t hwrt_dma;
 	void *hwrt;			/* 2 x 496 bytes (TA, 3D) */
@@ -254,6 +272,8 @@ struct prismrv_device {
 	atomic_t fence_context;		/* dma_fence context id */
 	atomic_t fence_seqno;		/* per-context sequence number */
 	struct work_struct recovery_work;
+	struct delayed_work hang_work;
+	unsigned long last_progress;	/* jiffies of the last fence retirement */
 	struct mutex init_mutex;	/* serialises prismrv_hw_init */
 	/*
 	 * Prevents concurrent submit and recovery tearing each other's
@@ -298,6 +318,7 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 
 irqreturn_t prismrv_irq_handler(int irq, void *data);
 void prismrv_recovery_work(struct work_struct *work);
+void prismrv_hang_work(struct work_struct *work);
 
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file);
@@ -318,6 +339,8 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);
+int prismrv_va_init(struct prismrv_device *pv);
+void prismrv_va_fini(struct prismrv_device *pv);
 void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv);
 
 int prismrv_devfreq_init(struct prismrv_device *pv);

@@ -10,7 +10,7 @@
 #include <linux/types.h>
 
 /* Incremented when ABI-incompatible changes are made. */
-#define PRISMRV_UAPI_VERSION		2
+#define PRISMRV_UAPI_VERSION		3
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -19,6 +19,8 @@ struct drm_prismrv_gem_create {
 	__u64 size;		/* in bytes, page aligned by the kernel */
 	__u32 flags;		/* PRISMRV_BO_* */
 	__u32 handle;		/* out: GEM handle */
+	__u32 gpu_va;		/* out: fixed GPU virtual address of the BO */
+	__u32 pad;		/* must be zero on input, zeroed on output */
 };
 
 #define PRISMRV_BO_CACHED	0x0	/* normal cached mapping (default) */
@@ -64,6 +66,27 @@ struct drm_prismrv_get_param {
 #define PRISMRV_PARAM_CORE_COUNT	2 /* number of SGX MP cores */
 #define PRISMRV_PARAM_UKERNEL_SIZE	3 /* size of the loaded uKernel image */
 #define PRISMRV_PARAM_ERRATA		4 /* bitmask of active BRN workarounds */
+
+/*
+ * PRISMRV_PARAM_UAPI_VERSION returns PRISMRV_UAPI_VERSION so userspace can
+ * detect the kernel ABI with a query instead of a failing ioctl.
+ *
+ * PRISMRV_PARAM_CMD_ABI describes how the kernel presents a submit to the
+ * uKernel:
+ *   PRISMRV_CMD_ABI_STREAM_V1: the command BO is opaque to the kernel.
+ *     The kernel publishes one CCB entry with
+ *       data[0] = GPU VA of the command BO, data[1] = cmd_size,
+ *       data[2] = GPU VA of bos[0] (if num_bos >= 1).
+ *     Interpreting the stream is the job of the loaded uKernel image
+ *     (or the PrismRV emulator).  The stock vendor uKernel does NOT
+ *     understand it: real-hardware rendering needs a uKernel that does,
+ *     or a userspace that emits vendor TA/3D CCB commands.
+ *   All GPU addresses embedded in a command stream must be taken from
+ *   drm_prismrv_gem_create.gpu_va; GEM handles mean nothing to the GPU.
+ */
+#define PRISMRV_PARAM_UAPI_VERSION	6
+#define PRISMRV_PARAM_CMD_ABI		7
+#define PRISMRV_CMD_ABI_STREAM_V1	1
 
 #define DRM_PRISMRV_GEM_CREATE		0x00
 #define DRM_PRISMRV_GEM_MMAP_OFFSET	0x01

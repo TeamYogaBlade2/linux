@@ -21,8 +21,9 @@
 	(EUR_CR_EVENT_STATUS_TA_FINISHED_MASK | \
 	 EUR_CR_EVENT_STATUS_PIXELBE_END_RENDER_MASK)
 
-/* consecutive completions without a fence being signalled trigger reset */
+/* consecutive completion events that retire no fence trigger a reset */
 #define PRISMRV_RECOVERY_THRESHOLD	3
+#define PRISMRV_HANG_TIMEOUT_MS		4000
 
 /*
  * Release the GEM object references that submit_ioctl() transferred
@@ -47,30 +48,46 @@ void prismrv_fence_release_bos(struct prismrv_fence *pf)
 	pf->num_bos = 0;
 }
 
-static void prismrv_handle_completion(struct prismrv_device *pv)
+/*
+ * CCB retirement uses a 32-bit monotonic command counter instead of the
+ * raw 8-bit ring offsets.
+ *
+ * The hardware only exposes read_offset modulo 256.  Comparing ring
+ * distances with a half-range test (>= 128) breaks as soon as more than
+ * 128 commands are outstanding, although prismrv_ccb_full() allows up
+ * to 255.  Instead the driver extends read_offset to a 32-bit
+ * "commands consumed" counter: because at most 255 commands can be
+ * outstanding, the forward distance between the previously observed and
+ * the current read_offset is unambiguous.  Every fence remembers the
+ * counter value of its command (ccb_seq) and is retired once that value
+ * is below the consumed counter.
+ *
+ * Returns the number of fences retired.
+ */
+static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 {
 	LIST_HEAD(signalled);
+	unsigned int retired = 0;
+	unsigned long flags;
 	u32 read_off;
 
-	if (pv->ccb)
-		read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
-	else
-		read_off = 0;
+	if (!pv->ccb)
+		return 0;
+	read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
 
-	spin_lock(&pv->event_lock);
+	spin_lock_irqsave(&pv->event_lock, flags);
+	pv->ccb_completed += (read_off - pv->ccb_completed) & 255;
 	while (!list_empty(&pv->pending_fences)) {
 		struct prismrv_fence *pf =
 			list_first_entry(&pv->pending_fences,
 					 struct prismrv_fence, node);
 
-		if (pf->ccb_slot != 0xFFFF &&
-		    ((read_off - pf->ccb_slot - 1) & 255) >= 128)
+		if ((s32)(pf->ccb_seq - pv->ccb_completed) >= 0)
 			break;
 
-		list_del(&pf->node);
-		list_add_tail(&pf->node, &signalled);
+		list_move_tail(&pf->node, &signalled);
 	}
-	spin_unlock(&pv->event_lock);
+	spin_unlock_irqrestore(&pv->event_lock, flags);
 
 	while (!list_empty(&signalled)) {
 		struct prismrv_fence *pf =
@@ -86,12 +103,17 @@ static void prismrv_handle_completion(struct prismrv_device *pv)
 		prismrv_fence_release_bos(pf);
 		dma_fence_put(&pf->base);
 		atomic_dec(&pv->busy_count);
+		retired++;
 
 		pm_runtime_mark_last_busy(pv->drm.dev);
 		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
 
-	atomic_set(&pv->missed_completions, 0);
+	if (retired) {
+		WRITE_ONCE(pv->last_progress, jiffies);
+		atomic_set(&pv->missed_completions, 0);
+	}
+	return retired;
 }
 
 static void prismrv_check_recovery(struct prismrv_device *pv)
@@ -168,6 +190,30 @@ void prismrv_recovery_work(struct work_struct *work)
 	pm_runtime_put_autosuspend(pv->drm.dev);
 }
 
+/*
+ * Hang watchdog: armed by every submit.  If work is outstanding and no
+ * fence has retired for PRISMRV_HANG_TIMEOUT_MS, the uKernel is wedged
+ * without raising any interrupt; schedule a reset.
+ */
+void prismrv_hang_work(struct work_struct *work)
+{
+	struct prismrv_device *pv =
+		container_of(work, struct prismrv_device, hang_work.work);
+	unsigned long last = READ_ONCE(pv->last_progress);
+
+	if (!atomic_read(&pv->busy_count) || !READ_ONCE(pv->hw_ready))
+		return;
+
+	if (time_after(jiffies, last + msecs_to_jiffies(PRISMRV_HANG_TIMEOUT_MS))) {
+		dev_err(pv->drm.dev, "no progress for %dms, resetting GPU\n",
+			PRISMRV_HANG_TIMEOUT_MS);
+		WRITE_ONCE(pv->last_progress, jiffies);
+		schedule_work(&pv->recovery_work);
+	}
+	schedule_delayed_work(&pv->hang_work,
+			      msecs_to_jiffies(PRISMRV_HANG_TIMEOUT_MS / 2));
+}
+
 irqreturn_t prismrv_irq_handler(int irq, void *data)
 {
 	struct prismrv_device *pv = data;
@@ -182,16 +228,18 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 	if (!clear)
 		return IRQ_NONE;
 
-	if (status & PRISMRV_IRQ_COMPLETION_EVENTS)
-		prismrv_handle_completion(pv);
-	else if (atomic_read(&pv->busy_count) > 0)
-		/*
-		 * An unrelated event arrived while a submission is in
-		 * flight.  Only then does it hint at a wedged uKernel;
-		 * counting SW events while idle used to schedule a
-		 * bogus GPU reset.
-		 */
-		prismrv_check_recovery(pv);
+	/*
+	 * A completion event that does not advance read_offset (no fence
+	 * retired) while work is outstanding counts towards recovery.
+	 * Events that are not completion events (SW housekeeping raised
+	 * by the uKernel) say nothing about progress and are ignored;
+	 * a silent hang is caught by the hang watchdog instead.
+	 */
+	if (status & PRISMRV_IRQ_COMPLETION_EVENTS) {
+		if (!prismrv_handle_completion(pv) &&
+		    atomic_read(&pv->busy_count) > 0)
+			prismrv_check_recovery(pv);
+	}
 
 	/*
 	 * HostCtl flag path (REVIEW R6): the uKernel raises bits in

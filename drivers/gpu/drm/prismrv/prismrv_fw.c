@@ -56,18 +56,23 @@ static void prismrv_fw_names(struct prismrv_device *pv,
 	}
 
 	/*
-	 * Derive the init-script name: replace "-ukernel.bin" suffix with
-	 * "-init.bin".  If the suffix is absent, append "-init.bin" to the
-	 * stem so we still produce a useful path.
+	 * Derive the init-script name:
+	 *   foo-ukernel.bin -> foo-init.bin
+	 *   foo.bin         -> foo-init.bin
+	 *   foo             -> foo-init.bin
 	 */
 	strscpy(out_init, out_ukernel, 128);
 	{
-		char *suffix = strstr(out_init, "-ukernel.bin");
+		size_t len = strlen(out_init);
+		static const char uk[] = "-ukernel.bin";
+		static const char bin[] = ".bin";
 
-		if (suffix)
-			strcpy(suffix, "-init.bin");
-		else
-			strlcat(out_init, "-init.bin", 128);
+		if (len > strlen(uk) && !strcmp(out_init + len - strlen(uk), uk))
+			out_init[len - strlen(uk)] = '\0';
+		else if (len > strlen(bin) &&
+			 !strcmp(out_init + len - strlen(bin), bin))
+			out_init[len - strlen(bin)] = '\0';
+		strlcat(out_init, "-init.bin", 128);
 	}
 }
 
@@ -88,6 +93,20 @@ int prismrv_fw_load(struct prismrv_device *pv)
 		dev_err(pv->drm.dev, "failed to load %s (%d)\n",
 			fw_ukernel, ret);
 		return ret;
+	}
+
+	/*
+	 * Sanity-check the image before it is DMA-mapped into the GPU:
+	 * the uKernel is a stream of 64-bit USSE instructions and must
+	 * fit the region reserved for it in the GPU VA layout (up to the
+	 * next fixed carve-out).
+	 */
+	if (!fw->size || fw->size % 8 || fw->size > PRISMRV_UKERNEL_MAX_SIZE) {
+		dev_err(pv->drm.dev,
+			"%s: bad uKernel size %zu (need non-zero multiple of 8, <= %u)\n",
+			fw_ukernel, fw->size, PRISMRV_UKERNEL_MAX_SIZE);
+		release_firmware(fw);
+		return -EINVAL;
 	}
 
 	pv->ukernel_size = fw->size;

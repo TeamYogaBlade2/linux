@@ -3,6 +3,7 @@ config DRM_PRISMRV
 	tristate "PrismRV DRM driver for PowerVR SGX GPUs"
 	depends on MMU && (OF || COMPILE_TEST)
 	depends on DRM
+	select DRM_EXEC
 	select DRM_GEM_SHMEM_HELPER
 	select PM_DEVFREQ
 	select DEVFREQ_GOV_SIMPLE_ONDEMAND

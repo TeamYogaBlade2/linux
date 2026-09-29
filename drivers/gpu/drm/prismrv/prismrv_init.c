@@ -3,16 +3,27 @@
  * prismrv_init.c — hardware bring-up sequence.
  *
  * Mirrors the vendor SGXInitialise() order (services4/srvkm/devices/sgx/
- * sgxinit.c):
+ * sgxinit.c).  The init script blob captured from the vendor loader
+ * (DEVINITPART2) is split by a HALT record into two halves that the
+ * vendor driver runs on either side of the reset:
  *
- *   1. init script part 1        (pre-reset register writes)
+ *   1. init script part 1        (identity check, up to the first HALT)
  *   2. soft reset                (EUR_CR_SOFT_RESET pulse)
  *   3. pipe configuration        (EUR_CR_POWER)
- *   4. BIF context reset         (bank / dir-list registers)
- *   5. init script part 2        (post-reset register writes)
+ *   4. BIF context reset         (bank / dir-list registers; the script
+ *                                 does not program any of these, the
+ *                                 MMU code does right after)
+ *   5. init script part 2        (post-reset register programming:
+ *                                 event enables, USE_CODE_BASE_0..15,
+ *                                 banked USE/PDS/MTE registers)
  *   6. uKernel upload + HostCtl  (clock stamp, InitStatus = 0)
  *   7. EVENT_KICK                (starts the uKernel main loop)
  *   8. poll ui32InitStatus       (PVRSRV_USSE_EDM_INIT_COMPLETE)
+ *
+ * Everything the script writes for USE_CODE_BASE_*, event enables and
+ * the banked USE state lives in blocks that the soft reset clears, so it
+ * must run *after* the reset (part 2).  Running it once before the reset
+ * (as an earlier revision did) silently discarded all of it.
  */
 #include <linux/delay.h>
 #include <linux/firmware.h>
@@ -56,9 +67,9 @@ void prismrv_soft_reset(struct prismrv_device *pv)
 	    EUR_CR_SOFT_RESET_DCU_L2_RESET_MASK |
 	    EUR_CR_SOFT_RESET_DCU_L0L1_RESET_MASK |
 	    EUR_CR_SOFT_RESET_ITR_RESET_MASK |
-	    /* BIF reset (hwdoc SGX544 register list bit0): flush the MMU
-	     * state along with the rest; the dir-list base is reprogrammed
-	     * right after in prismrv_mmu_init() */
+	    /* BIF reset: the dir-list base and bank registers are cleared
+	     * by prismrv_bif_reset() and reprogrammed by prismrv_mmu_init()
+	     * right after the reset */
 	    EUR_CR_SOFT_RESET_BIF_RESET_MASK;
 	writel(v, pv->regs + EUR_CR_SOFT_RESET);
 	writel(0, pv->regs + EUR_CR_SOFT_RESET);
@@ -75,13 +86,11 @@ void prismrv_bif_reset(struct prismrv_device *pv)
 }
 
 /*
- * Run the init script from start_rec to the end (or a HALT record).
+ * Run the init script from start_rec up to (and including) the next HALT
+ * record, or to the end of the blob.
  *
- * The MT6589 script is a single-shot sequence with no HALT records:
- * it programs the BIF bank window, event enables, USE_CODE_BASE_0..15
- * and the bank-switched USE private registers in one pass.  Offsets
- * are BYTE offsets into the register page, including the switched
- * banks (0x4000+, 0x8000+, 0x22000+).
+ * Offsets are BYTE offsets into the register page, including the
+ * bank-switched windows (0x4000+, 0x8000+, 0x22000+).
  *
  * Returns the index of the next unexecuted record (== n when the whole
  * script ran), or a negative errno.
@@ -97,18 +106,28 @@ static int prismrv_run_script_range(struct prismrv_device *pv,
 
 	for (i = start_rec; i < n; i++, rec++) {
 		u32 op = le32_to_cpu(rec->op);
+		u32 off = le32_to_cpu(rec->offset);
+
+		if (off >= pv->regs_size || (off & 3)) {
+			dev_err(pv->drm.dev,
+				"init script rec %zu: bad offset 0x%x\n", i, off);
+			return -EINVAL;
+		}
 
 		switch (op) {
 		case PRISMRV_INIT_OP_WRITE:
-			writel(le32_to_cpu(rec->value),
-			       pv->regs + le32_to_cpu(rec->offset));
-			readl(pv->regs + le32_to_cpu(rec->offset));
+			writel(le32_to_cpu(rec->value), pv->regs + off);
+			readl(pv->regs + off);
 			break;
 		case PRISMRV_INIT_OP_READ:
-			readl(pv->regs + le32_to_cpu(rec->offset));
+			readl(pv->regs + off);
 			break;
 		case PRISMRV_INIT_OP_HALT:
 			return i + 1;
+		default:
+			dev_err(pv->drm.dev,
+				"init script rec %zu: bad op %u\n", i, op);
+			return -EINVAL;
 		}
 	}
 	return n;
@@ -118,7 +137,7 @@ int prismrv_hw_init(struct prismrv_device *pv)
 {
 	const struct firmware *fw = NULL;
 	unsigned int i;
-	int ret;
+	int ret, next;
 
 	/*
 	 * Use the init-script name derived by prismrv_fw_load() from the DT
@@ -136,19 +155,20 @@ int prismrv_hw_init(struct prismrv_device *pv)
 		return ret;
 	}
 
-	/*
-	 * Run the whole init script once, before the soft reset.  The
-	 * MT6589 capture has no part1/part2 HALT split — the vendor
-	 * sequence programs BIF windows, event enables and
-	 * USE_CODE_BASE_0..15 in a single pass, and every register it
-	 * touches survives the soft reset (only the USE pipeline is
-	 * reset; BIF keeps its dir-list programming).
-	 */
-	ret = prismrv_run_script_range(pv, fw, 0);
-	release_firmware(fw);
-	fw = NULL;
-	if (ret < 0)
+	if (!fw->size || fw->size % sizeof(struct prismrv_init_rec)) {
+		dev_err(pv->drm.dev, "init script size %zu is not a multiple of %zu\n",
+			fw->size, sizeof(struct prismrv_init_rec));
+		release_firmware(fw);
+		return -EINVAL;
+	}
+
+	/* part 1: pre-reset (identity check).  Ends at the first HALT. */
+	next = prismrv_run_script_range(pv, fw, 0);
+	if (next < 0) {
+		ret = next;
+		release_firmware(fw);
 		goto out_fw;
+	}
 
 	prismrv_read_revision(pv);	/* revision stable after clocks on */
 	prismrv_errata_init(pv);	/* sets pv->errata bitmask only */
@@ -159,6 +179,23 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	writel(0, pv->regs + EUR_CR_POWER);
 
 	prismrv_bif_reset(pv);
+
+	/*
+	 * part 2: post-reset register programming.  A blob without a HALT
+	 * separator (legacy single-shot capture) has next == n here, in
+	 * which case the whole script is replayed after the reset so the
+	 * USE_CODE_BASE / event-enable writes still take effect.
+	 */
+	if (next >= (int)(fw->size / sizeof(struct prismrv_init_rec))) {
+		dev_warn(pv->drm.dev,
+			 "init script has no HALT separator, replaying it after reset\n");
+		next = 0;
+	}
+	ret = prismrv_run_script_range(pv, fw, next);
+	release_firmware(fw);
+	fw = NULL;
+	if (ret < 0)
+		goto out_fw;
 
 	/*
 	 * mmu_init() MUST come before errata_apply().
@@ -241,6 +278,8 @@ out_fw:
 void prismrv_hw_fini(struct prismrv_device *pv)
 {
 	unsigned int i;
+	unsigned long flags;
+	struct prismrv_fence *it;
 	LIST_HEAD(retiring);
 
 	pv->hw_ready = false;
@@ -271,29 +310,24 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	if (pv->irq >= 0)
 		disable_irq(pv->irq);
 
-	/* retire any fences that will never complete */
-	spin_lock(&pv->event_lock);
-	while (!list_empty(&pv->pending_fences)) {
-		struct prismrv_fence *pf =
-			list_first_entry(&pv->pending_fences,
-					 struct prismrv_fence, node);
-		list_del(&pf->node);
+	/* stop the hang watchdog before tearing the rings down */
+	cancel_delayed_work_sync(&pv->hang_work);
 
-		dma_fence_set_error(&pf->base, -EIO);
-		dma_fence_signal(&pf->base);
-		/*
-		 * Release the BO references the fence was holding.
-		 * Must be done outside event_lock (which is a spinlock)
-		 * because drm_gem_object_put() may sleep if the last
-		 * ref triggers shmem page release.  Stash the fence
-		 * pointer and do the put after unlocking.
-		 *
-		 * We cannot call prismrv_fence_release_bos() here while
-		 * holding the spinlock, so splice the whole list first.
-		 */
-		list_add_tail(&pf->node, &retiring);
+	/*
+	 * Retire any fences that will never complete.  Detach them from
+	 * the pending list under event_lock, but signal them only after
+	 * the lock is dropped: dma_fence_signal() runs arbitrary callbacks
+	 * (possibly from other subsystems) that must not execute under a
+	 * driver spinlock that the IRQ handler also takes.
+	 */
+	spin_lock_irqsave(&pv->event_lock, flags);
+	list_splice_init(&pv->pending_fences, &retiring);
+	spin_unlock_irqrestore(&pv->event_lock, flags);
+
+	list_for_each_entry(it, &retiring, node) {
+		dma_fence_set_error(&it->base, -EIO);
+		dma_fence_signal(&it->base);
 	}
-	spin_unlock(&pv->event_lock);
 
 	while (!list_empty(&retiring)) {
 		struct prismrv_fence *pf =

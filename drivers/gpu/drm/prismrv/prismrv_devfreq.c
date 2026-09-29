@@ -14,13 +14,18 @@
 
 #include "prismrv_device.h"
 
+/* opp-supported-hw bit selecting the SW-eFuse forced 238.333 MHz point */
+#define PRISMRV_OPP_FORCED_BIT	8
+
 /**
  * prismrv_read_gpu_grade() - fetch the fused GPU speed grade.
  *
- * MT6589 stores a 4-bit grade (values 1..7) in eFuse word 0x0c
- * bits[31:28] (the vendor /dev/devmap index-3 word).  Grade 0 means
- * unfused: the vendor boot code then runs a fixed default frequency
- * without DVFS.  Returns the raw grade, or a negative errno.
+ * MT6589 stores the grade (values 1..7) in eFuse word 0x0c bits[30:28]
+ * (the vendor /dev/devmap index-3 word, bit 31 is masked off by the
+ * vendor code).  The DT nvmem cell extracts exactly these three bits.
+ * Grade 0 means unfused: the vendor boot code then runs a fixed default
+ * frequency (286 MHz) without DVFS.  Returns the raw grade, or a
+ * negative errno.
  */
 static int prismrv_read_gpu_grade(struct device *dev)
 {
@@ -42,7 +47,7 @@ static int prismrv_read_gpu_grade(struct device *dev)
 
 	/*
 	 * Validate the returned buffer length.  The DT specifies
-	 *   bits = <28 4>   (4-bit field at bit 28 of a 32-bit word)
+	 *   bits = <28 3>   (3-bit field at bit 28 of a 32-bit word)
 	 * so the NVMEM provider should return exactly 1 byte after
 	 * bit-extraction.  Guard against a misconfigured provider
 	 * returning a shorter (0-byte) or wider buffer.
@@ -54,9 +59,33 @@ static int prismrv_read_gpu_grade(struct device *dev)
 		return 0;
 	}
 
-	grade = buf[0] & 0x0f;	/* 4-bit field: mask stray upper bits */
+	grade = buf[0] & 0x07;	/* 3-bit field: mask stray upper bits */
 	kfree(buf);
 	return grade;
+}
+
+/*
+ * SW eFuse (devinfo index 10) bit 7: the vendor mtk_set_freq_init()
+ * overrides the grade-derived frequency with 238.333 MHz when it is set.
+ * Returns 1 if set, 0 if clear or the cell is not wired up.
+ */
+static int prismrv_read_sw_efuse_force(struct device *dev)
+{
+	struct nvmem_cell *cell;
+	size_t len;
+	u8 *buf;
+	int val;
+
+	cell = devm_nvmem_cell_get(dev, "gpu_sw_efuse");
+	if (IS_ERR(cell))
+		return 0;
+	buf = nvmem_cell_read(cell, &len);
+	devm_nvmem_cell_put(dev, cell);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
+	val = len ? (buf[0] & 1) : 0;
+	kfree(buf);
+	return val;
 }
 
 static void prismrv_devfreq_update_utilization(struct prismrv_device *pv)
@@ -97,7 +126,7 @@ static int prismrv_devfreq_get_dev_status(struct device *dev,
 
 	spin_lock_irqsave(&df->lock, irqflags);
 	prismrv_devfreq_update_utilization(pv);
-	status->current_frequency = clk_get_rate(pv->clocks[0].clk);
+	status->current_frequency = clk_get_rate(pv->clk_core);
 	/* a single utilization update: calling it twice double-counted
 	 * the elapsed interval and skewed the reported load */
 	status->busy_time = df->busy_time;
@@ -139,6 +168,14 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 	if (grade > 7)
 		grade = 0;
 	version = BIT(grade);
+
+	ret = prismrv_read_sw_efuse_force(pv->drm.dev);
+	if (ret < 0)
+		return ret;
+	if (ret) {
+		dev_info(pv->drm.dev, "SW eFuse bit 7 set: forcing 238.333 MHz\n");
+		version = BIT(PRISMRV_OPP_FORCED_BIT);
+	}
 	if (grade == 0)
 		dev_info(pv->drm.dev,
 			 "GPU grade unfused: fixed default frequency\n");
@@ -152,7 +189,7 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 	 */
 	ret = devm_pm_opp_set_config(pv->drm.dev,
 		&(struct dev_pm_opp_config){
-			.clk_names = (const char *[]){ pv->clocks[0].id, NULL },
+			.clk_names = (const char *[]){ "core", NULL },
 			.regulator_names = (const char *[]){ "vrf18_2", NULL },
 			.supported_hw = &version,
 			.supported_hw_count = 1,
@@ -168,7 +205,7 @@ int prismrv_devfreq_init(struct prismrv_device *pv)
 		return ret;
 	}
 
-	cur_freq = clk_get_rate(pv->clocks[0].clk);
+	cur_freq = clk_get_rate(pv->clk_core);
 	opp = devfreq_recommended_opp(pv->drm.dev, &cur_freq, 0);
 	if (IS_ERR(opp))
 		return PTR_ERR(opp);

@@ -42,7 +42,7 @@ properties:
 
   clocks:
     minItems: 1
-    maxItems: 3
+    maxItems: 4
 
   clock-names:
     minItems: 1
@@ -54,13 +54,35 @@ properties:
 
   operating-points-v2: true
 
+  nvmem-cells:
+    minItems: 1
+    maxItems: 2
+
+  nvmem-cell-names:
+    minItems: 1
+    items:
+      - const: gpu_grade      # MT6589: devinfo[3] bits[30:28], speed grade
+      - const: gpu_sw_efuse   # MT6589: devinfo[10] bit 7, forces 238.333 MHz
+
+  firmware-name:
+    $ref: /schemas/types.yaml#/definitions/string
+    description:
+      uKernel firmware file name (default depends on the SoC); the register
+      init script is loaded from the same directory with the "-ukernel.bin"
+      suffix replaced by "-init.bin".
+
+  vrf18_2-supply:
+    description: Regulator feeding the GPU (MT6589 VRF18_2 buck, DVFS rail).
+
   power-domains:
     maxItems: 1
 
   resets:
     maxItems: 1
 
-  reset-names: {}
+  reset-names:
+    items:
+      - const: g3d
 
 required:
   - compatible
@@ -68,17 +90,21 @@ required:
   - interrupts
 
 allOf:
+  # A power domain exists (and is then mandatory) on these SoCs only.
   - if:
       properties:
         compatible:
           contains:
-            const: ti,am6548-gpu
+            enum:
+              - ti,am6548-gpu
+              - mediatek,mt6589-gpu
     then:
       required:
         - power-domains
     else:
       properties:
         power-domains: false
+  # Clocks are described in DT on these SoCs only.
   - if:
       properties:
         compatible:
@@ -86,6 +112,7 @@ allOf:
             enum:
               - allwinner,sun6i-a31-gpu
               - ingenic,jz4780-gpu
+              - mediatek,mt6589-gpu
     then:
       required:
         - clocks
@@ -101,19 +128,20 @@ allOf:
             const: mediatek,mt6589-gpu
     then:
       required:
-        - clocks
-        - clock-names
-        - power-domains
         - resets
+        - reset-names
       properties:
         clocks:
           minItems: 4
-          maxItems: 4
         clock-names:
           minItems: 4
-          maxItems: 4
-          items:
-            enum: [core, mem, sys, hyd]
+    else:
+      properties:
+        resets: false
+        reset-names: false
+        nvmem-cells: false
+        nvmem-cell-names: false
+        vrf18_2-supply: false
   - if:
       properties:
         compatible:

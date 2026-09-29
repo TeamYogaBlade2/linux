@@ -12,6 +12,8 @@
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
 #include <linux/delay.h>
+#include <linux/string.h>
+#include <linux/dma-mapping.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_ioctl.h>
@@ -64,6 +66,50 @@ static const struct drm_driver prismrv_drm_driver = {
 	.minor = 0,
 };
 
+/*
+ * Clock sequencing mirrors the vendor EnableSGXClocks()/DisableSGXClocks()
+ * (services4/system/mt6589/sysutils_linux.c): HYD first, then G3D, MEM,
+ * AXI; disabled in exactly the reverse order (AXI, MEM, G3D, HYD).  DT
+ * lists core, mem, sys, hyd; "hyd" is therefore pulled out of the list.
+ */
+static void prismrv_clks_off(struct prismrv_device *pv, int upto)
+{
+	int i;
+
+	for (i = upto - 1; i >= 0; i--)
+		if (pv->clocks[i].clk != pv->clk_hyd)
+			clk_disable_unprepare(pv->clocks[i].clk);
+	if (pv->clk_hyd)
+		clk_disable_unprepare(pv->clk_hyd);
+}
+
+static int prismrv_clks_on(struct prismrv_device *pv)
+{
+	int i, ret;
+
+	if (pv->clk_hyd) {
+		ret = clk_prepare_enable(pv->clk_hyd);
+		if (ret)
+			return ret;
+	}
+	for (i = 0; i < pv->nr_clocks; i++) {
+		if (pv->clocks[i].clk == pv->clk_hyd)
+			continue;
+		ret = clk_prepare_enable(pv->clocks[i].clk);
+		if (ret) {
+			prismrv_clks_off(pv, i);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+static void prismrv_va_release(struct drm_device *drm, void *arg)
+{
+	prismrv_va_fini(arg);
+}
+
+static void prismrv_teardown(struct platform_device *pdev);
 static int prismrv_runtime_suspend(struct device *dev);
 static int prismrv_runtime_resume(struct device *dev);
 
@@ -86,8 +132,23 @@ static int prismrv_probe(struct platform_device *pdev)
 	spin_lock_init(&pv->bo_list_lock);
 	INIT_LIST_HEAD(&pv->bo_list);
 	init_rwsem(&pv->submit_rwsem);
+	prismrv_va_init(pv);
+	ret = drmm_add_action_or_reset(&pv->drm, prismrv_va_release, pv);
+	if (ret)
+		return ret;
 	INIT_WORK(&pv->recovery_work, prismrv_recovery_work);
+	INIT_DELAYED_WORK(&pv->hang_work, prismrv_hang_work);
 	init_waitqueue_head(&pv->init_wq);
+
+	/*
+	 * The BIF MMU (non-36bit variant) stores 32-bit physical page
+	 * addresses in PDEs/PTEs and the DIR_LIST base register, and the
+	 * uKernel/CCB/HostCtl are addressed with 32-bit pointers: every
+	 * buffer the GPU can see must live below 4 GiB.
+	 */
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "no 32-bit DMA\n");
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	pv->regs = devm_ioremap_resource(&pdev->dev, res);
@@ -99,57 +160,73 @@ static int prismrv_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 	pv->nr_clocks = ret;
+	for (ret = 0; ret < pv->nr_clocks; ret++) {
+		if (!strcmp(pv->clocks[ret].id, "core"))
+			pv->clk_core = pv->clocks[ret].clk;
+		else if (!strcmp(pv->clocks[ret].id, "hyd"))
+			pv->clk_hyd = pv->clocks[ret].clk;
+	}
+	if (!pv->clk_core)
+		return dev_err_probe(&pdev->dev, -EINVAL, "missing \"core\" clock\n");
 
 	pv->rstc = devm_reset_control_get_optional_exclusive(&pdev->dev,
 							     "g3d");
 	if (IS_ERR(pv->rstc))
 		return PTR_ERR(pv->rstc);
 
-	pv->irq = -1;
+	/* the interrupt is mandatory: completion is interrupt driven and
+	 * there is no polling fallback.  Propagate -EPROBE_DEFER etc. */
 	irq = platform_get_irq(pdev, 0);
-	if (irq >= 0) {
-		ret = devm_request_irq(&pdev->dev, irq, prismrv_irq_handler,
-				       IRQF_SHARED, dev_name(&pdev->dev), pv);
-		if (ret)
-			return ret;
-		pv->irq = irq;
-	}
+	if (irq < 0)
+		return irq;
+	pv->irq = irq;
+	ret = devm_request_irq(&pdev->dev, irq, prismrv_irq_handler,
+			       IRQF_SHARED, dev_name(&pdev->dev), pv);
+	if (ret)
+		return ret;
 
 	ret = drm_dev_register(&pv->drm, 0);
 	if (ret)
 		return ret;
 	platform_set_drvdata(pdev, pv);
 
-	/* firmware + hardware bring-up can be deferred if the firmware
-	 * files are not yet installed */
-	ret = prismrv_fw_load(pv);
-	if (ret == 0) {
-		pm_runtime_get_noresume(&pdev->dev);
-		ret = prismrv_runtime_resume(&pdev->dev);
-		pm_runtime_put_noidle(&pdev->dev);
-	}
-	if (ret)
-		dev_warn(&pdev->dev,
-			 "GPU bring-up deferred (%d); will retry on open\n",
-			 ret);
-
-	/* runtime autosuspend: GPU idles 100ms after the last submit */
+	/*
+	 * Runtime PM state machine: the device starts RPM_SUSPENDED with
+	 * PM disabled.  Bring the hardware up by hand (clocks, reset,
+	 * hw_init), and only if that worked tell the PM core the device
+	 * is RPM_ACTIVE before enabling runtime PM, so the core's view
+	 * matches the real hardware state.  On failure the clocks have
+	 * been released again by runtime_resume() and the device stays
+	 * RPM_SUSPENDED; the first submit retries through
+	 * pm_runtime_resume_and_get().
+	 */
 	pm_runtime_set_autosuspend_delay(&pdev->dev, 100);
 	pm_runtime_use_autosuspend(&pdev->dev);
-	pm_runtime_enable(&pdev->dev);
-	pm_runtime_mark_last_busy(&pdev->dev);
-	pm_runtime_put_autosuspend(&pdev->dev);
+
+	ret = prismrv_fw_load(pv);
+	if (ret == 0)
+		ret = prismrv_runtime_resume(&pdev->dev);
+	if (ret) {
+		dev_warn(&pdev->dev,
+			 "GPU bring-up deferred (%d); will retry on first submit\n",
+			 ret);
+		pm_runtime_enable(&pdev->dev);
+	} else {
+		pm_runtime_set_active(&pdev->dev);
+		pm_runtime_get_noresume(&pdev->dev);
+		pm_runtime_enable(&pdev->dev);
+		pm_runtime_mark_last_busy(&pdev->dev);
+		pm_runtime_put_autosuspend(&pdev->dev);
+	}
 
 	ret = prismrv_devfreq_init(pv);
-	if (ret == -EPROBE_DEFER)
-		goto err_devfreq;
+	if (ret == -EPROBE_DEFER) {
+		prismrv_teardown(pdev);
+		return ret;
+	}
 
 	dev_info(&pdev->dev, "%s probed\n", pv->info->name);
 	return 0;
-
-err_devfreq:
-	drm_dev_unplug(&pv->drm);
-	return ret;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
@@ -158,7 +235,7 @@ err_devfreq:
 #define PRISMRV_REMOVE_RET int
 #endif
 
-static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
+static void prismrv_teardown(struct platform_device *pdev)
 {
 	struct prismrv_device *pv = platform_get_drvdata(pdev);
 
@@ -198,6 +275,11 @@ static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
 	prismrv_devfreq_fini(pv);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+}
+
+static PRISMRV_REMOVE_RET prismrv_remove(struct platform_device *pdev)
+{
+	prismrv_teardown(pdev);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 	return 0;
 #endif
@@ -240,7 +322,7 @@ static int prismrv_runtime_suspend(struct device *dev)
 
 	/* assert the G3D reset line before gating the clocks */
 	reset_control_assert(pv->rstc);
-	clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
+	prismrv_clks_off(pv, pv->nr_clocks);
 	return 0;
 }
 
@@ -249,7 +331,7 @@ static int prismrv_runtime_resume(struct device *dev)
 	struct prismrv_device *pv = dev_get_drvdata(dev);
 	int ret;
 
-	ret = clk_bulk_prepare_enable(pv->nr_clocks, pv->clocks);
+	ret = prismrv_clks_on(pv);
 	if (ret)
 		return ret;
 
@@ -282,8 +364,7 @@ static int prismrv_runtime_resume(struct device *dev)
 				 */
 				mutex_unlock(&pv->init_mutex);
 				up_write(&pv->submit_rwsem);
-				clk_bulk_disable_unprepare(pv->nr_clocks,
-							   pv->clocks);
+				prismrv_clks_off(pv, pv->nr_clocks);
 				dev_err(pv->drm.dev,
 					"resume: firmware load failed (%d)\n",
 					ret);
@@ -297,7 +378,7 @@ static int prismrv_runtime_resume(struct device *dev)
 	up_write(&pv->submit_rwsem);
 
 	if (ret)
-		clk_bulk_disable_unprepare(pv->nr_clocks, pv->clocks);
+		prismrv_clks_off(pv, pv->nr_clocks);
 	return ret;
 }
 
