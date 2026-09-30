@@ -17,6 +17,7 @@
 #define RELEASE
 #define SUPPORT_PERCONTEXT_PB
 #define SUPPORT_HW_RECOVERY
+#define SUPPORT_ACTIVE_POWER_MANAGEMENT
 #define SUPPORT_SGX_HWPERF
 #define SUPPORT_SGX_LOW_LATENCY_SCHEDULING
 #define SUPPORT_MEMINFO_IDS
@@ -37,7 +38,15 @@
 #define LDM_PLATFORM
 #define PVR_LDM_DRIVER_REGISTRATION_NAME "pvrsrvkm"
 #define SUPPORT_LARGE_GENERAL_HEAP
-//#define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC
+/*
+ * ABI lock to aquaris-5 userspace blob:
+ * - PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC changes structure layouts
+ *   (PVRSRV_COMMAND, PVRSRV_QUEUE_INFO, transfer/2D kick).
+ * - ION ioctl numbers are reserved in pvr_bridge.h regardless.
+ * Real ION / android-sync backends are stubbed where infrastructure
+ * is missing; structure sizes and ioctl numbers stay identical.
+ */
+#define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC
 #define USE_RGBA_8888_FB
 #define MTK_HAL_MM_STATISTIC
 #define MTK_FREQ_OD_INIT

@@ -36,7 +36,10 @@
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 #include <linux/file.h>
 #include <linux/version.h>
-#include <../drivers/staging/android/sync.h>
+#include <linux/sync_file.h>
+#include <linux/dma-fence.h>
+/* pvr_sync.c provides the timeline/fence implementation via dma-fence */
+#include "pvr_sync.h"
 #endif
 
 #include "srvkm.h"
@@ -2668,13 +2671,8 @@ PVRSRVSwapToDCBuffer2BW(IMG_UINT32 ui32BridgeID,
 	IMG_UINT32 i;
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	int iReleaseFd = get_unused_fd();
-	if(iReleaseFd < 0)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to find unused fd (%d)",
-								__func__, iReleaseFd));
-		return 0;
-	}
+	/* FD allocation deferred; display class is not present (no mtklfb) */
+	int iReleaseFd = -1;
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
 	PVRSRV_BRIDGE_ASSERT_CMD(ui32BridgeID, PVRSRV_BRIDGE_SWAP_DISPCLASS_TO_BUFFER2);
@@ -2797,19 +2795,12 @@ PVRSRVSwapToDCBuffer2BW(IMG_UINT32 ui32BridgeID,
 	}
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	if(hFence)
-	{
-		struct sync_fence *psFence = hFence;
-		sync_fence_install(psFence, iReleaseFd);
-		psSwapDispClassBufferOUT->hFence = (IMG_HANDLE)iReleaseFd;
-	}
-	else
-	{
-		psSwapDispClassBufferOUT->hFence = (IMG_HANDLE)-1;
-		put_unused_fd(iReleaseFd);
-	}
+	/* No display class / queue fence FD; keep ABI field, report invalid FD */
+	(void)hFence;
+	(void)iReleaseFd;
+	psSwapDispClassBufferOUT->hFence = (IMG_HANDLE)(long)-1;
 #else /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
-	psSwapDispClassBufferOUT->hFence = (IMG_HANDLE)-1;
+	psSwapDispClassBufferOUT->hFence = (IMG_HANDLE)(long)-1;
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
     return 0;
@@ -4282,6 +4273,10 @@ CommonBridgeInit(IMG_VOID)
     SetDispatchTableEntry(PVRSRV_BRIDGE_CHG_DEV_MEM_ATTRIBS, PVRSRVChangeDeviceMemoryAttributesBW);
     SetDispatchTableEntry(PVRSRV_BRIDGE_MAP_DEV_MEMORY_2, PVRSRVMapDeviceMemoryBW);
     SetDispatchTableEntry(PVRSRV_BRIDGE_EXPORT_DEVICEMEM_2, PVRSRVExportDeviceMemBW);
+
+	/* ION slots reserved for aquaris-5 ABI; no real ION backend */
+	SetDispatchTableEntry(PVRSRV_BRIDGE_MAP_ION_HANDLE, DummyBW);
+	SetDispatchTableEntry(PVRSRV_BRIDGE_UNMAP_ION_HANDLE, DummyBW);
 
 	/* SIM */
 	SetDispatchTableEntry(PVRSRV_BRIDGE_PROCESS_SIMISR_EVENT, DummyBW);
