@@ -94,24 +94,29 @@ static int mt6589_lc_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 	struct mtk_clk_pll *pll = to_mtk_clk_pll(hw);
 	u32 pcw = 0;
 	u32 postdiv;
-	u32 mask, val;
+	u32 mask, pcw_mask, rate_mask, old_val, val;
 	bool prepared;
-	int ret;
+	int ret, rollback_ret;
 
 	mtk_pll_calc_values(pll, &pcw, &postdiv, rate, parent_rate);
 	prepared = mtk_pll_is_prepared(hw);
+
+	mask = pll->data->pd_mask ?: 0x3;
+	pcw_mask = GENMASK(pll->data->pcw_shift +
+			   pll->data->pcwbits - 1,
+			   pll->data->pcw_shift);
+	rate_mask = (mask << pll->data->pd_shift) | pcw_mask;
+	old_val = readl(pll->base_addr);
 
 	if (prepared)
 		mtk_pll_unprepare(hw);
 
 	/* LC PLL: write directly to CON0, no PCW_CHG trigger */
-	val = readl(pll->base_addr);
+	val = old_val;
 	/* Clear postdiv field (2 bits) */
-	mask = pll->data->pd_mask ?: 0x3;
 	val &= ~(mask << pll->data->pd_shift);
 	/* Clear FBKDIV field (pcwbits, from pcw_shift) */
-	val &= ~(GENMASK(pll->data->pcw_shift + pll->data->pcwbits - 1,
-		 pll->data->pcw_shift));
+	val &= ~pcw_mask;
 	/* Set new postdiv and pcw */
 	val |= ((ffs(postdiv) - 1) << pll->data->pd_shift);
 	val |= (pcw << pll->data->pcw_shift);
@@ -121,7 +126,30 @@ static int mt6589_lc_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 
 	if (prepared) {
 		ret = mtk_pll_prepare(hw);
-		if (ret)
+		if (!ret)
+			return 0;
+
+		/*
+		 * set_rate must not leave the CCF-visible prepared state
+		 * different from the hardware state when re-prepare fails.
+		 */
+		mtk_pll_unprepare(hw);
+
+		/* Restore the old rate while the PLL is known to be off. */
+		val = readl(pll->base_addr);
+		val &= ~rate_mask;
+		val |= old_val & rate_mask;
+		writel(val, pll->base_addr);
+
+		/*
+		 * Restore the state expected by the caller. If even rollback
+		 * preparation fails, leave the PLL unprepared rather than
+		 * pretending that the state was recovered.
+		 */
+		rollback_ret = mtk_pll_prepare(hw);
+		if (rollback_ret)
+			mtk_pll_unprepare(hw);
+
 			return ret;
 	}
 
