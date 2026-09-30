@@ -100,7 +100,8 @@ static PVRSRV_ERROR SysLocateDevices(SYS_DATA *psSysData)
 		SysSysPAddrToCpuPAddr(gsSGXDeviceMap.sRegsSysPBase);
 	PVR_TRACE(("SGX register base: 0x%lx", (unsigned long)gsSGXDeviceMap.sRegsCpuPBase.uiAddr));
 
-	gsSGXDeviceMap.ui32RegsSize = (unsigned int)(dev_res->end - dev_res->start);
+	/* resource end is inclusive; resource_size() == end - start + 1 */
+	gsSGXDeviceMap.ui32RegsSize = (unsigned int)resource_size(dev_res);
 	PVR_TRACE(("SGX register size: %d",gsSGXDeviceMap.ui32RegsSize));
 
 	gsSGXDeviceMap.ui32IRQ = dev_irq;
@@ -299,44 +300,59 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 #endif
 
 	gpsSysData->clk_core = devm_clk_get_optional(&pdev->dev, "core");
-	if (IS_ERR(gpsSysData->clk_core))
-		return PTR_ERR(gpsSysData->clk_core);
+	if (IS_ERR(gpsSysData->clk_core)) {
+		eError = PTR_ERR(gpsSysData->clk_core);
+		goto err_cleanup;
+	}
 
 	gpsSysData->clk_mem = devm_clk_get_optional(&pdev->dev, "mem");
-	if (IS_ERR(gpsSysData->clk_mem))
-		return PTR_ERR(gpsSysData->clk_mem);
+	if (IS_ERR(gpsSysData->clk_mem)) {
+		eError = PTR_ERR(gpsSysData->clk_mem);
+		goto err_cleanup;
+	}
 
 	gpsSysData->clk_sys = devm_clk_get_optional(&pdev->dev, "sys");
-	if (IS_ERR(gpsSysData->clk_sys))
-		return PTR_ERR(gpsSysData->clk_sys);
+	if (IS_ERR(gpsSysData->clk_sys)) {
+		eError = PTR_ERR(gpsSysData->clk_sys);
+		goto err_cleanup;
+	}
 
 	gpsSysData->clk_hyd = devm_clk_get_optional(&pdev->dev, "hyd");
-	if (IS_ERR(gpsSysData->clk_hyd))
-		return PTR_ERR(gpsSysData->clk_hyd);
+	if (IS_ERR(gpsSysData->clk_hyd)) {
+		eError = PTR_ERR(gpsSysData->clk_hyd);
+		goto err_cleanup;
+	}
 
 	gpsSysData->clk_smi_mfg_as = devm_clk_get_optional(&pdev->dev, "smi_mfg_as");
-	if (IS_ERR(gpsSysData->clk_smi_mfg_as))
-		return PTR_ERR(gpsSysData->clk_smi_mfg_as);
+	if (IS_ERR(gpsSysData->clk_smi_mfg_as)) {
+		eError = PTR_ERR(gpsSysData->clk_smi_mfg_as);
+		goto err_cleanup;
+	}
 
 	gpsSysSpecificData->ui32SrcClockDiv = 3;
 
-
 	gpsSysData->rstc = devm_reset_control_get_exclusive(&pdev->dev, "g3d");
-	if (IS_ERR(gpsSysData->rstc))
-		return PTR_ERR(gpsSysData->rstc);
+	if (IS_ERR(gpsSysData->rstc)) {
+		eError = PTR_ERR(gpsSysData->rstc);
+		goto err_cleanup;
+	}
 
 	gpsSysData->vdd_reg = devm_regulator_get_optional(&pdev->dev, "vdd");
 	if (IS_ERR(gpsSysData->vdd_reg)) {
 		if (PTR_ERR(gpsSysData->vdd_reg) == -ENODEV)
 			gpsSysData->vdd_reg = NULL;
-		else
-			return dev_err_probe(&pdev->dev, PTR_ERR(gpsSysData->vdd_reg), "failed to get regulator\n");
+		else {
+			eError = PTR_ERR(gpsSysData->vdd_reg);
+			dev_err(&pdev->dev, "failed to get regulator: %d\n", eError);
+			goto err_cleanup;
+		}
 	}
 
 	eError = devm_pm_opp_of_add_table(&pdev->dev);
 	if (eError) {
 		dev_err(&pdev->dev, "failed to add OPP table: %d\n", eError);
-		return eError;
+		/* OPP table optional on some boards; continue without devfreq later */
+		eError = 0;
 	}
 
 	gpsSysData->gpu_currently_busy = false;
@@ -346,7 +362,10 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 
 	gpsSysData->devfreq_profile.target = sgx_devfreq_target;
 	gpsSysData->devfreq_profile.get_dev_status = sgx_devfreq_get_dev_status;
-	gpsSysData->devfreq_profile.initial_freq = clk_get_rate(gpsSysData->clk_core);
+	if (gpsSysData->clk_core)
+		gpsSysData->devfreq_profile.initial_freq = clk_get_rate(gpsSysData->clk_core);
+	else
+		gpsSysData->devfreq_profile.initial_freq = SYS_SGX_CLOCK_SPEED;
 	gpsSysData->devfreq_profile.polling_ms = 30;
 
 	gpsSysData->devfreq = devm_devfreq_add_device(&pdev->dev,
@@ -355,7 +374,7 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 						       NULL);
 	if (IS_ERR(gpsSysData->devfreq)) {
 		dev_err(&pdev->dev, "failed to add devfreq device\n");
-		return PTR_ERR(gpsSysData->devfreq);
+		gpsSysData->devfreq = NULL; /* non-fatal: run without DVFS */
 	}
 
 	pm_runtime_enable(&pdev->dev);
@@ -473,6 +492,11 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 	gpsSysData->hSOCTimerRegisterOSMemHandle = 0;
 
 	return PVRSRV_OK;
+
+err_cleanup:
+	(IMG_VOID)SysDeinitialise(gpsSysData);
+	gpsSysData = IMG_NULL;
+	return eError;
 }
 
 

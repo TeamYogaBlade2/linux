@@ -93,13 +93,29 @@ IMG_VOID UnwrapSystemPowerChange(SYS_SPECIFIC_DATA *psSysSpecData)
 IMG_VOID SysGetSGXTimingInformation(SGX_TIMING_INFORMATION *psTimingInfo)
 {
 	PVR_ASSERT(atomic_read(&gpsSysSpecificData->sSGXClocksEnabled) != 0);
-	psTimingInfo->ui32CoreClockSpeed = clk_get_rate(gpsSysData->clk_core);
+	if (gpsSysData->clk_core)
+		psTimingInfo->ui32CoreClockSpeed = clk_get_rate(gpsSysData->clk_core);
+	else
+		psTimingInfo->ui32CoreClockSpeed = SYS_SGX_CLOCK_SPEED;
 	psTimingInfo->ui32HWRecoveryFreq = SYS_SGX_HWRECOVERY_TIMEOUT_FREQ;
 	psTimingInfo->ui32uKernelFreq = SYS_SGX_PDS_TIMER_FREQ;
 	psTimingInfo->bEnableActivePM = IMG_TRUE;
 	psTimingInfo->ui32ActivePowManLatencyms = SYS_SGX_ACTIVE_POWER_LATENCY_MS;
 }
 #endif
+
+static int pvr_clk_enable(struct clk *clk)
+{
+	if (!clk)
+		return 0;
+	return clk_prepare_enable(clk);
+}
+
+static void pvr_clk_disable(struct clk *clk)
+{
+	if (clk)
+		clk_disable_unprepare(clk);
+}
 
 PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 {
@@ -121,26 +137,35 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 	if (psSysData->vdd_reg)
 		regulator_set_mode(psSysData->vdd_reg, REGULATOR_MODE_FAST);
 
-	ret = clk_prepare_enable(psSysData->clk_hyd);
-	if (ret)
-		return ret;
+	/* SMI mux must be up before MFG core clocks for memory path access */
+	ret = pvr_clk_enable(psSysData->clk_smi_mfg_as);
+	if (ret) {
+		PVR_DPF((PVR_DBG_ERROR, "EnableSGXClocks: smi_mfg_as enable failed (%d)", ret));
+		goto err_pm;
+	}
 
-	ret = clk_prepare_enable(psSysData->clk_core);
+	ret = pvr_clk_enable(psSysData->clk_hyd);
+	if (ret)
+		goto err_smi;
+
+	ret = pvr_clk_enable(psSysData->clk_core);
 	if (ret)
 		goto err_core;
 
-	ret = clk_prepare_enable(psSysData->clk_mem);
+	ret = pvr_clk_enable(psSysData->clk_mem);
 	if (ret)
 		goto err_mem;
 
-	ret = clk_prepare_enable(psSysData->clk_sys);
+	ret = pvr_clk_enable(psSysData->clk_sys);
 	if (ret)
 		goto err_sys;
 
-	reset_control_assert(psSysData->rstc);
-	usleep_range(1, 2);
-	reset_control_deassert(psSysData->rstc);
-	usleep_range(1, 2);
+	if (psSysData->rstc) {
+		reset_control_assert(psSysData->rstc);
+		usleep_range(1, 2);
+		reset_control_deassert(psSysData->rstc);
+		usleep_range(1, 2);
+	}
 
 	SysEnableSGXInterrupts(psSysData);
 
@@ -158,13 +183,16 @@ PVRSRV_ERROR EnableSGXClocks(SYS_DATA *psSysData)
 	return PVRSRV_OK;
 
 err_sys:
-	clk_disable_unprepare(psSysData->clk_mem);
+	pvr_clk_disable(psSysData->clk_mem);
 err_mem:
-	clk_disable_unprepare(psSysData->clk_core);
+	pvr_clk_disable(psSysData->clk_core);
 err_core:
-	clk_disable_unprepare(psSysData->clk_hyd);
+	pvr_clk_disable(psSysData->clk_hyd);
+err_smi:
+	pvr_clk_disable(psSysData->clk_smi_mfg_as);
+err_pm:
 	pm_runtime_put_sync(&gpsPVRLDMDev->dev);
-	return ret;
+	return PVRSRV_ERROR_UNABLE_TO_ENABLE_CLOCK;
 }
 
 IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
@@ -181,12 +209,14 @@ IMG_VOID DisableSGXClocks(SYS_DATA *psSysData)
 
 	SysDisableSGXInterrupts(psSysData);
 
-	reset_control_assert(psSysData->rstc);
+	if (psSysData->rstc)
+		reset_control_assert(psSysData->rstc);
 
-	clk_disable_unprepare(psSysData->clk_sys);
-	clk_disable_unprepare(psSysData->clk_mem);
-	clk_disable_unprepare(psSysData->clk_core);
-	clk_disable_unprepare(psSysData->clk_hyd);
+	pvr_clk_disable(psSysData->clk_sys);
+	pvr_clk_disable(psSysData->clk_mem);
+	pvr_clk_disable(psSysData->clk_core);
+	pvr_clk_disable(psSysData->clk_hyd);
+	pvr_clk_disable(psSysData->clk_smi_mfg_as);
 
 	pm_runtime_put_sync(&gpsPVRLDMDev->dev);
 
