@@ -28,6 +28,13 @@
 #define SYS_USING_INTERRUPTS
 #define PVRSRV_NEW_PVR_DPF
 #define PVRSRV_NEED_PVR_DPF
+/*
+ * ABI lock to aquaris-5 userspace blob (structure sizes + ioctl numbers).
+ * Real ION backend is absent; bridge MAP/UNMAP_ION handlers are DummyBW.
+ * SUPPORT_ION must stay defined so PVRSRV_CLIENT_MEM_INFO.uiIonBufferSize
+ * and related layout match the blob.
+ */
+#define SUPPORT_ION
 #define SUPPORT_PVRSRV_DEVICE_CLASS
 #define IMG_ADDRSPACE_PHYSADDR_BITS 32
 #define SGX_DYNAMIC_TIMING_INFO
@@ -38,14 +45,7 @@
 #define LDM_PLATFORM
 #define PVR_LDM_DRIVER_REGISTRATION_NAME "pvrsrvkm"
 #define SUPPORT_LARGE_GENERAL_HEAP
-/*
- * ABI lock to aquaris-5 userspace blob:
- * - PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC changes structure layouts
- *   (PVRSRV_COMMAND, PVRSRV_QUEUE_INFO, transfer/2D kick).
- * - ION ioctl numbers are reserved in pvr_bridge.h regardless.
- * Real ION / android-sync backends are stubbed where infrastructure
- * is missing; structure sizes and ioctl numbers stay identical.
- */
+#define SUPPORT_PVRSRV_ANDROID_SYSTRACE
 #define PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC
 #define USE_RGBA_8888_FB
 #define MTK_HAL_MM_STATISTIC
