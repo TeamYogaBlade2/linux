@@ -558,6 +558,18 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
 };
 
+static const unsigned int mt6589_pull_type[] = {
+	[0 ... 3] = MTK_PULL_PUPD_R1R0_TYPE,
+	[4] = MTK_PULL_PULLSEL_TYPE,
+	[5 ... 10] = MTK_PULL_PUPD_R1R0_TYPE,
+	[11 ... 129] = MTK_PULL_PULLSEL_TYPE,
+	[130 ... 131] = MTK_PULL_PUPD_R1R0_TYPE,
+	[132 ... 133] = MTK_PULL_PULLSEL_TYPE,
+	[134 ... 141] = MTK_PULL_PUPD_R1R0_TYPE,
+	[142 ... 225] = MTK_PULL_PULLSEL_TYPE,
+	[226 ... 231] = MTK_PULL_PUPD_R1R0_TYPE,
+};
+
 static const char * const mt6589_pinctrl_register_base_names[] = {
 	"gpio", "gpio1",
 };
@@ -585,6 +597,7 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.drive_get = mtk_pinconf_drive_get_rev1,
 	.adv_pull_set = mtk_pinconf_adv_pull_set,
 	.adv_pull_get = mtk_pinconf_adv_pull_get,
+	.pull_type = mt6589_pull_type,
 };
 
 static const struct of_device_id mt6589_pinctrl_match[] = {
