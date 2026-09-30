@@ -261,7 +261,7 @@ static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
 	PIN_FIELD_SR(220, DRV_CON11, 31, 0),
 
 	/* PCM0 */
-	PINS_FIELD_SR(221, 235, DRV_CON12, 3, 0),
+	PINS_FIELD_SR(221, 225, DRV_CON12, 3, 0),
 
 	/* MSDC3 */
 	PINS_FIELD_SR(226, 227, DRV_CON12, 7, 0),
