@@ -61,10 +61,10 @@
 	PIN_FIELD_CALC(_pin_s, _pin_e, _base, _offset, 0x0, _bit, 3, 32, 1)
 
 static const struct mtk_pin_field_calc mt6589_pin_mode_range[] = {
-	PIN_FIELD_CALC(0, 43, 0, 0x0c00, 0x10, 0, 3, 16, 0),
+	PIN_FIELD_CALC(0, 43, 0, 0x0c00, 0x10, 0, 3, 15, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0980, 0x10, 0, 4, 16, 0),
 	PIN_FIELD_CALC(47, 49, 0, 0x09a0, 0x10, 0, 4, 16, 0),
-	PIN_FIELD_CALC(50, 231, 0, 0x0ca0, 0x10, 0, 3, 16, 0),
+	PIN_FIELD_CALC(50, 231, 0, 0x0ca0, 0x10, 0, 3, 15, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_dir_range[] = {
@@ -587,6 +587,7 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
 	.ngrps = ARRAY_SIZE(mtk_pins_mt6589),
+	.nfuncs = 8,
 	.eint_hw = &mt6589_eint_hw,
 	.gpio_m = 0,
 	.base_names = mt6589_pinctrl_register_base_names,
