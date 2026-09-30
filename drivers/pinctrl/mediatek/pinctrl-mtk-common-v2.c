@@ -1159,13 +1159,13 @@ int mtk_pinconf_adv_pull_set(struct mtk_pinctrl *hw,
 	 * 10K on & 50K (75K) on, when (R0, R1) = (1, 1)
 	 */
 	err = mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_R0, arg & 1);
-	if (err)
-		return 0;
+	if (err != -ENOTSUPP)
+		return err;
 
 	err = mtk_hw_set_value(hw, desc, PINCTRL_PIN_REG_R1,
 			       !!(arg & 2));
-	if (err)
-		return 0;
+	if (err != -ENOTSUPP)
+		return err;
 
 	arg = pullup ? 0 : 1;
 
@@ -1177,6 +1177,10 @@ int mtk_pinconf_adv_pull_set(struct mtk_pinctrl *hw,
 	if (err == -ENOTSUPP) {
 		if (hw->soc->bias_set) {
 			err = hw->soc->bias_set(hw, desc, pullup);
+			if (err)
+				return err;
+		} else if (hw->soc->bias_set_combo) {
+			err = hw->soc->bias_set_combo(hw, desc, pullup, arg);
 			if (err)
 				return err;
 		} else {
@@ -1194,6 +1198,7 @@ int mtk_pinconf_adv_pull_get(struct mtk_pinctrl *hw,
 			     const struct mtk_pin_desc *desc, bool pullup,
 			     u32 *val)
 {
+	u32 current_pullup, current_enable;
 	u32 t, t2;
 	int err;
 
@@ -1207,6 +1212,20 @@ int mtk_pinconf_adv_pull_get(struct mtk_pinctrl *hw,
 			err = hw->soc->bias_get(hw, desc, pullup, val);
 			if (err)
 				return err;
+			return 0;
+		} else if (hw->soc->bias_get_combo) {
+			err = hw->soc->bias_get_combo(hw, desc,
+						      &current_pullup,
+						      &current_enable);
+			if (err)
+				return err;
+
+			if (current_enable == MTK_DISABLE ||
+			    !!current_pullup != pullup)
+				return -EINVAL;
+
+			*val = current_enable;
+			return 0;
 		} else {
 			return -ENOTSUPP;
 		}
