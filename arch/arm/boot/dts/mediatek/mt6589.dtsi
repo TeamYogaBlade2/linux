@@ -788,6 +788,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C0_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -802,6 +804,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C1_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -816,6 +820,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C2_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -830,6 +836,8 @@
 				 <&pericfg CLK_PERI0_APDMA>;
 			clock-names = "main", "dma";
 			clock-div = <16>;
+			resets = <&pericfg MT6589_PERI_I2C3_SW_RST>;
+			reset-names = "reset";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -842,6 +850,8 @@
 			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C4_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -855,6 +865,8 @@
 			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C5_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -868,6 +880,8 @@
 			interrupts = <GIC_SPI 50 IRQ_TYPE_LEVEL_LOW>;
 			clock-names = "main", "pmic", "dma";
 			clock-div = <1>;
+			resets = <&pericfg MT6589_PERI_I2C6_SW_RST>;
+			reset-names = "reset";
 			mediatek,have-pmic;
 			status = "disabled";
 			#address-cells = <1>;
@@ -1605,6 +1619,7 @@
 		pins-i2c0 {
 			pinmux = <MT6589_GPIO118__FUNC_SDA0>,
 				 <MT6589_GPIO119__FUNC_SCL0>;
+			input-enable;
 			bias-pull-up;
 		};
 	};
@@ -1613,6 +1628,7 @@
 		pin-i2c1 {
 			pinmux = <MT6589_GPIO214__FUNC_SDA1>,
 				 <MT6589_GPIO215__FUNC_SCL1>;
+			input-enable;
 			bias-pull-up;
 		};
 	};
@@ -1621,6 +1637,7 @@
 		pin-i2c2 {
 			pinmux = <MT6589_GPIO216__FUNC_SDA2>,
 				 <MT6589_GPIO217__FUNC_SCL2>;
+			input-enable;
 			bias-pull-up;
 		};
 	};
@@ -1629,6 +1646,7 @@
 		pin-i2c3 {
 			pinmux = <MT6589_GPIO67__FUNC_SDA3>,
 				 <MT6589_GPIO68__FUNC_SCL3>;
+			input-enable;
 			bias-pull-up;
 		};
 	};

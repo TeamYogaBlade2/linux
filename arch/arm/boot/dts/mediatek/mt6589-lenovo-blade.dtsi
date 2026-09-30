@@ -63,6 +63,21 @@
 };
 
 &pio {
+	pmic_eint_pins: pmic-eint-pins {
+		pin-pmic-eint {
+			pinmux = <MT6589_GPIO37__FUNC_EINT3>;
+			input-enable;
+		};
+	};
+
+	alsps_eint_pins: alsps-eint-pins {
+		pin-alsps-int {
+			pinmux = <MT6589_GPIO38__FUNC_EINT4>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
 	usb_pins: usb-pins {
 		pins_iddig {
 			pinmux = <MT6589_GPIO57__FUNC_GPIO57>;
@@ -96,6 +111,11 @@
 	};
 };
 
+&pmic {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pmic_eint_pins>;
+};
+
 &mt6320_accdet {
 	detect-gpios = <&pio 115 GPIO_ACTIVE_LOW>;
 	io-channels = <&mt6320_adc 5>;
@@ -122,7 +142,7 @@
 	connector {
 		compatible = "gpio-usb-b-connector", "usb-b-connector";
 		type = "micro";
-		id-gpios = <&pio 57 GPIO_ACTIVE_LOW>;
+		id-gpios = <&pio 57 GPIO_ACTIVE_HIGH>;
 		vbus-supply = <&usb_otg_vbus>;
 	};
 };
@@ -213,6 +233,8 @@
 	light-sensor@1c {
 		compatible = "dynaimage,al3320b";
 		reg = <0x1c>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&alsps_eint_pins>;
 
 		vdd-supply = <&mt6320_buck_vio18>;
 		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
@@ -232,8 +254,6 @@
 	bq27541: fuel-gauge@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
-
-		// monitored-battery = ;
 	};
 };
 
@@ -255,7 +275,7 @@
 	pinctrl-0 = <&mt6320_i2c2_pins>;
 	clock-frequency = <100000>;
 
-	charger@6b {
+	bq24196: charger@6b {
 		compatible = "ti,bq24196";
 		reg = <0x6b>;
 
@@ -265,7 +285,8 @@
 		interrupt-parent = <&pio>;
 
 		// ce-gpios = ??; // KP col7 P5?
-		// monitored-battery = ;
+
+		ti,system-minimum-microvolt = <3700000>;
 
 		usb_otg_vbus: usb-otg-vbus { };
 	};

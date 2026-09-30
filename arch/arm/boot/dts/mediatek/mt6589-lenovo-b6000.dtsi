@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
+ */
+
+#include "mt6589-lenovo-blade.dtsi"
+
+/ {
+	// TODO: recheck it
+	framebuffer0: framebuffer@bf600000 {
+		compatible = "simple-framebuffer";
+		memory-region = <&framebuffer_reserved>;
+		width = <800>;
+		height = <1280>;
+		stride = <(800 * 2)>;
+		format = "r5g6b5";
+	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion-polymer";
+
+		charge-full-design-microamp-hours = <6000000>;
+		energy-full-design-microwatt-hours = <22500000>;
+
+		/*
+		 * Stock fuel-gauge voltage/SOC table uses 3400mV as 0%.
+		 * This is a vendor software threshold, not a proven
+		 * physical cell absolute minimum voltage.
+		 */
+		voltage-min-design-microvolt = <3400000>;
+
+		/*
+		 * Full-charge/design maximum voltage.  The stock BQ24196
+		 * configuration programs VREG to 4.352V.
+		 */
+		voltage-max-design-microvolt = <4352000>;
+
+		/* BQ24196 stock configuration. */
+		precharge-current-microamp = <256000>;
+		charge-term-current-microamp = <256000>;
+
+		constant-charge-voltage-max-microvolt = <4352000>;
+	};
+};
+
+&bq27541 {
+	monitored-battery = <&battery>;
+};
+
+&bq24196 {
+	monitored-battery = <&battery>;
+};

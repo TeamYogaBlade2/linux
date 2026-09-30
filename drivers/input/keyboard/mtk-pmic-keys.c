@@ -382,6 +382,15 @@ static int mtk_pmic_keys_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	if (mtk_pmic_regs->homekey_puen_reg) {
+		error = regmap_update_bits(keys->regmap,
+					   mtk_pmic_regs->homekey_puen_reg,
+					   mtk_pmic_regs->homekey_puen_mask,
+					   mtk_pmic_regs->homekey_puen_mask);
+		if (error)
+			return error;
+	}
+
 	for_each_child_of_node_scoped(node, child) {
 		keys->keys[index].regs = &mtk_pmic_regs->keys_regs[index];
 
@@ -422,15 +431,6 @@ static int mtk_pmic_keys_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"register input device failed (%d)\n", error);
 		return error;
-	}
-
-	if (mtk_pmic_regs->homekey_puen_reg) {
-		error = regmap_update_bits(keys->regmap,
-					   mtk_pmic_regs->homekey_puen_reg,
-					   mtk_pmic_regs->homekey_puen_mask,
-					   mtk_pmic_regs->homekey_puen_mask);
-		if (error)
-			return error;
 	}
 
 	mtk_pmic_keys_lp_reset_setup(keys, mtk_pmic_regs);

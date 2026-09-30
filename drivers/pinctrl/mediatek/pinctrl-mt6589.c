@@ -61,10 +61,10 @@
 	PIN_FIELD_CALC(_pin_s, _pin_e, _base, _offset, 0x0, _bit, 3, 32, 1)
 
 static const struct mtk_pin_field_calc mt6589_pin_mode_range[] = {
-	PIN_FIELD_CALC(0, 43, 0, 0x0c00, 0x10, 0, 3, 16, 0),
+	PIN_FIELD_CALC(0, 43, 0, 0x0c00, 0x10, 0, 3, 15, 0),
 	PIN_FIELD_CALC(44, 46, 0, 0x0980, 0x10, 0, 4, 16, 0),
 	PIN_FIELD_CALC(47, 49, 0, 0x09a0, 0x10, 0, 4, 16, 0),
-	PIN_FIELD_CALC(50, 231, 0, 0x0ca0, 0x10, 0, 3, 16, 0),
+	PIN_FIELD_CALC(50, 231, 0, 0x0ca0, 0x10, 0, 3, 15, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_dir_range[] = {
@@ -72,11 +72,11 @@ static const struct mtk_pin_field_calc mt6589_pin_dir_range[] = {
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_di_range[] = {
-	PIN_FIELD_CALC(0, 231, 0, 0x0800, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(0, 231, 0, 0x0a00, 0x10, 0, 1, 16, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_do_range[] = {
-	PIN_FIELD_CALC(0, 231, 0, 0x0a00, 0x10, 0, 1, 16, 0),
+	PIN_FIELD_CALC(0, 231, 0, 0x0800, 0x10, 0, 1, 16, 0),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
@@ -261,7 +261,7 @@ static const struct mtk_pin_field_calc mt6589_pin_sr_range[] = {
 	PIN_FIELD_SR(220, DRV_CON11, 31, 0),
 
 	/* PCM0 */
-	PINS_FIELD_SR(221, 235, DRV_CON12, 3, 0),
+	PINS_FIELD_SR(221, 225, DRV_CON12, 3, 0),
 
 	/* MSDC3 */
 	PINS_FIELD_SR(226, 227, DRV_CON12, 7, 0),
@@ -558,6 +558,18 @@ static const struct mtk_pin_reg_calc mt6589_reg_cals[PINCTRL_PIN_REG_MAX] = {
 	[PINCTRL_PIN_REG_PULLSEL] = MTK_RANGE(mt6589_pin_pullsel_range),
 };
 
+static const unsigned int mt6589_pull_type[] = {
+	[0 ... 3] = MTK_PULL_PUPD_R1R0_TYPE,
+	[4] = MTK_PULL_PULLSEL_TYPE,
+	[5 ... 10] = MTK_PULL_PUPD_R1R0_TYPE,
+	[11 ... 129] = MTK_PULL_PULLSEL_TYPE,
+	[130 ... 131] = MTK_PULL_PUPD_R1R0_TYPE,
+	[132 ... 133] = MTK_PULL_PULLSEL_TYPE,
+	[134 ... 141] = MTK_PULL_PUPD_R1R0_TYPE,
+	[142 ... 225] = MTK_PULL_PULLSEL_TYPE,
+	[226 ... 231] = MTK_PULL_PUPD_R1R0_TYPE,
+};
+
 static const char * const mt6589_pinctrl_register_base_names[] = {
 	"gpio", "gpio1",
 };
@@ -575,6 +587,7 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.pins = mtk_pins_mt6589,
 	.npins = ARRAY_SIZE(mtk_pins_mt6589),
 	.ngrps = ARRAY_SIZE(mtk_pins_mt6589),
+	.nfuncs = 8,
 	.eint_hw = &mt6589_eint_hw,
 	.gpio_m = 0,
 	.base_names = mt6589_pinctrl_register_base_names,
@@ -585,6 +598,7 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.drive_get = mtk_pinconf_drive_get_rev1,
 	.adv_pull_set = mtk_pinconf_adv_pull_set,
 	.adv_pull_get = mtk_pinconf_adv_pull_get,
+	.pull_type = mt6589_pull_type,
 };
 
 static const struct of_device_id mt6589_pinctrl_match[] = {
