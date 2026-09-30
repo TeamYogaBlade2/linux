@@ -1961,15 +1961,19 @@ PVRSRV_ERROR OSBaseFreeContigMemory(IMG_SIZE_T uiSize, IMG_CPU_VIRTADDR pvLinAdd
 
 ******************************************************************************/
 
-/* TODO use ioremap */
+/*
+ * pvLinRegBaseAddr is expected to be a kernel virtual address obtained via
+ * OSMapPhysToLin() / IORemapWrapper() (i.e. already ioremapped).
+ * Do not pass a physical address here.
+ */
 IMG_UINT32 OSReadHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset)
 {
-    return (IMG_UINT32) readl((IMG_PBYTE)pvLinRegBaseAddr+ui32Offset);
+	return readl((void __iomem *)((IMG_PBYTE)pvLinRegBaseAddr + ui32Offset));
 }
 
 IMG_VOID OSWriteHWReg(IMG_PVOID pvLinRegBaseAddr, IMG_UINT32 ui32Offset, IMG_UINT32 ui32Value)
 {
-    writel(ui32Value, (IMG_PBYTE)pvLinRegBaseAddr+ui32Offset);
+	writel(ui32Value, (void __iomem *)((IMG_PBYTE)pvLinRegBaseAddr + ui32Offset));
 }
 
 #if defined(CONFIG_PCI)
