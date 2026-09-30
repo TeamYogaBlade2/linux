@@ -12,8 +12,6 @@ ccflags-y := \
 	-I$(src)/services4/srvkm/devices/sgx \
 	-I$(src)/services4/srvkm/env/linux \
 	-I$(src)/services4/srvkm/include \
-	-I$(src)/services4/3rdparty/mtklfb \
-	-I$(src)/services4/3rdparty/mtkbc \
 	-I$(src)/services4/system/mt6589 \
 	-I$(src)/services4/system/mtk_common
 
@@ -87,10 +85,5 @@ pvrsrvkm-y := \
 	services4/srvkm/env/linux/mtk_hal_mm.o \
 	services4/srvkm/common/ttrace.o
 
-mtklfb-y := \
-	services4/3rdparty/mtklfb/mtklfb_displayclass.o \
-	services4/3rdparty/mtklfb/mtklfb_linux.o \
-	services4/3rdparty/mtklfb/mtklfb_debug.o
 
 obj-$(CONFIG_PVR_SGX_MT6589) += pvrsrvkm.o
-obj-$(CONFIG_PVR_SGX_MT6589) += mtklfb.o
