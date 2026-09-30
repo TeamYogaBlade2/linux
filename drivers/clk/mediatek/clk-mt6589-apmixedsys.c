@@ -145,12 +145,13 @@ static int mt6589_lc_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 		 * Restore the state expected by the caller. If even rollback
 		 * preparation fails, leave the PLL unprepared rather than
 		 * pretending that the state was recovered.
-		 */
+	 */
 		rollback_ret = mtk_pll_prepare(hw);
-		if (rollback_ret)
+		if (rollback_ret) {
 			mtk_pll_unprepare(hw);
+		}
 
-			return ret;
+		return ret;
 	}
 
 	return 0;
@@ -377,6 +378,21 @@ to_mt6589_apmixed_output_hw(struct clk_hw *hw)
 	return container_of(hw, struct mt6589_apmixed_output_hw, gate.hw);
 }
 
+static int mt6589_apmixed_output_enable(struct clk_hw *hw)
+{
+	return clk_gate_ops.enable(hw);
+}
+
+static void mt6589_apmixed_output_disable(struct clk_hw *hw)
+{
+	clk_gate_ops.disable(hw);
+}
+
+static int mt6589_apmixed_output_is_enabled(struct clk_hw *hw)
+{
+	return clk_gate_ops.is_enabled(hw);
+}
+
 static unsigned long
 mt6589_apmixed_output_recalc_rate(struct clk_hw *hw,
 				  unsigned long parent_rate)
@@ -460,9 +476,9 @@ mt6589_apmixed_output_recalc_accuracy(struct clk_hw *hw,
 }
 
 static const struct clk_ops mt6589_apmixed_output_ops = {
-	.enable		= clk_gate_ops.enable,
-	.disable	= clk_gate_ops.disable,
-	.is_enabled	= clk_gate_ops.is_enabled,
+	.enable		= mt6589_apmixed_output_enable,
+	.disable	= mt6589_apmixed_output_disable,
+	.is_enabled	= mt6589_apmixed_output_is_enabled,
 	.recalc_rate	= mt6589_apmixed_output_recalc_rate,
 	.determine_rate	= mt6589_apmixed_output_determine_rate,
 	.set_rate	= mt6589_apmixed_output_set_rate,
