@@ -6,6 +6,8 @@
 #ifndef _UAPI_PRISMRV_DRM_H_
 #define _UAPI_PRISMRV_DRM_H_
 
+#include "drm.h"
+
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
