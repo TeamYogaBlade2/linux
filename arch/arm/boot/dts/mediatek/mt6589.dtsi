@@ -1045,6 +1045,8 @@
 				 <&topckgen CLK_TOP_MUX_MSDC0>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		mmc1: mmc@11240000 {
@@ -1056,6 +1058,8 @@
 				 <&topckgen CLK_TOP_MUX_MSDC1>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		mmc2: mmc@11250000 {
@@ -1067,6 +1071,8 @@
 				 <&topckgen CLK_TOP_MUX_MSDC2>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		mmc3: mmc@11260000 {
@@ -1078,6 +1084,8 @@
 				 <&topckgen CLK_TOP_MUX_MSDC3>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 
 		mmc4: mmc@11270000 {
@@ -1089,6 +1097,8 @@
 				 <&topckgen CLK_TOP_MUX_MSDC4>;
 			clock-names = "source", "hclk";
 			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
 		};
 	};
 };
