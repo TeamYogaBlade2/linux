@@ -120,9 +120,21 @@ Claims from that review that were checked and found **false**:
 - RDMA stop does not mask `INT_ENABLE`/ack `INT_STATUS` as downstream does; with a
   level-triggered SPI this could re-fire.  Not changed: `mtk_disp_rdma.c` is shared
   across every MediaTek SoC and this pattern is upstream's.
-- DSI link rate computes to 419.022 Mbps and the MT6589 PLL table rounds to 416 Mbps
-  (~0.72% deficit), which could cause a 60 Hz tear.  The BOE HX8896-A01 panel also
-  has no DCS init sequence in the driver.
+- **DSI link rate — verified, and it is NOT a code bug.**  The mode needs
+  419.022 Mbps (69837 kHz x 24 bpp / 4 lanes) and the 50-entry MT6589 MIPI TX PLL
+  table's nearest entry is 416 Mbps, a 0.721% deficit, exactly as reported.  But the
+  PHY driver does not blindly honour the request: `mt6589_pll_find_closest()` walks
+  the table and programs the nearest entry, logging both target and achieved rate.
+  More importantly, every DPHY timing field computed from `dsi->data_rate`
+  (`mtk_dsi_phy_timconfig()`) evaluates to the *same integer* at 419 and 416 MHz -
+  lpx 4, da_hs_prepare 4, da_hs_zero 7, clk_hs_prepare 3 - and everything else is a
+  function of those, so no register is miscomputed.  Whether a 0.72% slow link
+  tears on this panel is a panel characteristic, not a driver issue.
+  The mode itself is self-consistent: 1416 x 822 totals give 59.9999 Hz.
+- **Panel DCS init sequence** — `boe_hx8896_a01` has no `.init_sequence`, but its
+  delays (prepare 120 ms, enable 100 ms, disable 320 ms) are specific rather than
+  defaults, which suggests they were measured.  aquaris-5 has no HX8896 panel
+  definition at all (it is an Aquaris tree), so there is no ground truth either way.
 
 ## Deliberately not implemented
 
