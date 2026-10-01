@@ -71,18 +71,6 @@ enum prismrv_cmd_type {
 	PRISMRV_CMD_COUNT
 };
 
-static const unsigned int prismrv_hostkick_instr[PRISMRV_CMD_COUNT] = {
-	554,  /* TA */
-	523,  /* TRANSFER */
-	486,  /* 2D */
-	397,  /* POWER */
-	427,  /* CONTEXTSUSPEND */
-	75,   /* CLEANUP */
-	1115, /* GETMISCINFO */
-	1017, /* PROCESS_QUEUES */
-	0,    /* DATABREAKPOINT: not implemented in this uKernel */
-	1023, /* SETHWPERFSTATUS */
-};
 
 /* HostCtl block shared with the uKernel (SGXMKIF_HOST_CTL subset) */
 struct prismrv_host_ctl {

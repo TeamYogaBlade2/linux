@@ -40,6 +40,20 @@
 #define HWRTDATA_SIZE			496
 #define PRISMRV_CCB_DRAIN_TIMEOUT_MS	2000
 #define PRISMRV_MAX_SUBMIT_BOS		256
+/* uKernel service entry index per command type (userspace may only use TA) */
+static const unsigned int prismrv_hostkick_instr[PRISMRV_CMD_COUNT] = {
+	554,  /* TA */
+	523,  /* TRANSFER */
+	486,  /* 2D */
+	397,  /* POWER */
+	427,  /* CONTEXTSUSPEND */
+	75,   /* CLEANUP */
+	1115, /* GETMISCINFO */
+	1017, /* PROCESS_QUEUES */
+	0,    /* DATABREAKPOINT: not implemented in this uKernel */
+	1023, /* SETHWPERFSTATUS */
+};
+
 #define PRISMRV_MAX_IN_FENCES		64
 #define PRISMRV_HANG_TIMEOUT_MS		4000
 /*
