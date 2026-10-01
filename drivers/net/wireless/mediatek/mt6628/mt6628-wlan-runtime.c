@@ -358,6 +358,9 @@ int ret;
 	if (!buf)
 		return -ENOMEM;
 
+	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	mt6628_wlan_pm_busy(wl);
+
 	ret = sdio_readsb(wl->func, buf,
 			  port ? MT6628_MCR_WRDR1 : MT6628_MCR_WRDR0,
 			  xfer_len);
@@ -574,6 +577,9 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 
 	memcpy(buf, &hdr, sizeof(hdr));
 	memcpy(buf + sizeof(hdr), skb->data, skb->len);
+
+	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	mt6628_wlan_pm_busy(wl);
 
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR0, buf, xfer_len);

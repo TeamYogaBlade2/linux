@@ -118,6 +118,9 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 		spin_unlock_irqrestore(&wl->cmd_lock, flags);
 	}
 
+	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	mt6628_wlan_pm_busy(wl);
+
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);
 	sdio_release_host(wl->func);
