@@ -485,6 +485,55 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	return 0;
 }
 
+static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
+				       struct wireless_dev *wdev,
+				       const u8 *mac,
+				       struct station_info *sinfo)
+{
+	struct mt6628_wlan *wl =
+		*(struct mt6628_wlan **)netdev_priv(wdev->netdev);
+	struct mt6628_event_sta_statistics stats;
+	bool connected;
+
+	if (!wl || !wdev->netdev)
+		return -ENODEV;
+
+	mutex_lock(&wl->cfg_mutex);
+	connected = wl->conn_state == MT6628_CONN_CONNECTED;
+
+	/* Station mode has exactly one peer: the AP we are associated with. */
+	if (connected && mac && !is_zero_ether_addr(mac))
+		connected = ether_addr_equal(wl->conn_bssid, mac);
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!connected)
+		return -ENOLINK;
+
+	memset(&stats, 0, sizeof(stats));
+	if (mt6628_wlan_get_sta_statistics(wl, &stats))
+		return -EOPNOTSUPP;
+
+	sinfo->filled = BIT_ULL(NL80211_STA_INFO_SIGNAL) |
+			 BIT_ULL(NL80211_STA_INFO_TX_PACKETS) |
+			 BIT_ULL(NL80211_STA_INFO_TX_RETRIES);
+
+	/*
+	 * The firmware reports RCPI on a base of 128, which is the same
+	 * convention cfg80211 wants for the signal value.
+	 */
+	sinfo->signal = stats.rcpi;
+
+	sinfo->tx_packets = le32_to_cpu(stats.tx_count);
+	sinfo->tx_retries = le32_to_cpu(stats.tx_life_timeout_count);
+
+	/*
+	 * The link speed is reported in units of 0.5 Mbit/s.  This cfg80211
+	 * vintage has no bitrate field in struct rate_info, so it is left
+	 * for userspace to derive from the scan results.
+	 */
+	return 0;
+}
+
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
@@ -494,6 +543,7 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.del_key = mt6628_cfg80211_del_key,
 	.set_power_mgmt = mt6628_cfg80211_set_power_mgmt,
 	.mgmt_tx = mt6628_cfg80211_mgmt_tx,
+	.get_station = mt6628_cfg80211_get_station,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)

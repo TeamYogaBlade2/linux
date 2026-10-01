@@ -613,6 +613,44 @@ int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
 					&response_len, MT6628_EVENT_ID_CMD_RESULT, 1000);
 }
 
+int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
+				   struct mt6628_event_sta_statistics *stats)
+{
+	struct mt6628_cmd_get_sta_statistics cmd = {};
+	size_t response_len;
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND)
+		return -ENOLINK;
+
+	cmd.index = wl->sta_rec_idx;
+	cmd.flags = 0;
+	/* Clear the firmware counters as they are read, so a second
+	 * query reports the interval since the first rather than a
+	 * cumulative total.
+	 */
+	cmd.read_clear = 1;
+	ether_addr_copy(cmd.mac_addr, wl->conn_bssid);
+
+	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_GET_STA_STATISTICS, 0,
+				   &cmd, sizeof(cmd), stats, sizeof(*stats),
+				   &response_len,
+				   MT6628_EVENT_ID_STA_STATISTICS, 1000);
+	if (ret)
+		return ret;
+
+	if (response_len < sizeof(*stats))
+		return -EPROTO;
+
+	/* Bit 0 tells us whether the firmware filled the counters in. */
+	if (!(le32_to_cpu(stats->flags) & 1))
+		return -ENODATA;
+
+	return 0;
+}
+
 static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 {
 	unsigned long flags;

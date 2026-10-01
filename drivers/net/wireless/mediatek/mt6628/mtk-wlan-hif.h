@@ -106,6 +106,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_EVENT_ID_CH_PRIVILEGE	0x18
 #define MT6628_EVENT_ID_BSS_BEACON_TIMEOUT	0x1b
 #define MT6628_EVENT_ID_SEND_DEAUTH	0x23
+#define MT6628_EVENT_ID_STA_STATISTICS	0x29
 
 #define MT6628_CMD_ID_SCAN_REQ_V2	0x04
 #define MT6628_CMD_ID_POWER_SAVE_MODE	0x06
@@ -116,6 +117,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_CMD_ID_UPDATE_STA_RECORD	0x17
 #define MT6628_CMD_ID_REMOVE_STA_RECORD	0x18
 #define MT6628_CMD_ID_CH_PRIVILEGE	0x20
+#define MT6628_CMD_ID_GET_STA_STATISTICS	0x85
 #define MT6628_CMD_ID_BASIC_CONFIG	0xc1
 
 #define MT6628_AUTH_MODE_OPEN		0
@@ -185,11 +187,49 @@ struct mt6628_event_send_deauth {
 	__le16 seq_ctrl;
 } __packed;
 
+/*
+ * CMD_GET_STA_STATISTICS: ask the firmware for one STA-REC's counters.
+ * ucReadClear makes the firmware reset the counters as it reports them.
+ */
+struct mt6628_cmd_get_sta_statistics {
+	u8 index;
+	u8 flags;
+	u8 read_clear;
+	u8 reserved0[1];
+	u8 mac_addr[ETH_ALEN];
+	u8 reserved1[2];
+	u8 reserved2[16];
+} __packed;
+
+/* Body of EVENT_ID_STA_STATISTICS. */
+struct mt6628_event_sta_statistics {
+	u8 version;
+	u8 reserved1[3];
+	__le32 flags;			/* bit 0: counters valid */
+	u8 sta_rec_idx;
+	u8 network_type_index;
+	u8 wt_entry;
+	u8 reserved4[1];
+	u8 mac_addr[ETH_ALEN];
+	u8 per;				/* base: 128 */
+	u8 rcpi;
+	__le32 phy_mode;			/* SGI, bandwidth */
+	__le16 link_speed;		/* unit is 0.5 Mbit/s */
+	u8 link_quality;
+	u8 link_reserved;
+	__le32 tx_count;
+	__le32 tx_fail_count;
+	__le32 tx_life_timeout_count;
+	__le32 tx_done_air_time;
+} __packed;
+
 static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
 static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
 static_assert(sizeof(struct mt6628_event_tx_done) == 16);
 static_assert(sizeof(struct mt6628_event_bss_beacon_timeout) == 4);
 static_assert(sizeof(struct mt6628_event_send_deauth) == 24);
+static_assert(sizeof(struct mt6628_cmd_get_sta_statistics) == 28);
+static_assert(sizeof(struct mt6628_event_sta_statistics) == 44);
 
 struct mt6628_hif_rx_hdr {
 	__le16 packet_len;

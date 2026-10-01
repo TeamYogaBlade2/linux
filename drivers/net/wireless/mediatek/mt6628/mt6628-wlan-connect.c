@@ -15,10 +15,6 @@
 #include "mtk-wlan.h"
 
 #define MT6628_CONNECT_TIMEOUT_MS       5000
-#define MT6628_CONN_DISCONNECTED        0
-#define MT6628_CONN_AUTH                1
-#define MT6628_CONN_ASSOC               2
-#define MT6628_CONN_CONNECTED           3
 
 #define MT6628_CONNECT_MAX_IE_LEN       600
 

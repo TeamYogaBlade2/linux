@@ -21,6 +21,12 @@
 
 #define MT6628_WLAN_TX_TC_NUM		6
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
+
+/* Connection state machine states, shared with the event paths. */
+#define MT6628_CONN_DISCONNECTED	0
+#define MT6628_CONN_AUTH		1
+#define MT6628_CONN_ASSOC		2
+#define MT6628_CONN_CONNECTED		3
 #define MT6628_WLAN_KEY_INDEX_MAX	3
 
 /* Size of the EVENT_ID_SEND_DEAUTH reply rate limiter ring. */
@@ -192,6 +198,9 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);
 void mt6628_wlan_flush_keys(struct mt6628_wlan *wl);
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled);
+struct mt6628_event_sta_statistics;
+int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
+				   struct mt6628_event_sta_statistics *stats);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 			 size_t frame_len, bool wait_for_status, bool need_ack);
 
