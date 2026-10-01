@@ -158,9 +158,13 @@ static int mt6589_afe_pcm_open(struct snd_soc_component *comp,
 			       struct snd_pcm_substream *substream)
 {
 	snd_soc_set_runtime_hwparams(substream, &mt6589_afe_hardware);
-	/* AFE_DL1_END[2:0] must be 7: keep the period (so the buffer) 8-byte aligned. */
+	/*
+	 * AFE_DL1_END[2:0] must be 7, so keep the period (and therefore the
+	 * buffer) 8-byte aligned, and honour the AFE's 32-byte sample
+	 * alignment requirement as well so the ring does not need masking.
+	 */
 	return snd_pcm_hw_constraint_step(substream->runtime, 0,
-					  SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 8);
+					  SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 32);
 }
 
 static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,

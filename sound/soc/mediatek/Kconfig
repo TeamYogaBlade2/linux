@@ -29,6 +29,10 @@ config SND_SOC_MT6589
 	tristate "ASoC support for the MediaTek MT6589 chip"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	select SND_SOC_MEDIATEK
+	# The DL1 ring has to live in the AFE on-chip SRAM.  Without the
+	# generic allocator, SNDRV_DMA_TYPE_DEV_IRAM silently degrades to a
+	# plain device allocation and the ring ends up in DRAM.
+	depends on GENERIC_ALLOCATOR || COMPILE_TEST
 	help
 	  This adds the ASoC platform (AFE) driver for the MediaTek MT6589
 	  SoC. Select a machine driver below to build a sound card.
