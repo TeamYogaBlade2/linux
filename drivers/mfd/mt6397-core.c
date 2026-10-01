@@ -176,18 +176,18 @@ static const struct mfd_cell mt6320_devs[] = {
 		.of_compatible = "mediatek,mt6320-pwrc",
 	}, {
 		.name = "mt6320-auxadc",
-		.of_compatible = "mediatek,mt6320-auxadc"
+		.of_compatible = "mediatek,mt6320-auxadc",
 	}, {
 		.name = "mt6320-efuse",
-		.of_compatible = "mediatek,mt6320-efuse"
+		.of_compatible = "mediatek,mt6320-efuse",
 	}, {
 		.name = "mt6320-accdet",
 		.num_resources = ARRAY_SIZE(mt6320_accdet_resources),
 		.resources = mt6320_accdet_resources,
-		.of_compatible = "mediatek,mt6320-accdet"
+		.of_compatible = "mediatek,mt6320-accdet",
 	}, {
 		.name = "mt6320-sound",
-		.of_compatible = "mediatek,mt6320-sound"
+		.of_compatible = "mediatek,mt6320-sound",
 	},
 };
 
