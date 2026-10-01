@@ -42,12 +42,18 @@
 
 #define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
 
-#define MT6320_PMIC_TRIM_ADDRESS1	0x01c2
-#define MT6320_PMIC_TRIM_ADDRESS2	0x01c4
+/*
+ * Headphone amplifier trim lives in the efuse data-out words.  The
+ * kernel's MT6320 register header still labels these
+ * EFUSE_DOUT_112_127 / EFUSE_DOUT_128_143; name them for what they are
+ * used for here.  Bit 12 of the first word is the "trim valid" flag.
+ */
+#define MT6320_EFUSE_DOUT_112_127	0x01c2
+#define MT6320_EFUSE_DOUT_128_143	0x01c4
 #define MT6320_PMIC_TRIM_REG1_DEFAULT	0x0220
 #define MT6320_PMIC_TRIM_REG2_DEFAULT	0x0006
 #define MT6320_E2_CID			MT6320_AFUNC_AUD_CON2
-#define MT6320_PMIC_TRIM_SPK		0x01ca
+#define MT6320_EFUSE_DOUT_176_191	0x01ca
 #define MT6320_SPK_TRIM_DEFAULT		0x0010
 /*
  * SPK_CON1 carries the measured class-D offset on E2 silicon.  E1 reads
@@ -124,11 +130,11 @@ static int mt6320_apply_hp_trim(struct mt6320_codec_priv *priv)
 	u32 reg1, reg2, trim;
 	int ret;
 
-	ret = regmap_read(priv->regmap, MT6320_PMIC_TRIM_ADDRESS1, &reg1);
+	ret = regmap_read(priv->regmap, MT6320_EFUSE_DOUT_112_127, &reg1);
 	if (ret)
 		return ret;
 
-	ret = regmap_read(priv->regmap, MT6320_PMIC_TRIM_ADDRESS2, &reg2);
+	ret = regmap_read(priv->regmap, MT6320_EFUSE_DOUT_128_143, &reg2);
 	if (ret)
 		return ret;
 
@@ -427,7 +433,7 @@ static int mt6320_apply_spk_trim(struct mt6320_codec_priv *priv)
 		return ret;
 
 	if (cid < MT6320_E2_CID) {
-		ret = regmap_read(priv->regmap, MT6320_PMIC_TRIM_SPK, &reg);
+		ret = regmap_read(priv->regmap, MT6320_EFUSE_DOUT_176_191, &reg);
 		if (ret)
 			return ret;
 

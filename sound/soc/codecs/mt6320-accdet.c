@@ -100,17 +100,24 @@ static void mt6320_accdet_report(struct mt6320_accdet *priv,
 
 static int mt6320_accdet_key(struct mt6320_accdet *priv)
 {
-	int raw, mv, ret;
+	int uv, mv;
+	int ret;
 
 	if (!priv->key)
 		return -1;
 
-	ret = iio_read_channel_raw(priv->key, &raw);
+	ret = iio_read_channel_processed(priv->key, &uv);
 	if (ret)
 		return -1;
 
-	/* MT6320 AUXADC: 10-bit conversion, 1.2 V full-scale. */
-	mv = raw * 1200 / 1024;
+	/*
+	 * The AUXADC driver advertises its 1.2 V full-scale 10-bit range
+	 * through IIO_CHAN_INFO_SCALE, so take the converted value from the
+	 * IIO core rather than repeating the constants here and risking the
+	 * two drifting apart.  The processed value is in microvolts, and
+	 * the Blade BSP thresholds below are in millivolts.
+	 */
+	mv = uv / 1000;
 
 	/*
 	 * Blade BSP thresholds:
