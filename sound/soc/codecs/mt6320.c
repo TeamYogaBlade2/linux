@@ -52,7 +52,13 @@
 #define MT6320_EFUSE_DOUT_128_143	0x01c4
 #define MT6320_PMIC_TRIM_REG1_DEFAULT	0x0220
 #define MT6320_PMIC_TRIM_REG2_DEFAULT	0x0006
-#define MT6320_E2_CID			MT6320_AFUNC_AUD_CON2
+/*
+ * PMIC chip ID read from MT6320_CID, not a register address:
+ * PMIC6320_E1_CID_CODE / PMIC6320_E2_CID_CODE.  The E2 revision selects the
+ * auto-trim path and the E2 regulator idle values.
+ */
+#define MT6320_E1_CID			0x1020
+#define MT6320_E2_CID			0x2020
 #define MT6320_EFUSE_DOUT_176_191	0x01ca
 #define MT6320_SPK_TRIM_DEFAULT		0x0010
 /*

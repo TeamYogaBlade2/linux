@@ -311,6 +311,18 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
+	/*
+	 * Ack a period interrupt that arrived after IRQ1 was disabled above.
+	 * Leaving it latched makes it fire again as soon as the next stream
+	 * re-enables IRQ1, where the handler would report a period elapsed
+	 * for a stream that has not started: the hw pointer jumps, and ALSA
+	 * can see an xrun on the first buffer after a stop/start.
+	 */
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+			   AFE_IRQ_MCU_CLR_NOSTATUS);
+	if (ret && !first_err)
+		first_err = ret;
+
 	afe->dl1_substream = NULL;
 	return first_err;
 }
