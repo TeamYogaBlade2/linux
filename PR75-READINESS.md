@@ -39,6 +39,22 @@ checked rather than assumed:
 
 - DMA ring at AFE_VUL_BASE/END/CUR (0x0080/0x0088/0x008c), confirmed in the
   datasheet.
+- **Sample-rate codes — two different encodings exist and only one was
+  implemented.**  `SetDLSrc2()` has its own dense 0..8 table used by
+  `AFE_ADDA_DL_SRC2_CON0`.  Everything else goes through
+  `SampleRateTransform()`, which returns the *sparse* `Soc_Aud_I2S_SAMPLERATE_*`
+  enum where 16k is 4 not 3 and 44.1k is 9 not 7.  This affects
+  `AFE_I2S_CON1_RATE`, `AFE_DAC_CON1_DL1_RATE`, `AFE_DAC_CON1_VUL_RATE`
+  and both IRQ rate fields - so it affected DL1 **playback** too, not just
+  capture.  Every rate from 16k upwards was programmed with the wrong code.
+  Both tables are now present and each field uses the right one.
+- **IRQ2 counts into `AFE_IRQ_MCU_CNT2`** (0x03b0), not CNT1; starting capture
+  would have overwritten the DL1 period counter.
+- **The ADC to VUL paths are in `AFE_CONN3`** (0x02c) bits 0 and 3, not
+  AFE_CONN2.  The data sheet names those bits `I03_O09_S`/`I04_O10_S` while
+  the downstream tables label the same register and bits `I03->O10`/`I04->O09`
+  - the two sources are offset by one in output numbering, so register and bit
+  were taken as the common ground.
 - VUL memif enable at `AFE_DAC_CON0` bit 3 — the datasheet shows one enable per
   memif (DL1 bit 1, DL2 bit 2, VUL bit 3, AWB bit 4) and downstream uses
   `1 << (block + 1)` with `MEM_DL1 == 0`.  An earlier version of this commit
