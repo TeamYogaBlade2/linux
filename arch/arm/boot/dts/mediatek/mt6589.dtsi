@@ -922,6 +922,15 @@
 			reg = <0x10200100 0x1c>;
 		};
 
+		smi_common: smi@10202000 {
+			compatible = "mediatek,mt6589-smi-common";
+			reg = <0x10202000 0x1000>, <0x1000e000 0x1000>;
+			clocks = <&infracfg CLK_INFRA_SMI>,
+				 <&infracfg CLK_INFRA_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_IFR>;
+		};
+
 		gic: interrupt-controller@10211000 {
 			compatible = "arm,cortex-a7-gic";
 			interrupt-controller;
@@ -1109,6 +1118,50 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+		};
+
+		larb1: larb@16010000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x16010000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <1>;
+			clocks = <&vdecsys CLK_VDEC0_VDE>,
+				 <&vdecsys CLK_VDEC1_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_VDE>;
+		};
+
+		larb2: larb@14010000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x14010000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <2>;
+			clocks = <&dispsys CLK_DISP0_LARB2_SMI>,
+				 <&dispsys CLK_DISP0_LARB2_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		larb3: larb@15001000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x15001000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <3>;
+			clocks = <&imgsys CLK_IMAGE_LARB3_SMI>,
+				 <&imgsys CLK_IMAGE_LARB3_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+		};
+
+		larb4: larb@15002000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x15002000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <4>;
+			clocks = <&imgsys CLK_IMAGE_LARB4_SMI>,
+				 <&imgsys CLK_IMAGE_LARB4_SMI>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
 		};
 	};
 };
