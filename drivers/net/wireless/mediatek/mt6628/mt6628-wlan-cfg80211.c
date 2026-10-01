@@ -492,6 +492,20 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	return 0;
 }
 
+/*
+ * Convert a firmware RCPI to dBm, matching RCPI_TO_dBm() in the
+ * downstream driver: (min(rcpi, 220) >> 1) - 110.
+ */
+static int mt6628_rcpi_to_dbm(u8 rcpi)
+{
+	return min_t(int, rcpi, 220) / 2 - 110;
+}
+
+static int mt6628_rcpi_to_mbm(u8 rcpi)
+{
+	return mt6628_rcpi_to_dbm(rcpi) * 100;
+}
+
 static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 				       struct wireless_dev *wdev,
 				       const u8 *mac,
@@ -524,11 +538,8 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 			 BIT_ULL(NL80211_STA_INFO_TX_PACKETS) |
 			 BIT_ULL(NL80211_STA_INFO_TX_RETRIES);
 
-	/*
-	 * The firmware reports RCPI on a base of 128, which is the same
-	 * convention cfg80211 wants for the signal value.
-	 */
-	sinfo->signal = stats.rcpi;
+	/* The firmware reports RCPI, which is not a dBm value. */
+	sinfo->signal = mt6628_rcpi_to_dbm(stats.rcpi);
 
 	sinfo->tx_packets = le32_to_cpu(stats.tx_count);
 	sinfo->tx_retries = le32_to_cpu(stats.tx_life_timeout_count);
@@ -581,13 +592,6 @@ static int mt6628_rx_frequency(struct mt6628_wlan *wl,
 		return 0;
 
 	return ieee80211_channel_to_frequency(channel, band);
-}
-
-static int mt6628_rcpi_to_mbm(u8 rcpi)
-{
-	int dbm = min_t(int, rcpi, 220) / 2 - 110;
-
-	return dbm * 100;
 }
 
 void mt6628_cfg80211_mgmt_rx_done(struct mt6628_wlan *wl)
