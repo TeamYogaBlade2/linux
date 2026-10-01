@@ -158,6 +158,15 @@ These cannot be settled by reading source:
 - **Display power domains** — OVL/RDMA declare a domain but take no reference. Inert
   here (RDMA0's own `pm_runtime_get_sync()` powers it on), and upstream behaviour.
 
+## MT6628 WLAN gap analysis
+
+Full gap analysis against the downstream driver:
+`drivers/net/wireless/mediatek/mt6628/Downstream-Gaps.md`.  It separates the
+features that are missing because the *firmware* cannot support them
+(`get_survey`, upstream-style roaming, the FM audio chain, DL2) from those that
+are out of scope (voice/modem PCM) and those that are simply not implemented
+(AP/P2P/monitor, VHT, DFS/regulatory, PMF, SAE, 802.1X).
+
 ## MT6589 clock driver address audit
 
 Every register offset in all ten `clk-mt6589-*.c` drivers was resolved against
