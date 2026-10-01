@@ -12,6 +12,7 @@
 #include <dt-bindings/reset/mt6589-resets.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 #include <dt-bindings/power/mt6589-power.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	#address-cells = <1>;
@@ -636,6 +637,28 @@
 			compatible = "mediatek,mt6589-apmixedsys", "syscon";
 			reg = <0x10209000 0x1000>;
 			#clock-cells = <1>;
+		};
+
+		auxadc: adc@11003000 {
+			compatible = "mediatek,mt6589-auxadc";
+			reg = <0x11003000 0x1000>;
+			clocks = <&pericfg CLK_PERI1_AUXADC>;
+			clock-names = "main";
+			#io-channel-cells = <1>;
+		};
+
+		thermal: thermal@1100c000 {
+			compatible = "mediatek,mt6589-thermal";
+			reg = <0x1100c000 0x1000>;
+			interrupts = <GIC_SPI 38 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&pericfg CLK_PERI0_THERM>,
+				 <&pericfg CLK_PERI1_AUXADC>;
+			clock-names = "therm", "auxadc";
+			mediatek,auxadc = <&auxadc>;
+			mediatek,apmixedsys = <&apmixedsys>;
+			nvmem-cells = <&thermal_cal_data>;
+			nvmem-cell-names = "calibration-data";
+			#thermal-sensor-cells = <1>;
 		};
 
 		audsys: syscon@12070000 {
