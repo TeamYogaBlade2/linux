@@ -284,21 +284,3 @@ PVRSRV_ERROR SysPMRuntimeUnregister(void)
 	return PVRSRV_OK;
 }
 
-#if 0 //#if defined(MTK_USE_GDC)
-IMG_UINT32 SysCacheBypass(IMG_UINT32 ui32RegVal)
-{
-	if (get_chip_eco_ver() == CHIP_E1) {
-		/* E1 chip */
-		ui32RegVal |= 0x80U;
-	} else {
-		/* E2 chip */
-		ui32RegVal |= 0x80U;
-	}
-	return ui32RegVal;
-}
-IMG_VOID OnSGXResetDone()
-{
-	SYSRAM_MFG_SWITCH_BANK(true);
-	//PVRSRVReleasePrintf("MFG Reset Done");
-}
-#endif

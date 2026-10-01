@@ -69,7 +69,11 @@ struct pvr_drm_priv {
 	unsigned int			width;
 	unsigned int			height;
 	unsigned int			refresh;
+	bool				registered;
 };
+
+/* Avoid platform_set_drvdata — SGX probe owns the platform device */
+static struct pvr_drm_priv *pvr_drm_priv;
 
 static const uint32_t pvr_drm_formats[] = {
 	DRM_FORMAT_XRGB8888,
@@ -295,8 +299,6 @@ int pvr_drm_display_init(struct platform_device *pdev)
 		return PTR_ERR(priv);
 
 	drm = &priv->drm;
-	platform_set_drvdata(pdev, priv);
-
 	pvr_drm_read_mode(pdev, priv);
 	pvr_drm_map_ovl(pdev, priv);
 
@@ -329,8 +331,12 @@ int pvr_drm_display_init(struct platform_device *pdev)
 	drm_mode_config_reset(drm);
 
 	ret = drm_dev_register(drm, 0);
-	if (ret)
+	if (ret) {
+		pvr_drm_priv = NULL;
 		return ret;
+	}
+	priv->registered = true;
+	pvr_drm_priv = priv;
 
 	drm_client_setup_with_fourcc(drm, DRM_FORMAT_XRGB8888);
 
@@ -345,16 +351,21 @@ int pvr_drm_display_init(struct platform_device *pdev)
 
 void pvr_drm_display_fini(struct platform_device *pdev)
 {
-	struct pvr_drm_priv *priv = platform_get_drvdata(pdev);
+	struct pvr_drm_priv *priv = pvr_drm_priv;
 
 	if (!priv || !IS_ENABLED(CONFIG_DRM))
 		return;
 
-	drm_dev_unregister(&priv->drm);
-	drm_atomic_helper_shutdown(&priv->drm);
+	if (priv->registered) {
+		drm_dev_unregister(&priv->drm);
+		drm_atomic_helper_shutdown(&priv->drm);
+		priv->registered = false;
+	}
 
 	if (priv->ovl_regs) {
 		iounmap(priv->ovl_regs);
 		priv->ovl_regs = NULL;
 	}
+
+	pvr_drm_priv = NULL;
 }

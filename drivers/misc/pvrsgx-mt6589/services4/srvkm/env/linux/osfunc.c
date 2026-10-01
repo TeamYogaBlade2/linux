@@ -157,15 +157,6 @@ OSAllocPages_Impl(IMG_UINT32 ui32AllocFlags,
 
     PVR_UNREFERENCED_PARAMETER(ui32PageSize);
 
-#if 0
-    /* For debug: force all OSAllocPages allocations to have a kernel
-     * virtual address */
-    if(ui32AllocFlags & PVRSRV_HAP_SINGLE_PROCESS)
-    {
-        ui32AllocFlags &= ~PVRSRV_HAP_SINGLE_PROCESS;
-        ui32AllocFlags |= PVRSRV_HAP_MULTI_PROCESS;
-    }
-#endif
 
     switch(ui32AllocFlags & PVRSRV_HAP_MAPTYPE_MASK)
     {
@@ -1767,15 +1758,6 @@ OSReservePhys(IMG_CPU_PHYADDR BasePAddr,
 {
     LinuxMemArea *psLinuxMemArea;
 
-#if 0
-    /* For debug: force all OSReservePhys reservations to have a kernel
-     * virtual address */
-    if(ui32MappingFlags & PVRSRV_HAP_SINGLE_PROCESS)
-    {
-        ui32MappingFlags &= ~PVRSRV_HAP_SINGLE_PROCESS;
-        ui32MappingFlags |= PVRSRV_HAP_MULTI_PROCESS;
-    }
-#endif
 
     switch(ui32MappingFlags & PVRSRV_HAP_MAPTYPE_MASK)
     {

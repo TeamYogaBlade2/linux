@@ -197,19 +197,6 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
 
 	PVR_TRACE(("PVRSRVDriverProbe(pDevice=%p)", pDevice));
 
-#if 0   /* INTEGRATION_POINT */
-	/* Some systems require device-specific system initialisation.
-	 * E.g. this lets the OS track a device's dependencies on various
-	 * system hardware.
-	 *
-	 * Note: some systems use this to enable HW that SysAcquireData
-	 * will depend on, therefore it must be called first.
-	 */
-	if (PerDeviceSysInitialise((IMG_PVOID)pDevice) != PVRSRV_OK)
-	{
-		return -EINVAL;
-	}
-#endif
 	/* SysInitialise only designed to be called once.
 	 */
 	psSysData = SysAcquireDataNoCheck();
@@ -246,7 +233,7 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
  base/bus.c:device_release_driver() for the call to this function.
 
  This is the correct place to clean up anything our driver did while it was
- asoociated with the device.
+ associated with the device.
 
  @input pDevice - the device for which driver detachment is happening
 
@@ -276,13 +263,6 @@ static void PVRSRVDriverRemove(struct platform_device *pDevice)
 
 	gpsPVRLDMDev = IMG_NULL;
 
-#if 0   /* INTEGRATION_POINT */
-	/* See previous integration point for details. */
-	if (PerDeviceSysDeInitialise((IMG_PVOID)pDevice) != PVRSRV_OK)
-	{
-		return -EINVAL;
-	}
-#endif
 
 	return;
 }

@@ -377,7 +377,7 @@ PVRSRV_ERROR SysInitialise(struct platform_device *pdev)
 		gpsSysData->devfreq = NULL; /* non-fatal: run without DVFS */
 	}
 
-	pm_runtime_enable(&pdev->dev);
+	/* pm_runtime_enable is done in SysPMRuntimeRegister() */
 
 	eError = SysLocateDevices(gpsSysData);
 	if (eError != PVRSRV_OK)
