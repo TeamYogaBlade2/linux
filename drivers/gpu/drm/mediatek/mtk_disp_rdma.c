@@ -19,6 +19,7 @@
 #include "mtk_drm_drv.h"
 
 #define DISP_REG_RDMA_INT_ENABLE		0x0000
+
 #define DISP_REG_RDMA_INT_STATUS		0x0004
 #define RDMA_TARGET_LINE_INT				BIT(5)
 #define RDMA_FIFO_UNDERFLOW_INT				BIT(4)
@@ -101,7 +102,8 @@ struct mtk_disp_rdma_data {
  * @data: local driver data
  */
 struct mtk_disp_rdma {
-	struct clk			*clk;
+	struct clk_bulk_data		*clks;
+	int				num_clks;
 	void __iomem			*regs;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_rdma_data	*data;
@@ -182,14 +184,14 @@ int mtk_rdma_clk_enable(struct device *dev)
 {
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 
-	return clk_prepare_enable(rdma->clk);
+	return clk_bulk_prepare_enable(rdma->num_clks, rdma->clks);
 }
 
 void mtk_rdma_clk_disable(struct device *dev)
 {
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 
-	clk_disable_unprepare(rdma->clk);
+	clk_bulk_disable_unprepare(rdma->num_clks, rdma->clks);
 }
 
 void mtk_rdma_start(struct device *dev)
@@ -431,10 +433,20 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	priv->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(priv->clk))
-		return dev_err_probe(dev, PTR_ERR(priv->clk),
-				     "failed to get rdma clk\n");
+	/*
+	 * The node declares engine, SMI and output clocks.  Taking only index
+	 * 0 left the other two gated, so the register writes issued through
+	 * the shadow registers may not have reached the hardware.
+	 */
+	/*
+	 * Take every clock the node declares: engine, SMI and output.
+	 * devm_clk_get() can only return one of them, so with no clock-names
+	 * property the other two stayed gated.
+	 */
+	ret = devm_clk_bulk_get_all(dev, &priv->clks);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to get rdma clks\n");
+	priv->num_clks = ret;
 
 	priv->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->regs))
@@ -474,16 +486,16 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	}
 
 	if (priv->data->reset) {
-		ret = clk_prepare_enable(priv->clk);
+		ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
 		if (ret) {
 			pm_runtime_put_sync(dev);
 			pm_runtime_disable(dev);
 			return dev_err_probe(dev, ret,
-					     "Failed to enable RDMA clock\n");
+					     "Failed to enable RDMA clocks\n");
 		}
 
 		priv->data->reset(priv);
-		clk_disable_unprepare(priv->clk);
+		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
 	}
 
 	pm_runtime_put_sync(dev);

@@ -37,6 +37,7 @@
 
 #define DISP_REG_OVL_EN				0x000c
 #define DISP_REG_OVL_RST			0x0014
+
 #define DISP_REG_OVL_ROI_SIZE			0x0020
 #define DISP_REG_OVL_DATAPATH_CON		0x0024
 #define OVL_LAYER_SMI_ID_EN				BIT(0)
@@ -81,7 +82,6 @@
 #define OVL_CON_CLRFMT_BGRA8888	(OVL_CON_CLRFMT_RGBA8888 | OVL_CON_BYTE_SWAP)
 #define OVL_CON_CLRFMT_UYVY	(4 << 12)
 #define OVL_CON_CLRFMT_YUYV	(5 << 12)
-#define OVL_CON_MTX_YUV_TO_RGB	(6 << 16)
 #define OVL_CON_CLRFMT_PARGB8888 ((3 << 12) | OVL_CON_CLRFMT_MAN)
 #define OVL_CON_CLRFMT_PABGR8888 (OVL_CON_CLRFMT_PARGB8888 | OVL_CON_RGB_SWAP)
 #define OVL_CON_CLRFMT_PBGRA8888 (OVL_CON_CLRFMT_PARGB8888 | OVL_CON_BYTE_SWAP)
@@ -210,7 +210,8 @@ struct mtk_disp_ovl_data {
  */
 struct mtk_disp_ovl {
 	struct drm_crtc			*crtc;
-	struct clk			*clk;
+	struct clk_bulk_data		*clks;
+	int				num_clks;
 	void __iomem			*regs;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_ovl_data	*data;
@@ -311,14 +312,14 @@ int mtk_ovl_clk_enable(struct device *dev)
 {
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
-	return clk_prepare_enable(ovl->clk);
+	return clk_bulk_prepare_enable(ovl->num_clks, ovl->clks);
 }
 
 void mtk_ovl_clk_disable(struct device *dev)
 {
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
-	clk_disable_unprepare(ovl->clk);
+	clk_bulk_disable_unprepare(ovl->num_clks, ovl->clks);
 }
 
 void mtk_ovl_start(struct device *dev)
@@ -565,12 +566,22 @@ static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl, struct mtk_pla
 		       OVL_CON_CLRFMT_ABGR8888 :
 		       OVL_CON_CLRFMT_PABGR8888;
 	case DRM_FORMAT_UYVY:
-		return OVL_CON_CLRFMT_UYVY | OVL_CON_MTX_YUV_TO_RGB;
+		return OVL_CON_CLRFMT_UYVY;
 	case DRM_FORMAT_YUYV:
-		return OVL_CON_CLRFMT_YUYV | OVL_CON_MTX_YUV_TO_RGB;
+		return OVL_CON_CLRFMT_YUYV;
 	}
 }
 
+/*
+ * OVL_CON[15:12] CLRFMT, per the MT6589 data sheet:
+ * 0000 RGB888, 0001 RGB565, 0010 ARGB888, 0011 PARGB8888,
+ * 0100 xARGB8888, 1000 YUYV, 1001 UYVY.
+ *
+ * YUV to RGB conversion is implied purely by selecting a YUV CLRFMT; the
+ * coefficients are programmed separately by mt6589_ovl_write_yuv_matrix().
+ * There is no matrix enable bit in OVL_CON on this SoC, and OVL_CON[23:16]
+ * is HORI_BLOCK_NUM, which nothing here sets.
+ */
 static unsigned int mt6589_fmt_convert(unsigned int fmt, unsigned int blend_mode)
 {
 	switch (fmt) {
@@ -586,8 +597,8 @@ static unsigned int mt6589_fmt_convert(unsigned int fmt, unsigned int blend_mode
 	case DRM_FORMAT_XRGB8888: return (2 << 12);
 	case DRM_FORMAT_ABGR8888:
 	case DRM_FORMAT_XBGR8888: return (2 << 12) | OVL_CON_BYTE_SWAP;
-	case DRM_FORMAT_UYVY:    return (9 << 12) | OVL_CON_MTX_YUV_TO_RGB;
-	case DRM_FORMAT_YUYV:    return (8 << 12) | OVL_CON_MTX_YUV_TO_RGB;
+	case DRM_FORMAT_UYVY:    return (9 << 12);
+	case DRM_FORMAT_YUYV:    return (8 << 12);
 	}
 	return 0;
 }
@@ -759,10 +770,21 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	priv->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(priv->clk))
-		return dev_err_probe(dev, PTR_ERR(priv->clk),
-				     "failed to get ovl clk\n");
+	/*
+	 * The node declares both the engine and the SMI clock.  Taking only
+	 * index 0 left SMI gated, and without it the GMC and M4U writes this
+	 * driver performs may not reach the hardware.
+	 */
+	/*
+	 * Take every clock the node declares.  devm_clk_get() can only return
+	 * one of them: with no clock-names property it always resolves index
+	 * 0, so the SMI clock stayed gated.  This helper walks the whole
+	 * clocks property by index instead.
+	 */
+	ret = devm_clk_bulk_get_all(dev, &priv->clks);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to get ovl clks\n");
+	priv->num_clks = ret;
 
 	priv->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->regs))
