@@ -259,3 +259,12 @@ The driver is a complete STA-mode full-MAC driver. Everything in the "blocked"
 and "out of scope" rows is absent for a reason other than the port falling
 short; the genuinely missing functionality is AP/P2P/monitor, VHT, DFS and the
 security extensions.
+---
+
+## Bring-up note
+
+The WLAN attaches as **SDIO function 1** and STP (Bluetooth/FM/GNSS) as
+function 2 on the same controller. Both function nodes must exist in the
+device tree or the function is never enumerated and the radio never
+probes. A missing function 1 node produces no MMC or SDIO messages at
+all in the boot log, which is easy to mistake for a driver hang.
