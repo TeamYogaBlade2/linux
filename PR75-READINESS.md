@@ -210,3 +210,34 @@ In rough order of expected information value:
 
 For each, check `dmesg` for the warnings the drivers already emit on the failure
 paths I fixed — those are the intended tripwires.
+---
+
+## Boot bring-up findings (from real hardware)
+
+Recorded because each was invisible to source review and each presented only
+as a missing log line.
+
+- **MT6589 had no MMC compatible.** The nodes declare `mediatek,mt6589-mmc`,
+  which matched nothing in `mtk-sd.c`, so the controller never probed.  Symptom:
+  *no MMC or SDIO output at all*, and the MT6628 combo functions never
+  enumerated.  Added a compatible derived from mt8173 - the data sheet gives
+  `MSDC_CFG` `CARD_CK_DIV` as bits [15:8], so the divider is 8 bits wide, not the
+  12 of the mt8183 class.  `needs_top_base` stays false because MT6589 drives MSDC
+  from TOPCKGEN and the nodes declare a single reg window.
+- **The MT6628 WLAN SDIO function node was missing.** The combo chip exposes WLAN
+  as SDIO function 1 and STP (BT/FM/GNSS) as function 2; only function 2 existed,
+  so `mt6628_wlan_sdio_probe()` was never called.
+- **Frequency hopping must not be used on MT6589.**  Downstream never brings the
+  block up: `mt_freqhopping_init()` is commented out and `mt_fh_hal_init()` is only
+  stored in a table nothing calls.  ARMPLL DVFS writes `ARMPLL_CON1` directly.
+  Registering the PLLs with the FHCTL helper sends every rate change through
+  `hopping()`, which polls a monitor register that never updates and leaves the
+  PLL unprogrammed - the ARM clock stops and the boot hangs.
+- **AP-side register window.**  Downstream addresses the non-CPU domains as
+  `0xFxxx_xxxx`; the AP aliases them as `0x1xxx_xxxx` with the low 28 bits
+  preserved (FHCTL `0xF1005000` = AP `0x11005000`).  Changing a node to the
+  downstream value breaks it.
+- **The simple-framebuffer console is not the display path.**  The board drives
+  its panel over DSI through mediatek-drm; the framebuffer node was only a
+  fallback and has been removed.
+
