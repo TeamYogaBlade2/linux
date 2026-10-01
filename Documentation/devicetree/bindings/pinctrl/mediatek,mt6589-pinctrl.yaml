@@ -65,12 +65,12 @@ required:
   - "#interrupt-cells"
 
 patternProperties:
-  '-[0-9]*$':
+  '^(.*)?_pins(_default|_uhs)?$':
     type: object
     additionalProperties: false
 
     patternProperties:
-      '-pins*$':
+      '.*pins.*$|^pin-':
         type: object
         description:
           A pinctrl node should contain at least one subnodes representing the
