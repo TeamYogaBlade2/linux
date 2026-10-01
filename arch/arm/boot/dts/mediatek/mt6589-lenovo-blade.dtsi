@@ -480,6 +480,16 @@
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
 
+	/*
+	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the
+	 * STP transport (Bluetooth/FM/GNSS) as function 2.  Both function
+	 * nodes have to exist for the hardware to be enumerated: without
+	 * this one the WLAN is never probed.
+	 */
+	mt6628-wlan@1 {
+		reg = <1>;
+	};
+
 	mt6628-stp@2 {
 		reg = <2>;
 
