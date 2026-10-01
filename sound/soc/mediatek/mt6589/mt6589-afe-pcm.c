@@ -68,7 +68,8 @@
 #define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
 #define AFE_IRQ_MCU_CLR		0x03a8
 #define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | GENMASK(4, 0))
-#define AFE_IRQ_MCU_CNT1	0x03ac
+#define AFE_IRQ_MCU_CNT1	0x03ac	/* IRQ1 MCU counter */
+#define AFE_IRQ_MCU_CNT2	0x03b0	/* IRQ2 MCU counter */
 
 /* DL1 -> interconnect -> ADDA downlink SRC -> AFE<->PMIC link. */
 #define AFE_I2S_CON1		0x0034
@@ -79,11 +80,16 @@
 #define AFE_CONN1_DL1_O3	BIT(21)		/* DL1 ch1 -> O3 */
 #define AFE_CONN2		0x0028
 #define AFE_CONN2_DL1_O4	BIT(6)		/* DL1 ch2 -> O4 */
-/* I2S ADC -> VUL.  From the downstream mConnectionReg/mConnectionbits rows
- * for I03->O10 and I04->O09.
+/*
+ * I2S ADC -> VUL, the two connections the downstream capture driver makes:
+ * I03 -> O09 and I04 -> O10.  Both are in AFE_CONN3, at bit 0 and bit 3
+ * respectively.  The downstream mConnection tables agree on the registers
+ * and bits; only their output *numbering* is offset by one against the
+ * data sheet, which names these bits I03_O09_S and I04_O10_S.
  */
-#define AFE_CONN2_VUL_O9	BIT(29)	/* I04 -> O09 */
-#define AFE_CONN2_VUL_O10	BIT(0)	/* I03 -> O10 */
+#define AFE_CONN3		0x002c
+#define AFE_CONN3_VUL_O9	BIT(0)		/* I03 -> O09 */
+#define AFE_CONN3_VUL_O10	BIT(3)		/* I04 -> O10 */
 #define AFE_ADDA_DL_SRC2_CON0	0x0108
 #define AFE_ADDA_DL_SRC2_CON0_BASE 0x03001802	/* SRC-disabled base */
 #define AFE_ADDA_DL_SRC2_CON0_RATE GENMASK(31, 28)
@@ -124,7 +130,32 @@ struct mt6589_afe {
 	struct snd_pcm_substream *vul_substream;	/* active VUL stream */
 };
 
-/* Hz -> AFE sample-rate code. */
+/*
+ * Hz -> the sparse AFE sample-rate code used by SampleRateTransform()
+ * downstream (Soc_Aud_I2S_SAMPLERATE_*).  This is NOT the dense 0..8 table
+ * below: 16k is 4, not 3, and 44.1k is 9, not 7.  It applies to the rate
+ * fields in DAC_CON1, I2S_CON1 and IRQ_MCU_CON.
+ */
+static int mt6589_afe_rate_code_sparse(unsigned int rate)
+{
+	switch (rate) {
+	case 8000:	return 0;
+	case 11025:	return 1;
+	case 12000:	return 2;
+	case 16000:	return 4;
+	case 22050:	return 5;
+	case 24000:	return 6;
+	case 32000:	return 8;
+	case 44100:	return 9;
+	case 48000:	return 10;
+	default:	return -EINVAL;
+	}
+}
+
+/*
+ * Hz -> dense DL_SRC2 rate code.  SetDLSrc2() uses its own 0..8 table,
+ * distinct from SampleRateTransform() above.
+ */
 static int mt6589_afe_rate_code(unsigned int rate)
 {
 	switch (rate) {
@@ -252,20 +283,21 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
 	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int mcu_rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	u32 adda_con0;
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		return mt6589_afe_vul_prepare(comp, substream);
 	int ret;
 
-	if (adda_code < 0 || rate_code < 0)
+	if (adda_code < 0 || rate_code < 0 || mcu_rate_code < 0)
 		return -EINVAL;
 
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
 	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
 				 AFE_IRQ_MCU_CON_IRQ1_RATE,
 				 FIELD_PREP(AFE_IRQ_MCU_CON_IRQ1_RATE,
-					    rate_code));
+					    mcu_rate_code));
 	if (ret)
 		return ret;
 
@@ -308,13 +340,19 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 
 	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
 			   AFE_I2S_CON1_BASE |
-			   FIELD_PREP(AFE_I2S_CON1_RATE, rate_code));
+			   FIELD_PREP(AFE_I2S_CON1_RATE, mcu_rate_code));
 	if (ret)
 		return ret;
 
+	/*
+	 * DAC_CON1 carries the memif rate fields and SetSampleRate()
+	 * transforms its input through SampleRateTransform() first, so this
+	 * is the sparse code, not the dense DL_SRC2 one.
+	 */
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_DL1_RATE,
-				 FIELD_PREP(AFE_DAC_CON1_DL1_RATE, rate_code));
+				 FIELD_PREP(AFE_DAC_CON1_DL1_RATE,
+					    mcu_rate_code));
 	if (ret)
 		return ret;
 
@@ -496,7 +534,7 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
 	/* Select the internal ADC, matching SetI2SAdcIn(). */
@@ -522,7 +560,7 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	u32 base = lower_32_bits(runtime->dma_addr);
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
 	afe->vul_substream = substream;
@@ -542,17 +580,18 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	if (ret)
 		goto err;
 
-	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CNT1,
+	/* IRQ2 counts into its own counter register, not IRQ1's. */
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CNT2,
 			   runtime->period_size);
 	if (ret)
 		goto err;
 
 	/* Route the I2S ADC channels into the VUL memory interface. */
-	ret = regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O9);
+	ret = regmap_set_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O9);
 	if (ret)
 		goto err;
 
-	ret = regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O10);
+	ret = regmap_set_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O10);
 	if (ret)
 		goto err;
 
@@ -584,11 +623,11 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O9);
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O9);
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O10);
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O10);
 	if (ret && !first_err)
 		first_err = ret;
 
