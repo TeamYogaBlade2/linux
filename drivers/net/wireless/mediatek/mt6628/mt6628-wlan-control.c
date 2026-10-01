@@ -644,21 +644,39 @@ int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
 {
 	struct mt6628_cmd_get_sta_statistics cmd = {};
 	size_t response_len;
+	u8 sta_rec_idx;
+	u8 bssid[ETH_ALEN];
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
-	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND)
-		return -ENOLINK;
 
-	cmd.index = wl->sta_rec_idx;
-	cmd.flags = 0;
-	/* Clear the firmware counters as they are read, so a second
-	 * query reports the interval since the first rather than a
-	 * cumulative total.
+	/*
+	 * Both the STA-REC index and the peer address are connection state,
+	 * so take a consistent snapshot: a concurrent disconnect could
+	 * otherwise clear the index while we are still building the command.
 	 */
-	cmd.read_clear = 1;
-	ether_addr_copy(cmd.mac_addr, wl->conn_bssid);
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -ENOLINK;
+	}
+	sta_rec_idx = wl->sta_rec_idx;
+	ether_addr_copy(bssid, wl->conn_bssid);
+	mutex_unlock(&wl->cfg_mutex);
+
+	cmd.index = sta_rec_idx;
+	cmd.flags = 0;
+	/*
+	 * Do not ask the firmware to clear the counters as it reads them.
+	 * The downstream driver sets this for its SIOCSIWSTASTATS ioctl,
+	 * which is a deliberate read-and-reset.  get_station() is a passive
+	 * query that user space may call repeatedly, and clearing on every
+	 * call would destroy the counters just because someone looked at
+	 * them.
+	 */
+	cmd.read_clear = 0;
+	ether_addr_copy(cmd.mac_addr, bssid);
 
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_GET_STA_STATISTICS, 0,
 				   &cmd, sizeof(cmd), stats, sizeof(*stats),
