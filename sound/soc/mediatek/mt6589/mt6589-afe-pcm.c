@@ -33,6 +33,10 @@
 #define AFE_DAC_CON0		0x0010
 #define AFE_DAC_CON0_AFE_ON	BIT(0)
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
+/* AFE_DAC_CON0 per-memif enables: DL1 bit1, DL2 bit2, VUL bit3, AWB bit4.
+ * The downstream driver uses 1 << (block + 1) with MEM_DL1 == 0.
+ */
+#define AFE_DAC_CON0_VUL_ON	BIT(3)
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
 #define AFE_DAC_CON1_VUL_RATE	GENMASK(19, 16)
@@ -554,7 +558,7 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 
 	/* Start the memif before the interrupt, as the DL1 path does. */
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
-				 AFE_DAC_CON0_DL1_ON, AFE_DAC_CON0_DL1_ON);
+				 AFE_DAC_CON0_VUL_ON, AFE_DAC_CON0_VUL_ON);
 	if (ret)
 		goto err;
 
@@ -589,6 +593,11 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 		first_err = ret;
 
 	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+				AFE_DAC_CON0_VUL_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
