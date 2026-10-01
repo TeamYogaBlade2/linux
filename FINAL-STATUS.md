@@ -97,6 +97,15 @@ wrong, but two findings were real:
   resolves index 0, so it would return the same clock N times.  `devm_clk_bulk_get_all()`
   walks the whole `clocks` property by index, which is what is now used.
 
+- **`DSI_PHY_TIMCON2[15:8]` was being written as `DA_HS_SYNC`.**  On MT6589 that
+  register has only `CLK_HS_TRAIL[31:24]`, `CLK_HS_ZERO[23:16]` and
+  `CONT_DET[7:0]`, and the downstream register struct names the byte `RSV8`.  The
+  driver was poking a constant 1 into a reserved byte while never programming the
+  real `CONT_DET` field, which it defines and then never uses.  Fixed behind a
+  driver-data flag so no other SoC changes.  `CONT_DET` is left at reset rather
+  than guessed: downstream sources it from LCM parameters and there is no MT6589
+  1280x800 DSI panel in the downstream tree to take the value from.
+
 Claims from that review that were checked and found **false**:
 
 - "CLRFMT uses wrong mt8170-style encodings" — the datasheet gives RGB888=0,
@@ -130,8 +139,6 @@ was correct, and the defect was in how it interacted with a path added elsewhere
   removed: they are inherited upstream code shared with mt2701, mt8173, mt8183,
   mt8186 and mt8188, and only the MT6589 datasheet is available here.  Removing
   them on one SoC's evidence risks the other five.
-- `DSI_PHY_TIMCON2` / `DA_HS_SYNC` reportedly lands in a reserved byte on MT6589 —
-  not verified either way.
 - RDMA stop does not mask `INT_ENABLE`/ack `INT_STATUS` as downstream does; with a
   level-triggered SPI this could re-fire.  Not changed: `mtk_disp_rdma.c` is shared
   across every MediaTek SoC and this pattern is upstream's.
