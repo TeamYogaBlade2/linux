@@ -51,6 +51,11 @@
 			#clock-cells = <1>;
 		};
 
+		mt6320_adc: adc {
+			compatible = "mediatek,mt6320-auxadc";
+			#io-channel-cells = <1>;
+		};
+
 		/*
 		 * Expose the PMIC's own junction temperature sensor (AUXADC
 		 * channel 4) as a hardware monitoring device so that the
