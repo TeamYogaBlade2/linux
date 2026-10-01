@@ -18,7 +18,6 @@ properties:
   compatible:
     enum:
       - mediatek,mt6320-auxadc
-      - mediatek,mt6323-auxadc
 
   "#io-channel-cells":
     const: 1
