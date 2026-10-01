@@ -19,7 +19,7 @@ static inline unsigned long pvr_copy_from_user(void *pvTo, const void __user *pv
 {
     /*
      * The compile time correctness checking introduced for copy_from_user in
-     * Linux 2.6.33 isn't fully comaptible with our usage of the function.
+     * Linux 2.6.33 isn't fully compatible with our usage of the function.
      */
     if (access_ok(pvFrom, ulBytes))
     {

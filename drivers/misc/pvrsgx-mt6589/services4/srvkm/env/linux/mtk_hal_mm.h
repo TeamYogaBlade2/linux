@@ -16,7 +16,6 @@ static inline IMG_VOID MTKSysRAMDec(IMG_UINT32 uiByte)
 
 static inline IMG_UINT32 MTKGetSysRAMStats(IMG_VOID)
 {
-   // PVR_DPF((PVR_DBG_ERROR,"MTKGetSysRAMStats: total: %d",(unsigned int)atomic_read (&g_MtkSysRAMUseInByte_atomic)));
     return ((unsigned int)atomic_read (&g_MtkSysRAMUseInByte_atomic));
 }
 

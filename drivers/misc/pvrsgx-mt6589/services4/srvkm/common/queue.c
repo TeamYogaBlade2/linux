@@ -8,18 +8,11 @@
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
 /*
- * Structure fields (pvTimeline, pvCleanupFence, iFenceFd) must remain for
- * ABI compatibility with the aquaris-5 userspace blob. Real fence signalling
+ * Structure fields (pvTimeline, pvCleanupFence) must remain for ABI
+ * compatibility with the aquaris-5 userspace blob. Real fence signalling
  * for kicks goes through pvr_sync.c (dma-fence / sync_file). The queue-level
- * sw_sync timeline path is stubbed: no kernel android/sw_sync available.
+ * sw_sync timeline path is not available on mainline kernels.
  */
-static void *AllocQueueFence(void *psTimeline, IMG_UINT32 ui32FenceValue, const char *szName)
-{
-	(void)psTimeline;
-	(void)ui32FenceValue;
-	(void)szName;
-	return NULL;
-}
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
 /*
