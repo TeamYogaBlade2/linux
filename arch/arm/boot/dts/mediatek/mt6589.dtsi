@@ -913,6 +913,16 @@
 			reset-names = "pwrap", "pwrap-bridge";
 		};
 
+		mipi_tx0: dsi-phy@10012000 {
+			compatible = "mediatek,mt6589-mipi-tx";
+			reg = <0x10012000 0x90>;
+			clocks = <&clk26m>;
+			/* <&dispsys CLK_DISP1_DSI_DIGITAL_LANE> ? */
+			clock-output-names = "mipi_tx0_pll";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6589-sysirq",
 				     "mediatek,mt6577-sysirq";
