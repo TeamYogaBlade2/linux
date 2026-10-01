@@ -22,6 +22,10 @@
 #define MT6628_WLAN_TX_TC_NUM		6
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
 
+/* ENUM_CH_REQ_TYPE_T from the downstream connection manager. */
+#define MT6628_CH_REQ_TYPE_JOIN		0
+#define MT6628_CH_REQ_TYPE_P2P_LISTEN	1
+
 /* Connection state machine states, shared with the event paths. */
 #define MT6628_CONN_DISCONNECTED	0
 #define MT6628_CONN_AUTH		1
@@ -56,6 +60,14 @@ struct mt6628_wlan {
 	 */
 	bool pm_idle;
 	struct delayed_work pm_work;
+	/* Remain-on-channel state, including the request we granted it with. */
+	u64 roc_cookie;
+	struct ieee80211_channel *roc_chans[2];
+	unsigned int roc_n_chans;
+	unsigned int roc_duration;
+	struct delayed_work roc_work;
+	u8 channel_req_type;
+	unsigned int channel_grant_ms;	/* firmware-granted interval */
 
 	struct work_struct irq_work;
 	struct work_struct recovery_work;
@@ -177,6 +189,9 @@ void mt6628_wlan_pm_idle(struct mt6628_wlan *wl);
 void mt6628_wlan_pm_busy(struct mt6628_wlan *wl);
 int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl);
 
+int mt6628_wlan_ch_privilege(struct mt6628_wlan *wl,
+			     const struct ieee80211_channel *channel,
+			     const u8 *bssid, u8 req_type, bool require_grant);
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const struct ieee80211_channel *channel,
 				const u8 *bssid);
@@ -207,6 +222,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
 void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl);
+void mt6628_roc_work(struct work_struct *work);
 void mt6628_conn_schedule_retry(struct mt6628_wlan *wl);
 void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl);
 int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,

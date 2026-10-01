@@ -506,6 +506,139 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
 	return mt6628_rcpi_to_dbm(rcpi) * 100;
 }
 
+static void mt6628_roc_expire(struct mt6628_wlan *wl, u64 cookie)
+{
+	struct ieee80211_channel *chans[2];
+	unsigned int n_chans = 0;
+	unsigned int i;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->roc_cookie != cookie) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+	for (i = 0; i < wl->roc_n_chans; i++)
+		chans[n_chans++] = wl->roc_chans[i];
+	wl->roc_cookie = 0;
+	wl->roc_n_chans = 0;
+	wl->roc_duration = 0;
+	mutex_unlock(&wl->cfg_mutex);
+
+	cfg80211_remain_on_channel_expired(&wl->wdev, cookie,
+					   n_chans ? chans[0] : NULL,
+					   GFP_KERNEL);
+}
+
+static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
+{
+	bool active;
+
+	mutex_lock(&wl->cfg_mutex);
+	/*
+	 * cfg80211 passes back the cookie it was given.  Only release the
+	 * channel if it still matches the live request, so a stale cancel
+	 * cannot tear down a newer listen window.
+	 */
+	active = wl->roc_cookie && wl->roc_cookie == cookie;
+	if (active) {
+		wl->roc_cookie = 0;
+		wl->roc_n_chans = 0;
+		wl->roc_duration = 0;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!active)
+		return -ENOENT;
+
+	mt6628_wlan_release_channel(wl);
+	return 0;
+}
+
+static void mt6628_roc_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl = container_of(to_delayed_work(work),
+					     struct mt6628_wlan, roc_work);
+	u64 cookie;
+
+	mutex_lock(&wl->cfg_mutex);
+	cookie = wl->roc_cookie;
+	mutex_unlock(&wl->cfg_mutex);
+
+	mt6628_roc_expire(wl, cookie);
+}
+
+static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
+					     struct wireless_dev *wdev,
+					     struct ieee80211_channel *chan,
+					     unsigned int duration,
+					     u64 *cookie)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+	unsigned long timeout_ms;
+	u64 new_cookie;
+	int ret;
+
+	if (!wl || !chan)
+		return -EINVAL;
+
+	if (duration > wiphy->max_remain_on_channel_duration)
+		return -EINVAL;
+
+	/*
+	 * Only one listen-class channel can be granted at a time on this
+	 * hardware; cfg80211 only ever asks for one.
+	 */
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->roc_cookie) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -EBUSY;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	new_cookie = wl->roc_cookie + 1;
+	if (!new_cookie)
+		new_cookie = 1;
+
+	ret = mt6628_wlan_ch_privilege(wl, chan, NULL,
+					MT6628_CH_REQ_TYPE_P2P_LISTEN, true);
+	if (ret)
+		return ret;
+
+	mutex_lock(&wl->cfg_mutex);
+	wl->roc_cookie = new_cookie;
+	wl->roc_chans[0] = chan;
+	wl->roc_n_chans = 1;
+	wl->roc_duration = duration;
+	*cookie = new_cookie;
+	mutex_unlock(&wl->cfg_mutex);
+
+	cfg80211_ready_on_channel(&wl->wdev, *cookie, chan, duration, GFP_KERNEL);
+
+	/*
+	 * The firmware grants the channel for an interval of its own
+	 * choosing, which may be shorter than the time we asked for, so
+	 * expire on what it actually granted.
+	 */
+	timeout_ms = wl->channel_grant_ms ? wl->channel_grant_ms :
+		     (duration ? duration : 1000);
+	mod_delayed_work(system_wq, &wl->roc_work,
+			 msecs_to_jiffies(timeout_ms));
+	return 0;
+}
+
+static int mt6628_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy,
+						    struct wireless_dev *wdev,
+						    u64 cookie)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+
+	if (!wl)
+		return -EINVAL;
+
+	cancel_delayed_work_sync(&wl->roc_work);
+	return mt6628_roc_cancel(wl, cookie);
+}
+
 static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 				       struct wireless_dev *wdev,
 				       const u8 *mac,
@@ -562,6 +695,8 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.set_power_mgmt = mt6628_cfg80211_set_power_mgmt,
 	.mgmt_tx = mt6628_cfg80211_mgmt_tx,
 	.get_station = mt6628_cfg80211_get_station,
+	.remain_on_channel = mt6628_cfg80211_remain_on_channel,
+	.cancel_remain_on_channel = mt6628_cfg80211_cancel_remain_on_channel,
 };
 
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)
@@ -779,6 +914,7 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 	INIT_WORK(&wl->scan_work, mt6628_scan_work);
 	wl->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	wl->wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
+	wl->wiphy->max_remain_on_channel_duration = 30000;
 	wl->wiphy->max_scan_ssids = MT6628_SCAN_MAX_SSIDS;
 	wl->wiphy->max_scan_ie_len = MT6628_SCAN_MAX_IE_LEN;
 	wl->wiphy->bands[NL80211_BAND_2GHZ] = &mt6628_2ghz_band;

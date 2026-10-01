@@ -101,11 +101,18 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 		}
 	}
 
-	/* The channel privilege may outlive STA-REC setup failures. */
-	ret = mt6628_wlan_release_channel(wl);
-	if (ret)
-		dev_warn(&wl->func->dev,
-			 "failed to release channel privilege: %d\n", ret);
+	/*
+	 * The channel privilege may outlive STA-REC setup failures, so
+	 * release the JOIN grant.  A listen-class grant is owned by
+	 * remain-on-channel and must be left alone here.
+	 */
+	if (wl->channel_req_type == MT6628_CH_REQ_TYPE_JOIN) {
+		ret = mt6628_wlan_release_channel(wl);
+		if (ret)
+			dev_warn(&wl->func->dev,
+				 "failed to release channel privilege: %d\n",
+				 ret);
+	}
 }
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
@@ -635,6 +642,7 @@ void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl)
 {
 	INIT_DELAYED_WORK(&wl->conn_timeout_work, mt6628_connect_timeout_work);
 	INIT_DELAYED_WORK(&wl->conn_retry_work, mt6628_conn_retry_work);
+	INIT_DELAYED_WORK(&wl->roc_work, mt6628_roc_work);
 	wl->conn_retry_valid = false;
 	wl->conn_retry_count = 0;
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
@@ -651,6 +659,7 @@ void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl)
 
 void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl)
 {
+	cancel_delayed_work_sync(&wl->roc_work);
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
 	cancel_delayed_work_sync(&wl->conn_retry_work);
 	mt6628_conn_clear_retry(wl);

@@ -22,7 +22,6 @@
 #define MT6628_CMD_CH_ACTION_REQ		0
 #define MT6628_CMD_CH_ACTION_ABORT		1
 #define MT6628_EVENT_CH_STATUS_GRANT	0
-#define MT6628_CH_REQ_TYPE_JOIN		0
 #define MT6628_CH_MAX_INTERVAL_MS	5000
 
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
@@ -208,6 +207,14 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const struct ieee80211_channel *channel,
 				const u8 *bssid)
 {
+	return mt6628_wlan_ch_privilege(wl, channel, bssid,
+					MT6628_CH_REQ_TYPE_JOIN, true);
+}
+
+int mt6628_wlan_ch_privilege(struct mt6628_wlan *wl,
+			     const struct ieee80211_channel *channel,
+			     const u8 *bssid, u8 req_type, bool require_grant)
+{
 	struct mt6628_cmd_ch_privilege cmd = {};
 	struct mt6628_event_ch_privilege event = {};
 	size_t response_len;
@@ -217,9 +224,21 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 
 	if (!channel)
 		return -EINVAL;
-	if (!bssid || is_multicast_ether_addr(bssid) ||
-	    is_zero_ether_addr(bssid))
-		return -EINVAL;
+
+	/*
+	 * A JOIN has to name the BSS it is joining.  The listen-class
+	 * requests only need the channel, and the firmware treats a zero
+	 * BSSID as "no particular BSS" for those.
+	 */
+	if (req_type == MT6628_CH_REQ_TYPE_JOIN) {
+		if (!bssid || is_multicast_ether_addr(bssid) ||
+		    is_zero_ether_addr(bssid))
+			return -EINVAL;
+	} else if (bssid && !is_multicast_ether_addr(bssid) &&
+		   !is_zero_ether_addr(bssid)) {
+		/* Unicast BSSID is accepted but unused for listen requests. */
+		bssid = NULL;
+	}
 
 	switch (channel->band) {
 	case NL80211_BAND_2GHZ:
@@ -246,23 +265,30 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 	cmd.primary_channel = channel->hw_value;
 	cmd.rf_sco = 0;
 	cmd.rf_band = rf_band;
-	cmd.req_type = MT6628_CH_REQ_TYPE_JOIN;
+	cmd.req_type = req_type;
 	cmd.max_interval = cpu_to_le32(MT6628_CH_MAX_INTERVAL_MS);
-	ether_addr_copy(cmd.bssid, bssid);
+	if (bssid)
+		ether_addr_copy(cmd.bssid, bssid);
 
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_CH_PRIVILEGE, 1,
 				   &cmd, sizeof(cmd), &event, sizeof(event),
 				   &response_len, MT6628_EVENT_ID_CH_PRIVILEGE, 2000);
 	if (ret)
 		return ret;
-	if (response_len != sizeof(event) ||
-	    event.net_type_index != 0 || event.token_id != token ||
-	    event.status != MT6628_EVENT_CH_STATUS_GRANT ||
-	    event.primary_channel != channel->hw_value ||
-	    event.rf_band != rf_band)
+
+	if (require_grant &&
+	    (response_len != sizeof(event) ||
+	     event.net_type_index != 0 || event.token_id != token ||
+	     event.status != MT6628_EVENT_CH_STATUS_GRANT ||
+	     event.primary_channel != channel->hw_value ||
+	     event.rf_band != rf_band))
 		return -EPROTO;
 
 	wl->channel_token = token;
+	wl->channel_req_type = req_type;
+	if (require_grant && response_len >= sizeof(event))
+		wl->channel_grant_ms = le32_to_cpu(event.grant_interval);
+
 	return 0;
 }
 
@@ -278,7 +304,7 @@ int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
 	cmd.net_type_index = 0;
 	cmd.token_id = token;
 	cmd.action = MT6628_CMD_CH_ACTION_ABORT;
-	cmd.req_type = MT6628_CH_REQ_TYPE_JOIN;
+	cmd.req_type = wl->channel_req_type;
 
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_CH_PRIVILEGE, 1,
 				   &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
@@ -799,6 +825,7 @@ err_resource:
 }
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_request_channel);
+EXPORT_SYMBOL_GPL(mt6628_wlan_ch_privilege);
 EXPORT_SYMBOL_GPL(mt6628_wlan_release_channel);
 EXPORT_SYMBOL_GPL(mt6628_wlan_update_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_set_bss_info);
