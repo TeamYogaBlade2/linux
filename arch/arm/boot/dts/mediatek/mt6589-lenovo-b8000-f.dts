@@ -3,7 +3,6 @@
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
-#include <dt-bindings/gpio/gpio.h>
 #include "mt6589-lenovo-b8000.dtsi"
 
 / {
