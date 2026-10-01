@@ -42,6 +42,14 @@ struct mt6628_wlan {
 	u8 seq_num;
 	bool fw_running;
 	bool driver_owned;
+	/*
+	 * Runtime power ownership.  When the driver has been idle for a
+	 * while it hands the chip to the firmware, which may then enter its
+	 * low power state; the driver reclaims ownership on the next
+	 * interrupt, transmit or command.
+	 */
+	bool pm_idle;
+	struct delayed_work pm_work;
 
 	struct work_struct irq_work;
 	struct work_struct recovery_work;
@@ -147,6 +155,10 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl);
 int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl);
 int mt6628_wlan_force_firmware_reset(struct mt6628_wlan *wl);
 int mt6628_wlan_take_driver_own(struct mt6628_wlan *wl);
+int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl);
+int mt6628_wlan_pm_resume(struct mt6628_wlan *wl);
+void mt6628_wlan_pm_idle(struct mt6628_wlan *wl);
+void mt6628_wlan_pm_busy(struct mt6628_wlan *wl);
 int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl);
 
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,

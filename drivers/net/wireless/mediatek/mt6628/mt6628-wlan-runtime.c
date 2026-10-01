@@ -8,6 +8,7 @@
 #include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <linux/kernel.h>
+#include <linux/jiffies.h>
 #include <linux/slab.h>
 
 #include "mtk-wlan.h"
@@ -28,6 +29,13 @@
 #define MT6628_RUNTIME_RX_LOOPS		32
 #define MT6628_RUNTIME_QUEUE_LIMIT	256
 #define MT6628_TX_QUEUE_LIMIT		128
+
+/*
+ * How long the driver may stay idle before handing the chip to the
+ * firmware.  Downstream enters the sleepy state from the idle hook; keep
+ * this short enough that an idle interface actually releases the bus.
+ */
+#define MT6628_PM_IDLE_DELAY_MS		200
 
 struct mt6628_hif_tx_hdr {
 	__le16 tx_byte_count_user_priority;
@@ -55,6 +63,13 @@ static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 	__le32 tmp;
 	int ret;
 
+	/*
+	 * Every register access goes through here, so this is the single
+	 * place that has to take Driver Own back when the firmware has been
+	 * allowed to power the chip down.
+	 */
+	mt6628_wlan_pm_busy(wl);
+
 	ret = sdio_memcpy_fromio(wl->func, &tmp, reg, sizeof(tmp));
 	if (!ret)
 		*val = le32_to_cpu(tmp);
@@ -65,6 +80,8 @@ static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 static int mt6628_runtime_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 {
 	__le32 tmp = cpu_to_le32(val);
+
+	mt6628_wlan_pm_busy(wl);
 
 	return sdio_memcpy_toio(wl->func, reg, &tmp, sizeof(tmp));
 }
@@ -715,6 +732,12 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		schedule_work(&wl->mgmt_work);
 
 	mt6628_runtime_schedule_rx(wl);
+
+	/*
+	 * Everything that was pending has been handed to the workers, so
+	 * the driver can go idle again once they have drained.
+	 */
+	mt6628_wlan_pm_idle(wl);
 }
 
 /* SDIO IRQ callbacks run with the SDIO host already claimed. */
@@ -725,9 +748,19 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 	if (!wl || !wl->runtime_started)
 		return;
 
+	/*
+	 * The firmware may be holding the chip in its low power state.
+	 * Take Driver Own back before touching any register, and leave the
+	 * SDIO interrupt masked so the ownership transition and the
+	 * register reads that follow are not interrupted.
+	 */
+	mt6628_wlan_pm_resume(wl);
+
 	mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
 	schedule_work(&wl->irq_work);
 }
+
+static void mt6628_runtime_pm_work(struct work_struct *work);
 
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 {
@@ -741,6 +774,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
+	INIT_DELAYED_WORK(&wl->pm_work, mt6628_runtime_pm_work);
 	spin_lock_init(&wl->tx_lock);
 	init_waitqueue_head(&wl->tx_wait);
 	skb_queue_head_init(&wl->tx_queue);
@@ -906,6 +940,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	cancel_delayed_work_sync(&wl->tx_work);
 	cancel_work_sync(&wl->event_work);
 	cancel_work_sync(&wl->mgmt_work);
+	cancel_delayed_work_sync(&wl->pm_work);
 
 	if (ndev) {
 		unregister_netdev(ndev);
@@ -924,3 +959,158 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_start);
 EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_stop);
+
+/*
+ * Runtime power ownership.
+ *
+ * Driver Own and 802.11 power save are unrelated: the former decides who
+ * may touch the chip, the latter is a link level mode negotiated with the
+ * AP.  While the driver has data to move it holds Driver Own; once it has
+ * been idle for a while it hands the chip to the firmware, which can then
+ * enter its low power state.  The firmware raises an interrupt when it
+ * has something for us again, and the interrupt path takes Driver Own
+ * back before reading anything.
+ *
+ * This mirrors nicpmSetFWOwn()/nicpmSetDriverOwn() in the downstream
+ * driver, including its refusal to release ownership while interrupts are
+ * still pending: otherwise the firmware could take the chip away with an
+ * unread WHISR behind us.
+ */
+int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
+{
+	u32 val;
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+	if (wl->pm_idle || !wl->driver_owned)
+		return 0;
+
+	/*
+	 * Pending traffic means the firmware still wants the host to run.
+	 * Keep ownership and let the caller try again later.
+	 */
+	if (!skb_queue_empty(&wl->rx_queue) ||
+	    !skb_queue_empty(&wl->event_queue) ||
+	    !skb_queue_empty(&wl->mgmt_queue) ||
+	    !skb_queue_empty(&wl->tx_queue) ||
+	    !skb_queue_empty(&wl->async_event_queue) ||
+	    !skb_queue_empty(&wl->async_mgmt_queue))
+		return -EBUSY;
+
+	sdio_claim_host(wl->func);
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &val);
+	if (ret)
+		goto out_release;
+
+	/* Consume anything already latched before releasing the chip. */
+	if (val & (MT6628_WHISR_TX_DONE | MT6628_WHISR_RX0_DONE |
+		   MT6628_WHISR_RX1_DONE | MT6628_WHISR_ABNORMAL |
+		   MT6628_WHISR_D2H_SW_ASSERT_INFO)) {
+		ret = -EBUSY;
+		goto out_release;
+	}
+
+	ret = mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
+				     MT6628_FW_OWN_REQ_SET);
+	if (ret)
+		goto out_release;
+
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHLPCR, &val);
+	if (ret)
+		goto out_release;
+
+	/*
+	 * The request bit reads back while the transition is refused or
+	 * still in flight.  Roll it back so the driver keeps ownership
+	 * and can retry later.
+	 */
+	if (val & MT6628_FW_OWN_REQ_SET) {
+		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
+					MT6628_FW_OWN_REQ_CLR);
+		ret = -EBUSY;
+		goto out_release;
+	}
+
+	wl->driver_owned = false;
+	wl->pm_idle = true;
+
+out_release:
+	sdio_release_host(wl->func);
+	return ret;
+}
+
+int mt6628_wlan_pm_resume(struct mt6628_wlan *wl)
+{
+	int ret;
+
+	if (!wl->runtime_started || !wl->pm_idle)
+		return 0;
+
+	/*
+	 * Clear the idle flag first: a failed reclaim must leave the
+	 * driver owning the chip rather than pretending it is asleep.
+	 */
+	wl->pm_idle = false;
+
+	ret = mt6628_wlan_take_driver_own(wl);
+	if (ret) {
+		dev_warn_ratelimited(&wl->func->dev,
+				     "failed to reclaim driver ownership: %d\n",
+				     ret);
+		return ret;
+	}
+
+	wl->driver_owned = true;
+	return 0;
+}
+
+static void mt6628_runtime_pm_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wlan =
+		container_of(to_delayed_work(work), struct mt6628_wlan,
+			     pm_work);
+	int ret;
+
+	if (!wlan->runtime_started)
+		return;
+
+	ret = mt6628_wlan_give_firmware_own(wlan);
+
+	/* Traffic still outstanding: back off and try again shortly. */
+	if (ret == -EBUSY) {
+		schedule_delayed_work(&wlan->pm_work,
+				      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		return;
+	}
+
+	if (ret)
+		dev_warn_ratelimited(&wlan->func->dev,
+				     "failed to enter idle power state: %d\n",
+				     ret);
+}
+
+void mt6628_wlan_pm_busy(struct mt6628_wlan *wl)
+{
+	if (!wl || !wl->runtime_started)
+		return;
+
+	/* Any register access starts by taking Driver Own back. */
+	mt6628_wlan_pm_resume(wl);
+}
+
+void mt6628_wlan_pm_idle(struct mt6628_wlan *wl)
+{
+	if (!wl || !wl->runtime_started)
+		return;
+
+	/*
+	 * The firmware woke us, or a transfer just drained: reclaim
+	 * ownership before arming the countdown again.
+	 */
+	if (wl->pm_idle)
+		mt6628_wlan_pm_resume(wl);
+
+	schedule_delayed_work(&wl->pm_work,
+			      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+}
