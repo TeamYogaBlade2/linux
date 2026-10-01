@@ -43,6 +43,11 @@ static const u8 mt6628_assoc_5ghz_rates[] = {
 	0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c,
 };
 
+static int mt6628_send_deauth_to(struct mt6628_wlan *wl, const u8 *da,
+				 const u8 *sa, const u8 *bssid, u16 reason);
+
+static bool mt6628_deauth_rate_limit(struct mt6628_wlan *wl, const u8 *da);
+
 static void mt6628_conn_free_ies(struct mt6628_wlan *wl)
 {
 	kfree(wl->conn_req_ie);
@@ -111,6 +116,60 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 	wl->conn_rf_sco = 0;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
+}
+
+/*
+ * The firmware received a frame it considers illegal while we were not
+ * associated, and asks the host to answer it with a deauthentication.
+ * The event body is a verbatim copy of that frame's MAC header, so the
+ * addresses have to be echoed back the way nicRx.c/authSendDeauthFrame()
+ * does it in the downstream driver: the deauth goes back to the sender
+ * of the offending frame (aucAddr2), sourced from the address the
+ * offending frame was addressed to (aucAddr1).
+ *
+ * This is a reply, not a teardown: the association stays up.
+ */
+void mt6628_cfg80211_fw_send_deauth(struct mt6628_wlan *wl,
+				    __le16 frame_ctrl, const u8 *addr1,
+				    const u8 *addr2)
+{
+	u8 da[ETH_ALEN], sa[ETH_ALEN], bssid[ETH_ALEN];
+	u16 fc;
+
+	/*
+	 * Only answer frames that came through the AP. Downstream bails out
+	 * for anything with both DS bits clear, since then there is no BSS
+	 * that could legitimately own the frame.
+	 */
+	fc = le16_to_cpu(frame_ctrl);
+	if (!(fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)))
+		return;
+	if (fc & IEEE80211_FCTL_TODS)	/* ToDS: BSSID is aucAddr1 */
+		ether_addr_copy(bssid, addr1);
+	else				/* otherwise: BSSID is aucAddr2 */
+		ether_addr_copy(bssid, addr2);
+
+	ether_addr_copy(da, addr2);
+	ether_addr_copy(sa, addr1);
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_state != MT6628_CONN_CONNECTED ||
+	    !ether_addr_equal(wl->conn_bssid, bssid)) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	/*
+	 * Rate limit replies per peer: the firmware raises this event for
+	 * every offending frame, and a peer stuck in the offending state
+	 * would otherwise make us emit a deauth per received frame.
+	 */
+	if (!mt6628_deauth_rate_limit(wl, da))
+		return;
+
+	mt6628_send_deauth_to(wl, da, sa, bssid,
+			      WLAN_REASON_CLASS3_FRAME_FROM_NONASSOC_STA);
 }
 
 void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
@@ -465,12 +524,16 @@ static int mt6628_send_assoc(struct mt6628_wlan *wl)
 	return ret;
 }
 
-static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
+static int mt6628_send_deauth_to(struct mt6628_wlan *wl, const u8 *da,
+				 const u8 *sa, const u8 *bssid, u16 reason)
 {
 	struct ieee80211_mgmt *mgmt;
 	size_t frame_len = offsetof(struct ieee80211_mgmt, u.deauth.reason_code) +
 			sizeof(mgmt->u.deauth.reason_code);
 	int ret;
+
+	if (!wl->netdev)
+		return -ENODEV;
 
 	mgmt = kzalloc(frame_len, GFP_KERNEL);
 	if (!mgmt)
@@ -478,14 +541,58 @@ static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
 
 	mgmt->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT |
 						  IEEE80211_STYPE_DEAUTH);
-	ether_addr_copy(mgmt->da, wl->conn_bssid);
-	ether_addr_copy(mgmt->sa, wl->netdev->dev_addr);
-	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
+	ether_addr_copy(mgmt->da, da);
+	ether_addr_copy(mgmt->sa, sa);
+	ether_addr_copy(mgmt->bssid, bssid);
 	mgmt->u.deauth.reason_code = cpu_to_le16(reason);
 
 	ret = mt6628_wlan_mgmt_tx(wl, (u8 *)mgmt, frame_len, true, false);
 	kfree(mgmt);
 	return ret;
+}
+
+/*
+ * Downstream keeps a small ring of the last deauth reply per peer and
+ * refuses to send again inside MIN_DEAUTH_INTERVAL_MSEC.  The firmware
+ * raises EVENT_ID_SEND_DEAUTH for every offending frame, so without this
+ * a peer stuck in the offending state turns into a deauth storm.
+ */
+static bool mt6628_deauth_rate_limit(struct mt6628_wlan *wl, const u8 *da)
+{
+	unsigned long now = jiffies;
+	unsigned int i;
+
+	mutex_lock(&wl->cfg_mutex);
+
+	for (i = 0; i < MT6628_MAX_DEAUTH_INFO_COUNT; i++) {
+		struct mt6628_deauth_info *info = &wl->deauth_info[i];
+
+		if (is_zero_ether_addr(info->da))
+			continue;
+
+		if (time_after_eq(now, info->last_send +
+				 msecs_to_jiffies(MT6628_MIN_DEAUTH_INTERVAL_MS))) {
+			ether_addr_copy(info->da, da);
+			info->last_send = now;
+			mutex_unlock(&wl->cfg_mutex);
+			return true;
+		}
+
+		if (ether_addr_equal(info->da, da)) {
+			mutex_unlock(&wl->cfg_mutex);
+			return false;
+		}
+	}
+
+	/* Ring full: answer rather than stay silent. */
+	mutex_unlock(&wl->cfg_mutex);
+	return true;
+}
+
+static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)
+{
+	return mt6628_send_deauth_to(wl, wl->conn_bssid, wl->netdev->dev_addr,
+				     wl->conn_bssid, reason);
 }
 
 static void mt6628_connect_timeout_work(struct work_struct *work)

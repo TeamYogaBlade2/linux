@@ -649,6 +649,25 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 		return true;
 	}
 
+	if (event->eid == MT6628_EVENT_ID_SEND_DEAUTH) {
+		const struct mt6628_event_send_deauth *hdr;
+		u8 addr1[ETH_ALEN], addr2[ETH_ALEN];
+		__le16 frame_ctrl;
+
+		if (body_len != sizeof(*hdr))
+			goto drop;
+
+		hdr = (const struct mt6628_event_send_deauth *)
+			(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
+		frame_ctrl = hdr->frame_control;
+		ether_addr_copy(addr1, hdr->addr1);
+		ether_addr_copy(addr2, hdr->addr2);
+
+		kfree_skb(skb);
+		mt6628_cfg80211_fw_send_deauth(wl, frame_ctrl, addr1, addr2);
+		return true;
+	}
+
 	if (event->eid != MT6628_EVENT_ID_SCAN_DONE)
 		return false;
 	if (body_len != sizeof(*scan_done))

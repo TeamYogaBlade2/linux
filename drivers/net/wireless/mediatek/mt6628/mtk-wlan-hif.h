@@ -25,6 +25,7 @@
  */
 
 #include <linux/bits.h>
+#include <linux/etherdevice.h>
 #include <linux/mmc/sdio_func.h>
 
 #define MT6628_WLAN_SDIO_BLK_SIZE	512
@@ -104,6 +105,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_EVENT_ID_TX_DONE	0x17
 #define MT6628_EVENT_ID_CH_PRIVILEGE	0x18
 #define MT6628_EVENT_ID_BSS_BEACON_TIMEOUT	0x1b
+#define MT6628_EVENT_ID_SEND_DEAUTH	0x23
 
 #define MT6628_CMD_ID_SCAN_REQ_V2	0x04
 #define MT6628_CMD_ID_POWER_SAVE_MODE	0x06
@@ -169,10 +171,25 @@ struct mt6628_event_bss_beacon_timeout {
 	u8 reserved[3];
 } __packed;
 
+/*
+ * Body of EVENT_ID_SEND_DEAUTH: a plain 802.11 MAC header carrying the
+ * address the firmware wants us to deauthenticate from.  aucAddr1 is the
+ * destination (the AP), aucAddr2 our own station address.
+ */
+struct mt6628_event_send_deauth {
+	__le16 frame_control;
+	__le16 duration_id;
+	u8 addr1[ETH_ALEN];
+	u8 addr2[ETH_ALEN];
+	u8 addr3[ETH_ALEN];
+	__le16 seq_ctrl;
+} __packed;
+
 static_assert(sizeof(struct mt6628_wifi_cmd_hdr) == MT6628_WIFI_CMD_HEADER_LEN);
 static_assert(sizeof(struct mt6628_wifi_event_hdr) == MT6628_WIFI_EVENT_HEADER_LEN);
 static_assert(sizeof(struct mt6628_event_tx_done) == 16);
 static_assert(sizeof(struct mt6628_event_bss_beacon_timeout) == 4);
+static_assert(sizeof(struct mt6628_event_send_deauth) == 24);
 
 struct mt6628_hif_rx_hdr {
 	__le16 packet_len;

@@ -23,6 +23,10 @@
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
 #define MT6628_WLAN_KEY_INDEX_MAX	3
 
+/* Size of the EVENT_ID_SEND_DEAUTH reply rate limiter ring. */
+#define MT6628_MAX_DEAUTH_INFO_COUNT	4
+#define MT6628_MIN_DEAUTH_INTERVAL_MS	500
+
 /*
  * Wire values used by CMD_UPDATE_STA_RECORD_T.ucStaState.
  * The MT6628 downstream encodes STA_STATE_1/2/3 as 0/1/2.
@@ -82,6 +86,15 @@ struct mt6628_wlan {
 	u8 *conn_resp_ie;
 	size_t conn_resp_ie_len;
 	struct delayed_work conn_timeout_work;
+
+	/*
+	 * Rate limiter for EVENT_ID_SEND_DEAUTH replies, one entry per
+	 * peer, mirroring the deauth-info ring in the downstream driver.
+	 */
+	struct mt6628_deauth_info {
+		u8 da[ETH_ALEN];
+		unsigned long last_send;
+	} deauth_info[MT6628_MAX_DEAUTH_INFO_COUNT];
 
 	struct mutex cfg_mutex;
 	struct cfg80211_scan_request *scan_req;
@@ -173,6 +186,9 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 					   struct sk_buff *skb);
 void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl);
+void mt6628_cfg80211_fw_send_deauth(struct mt6628_wlan *wl,
+				    __le16 frame_ctrl, const u8 *addr1,
+				    const u8 *addr2);
 void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 					  struct sk_buff *skb);
 void mt6628_cfg80211_mgmt_rx_done(struct mt6628_wlan *wl);
