@@ -40,6 +40,7 @@
 
 #include "img_defs.h"
 #include "services.h"
+#include "pvr_drm_display.h"
 #include "kerneldisplay.h"
 #include "kernelbuffer.h"
 #include "syscommon.h"
@@ -221,6 +222,14 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
 		}
 	}
 
+	{
+		int drm_err = pvr_drm_display_init(pDevice);
+		if (drm_err)
+			PVR_DPF((PVR_DBG_ERROR,
+				 "PVRSRVDriverProbe: DRM display init failed (%d)",
+				 drm_err));
+	}
+
 	return 0;
 }
 
@@ -261,6 +270,8 @@ static void PVRSRVDriverRemove(struct platform_device *pDevice)
 		}
 	}
 #endif
+	pvr_drm_display_fini(pDevice);
+
 	(void) SysDeinitialise(psSysData);
 
 	gpsPVRLDMDev = IMG_NULL;

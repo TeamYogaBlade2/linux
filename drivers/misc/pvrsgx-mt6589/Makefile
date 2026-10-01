@@ -41,6 +41,7 @@ pvrsrvkm-y := \
 	services4/srvkm/env/linux/mutils.o \
 	services4/srvkm/env/linux/mmap.o \
 	services4/srvkm/env/linux/module.o \
+	services4/srvkm/env/linux/pvr_drm_display.o \
 	services4/srvkm/env/linux/pdump.o \
 	services4/srvkm/env/linux/proc.o \
 	services4/srvkm/env/linux/pvr_bridge_k.o \

@@ -802,6 +802,12 @@
 			operating-points-v2 = <&gpu_opp_table>;
 			resets = <&mfgsys MT6589_MFG_G3D_RESET>;
 			reset-names = "g3d";
+
+			/* Standalone pvr DRM/KMS output (not simple-framebuffer) */
+			pvr,output-width = <1280>;
+			pvr,output-height = <800>;
+			pvr,output-refresh = <60>;
+			pvr,ovl-addr-offset = <0x40>;
 		};
 
 		dispsys: syscon@14000000 {
