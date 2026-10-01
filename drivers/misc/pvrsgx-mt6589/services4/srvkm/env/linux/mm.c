@@ -1605,16 +1605,7 @@ FreeSubLinuxMemArea(LinuxMemArea *psLinuxMemArea)
 static LinuxMemArea *
 LinuxMemAreaStructAlloc(IMG_VOID)
 {
-/* debug */
-#if 0
-    LinuxMemArea *psLinuxMemArea;
-    psLinuxMemArea = kmem_cache_alloc(g_PsLinuxMemAreaCache, GFP_KERNEL);
-    printk(KERN_ERR "%s: psLinuxMemArea=%p\n", __FUNCTION__, psLinuxMemArea);
-    dump_stack();
-    return psLinuxMemArea;
-#else
-    return KMemCacheAllocWrapper(g_PsLinuxMemAreaCache, GFP_KERNEL);
-#endif
+return KMemCacheAllocWrapper(g_PsLinuxMemAreaCache, GFP_KERNEL);
 }
 
 
@@ -1622,8 +1613,6 @@ static IMG_VOID
 LinuxMemAreaStructFree(LinuxMemArea *psLinuxMemArea)
 {
     KMemCacheFreeWrapper(g_PsLinuxMemAreaCache, psLinuxMemArea);
-    /* debug */
-    //printk(KERN_ERR "%s(%p)\n", __FUNCTION__, psLinuxMemArea);
 }
 
 

@@ -12,7 +12,7 @@
 #include "sgxutils.h"
 
 #if !defined(__linux__) && !defined(__QNXNTO__)
-#pragma message("FIXME: Review use of OS_PAGEABLE vs OS_NON_PAGEABLE")
+/* Historical DDK note: OS_PAGEABLE vs OS_NON_PAGEABLE usage */
 #endif
 
 #include "lists.h"

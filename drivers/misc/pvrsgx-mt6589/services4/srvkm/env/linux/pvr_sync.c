@@ -44,6 +44,7 @@ struct PVR_SYNC_KERNEL_SYNC_INFO {
 struct PVR_SYNC_TIMELINE {
 	u64			context;
 	atomic_t		seqno;
+	refcount_t		refcount;	/* +1 creator, +1 per live fence */
 	struct list_head	sTimelineList;
 	IMG_BOOL		bSyncHasSignaled;
 	spinlock_t		sTimelineLock;	/* was mutex, now spinlock for dma_fence */
@@ -61,6 +62,7 @@ struct PVR_SYNC_DATA {
 
 struct PVR_SYNC {
 	struct dma_fence		base;
+	spinlock_t			lock;		/* dma_fence lock (not timeline lock) */
 	struct PVR_SYNC_DATA		*psSyncData;
 	struct PVR_SYNC_TIMELINE	*psTimeline;
 	struct list_head		link;		/* node in timeline->fence_list */
@@ -123,6 +125,8 @@ static void PVRSyncSWCompleteOp(PVRSRV_KERNEL_SYNC_INFO *psKernelSyncInfo)
 	psKernelSyncInfo->psSyncData->ui32WriteOpsComplete = 1;
 }
 
+static void PVRSyncTimelinePut(struct PVR_SYNC_TIMELINE *psTimeline);
+
 /* ---------- dma_fence_ops ---------- */
 static const char *pvr_sync_get_driver_name(struct dma_fence *fence)
 {
@@ -132,6 +136,9 @@ static const char *pvr_sync_get_driver_name(struct dma_fence *fence)
 static const char *pvr_sync_get_timeline_name(struct dma_fence *fence)
 {
 	struct PVR_SYNC *sync = container_of(fence, struct PVR_SYNC, base);
+
+	if (!sync->psTimeline)
+		return "pvr-dead";
 	return sync->psTimeline->name;
 }
 
@@ -143,38 +150,61 @@ static bool pvr_sync_enable_signaling(struct dma_fence *fence)
 static bool pvr_sync_signaled(struct dma_fence *fence)
 {
 	struct PVR_SYNC *sync = container_of(fence, struct PVR_SYNC, base);
-	PVRSRV_SYNC_DATA *sd = sync->psSyncData->psSyncInfo->psBase->psSyncData;
-	return sd->ui32WriteOpsComplete >= sd->ui32WriteOpsPending;
+	struct PVR_SYNC_DATA *psd = sync->psSyncData;
+	PVRSRV_KERNEL_SYNC_INFO *base;
+	/*
+	 * Fence was stamped with WriteOpsPending at creation (WOP snapshot).
+	 * It becomes signaled once the GPU has completed at least that many
+	 * write ops. Unsigned wrap is handled via signed difference.
+	 */
+	if (!psd || !psd->psSyncInfo || !psd->psSyncInfo->psBase ||
+	    !psd->psSyncInfo->psBase->psSyncData)
+		return true;
+	base = psd->psSyncInfo->psBase;
+	return (s32)(base->psSyncData->ui32WriteOpsComplete - psd->ui32WOPSnapshot) >= 0;
 }
 
 static void pvr_sync_release(struct dma_fence *fence)
 {
 	struct PVR_SYNC *sync = container_of(fence, struct PVR_SYNC, base);
-
-	if (atomic_dec_return(&sync->psSyncData->sRefcount) != 0)
-		return;
+	struct PVR_SYNC_DATA *psSyncData = sync->psSyncData;
+	struct PVR_SYNC_TIMELINE *tl = sync->psTimeline;
+	unsigned long flags;
 
 	DPF("R( ): WOCVA=0x%.8X ROCVA=0x%.8X RO2CVA=0x%.8X "
 	    "WOP/C=0x%x/0x%x ROP/C=0x%x/0x%x RO2P/C=0x%x/0x%x "
 	    "ID=%llu, F=%p",
-	    sync->psSyncData->psSyncInfo->psBase->sWriteOpsCompleteDevVAddr.uiAddr,
-	    sync->psSyncData->psSyncInfo->psBase->sReadOpsCompleteDevVAddr.uiAddr,
-	    sync->psSyncData->psSyncInfo->psBase->sReadOps2CompleteDevVAddr.uiAddr,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32WriteOpsPending,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32WriteOpsComplete,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOpsPending,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOpsComplete,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOps2Pending,
-	    sync->psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOps2Complete,
-	    sync->psSyncData->ui64Stamp,
-	    &sync->base);
+	    psSyncData->psSyncInfo->psBase->sWriteOpsCompleteDevVAddr.uiAddr,
+	    psSyncData->psSyncInfo->psBase->sReadOpsCompleteDevVAddr.uiAddr,
+	    psSyncData->psSyncInfo->psBase->sReadOps2CompleteDevVAddr.uiAddr,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32WriteOpsPending,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32WriteOpsComplete,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOpsPending,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOpsComplete,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOps2Pending,
+	    psSyncData->psSyncInfo->psBase->psSyncData->ui32ReadOps2Complete,
+	    psSyncData->ui64Stamp,
+	    fence);
 
-	spin_lock(&sync->psTimeline->sTimelineLock);
-	list_del(&sync->link);
-	spin_unlock(&sync->psTimeline->sTimelineLock);
+	/*
+	 * Always free the fence object (dma_fence release contract).
+	 * Only the shared SyncData is refcounted. Drop from timeline list
+	 * under the timeline lock; list_del_init is safe if UpdateAllSyncs
+	 * already removed us after signalling.
+	 */
+	if (tl) {
+		spin_lock_irqsave(&tl->sTimelineLock, flags);
+		if (!list_empty(&sync->link))
+			list_del_init(&sync->link);
+		spin_unlock_irqrestore(&tl->sTimelineLock, flags);
+		sync->psTimeline = NULL;
+		PVRSyncTimelinePut(tl);
+	}
 
-	PVRSyncFreeSyncData(sync->psSyncData);
-	dma_fence_free(&sync->base);
+	if (atomic_dec_and_test(&psSyncData->sRefcount))
+		PVRSyncFreeSyncData(psSyncData);
+
+	dma_fence_free(fence);
 }
 
 static const struct dma_fence_ops gsDmaFenceOps = {
@@ -218,9 +248,13 @@ PVRSyncCreateSync(struct PVR_SYNC_TIMELINE *obj,
 	seqno = atomic_inc_return(&obj->seqno);
 	psSync->psSyncData->ui64Stamp = gui64SyncPointStamp++;
 	list_add_tail(&psSync->link, &obj->fence_list);
+	refcount_inc(&obj->refcount); /* fence holds timeline */
 	spin_unlock_irqrestore(&obj->sTimelineLock, flags);
 
-	dma_fence_init(&psSync->base, &gsDmaFenceOps, &obj->sTimelineLock,
+	spin_lock_init(&psSync->lock);
+	/* Use a dedicated lock for the fence so release/signal never nest
+	 * on the timeline list lock (deadlock risk in signal callbacks). */
+	dma_fence_init(&psSync->base, &gsDmaFenceOps, &psSync->lock,
 		       obj->context, seqno);
 
 	DPF("C( ): WOCVA=0x%.8X ROCVA=0x%.8X RO2CVA=0x%.8X",
@@ -260,27 +294,33 @@ static void PVRSyncFreeSyncData(struct PVR_SYNC_DATA *psSyncData)
 }
 
 /* ---------- Timeline management ---------- */
+static void PVRSyncFreeTimeline(struct PVR_SYNC_TIMELINE *psTimeline)
+{
+	if (psTimeline->psSyncInfo) {
+		DPF("R(t): WOCVA=0x%.8X ROCVA=0x%.8X RO2CVA=0x%.8X",
+		    psTimeline->psSyncInfo->psBase->sWriteOpsCompleteDevVAddr.uiAddr,
+		    psTimeline->psSyncInfo->psBase->sReadOpsCompleteDevVAddr.uiAddr,
+		    psTimeline->psSyncInfo->psBase->sReadOps2CompleteDevVAddr.uiAddr);
+		PVRSyncReleaseSyncInfo(psTimeline->psSyncInfo);
+		psTimeline->psSyncInfo = NULL;
+	}
+	kfree(psTimeline);
+}
+
+static void PVRSyncTimelinePut(struct PVR_SYNC_TIMELINE *psTimeline)
+{
+	if (psTimeline && refcount_dec_and_test(&psTimeline->refcount))
+		PVRSyncFreeTimeline(psTimeline);
+}
+
 static void PVRSyncReleaseTimeline(struct PVR_SYNC_TIMELINE *psTimeline)
 {
 	mutex_lock(&gTimelineListLock);
 	list_del(&psTimeline->sTimelineList);
 	mutex_unlock(&gTimelineListLock);
 
-	DPF("R(t): WOCVA=0x%.8X ROCVA=0x%.8X RO2CVA=0x%.8X "
-	    "WOP/C=0x%x/0x%x ROP/C=0x%x/0x%x RO2P/C=0x%x/0x%x",
-	    psTimeline->psSyncInfo->psBase->sWriteOpsCompleteDevVAddr.uiAddr,
-	    psTimeline->psSyncInfo->psBase->sReadOpsCompleteDevVAddr.uiAddr,
-	    psTimeline->psSyncInfo->psBase->sReadOps2CompleteDevVAddr.uiAddr,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32WriteOpsPending,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32WriteOpsComplete,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32ReadOpsPending,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32ReadOpsComplete,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32ReadOps2Pending,
-	    psTimeline->psSyncInfo->psBase->psSyncData->ui32ReadOps2Complete);
-
-	PVRSyncReleaseSyncInfo(psTimeline->psSyncInfo);
-	psTimeline->psSyncInfo = NULL;
-	kfree(psTimeline);
+	/* Drop creator reference; live fences keep the timeline alive */
+	PVRSyncTimelinePut(psTimeline);
 }
 
 static struct PVR_SYNC_TIMELINE *PVRSyncCreateTimeline(const IMG_CHAR *pszName)
@@ -294,6 +334,7 @@ static struct PVR_SYNC_TIMELINE *PVRSyncCreateTimeline(const IMG_CHAR *pszName)
 
 	psTimeline->context = dma_fence_context_alloc(1);
 	atomic_set(&psTimeline->seqno, 0);
+	refcount_set(&psTimeline->refcount, 1);
 	spin_lock_init(&psTimeline->sTimelineLock);
 	INIT_LIST_HEAD(&psTimeline->fence_list);
 	strncpy(psTimeline->name, pszName, sizeof(psTimeline->name) - 1);
@@ -638,6 +679,9 @@ static void PVRSyncWorkQueueFunction(struct work_struct *data)
 void PVRSyncUpdateAllSyncs(void)
 {
 	struct list_head *psEntry;
+	struct PVR_SYNC *to_signal[32];
+	unsigned int nsig;
+	unsigned int i;
 	IMG_BOOL need_queue = IMG_FALSE;
 	unsigned long flags;
 
@@ -647,14 +691,30 @@ void PVRSyncUpdateAllSyncs(void)
 			container_of(psEntry, struct PVR_SYNC_TIMELINE, sTimelineList);
 		struct PVR_SYNC *ps, *tmp;
 
+		nsig = 0;
 		spin_lock_irqsave(&tl->sTimelineLock, flags);
 		list_for_each_entry_safe(ps, tmp, &tl->fence_list, link) {
-			if (pvr_sync_signaled(&ps->base)) {
-				dma_fence_signal_locked(&ps->base);
+			if (!pvr_sync_signaled(&ps->base))
+				continue;
+			list_del_init(&ps->link);
+			/* Keep fence alive across unlock + signal. */
+			dma_fence_get(&ps->base);
+			if (nsig < ARRAY_SIZE(to_signal))
+				to_signal[nsig++] = ps;
+			else {
+				/* Overflow: signal under lock as fallback. */
+				dma_fence_signal(&ps->base);
+				dma_fence_put(&ps->base);
 				need_queue = IMG_TRUE;
 			}
 		}
 		spin_unlock_irqrestore(&tl->sTimelineLock, flags);
+
+		for (i = 0; i < nsig; i++) {
+			dma_fence_signal(&to_signal[i]->base);
+			dma_fence_put(&to_signal[i]->base);
+			need_queue = IMG_TRUE;
+		}
 	}
 	mutex_unlock(&gTimelineListLock);
 

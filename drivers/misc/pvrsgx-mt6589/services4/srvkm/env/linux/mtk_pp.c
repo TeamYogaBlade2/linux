@@ -385,11 +385,11 @@ static int MTKPP_ProcOpen(struct inode *inode, struct file *file)
     return seq_open(file, &g_MTKPP_seq_ops);
 }
 
-static struct file_operations g_MTKPP_proc_ops = {
-    .open    = MTKPP_ProcOpen,
-    .read    = seq_read,
-    .llseek  = seq_lseek,
-    .release = seq_release
+static const struct proc_ops g_MTKPP_proc_ops = {
+	.proc_open	= MTKPP_ProcOpen,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= seq_release,
 };
 
 #if defined(ENABLE_AEE_WHEN_LOCKUP)
@@ -452,8 +452,9 @@ void MTKPP_Init(void)
 		}
 	}
 
-	g_MTKPP_proc = create_proc_entry("gpulog", 0, NULL);
-	g_MTKPP_proc->proc_fops = &g_MTKPP_proc_ops;
+	g_MTKPP_proc = proc_create("gpulog", 0, NULL, &g_MTKPP_proc_ops);
+	if (!g_MTKPP_proc)
+		_MTKPP_DEBUG_LOG("%s: proc_create gpulog failed", __func__);
 
 	g_MTKPP_4_SGXDumpDebugInfo_current = NULL;
 	spin_lock_init(&g_MTKPP_4_SGXDumpDebugInfo_lock);

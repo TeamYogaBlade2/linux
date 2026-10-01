@@ -40,6 +40,7 @@
 
 #include "img_defs.h"
 #include "services.h"
+#include "pvr_drm_display.h"
 #include "kerneldisplay.h"
 #include "kernelbuffer.h"
 #include "syscommon.h"
@@ -196,19 +197,6 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
 
 	PVR_TRACE(("PVRSRVDriverProbe(pDevice=%p)", pDevice));
 
-#if 0   /* INTEGRATION_POINT */
-	/* Some systems require device-specific system initialisation.
-	 * E.g. this lets the OS track a device's dependencies on various
-	 * system hardware.
-	 *
-	 * Note: some systems use this to enable HW that SysAcquireData
-	 * will depend on, therefore it must be called first.
-	 */
-	if (PerDeviceSysInitialise((IMG_PVOID)pDevice) != PVRSRV_OK)
-	{
-		return -EINVAL;
-	}
-#endif
 	/* SysInitialise only designed to be called once.
 	 */
 	psSysData = SysAcquireDataNoCheck();
@@ -219,6 +207,14 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
 		{
 			return -ENODEV;
 		}
+	}
+
+	{
+		int drm_err = pvr_drm_display_init(pDevice);
+		if (drm_err)
+			PVR_DPF((PVR_DBG_ERROR,
+				 "PVRSRVDriverProbe: DRM display init failed (%d)",
+				 drm_err));
 	}
 
 	return 0;
@@ -237,7 +233,7 @@ static int PVRSRVDriverProbe(struct platform_device *pDevice)
  base/bus.c:device_release_driver() for the call to this function.
 
  This is the correct place to clean up anything our driver did while it was
- asoociated with the device.
+ associated with the device.
 
  @input pDevice - the device for which driver detachment is happening
 
@@ -261,17 +257,12 @@ static void PVRSRVDriverRemove(struct platform_device *pDevice)
 		}
 	}
 #endif
+	pvr_drm_display_fini(pDevice);
+
 	(void) SysDeinitialise(psSysData);
 
 	gpsPVRLDMDev = IMG_NULL;
 
-#if 0   /* INTEGRATION_POINT */
-	/* See previous integration point for details. */
-	if (PerDeviceSysDeInitialise((IMG_PVOID)pDevice) != PVRSRV_OK)
-	{
-		return -EINVAL;
-	}
-#endif
 
 	return;
 }

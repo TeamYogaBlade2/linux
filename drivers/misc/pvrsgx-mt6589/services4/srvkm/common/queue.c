@@ -7,25 +7,12 @@
 #include "ttrace.h"
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-#include <linux/version.h>
-#include <../drivers/staging/android/sw_sync.h>
-static struct sync_fence *AllocQueueFence(struct sw_sync_timeline *psTimeline, IMG_UINT32 ui32FenceValue, const char *szName)
-{
-	struct sync_fence *psFence = IMG_NULL;
-	struct sync_pt *psPt;
-
-	psPt = sw_sync_pt_create(psTimeline, ui32FenceValue);
-	if(psPt)
-	{
-		psFence = sync_fence_create(szName, psPt);
-		if(!psFence)
-		{
-			sync_pt_free(psPt);
-		}
-	}
-
-	return psFence;
-}
+/*
+ * Structure fields (pvTimeline, pvCleanupFence) must remain for ABI
+ * compatibility with the aquaris-5 userspace blob. Real fence signalling
+ * for kicks goes through pvr_sync.c (dma-fence / sync_file). The queue-level
+ * sw_sync timeline path is not available on mainline kernels.
+ */
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
 /*
@@ -418,12 +405,7 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVCreateCommandQueueKM(IMG_SIZE_T uQueueSize,
 	psQueueInfo->uQueueSize = uPower2QueueSize;
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	psQueueInfo->pvTimeline = sw_sync_timeline_create("pvr_queue_proc");
-	if(psQueueInfo->pvTimeline == IMG_NULL)
-	{
-		PVR_DPF((PVR_DBG_ERROR,"PVRSRVCreateCommandQueueKM: sw_sync_timeline_create() failed"));
-		goto ErrorExit;
-	}
+	psQueueInfo->pvTimeline = NULL; /* stub: no sw_sync timeline */
 #endif
 
 	/* if this is the first q, create a lock resource for the q list */
@@ -538,7 +520,8 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVDestroyCommandQueueKM(PVRSRV_QUEUE_INFO *psQueue
 	ui32NoOfSwapchainCreated--;
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	sync_timeline_destroy(psQueueInfo->pvTimeline);
+	/* stub: no timeline to destroy */
+	psQueueInfo->pvTimeline = NULL;
 #endif
 
 	if(psQueue == psQueueInfo)
@@ -730,37 +713,17 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVInsertCommandKM(PVRSRV_QUEUE_INFO	*psQueue,
 	}
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	if(phFence != IMG_NULL)
+	/*
+	 * Queue-level fence FDs are not implemented (no sw_sync).
+	 * Structure fields remain so the aquaris-5 blob layout matches.
+	 * Kick/transfer fences use pvr_sync (dma-fence) instead.
+	 */
+	if (phFence != IMG_NULL)
 	{
-		struct sync_fence *psRetireFence, *psCleanupFence;
-
-		/* New command? New timeline target */
 		psQueue->ui32FenceValue++;
-
-		psRetireFence = AllocQueueFence(psQueue->pvTimeline, psQueue->ui32FenceValue, "pvr_queue_retire");
-		if(!psRetireFence)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "PVRSRVInsertCommandKM: sync_fence_create() failed"));
-			psQueue->ui32FenceValue--;
-			return PVRSRV_ERROR_INVALID_PARAMS;
-		}
-
-		/* This similar to the retire fence, except that it is destroyed
-		 * when a display command completes, rather than at the whim of
-		 * userspace. It is used to keep the timeline alive.
-		 */
-		psCleanupFence = AllocQueueFence(psQueue->pvTimeline, psQueue->ui32FenceValue, "pvr_queue_cleanup");
-		if(!psCleanupFence)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "PVRSRVInsertCommandKM: sync_fence_create() #2 failed"));
-			sync_fence_put(psRetireFence);
-			psQueue->ui32FenceValue--;
-			return PVRSRV_ERROR_INVALID_PARAMS;
-		}
-
-		psCommand->pvCleanupFence = psCleanupFence;
+		psCommand->pvCleanupFence = IMG_NULL;
 		psCommand->pvTimeline = psQueue->pvTimeline;
-		*phFence = psRetireFence;
+		*phFence = IMG_NULL;
 	}
 	else
 	{
@@ -1293,11 +1256,8 @@ IMG_VOID PVRSRVCommandCompleteKM(IMG_HANDLE	hCmdCookie,
 	}
 
 #if defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC)
-	if(psCmdCompleteData->pvTimeline)
-	{
-		sw_sync_timeline_inc(psCmdCompleteData->pvTimeline, 1);
-		sync_fence_put(psCmdCompleteData->pvCleanupFence);
-	}
+	/* stub: queue-level timeline not implemented; kick fences use pvr_sync */
+	(void)psCmdCompleteData;
 #endif /* defined(PVR_ANDROID_NATIVE_WINDOW_HAS_SYNC) */
 
 	/* free command complete storage */
