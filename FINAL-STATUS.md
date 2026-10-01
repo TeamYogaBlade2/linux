@@ -1,7 +1,7 @@
 # MT6589 Lenovo Yoga Tablet (B8000-F) — port status
 
 Branch `dev/v7.1/mt6589-drm-ox-alpha` → origin (PR #75). 319 commits ahead of
-`origin/blade/v7.1`, of which 18 are this work. All Signed-off-by-free.
+`origin/blade/v7.1`, of which 19 are this work. All Signed-off-by-free.
 Verified: `make ARCH=arm LLVM=1 lenovo-blade_defconfig && make -j$(nproc)` clean,
 no warnings, from a fresh defconfig.
 
@@ -44,7 +44,7 @@ Two questions settled rather than "fixed": AFE `IRQ_MCU_STATUS` DL1 is bit 0
 is a legacy artifact; and the `0x01c2`/`0x01c4` HP-trim reads really are correct
 (efuse data-out words), only the local naming was misleading.
 
-## DRM — one critical defect found and fixed
+## DRM — defects found and fixed
 
 `f84c1dc1ec1d` inserted `DDP_COMPONENT_TDSHP` into the MT6589 main path. No such
 route exists: `mt6589-dispsys.h` documents `OVL → COLOR → BLS → RDMA0 → DSI0` and
@@ -74,6 +74,55 @@ completely non-functional on hardware:
 
 Also corrected: statistics were self-destroying (`read_clear=1` is right for the
 downstream `SIOCSIWSTASTATS` ioctl but wrong for a passive query userspace polls).
+
+### Fixed in the later verification round
+
+A second DRM review arrived after the tree was declared clean.  Most of it was
+wrong, but two findings were real:
+
+- **`OVL_CON_MTX_YUV_TO_RGB` wrote the wrong field.** `OVL_CON[23:16]` is
+  `HORI_BLOCK_NUM` on MT6589, so the `(6 << 16)` meant to enable a colour matrix
+  was corrupting the horizontal block count.  Nothing sets that field
+  deliberately, so those writes were pure noise.  Removed; YUV to RGB is implied
+  by selecting a YUV `CLRFMT` on this part, and the coefficients are written
+  separately by `mt6589_ovl_write_yuv_matrix()`.  The `CLRFMT` encoding is now
+  documented in the source so the constant is not reintroduced.
+
+- **The OVL SMI and RDMA SMI/output clocks were never gated.**  Both probes used
+  `devm_clk_get(dev, NULL)`, which can only ever return index 0, while the OVL node
+  declares an engine plus an SMI clock and the RDMA node declares engine, SMI and
+  output.  Without SMI the GMC/M4U writes that set up the layer buffer may not
+  reach the hardware, which presents as a blank framebuffer.  Note that
+  `devm_clk_get()` cannot be worked around by repeating the ID: `clk_get()` always
+  resolves index 0, so it would return the same clock N times.  `devm_clk_bulk_get_all()`
+  walks the whole `clocks` property by index, which is what is now used.
+
+Claims from that review that were checked and found **false**:
+
+- "CLRFMT uses wrong mt8170-style encodings" — the datasheet gives RGB888=0,
+  RGB565=1, ARGB888=2, PARGB8888=3, xARGB8888=4, YUYV=8, UYVY=9, which is exactly
+  what `mt6589_fmt_convert()` already emitted.
+- "no MMSYS routing is programmed" — `drivers/soc/mediatek/mtk-mmsys.c:43-44` sets
+  `.routes = mt6589_dispsys_routing_table`.  The earlier TDSHP revert was the
+  complete fix, not half of it.
+
+### Known open, needs hardware
+
+- `mtk_dsi.c` sets `DSI_EN` (bit 1) and `DPHY_RESET` (bit 2) in `DSI_COM_CON`,
+  but the MT6589 datasheet shows that register has only bit 0 (`DSI_RESET`).  The
+  real enable is `DSI_START`, which `mtk_dsi_start()` already toggles, so on
+  MT6589 these are dead writes rather than a functional gap.  Deliberately not
+  removed: they are inherited upstream code shared with mt2701, mt8173, mt8183,
+  mt8186 and mt8188, and only the MT6589 datasheet is available here.  Removing
+  them on one SoC's evidence risks the other five.
+- `DSI_PHY_TIMCON2` / `DA_HS_SYNC` reportedly lands in a reserved byte on MT6589 —
+  not verified either way.
+- RDMA stop does not mask `INT_ENABLE`/ack `INT_STATUS` as downstream does; with a
+  level-triggered SPI this could re-fire.  Not changed: `mtk_disp_rdma.c` is shared
+  across every MediaTek SoC and this pattern is upstream's.
+- DSI link rate computes to 419.022 Mbps and the MT6589 PLL table rounds to 416 Mbps
+  (~0.72% deficit), which could cause a 60 Hz tear.  The BOE HX8896-A01 panel also
+  has no DCS init sequence in the driver.
 
 ## Deliberately not implemented
 
