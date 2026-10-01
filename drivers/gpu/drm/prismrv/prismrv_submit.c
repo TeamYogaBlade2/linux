@@ -32,6 +32,7 @@
 #include <drm/drm_exec.h>
 #include <linux/iosys-map.h>
 #include <linux/dma-resv.h>
+#include <linux/vmalloc.h>
 
 #include <uapi/drm/prismrv_drm.h>
 #include "prismrv_device.h"
@@ -60,6 +61,7 @@ int prismrv_ccb_init(struct prismrv_device *pv)
 	/* a fresh CCB ring restarts the 32-bit command counters */
 	pv->ccb_submitted = 0;
 	pv->ccb_completed = 0;
+	pv->ccb_last_read = 0;
 	pv->last_progress = jiffies;
 
 	if (pv->ccb) {
@@ -132,12 +134,23 @@ void prismrv_ccb_fini(struct prismrv_device *pv)
 	}
 }
 
+/*
+ * Full when 255 commands are outstanding (one slot stays free so that
+ * write == read still means empty).  Syncs the consumed counter first:
+ * see prismrv_ccb_sync_locked() for why that makes the 8-bit to 32-bit
+ * extension unambiguous.  Called with ccb_lock held.
+ */
 static bool prismrv_ccb_full(struct prismrv_device *pv)
 {
-	u32 w = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
-	u32 r = le32_to_cpu(READ_ONCE(pv->ccb->read_offset))  & 255;
+	unsigned long flags;
+	u32 outstanding;
 
-	return ((w + 1 - r) & 255) == 0;
+	spin_lock_irqsave(&pv->event_lock, flags);
+	prismrv_ccb_sync_locked(pv);
+	outstanding = pv->ccb_submitted - pv->ccb_completed;
+	spin_unlock_irqrestore(&pv->event_lock, flags);
+
+	return outstanding >= 255;
 }
 
 /*
@@ -301,6 +314,64 @@ static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
 	return (int)ret ?: -ETIMEDOUT;
 }
 
+/*
+ * Copy the user's command stream into a kernel-owned BO after validating
+ * it.  Replaces objs[0] (the user's BO, which userspace can keep writing
+ * to) with the snapshot, so what was validated is exactly what the GPU
+ * executes.  Sleeps (vmap, allocation); call outside submit_rwsem.
+ */
+static int prismrv_snapshot_stream(struct prismrv_device *pv,
+				   struct drm_gem_object **objs,
+				   unsigned int num_bos, u32 cmd_size)
+{
+	struct iosys_map smap, dmap;
+	struct drm_gem_object *snap;
+	void *copy;
+	int ret;
+
+	if (!cmd_size || cmd_size % 4 || cmd_size > PRISMRV_STREAM_MAX_BYTES)
+		return -EINVAL;
+
+	copy = kvmalloc(cmd_size, GFP_KERNEL);
+	if (!copy)
+		return -ENOMEM;
+
+	ret = drm_gem_vmap(objs[0], &smap);
+	if (ret)
+		goto out_free;
+	if (smap.is_iomem)
+		memcpy_fromio(copy, smap.vaddr_iomem, cmd_size);
+	else
+		memcpy(copy, smap.vaddr, cmd_size);
+	drm_gem_vunmap(objs[0], &smap);
+
+	/* objs[1..] are the BOs the stream may reference */
+	ret = prismrv_validate_stream(pv, copy, cmd_size / 4, objs + 1, num_bos);
+	if (ret) {
+		dev_dbg(pv->drm.dev, "command stream rejected\n");
+		goto out_free;
+	}
+
+	snap = prismrv_bo_create(pv, cmd_size, 0);
+	if (IS_ERR(snap)) {
+		ret = PTR_ERR(snap);
+		goto out_free;
+	}
+	ret = drm_gem_vmap(snap, &dmap);
+	if (ret) {
+		drm_gem_object_put(snap);
+		goto out_free;
+	}
+	iosys_map_memcpy_to(&dmap, 0, copy, cmd_size);
+	drm_gem_vunmap(snap, &dmap);
+
+	drm_gem_object_put(objs[0]);
+	objs[0] = snap;		/* we own the creation reference */
+out_free:
+	kvfree(copy);
+	return ret;
+}
+
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file)
 {
@@ -368,6 +439,14 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		       args->num_bos * sizeof(*user_objs));
 		kvfree(user_objs);
 	}
+
+	/*
+	 * Validate + snapshot the stream.  The snapshot is a kernel-owned
+	 * BO that has no handle; from here on objs[0] is that snapshot.
+	 */
+	ret = prismrv_snapshot_stream(pv, objs, args->num_bos, args->cmd_size);
+	if (ret)
+		goto err_objs;
 
 	/* implicit sync: wait for existing GPU fences on every BO */
 	for (i = 0; i <= args->num_bos; i++) {
@@ -460,7 +539,10 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * dma_resv_add_fence() takes its own reference on the fence per BO;
 	 * no extra dma_fence_get() is needed for that.
 	 */
-	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT, f->num_bos);
+	/* userspace may list a BO more than once: tolerate duplicates */
+	drm_exec_init(&exec,
+		      DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES,
+		      f->num_bos);
 	drm_exec_until_all_locked(&exec) {
 		for (i = 0; i < f->num_bos; i++) {
 			ret = drm_exec_prepare_obj(&exec, f->bos[i], 1);

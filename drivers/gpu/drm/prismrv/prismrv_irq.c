@@ -64,19 +64,41 @@ void prismrv_fence_release_bos(struct prismrv_fence *pf)
  *
  * Returns the number of fences retired.
  */
+/*
+ * Extend the 8-bit hardware read_offset into the 32-bit consumed counter.
+ * Must be called with event_lock held.
+ *
+ * The extension is unambiguous only if the hardware cannot have consumed
+ * 256 or more commands since the previous sync.  It cannot consume more
+ * than are outstanding (<= 255), and every submit calls this before
+ * publishing a new command (prismrv_ccb_schedule()), so the number of
+ * unobserved consumptions never exceeds the outstanding count even when
+ * interrupt handling is delayed.
+ *
+ * Returns true if the counter advanced.
+ */
+bool prismrv_ccb_sync_locked(struct prismrv_device *pv)
+{
+	u8 read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
+	u8 delta = read_off - pv->ccb_last_read;
+
+	pv->ccb_last_read = read_off;
+	pv->ccb_completed += delta;
+	return delta != 0;
+}
+
 static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 {
 	LIST_HEAD(signalled);
 	unsigned int retired = 0;
 	unsigned long flags;
-	u32 read_off;
+	bool advanced;
 
 	if (!pv->ccb)
 		return 0;
-	read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
 
 	spin_lock_irqsave(&pv->event_lock, flags);
-	pv->ccb_completed += (read_off - pv->ccb_completed) & 255;
+	advanced = prismrv_ccb_sync_locked(pv);
 	while (!list_empty(&pv->pending_fences)) {
 		struct prismrv_fence *pf =
 			list_first_entry(&pv->pending_fences,
@@ -109,7 +131,7 @@ static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 		pm_runtime_put_autosuspend(pv->drm.dev);
 	}
 
-	if (retired) {
+	if (retired || advanced) {
 		WRITE_ONCE(pv->last_progress, jiffies);
 		atomic_set(&pv->missed_completions, 0);
 	}
@@ -139,6 +161,16 @@ void prismrv_recovery_work(struct work_struct *work)
 		container_of(work, struct prismrv_device, recovery_work);
 	int ret;
 
+	/*
+	 * Recovery only matters while work is outstanding, and outstanding
+	 * work holds a runtime-PM reference, so the device cannot be
+	 * suspended then.  A stale request that runs after the last fence
+	 * retired (or after suspend) has nothing to recover and must not
+	 * wake the GPU up just to reset it.
+	 */
+	if (!atomic_read(&pv->busy_count))
+		return;
+
 	ret = pm_runtime_resume_and_get(pv->drm.dev);
 	if (ret) {
 		dev_err(pv->drm.dev, "recovery: resume failed (%d)\n", ret);
@@ -158,6 +190,14 @@ void prismrv_recovery_work(struct work_struct *work)
 	 */
 	down_write(&pv->submit_rwsem);
 	mutex_lock(&pv->init_mutex);
+
+	if (!READ_ONCE(pv->hw_ready) || !atomic_read(&pv->busy_count)) {
+		/* retired or torn down while we waited for the locks */
+		mutex_unlock(&pv->init_mutex);
+		up_write(&pv->submit_rwsem);
+		pm_runtime_put_autosuspend(pv->drm.dev);
+		return;
+	}
 
 	WRITE_ONCE(pv->hw_ready, false);
 

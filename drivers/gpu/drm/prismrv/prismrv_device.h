@@ -244,6 +244,7 @@ struct prismrv_device {
 	spinlock_t ccb_lock;
 	u32 ccb_submitted;	/* commands published; protected by ccb_lock */
 	u32 ccb_completed;	/* commands consumed by the uKernel; event_lock */
+	u8 ccb_last_read;	/* read_offset at the last sync; event_lock */
 
 	dma_addr_t hwrt_dma;
 	void *hwrt;			/* 2 x 496 bytes (TA, 3D) */
@@ -318,6 +319,7 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 
 irqreturn_t prismrv_irq_handler(int irq, void *data);
 void prismrv_recovery_work(struct work_struct *work);
+bool prismrv_ccb_sync_locked(struct prismrv_device *pv);
 void prismrv_hang_work(struct work_struct *work);
 
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
@@ -339,6 +341,11 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);
+struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
+					 size_t size, u32 flags);
+int prismrv_validate_stream(struct prismrv_device *pv, const u32 *stream,
+			    size_t words, struct drm_gem_object **bos,
+			    unsigned int num_bos);
 int prismrv_va_init(struct prismrv_device *pv);
 void prismrv_va_fini(struct prismrv_device *pv);
 void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv);

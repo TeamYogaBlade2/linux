@@ -90,7 +90,7 @@ void prismrv_bif_reset(struct prismrv_device *pv)
  * record, or to the end of the blob.
  *
  * Offsets are BYTE offsets into the register page, including the
- * bank-switched windows (0x4000+, 0x8000+, 0x22000+).
+ * bank-switched windows (0x4000+, 0x8000+; the stock blob stays below 0x8ba0, inside the 64 KiB DT aperture).
  *
  * Returns the index of the next unexecuted record (== n when the whole
  * script ran), or a negative errno.

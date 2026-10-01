@@ -88,13 +88,17 @@ jobs:
 
       - name: Check uapi header installs cleanly (host gcc)
         run: |
-          mkdir -p /tmp/uapi/drm
-          install include/uapi/drm/prismrv_drm.h /tmp/uapi/drm/
-          gcc -fsyntax-only -I/tmp/uapi -x c - <<'HDREOF'
+          # the real export path: also installs the drm.h the header includes
+          make ARCH=arm headers_install INSTALL_HDR_PATH=/tmp/uapi >/dev/null
+          test -f /tmp/uapi/include/drm/prismrv_drm.h
+          gcc -fsyntax-only -I/tmp/uapi/include -x c - <<'HDREOF'
           #include <drm/prismrv_drm.h>
           /* Use a preprocessor check so -fsyntax-only catches it
            * (runtime checks are never executed during syntax-only passes). */
-          #if PRISMRV_UAPI_VERSION != 2
-          #error "UAPI version mismatch: expected 2"
+          #if PRISMRV_UAPI_VERSION != 3
+          #error "UAPI version mismatch: expected 3"
+          #endif
+          #ifndef PRISMRV_CMD_ABI_STREAM_V1
+          #error "missing command ABI definition"
           #endif
           HDREOF

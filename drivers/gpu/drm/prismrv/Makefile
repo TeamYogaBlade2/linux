@@ -8,6 +8,7 @@ prismrv-y := \
 	prismrv_mmu.o \
 	prismrv_gem.o \
 	prismrv_submit.o \
+	prismrv_stream.o \
 	prismrv_irq.o \
 	prismrv_devfreq.o
 

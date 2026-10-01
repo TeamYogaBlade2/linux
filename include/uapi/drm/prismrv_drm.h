@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only OR MIT */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note OR MIT */
 /*
  * prismrv_drm.h — user API for the PrismRV DRM driver
  * (Imagination PowerVR SGX series GPUs).
@@ -55,13 +55,13 @@ struct drm_prismrv_get_param {
 };
 
 /*
- * PRISMRV_PARAM_GPU_ID (value 1) was the original combined param that
- * returned EUR_CR_CORE_REVISION raw value.  It is retired in UAPI v2
- * because EUR_CR_CORE_ID and EUR_CR_CORE_REVISION are separate hardware
- * registers and should be queried independently.
- *
- * Userspace using UAPI v1 that queries GPU_ID will receive -EINVAL and
- * must be updated to use CORE_ID + CORE_REVISION instead.
+ * History: UAPI v1 had a combined PRISMRV_PARAM_GPU_ID (value 1) that
+ * returned the raw EUR_CR_CORE_REVISION value.  Since UAPI v2 value 1 is
+ * PRISMRV_PARAM_CORE_ID (EUR_CR_CORE_ID) and the revision is a separate
+ * parameter, because the two are separate hardware registers.  v1
+ * userspace that queries "GPU_ID" now silently receives CORE_ID, so it
+ * must check PRISMRV_PARAM_UAPI_VERSION (v3+) before trusting values.
+ * v3 added GEM_CREATE.gpu_va, PARAM_UAPI_VERSION and PARAM_CMD_ABI.
  */
 #define PRISMRV_PARAM_CORE_ID		1 /* raw EUR_CR_CORE_ID register */
 #define PRISMRV_PARAM_CORE_REVISION	5 /* raw EUR_CR_CORE_REVISION register */
@@ -89,6 +89,24 @@ struct drm_prismrv_get_param {
 #define PRISMRV_PARAM_UAPI_VERSION	6
 #define PRISMRV_PARAM_CMD_ABI		7
 #define PRISMRV_CMD_ABI_STREAM_V1	1
+
+/*
+ * Surface formats used by SET_RT / SET_TEXTURE packets of STREAM_V1
+ * (driver-independent codes, not DRM fourccs or Gallium pipe_format).
+ */
+#define PRISMRV_FMT_RGBA8_UNORM	0
+#define PRISMRV_FMT_BGRA8_UNORM	1
+#define PRISMRV_FMT_RGBA32F	2
+
+/*
+ * STREAM_V1 security contract: the kernel copies the stream into a
+ * kernel-owned buffer, checks every packet (unknown opcodes and any GPU
+ * address range outside the BOs listed in drm_prismrv_submit.bos[] are
+ * rejected with -EINVAL) and executes only the copy.  Streams may only
+ * reference BOs the caller listed.  Packet layout and opcodes are
+ * documented in Mesa's src/gallium/drivers/prismrv/prismrv_context.c.
+ */
+#define PRISMRV_STREAM_MAX_BYTES	(1024 * 1024)
 
 #define DRM_PRISMRV_GEM_CREATE		0x00
 #define DRM_PRISMRV_GEM_MMAP_OFFSET	0x01

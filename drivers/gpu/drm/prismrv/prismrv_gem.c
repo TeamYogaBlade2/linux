@@ -61,12 +61,19 @@ static void prismrv_bo_free(struct drm_gem_object *obj)
 	struct prismrv_device *pv = to_prismrv(obj->dev);
 	struct prismrv_bo *bo = to_prbo(obj);
 
-	/* remove from the device-wide BO list before touching MMU */
+	/*
+	 * Lock order (device-wide): mmu_lock -> bo_list_lock.
+	 * prismrv_mmu_invalidate_all_bos() is called with mmu_lock held and
+	 * then takes bo_list_lock; taking them in the opposite order here
+	 * (as an earlier revision did) is an ABBA deadlock against runtime
+	 * suspend / GPU recovery.  The last GEM reference can be dropped at
+	 * any time, so nothing else serialises this against them.
+	 */
+	mutex_lock(&pv->mmu_lock);
 	spin_lock(&pv->bo_list_lock);
 	list_del(&bo->bo_node);
 	spin_unlock(&pv->bo_list_lock);
 
-	mutex_lock(&pv->mmu_lock);
 	/*
 	 * If recovery/runtime suspend already tore the MMU down, ->mapped
 	 * was cleared by prismrv_mmu_invalidate_all_bos() and there is
@@ -168,52 +175,64 @@ prismrv_gem_create_object(struct drm_device *dev, size_t size)
 	return &bo->base.base;
 }
 
+/**
+ * prismrv_bo_create() - allocate a BO with a fixed GPU VA range.
+ * @flags: PRISMRV_BO_*
+ *
+ * Used by the create ioctl and, with no GEM handle, for the kernel-owned
+ * command-stream snapshots that userspace can neither map nor modify.
+ */
+struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
+					 size_t size, u32 flags)
+{
+	struct drm_gem_shmem_object *shmem;
+	struct prismrv_bo *bo;
+	int ret;
+
+	size = PAGE_ALIGN(size);
+	shmem = drm_gem_shmem_create(&pv->drm, size);
+	if (IS_ERR(shmem))
+		return ERR_CAST(shmem);
+
+	bo = to_prbo(&shmem->base);
+	mutex_lock(&pv->va_lock);
+	ret = drm_mm_insert_node_generic(&pv->va_mm, &bo->va_node, size,
+					 SZ_4K, 0, DRM_MM_INSERT_BEST);
+	mutex_unlock(&pv->va_lock);
+	if (ret) {
+		drm_gem_object_put(&shmem->base);
+		return ERR_PTR(ret);
+	}
+	bo->va_allocated = true;
+
+	/* write-combine must be set before the first vmap */
+	if (flags & PRISMRV_BO_UNCACHED)
+		shmem->map_wc = true;
+	return &shmem->base;
+}
+
 int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file)
 {
 	struct prismrv_device *pv = to_prismrv(dev);
 	struct drm_prismrv_gem_create *args = data;
-	struct drm_gem_shmem_object *shmem;
-	struct prismrv_bo *bo;
+	struct drm_gem_object *obj;
 	int ret;
 
-	if (args->flags & ~PRISMRV_BO_UNCACHED)
+	if (args->flags & ~PRISMRV_BO_UNCACHED || args->pad)
 		return -EINVAL;
-
 	if (args->size == 0 || args->size > SZ_256M)
 		return -EINVAL;
 	args->size = PAGE_ALIGN(args->size);
 
-	shmem = drm_gem_shmem_create(dev, args->size);
-	if (IS_ERR(shmem))
-		return PTR_ERR(shmem);
+	obj = prismrv_bo_create(pv, args->size, args->flags);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
 
-	/* assign the fixed GPU VA range */
-	bo = to_prbo(&shmem->base);
-	mutex_lock(&pv->va_lock);
-	ret = drm_mm_insert_node_generic(&pv->va_mm, &bo->va_node,
-					 args->size, SZ_4K, 0,
-					 DRM_MM_INSERT_BEST);
-	mutex_unlock(&pv->va_lock);
-	if (ret) {
-		drm_gem_object_put(&shmem->base);
-		return ret;
-	}
-	bo->va_allocated = true;
-
-	/*
-	 * Write-combine mapping for streaming buffers (vertex arrays,
-	 * command streams): CPU writes bypass the cache so the GPU sees
-	 * them without an explicit flush.  Must be set before the first
-	 * vmap (drm_gem_shmem_vmap honours it when creating the pgprot).
-	 */
-	if (args->flags & PRISMRV_BO_UNCACHED)
-		shmem->map_wc = true;
-
-	args->gpu_va = bo->va_node.start;
+	args->gpu_va = to_prbo(obj)->va_node.start;
 	args->pad = 0;
-	ret = drm_gem_handle_create(file, &shmem->base, &args->handle);
-	drm_gem_object_put(&shmem->base);
+	ret = drm_gem_handle_create(file, obj, &args->handle);
+	drm_gem_object_put(obj);
 	return ret;
 }
 
@@ -262,8 +281,10 @@ int prismrv_gem_populate(struct prismrv_device *pv, struct drm_gem_object **objs
  * recovery).  The GPU VA of a BO is stable, so only ->mapped is cleared;
  * the next submit re-creates the PTEs in the fresh MMU context.
  *
- * Callers hold mmu_lock + init_mutex + submit_rwsem (write), so no
- * concurrent pin_and_map() or bo_free() can run.
+ * Callers hold mmu_lock + init_mutex + submit_rwsem (write).  That
+ * excludes pin_and_map(), but NOT the last GEM reference being dropped:
+ * bo_free() serialises against this function through mmu_lock (lock
+ * order mmu_lock -> bo_list_lock everywhere).
  */
 void prismrv_mmu_invalidate_all_bos(struct prismrv_device *pv)
 {
