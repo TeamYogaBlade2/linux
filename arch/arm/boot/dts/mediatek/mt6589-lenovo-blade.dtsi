@@ -33,6 +33,11 @@
 			no-map;
 		};
 	};
+
+	sound {
+		compatible = "mediatek,mt6589-mt6320-sound";
+		mediatek,platform = <&afe>;
+	};
 };
 
 &cpu0 {
@@ -107,6 +112,12 @@
 &pmic {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pmic_eint_pins>;
+};
+
+&mt6320_accdet {
+	detect-gpios = <&pio 115 GPIO_ACTIVE_LOW>;
+	io-channels = <&mt6320_adc 5>;
+	io-channel-names = "key";
 };
 
 &mt6320_ldo_vgp4 {
