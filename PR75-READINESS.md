@@ -158,6 +158,37 @@ These cannot be settled by reading source:
 - **Display power domains** — OVL/RDMA declare a domain but take no reference. Inert
   here (RDMA0's own `pm_runtime_get_sync()` powers it on), and upstream behaviour.
 
+## MT6589 clock driver address audit
+
+Every register offset in all ten `clk-mt6589-*.c` drivers was resolved against
+the physical address (DT node base + offset) and checked in the data sheet:
+
+- **topckgen** (`base 0x10000100`): `CLK_CFG_0..8` at 0x40..0x64 and
+  `CLK_PDN_SET/CLR/STA` at 0x70/0x74/0x78 all resolve to the matching data sheet
+  registers.  The `+0x100` slide is already in place, and `TOPRGU_BASE` is
+  `0x10000000`, so there is no collision with the watchdog at `0x10000000`.
+- **infracfg** (`base 0x10001000`): `TOP_CKMUXSEL` at 0x00 and `TOP_CKDIV1` at
+  0x08 are *infracfg* registers despite the `TOP_` prefix, and resolve to
+  `0x10001000` / `0x10001008`, which is where the data sheet lists them.
+  `TOP_DCMCTL` is likewise an infracfg register at 0xA0.  Nothing in
+  topckgen claims them.
+- **pericfg** (`base 0x10003000`): all six PDN set/clr/sta registers resolve to
+  `PERI_GLOBALCON_PDN0/1` at 0x08..0x1C.
+- **apmixedsys** (`base 0x10209000`): every PLL register resolves; `VOID_REG` at
+  offset 0 is the intentional "no post-divider" placeholder for the LC PLLs.
+- **disp** (`0x14000000`), **img** (`0x15000000`), **vdec** (`0x16000000`),
+  **venc** (`0x17000000`), **mfg** (`0x10206000`), **aud** (`0x12070000`): all
+  offsets match the data sheet, or - for the image/video domains the data sheet
+  does not document - the downstream `mt_clkmgr.h` register definitions.
+
+Two naming traps worth remembering, since both look wrong at first glance:
+`TOP_CKMUXSEL`/`TOP_CKDIV1`/`TOP_DCMCTL` belong to infracfg, not topckgen, and
+the data sheet's summary table splits `PERI_GLOBALCON_PDN*` across lines so a
+naive address grep misses them.
+
+Gate bit positions, mux parents and PLL fields were verified separately and are
+correct; see the decisions log.
+
 ## Practical first-boot checklist
 
 In rough order of expected information value:
