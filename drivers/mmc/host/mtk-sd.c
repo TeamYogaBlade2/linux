@@ -648,26 +648,6 @@ static const struct mtk_mmc_compatible mt8173_compat = {
 	.support_64g = false,
 };
 
-static const struct mtk_mmc_compatible mt6589_compat = {
-	/*
-	 * MSDC_CFG gives CARD_CK_DIV as bits [15:8] on this part, so the
-	 * source clock divider is 8 bits wide, matching mt8173.
-	 *
-	 * needs_top_base stays false: the MT6589 MMC nodes declare a single
-	 * reg window, and asking for a second one would fail probe.
-	 */
-	.clk_div_bits = 8,
-	.recheck_sdio_irq = true,
-	.hs400_tune = true,
-	.pad_tune_reg = MSDC_PAD_TUNE,
-	.async_fifo = false,
-	.data_tune = false,
-	.busy_check = false,
-	.stop_clk_fix = false,
-	.enhance_rx = false,
-	.support_64g = false,
-};
-
 static const struct mtk_mmc_compatible mt8183_compat = {
 	.clk_div_bits = 12,
 	.recheck_sdio_irq = false,
@@ -742,7 +722,6 @@ static const struct of_device_id msdc_of_ids[] = {
 	{ .compatible = "mediatek,mt7986-mmc", .data = &mt7986_compat},
 	{ .compatible = "mediatek,mt7988-mmc", .data = &mt7986_compat},
 	{ .compatible = "mediatek,mt8135-mmc", .data = &mt8135_compat},
-	{ .compatible = "mediatek,mt6589-mmc", .data = &mt6589_compat},
 	{ .compatible = "mediatek,mt8173-mmc", .data = &mt8173_compat},
 	{ .compatible = "mediatek,mt8183-mmc", .data = &mt8183_compat},
 	{ .compatible = "mediatek,mt8189-mmc", .data = &mt8189_compat},
