@@ -1120,6 +1120,17 @@
 			#size-cells = <0>;
 		};
 
+		larb0: larb@17001000 {
+			compatible = "mediatek,mt6589-smi-larb";
+			reg = <0x17001000 0x1000>;
+			mediatek,smi = <&smi_common>;
+			mediatek,larb-id = <0>;
+			clocks = <&vencsys CLK_VENC_VEN>,
+				 <&vencsys CLK_VENC_VEN>;
+			clock-names = "apb", "smi";
+			power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
+		};
+
 		larb1: larb@16010000 {
 			compatible = "mediatek,mt6589-smi-larb";
 			reg = <0x16010000 0x1000>;
