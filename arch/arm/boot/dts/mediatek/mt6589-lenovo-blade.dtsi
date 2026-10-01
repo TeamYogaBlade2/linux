@@ -482,3 +482,7 @@
 &pwm {
 	status = "okay";
 };
+
+&gpu {
+	vrf18_2-supply = <&mt6320_buck_vrf18_2>;
+};
