@@ -53,14 +53,39 @@ checked rather than assumed:
 - Uplink SRC enable at `AFE_ADDA_UL_SRC_CON0` bit 0 and internal-ADC select at
   `AFE_ADDA_TOP_CON0` bit 0, per `SetI2SAdcEnable()`/`SetI2SAdcIn()`.
 
-Still absent relative to downstream:
+### Remaining downstream features, and why each is absent
 
-- Speaker and microphone mixer controls.  Only a headphone volume control exists;
-  I did not add more because I could not find verified bit layouts for the other
-  gain fields, and guessing them would be worse than omitting them.
-- DL2, AWB, VUL_DATA2, DAI/MOD_DAI, second I2S, sidetone, hardware digital gain.
-- Voice/modem PCM (`mt_soc_voice.c`, PCM2_VOICE).  Arguably out of scope for a
-  Wi-Fi tablet, but it is absent.
+These were investigated rather than simply skipped.  In each case the
+downstream path exists for a consumer that either does not exist on this board
+or belongs to the voice subsystem:
+
+- **AWB, second I2S, hardware digital gain** — these three form one chain whose
+  only purpose downstream is carrying FM radio audio: `mt_soc_fm_i2s2.c` is the
+  sole caller of `SetHwDigitalGain()`, and the AWB platform's only machine-driver
+  link is `FM_I2S2_IN`.  In this tree the FM driver is
+  `drivers/net/wireless/mediatek/mt6628/mtk-fm.c` and it registers only
+  `V4L2_CAP_RADIO | V4L2_CAP_TUNER | V4L2_CAP_HW_FEQ_SEEK` — no
+  `V4L2_CAP_AUDIO` and no PCM stream.  It is also entirely STP-based with no I2S
+  wiring at all.  So there is no producer: adding the chain would yield capture
+  endpoints that can never be opened and a second I2S input with no codec node.
+- **DL2** — dead upstream too.  The only reference to `MEM_DL2` anywhere in the
+  downstream kernel tree is `mt_soc_pcm_afe.c:573`, which formats DL1's 32-bit
+  data; it is never enabled as a path.
+- **DAI / MOD_DAI and sidetone** — outputs consumed by the voice path
+  (`mt_soc_voice.c`, PCM2_VOICE, modem PCM).  These are Android speech-subsystem
+  features, not general playback or capture, and the modem-facing handshake has
+  no meaning without that stack.
+- **Voice/modem PCM** — same reasoning; out of scope for a Wi-Fi tablet.
+
+### Mixer controls
+
+Only a headphone volume control exists, and that is the complete set the kernel
+side can offer: the downstream kernel sound driver has no volume API at all
+(`SetVolume`/`SetAnaVolume`/`AUDIO_VOLUME` appear nowhere under
+`kernel/sound/soc/mediatek`), the ZCD gain registers are only read for debug
+dumps and never programmed, and volume is handled in the Android audio HAL.
+The one candidate register field I had considered for a speaker gain,
+`AUD_IV_CFG0[4:2]`, turned out to be the speaker mux rather than a gain.
 
 Present and reasonable for the scope: DL1 playback, 8–48 kHz S16_LE, headphone and
 speaker analog paths with full power sequencing, de-pop, NCP and EFUSE trimming,
