@@ -163,7 +163,18 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
 			if (wl->mgmt_tx_pending &&
 			    tx_done->packet_seq == wl->mgmt_tx_packet_seq) {
-				wl->mgmt_tx_status = tx_done->status ? -EIO : 0;
+				/*
+				 * Any non-success result means the frame was
+				 * not acknowledged, which is what the caller
+				 * and cfg80211 need to know.
+				 */
+				wl->mgmt_tx_status =
+					tx_done->status ==
+					MT6628_TX_RESULT_SUCCESS ? 0 : -EIO;
+				if (tx_done->status != MT6628_TX_RESULT_SUCCESS)
+					dev_warn_ratelimited(&wl->func->dev,
+							     "management frame TX failed: result %u\n",
+							     tx_done->status);
 				wl->mgmt_tx_pending = false;
 				complete(&wl->mgmt_tx_done);
 			}

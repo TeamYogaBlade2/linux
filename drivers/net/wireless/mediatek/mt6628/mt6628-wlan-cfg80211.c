@@ -478,9 +478,16 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	if (ret)
 		return ret;
 
+	/*
+	 * Report the real outcome.  mgmt_tx() has already waited for the
+	 * firmware to confirm the frame by the time it returns zero, and
+	 * the firmware reports the 802.11 ACK result in the TX_DONE event,
+	 * so an unacknowledged frame is a genuine transmission failure and
+	 * must not be reported as a success.
+	 */
 	if (!params->dont_wait_for_ack)
 		cfg80211_mgmt_tx_status(wdev, tx_cookie, params->buf,
-					params->len, true, GFP_KERNEL);
+					params->len, ret == 0, GFP_KERNEL);
 
 	return 0;
 }

@@ -159,6 +159,18 @@ struct mt6628_wifi_event_hdr {
 	u8 reserved[2];
 } __packed;
 
+/*
+ * Firmware TX result codes, ENUM_TX_RESULT_CODE_T.  Only TX_RESULT_SUCCESS
+ * means the frame was acknowledged; the rest are failures, with 32 reserved
+ * for "dropped in driver".
+ */
+#define MT6628_TX_RESULT_SUCCESS		0
+#define MT6628_TX_RESULT_LIFE_TIMEOUT	1
+#define MT6628_TX_RESULT_RTS_ERROR		2
+#define MT6628_TX_RESULT_MPDU_ERROR		3
+#define MT6628_TX_RESULT_AGING_TIMEOUT	4
+#define MT6628_TX_RESULT_FLUSHED		5
+
 struct mt6628_event_tx_done {
 	u8 packet_seq;
 	u8 status;
