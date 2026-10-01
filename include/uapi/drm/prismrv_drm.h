@@ -99,14 +99,34 @@ struct drm_prismrv_get_param {
 #define PRISMRV_FMT_RGBA32F	2
 
 /*
- * STREAM_V1 security contract: the kernel copies the stream into a
- * kernel-owned buffer, checks every packet (unknown opcodes and any GPU
- * address range outside the BOs listed in drm_prismrv_submit.bos[] are
- * rejected with -EINVAL) and executes only the copy.  Streams may only
- * reference BOs the caller listed.  Packet layout and opcodes are
- * documented in Mesa's src/gallium/drivers/prismrv/prismrv_context.c.
+ * STREAM_V1 security contract.
+ *
+ * DRM_IOCTL_PRISMRV_SUBMIT is reachable from a render node, so every
+ * caller is untrusted.
+ *  - cmd_type must be PRISMRV_CMD_TA; all other values are -EINVAL (the
+ *    remaining service routines are driver-internal).
+ *  - The kernel copies the command stream and every TA packet block it
+ *    references into kernel memory, validates the copies and runs a
+ *    kernel-owned snapshot; later writes by userspace have no effect.
+ *    Unknown opcodes, malformed packets, out-of-range state values and
+ *    any GPU address range outside the BOs listed in
+ *    drm_prismrv_submit.bos[] are rejected with -EINVAL.
+ *  - SET_PROG_VS/FS carry NUL-terminated text restricted to the
+ *    instruction subset mov, vmov, vmul, vmad, frcp, frsq, smp on
+ *    r0-r255 / o0-o15 (smp slot < 8).  It has no memory access or
+ *    branch instruction.  The executor must implement exactly this
+ *    subset; the kernel does not (and cannot) police what a different
+ *    uKernel would do with other opcodes.
+ *  - Textures and render targets are plain data in listed BOs; the
+ *    executor must keep texel and pixel accesses inside the validated
+ *    extents (clamp/wrap), because shader coordinates are computed at
+ *    run time.
+ *  - Total snapshot size is limited to PRISMRV_STREAM_MAX_BYTES and
+ *    at most 64 jobs may be in flight per device.
+ * Packet layout and opcodes are documented in Mesa's
+ * src/gallium/drivers/prismrv/prismrv_context.c.
  */
-#define PRISMRV_STREAM_MAX_BYTES	(1024 * 1024)
+#define PRISMRV_STREAM_MAX_BYTES	(512 * 1024)
 
 #define DRM_PRISMRV_GEM_CREATE		0x00
 #define DRM_PRISMRV_GEM_MMAP_OFFSET	0x01

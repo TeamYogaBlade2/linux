@@ -42,6 +42,13 @@
 #define PRISMRV_MAX_SUBMIT_BOS		256
 #define PRISMRV_MAX_IN_FENCES		64
 #define PRISMRV_HANG_TIMEOUT_MS		4000
+/*
+ * Soft cap on in-flight jobs (the ring itself holds 255).  Every job owns
+ * a kernel snapshot of up to PRISMRV_STREAM_MAX_BYTES, so this bounds the
+ * memory one device can pin on behalf of render-node clients to
+ * 64 x 512 KiB = 32 MiB.
+ */
+#define PRISMRV_CCB_MAX_OUTSTANDING	64
 
 static const char *prismrv_fence_name(struct dma_fence *f)
 {
@@ -135,8 +142,8 @@ void prismrv_ccb_fini(struct prismrv_device *pv)
 }
 
 /*
- * Full when 255 commands are outstanding (one slot stays free so that
- * write == read still means empty).  Syncs the consumed counter first:
+ * Full when PRISMRV_CCB_MAX_OUTSTANDING commands are outstanding (the
+ * ring size, 255, keeps one slot free so write == read means empty).  Syncs the consumed counter first:
  * see prismrv_ccb_sync_locked() for why that makes the 8-bit to 32-bit
  * extension unambiguous.  Called with ccb_lock held.
  */
@@ -150,7 +157,7 @@ static bool prismrv_ccb_full(struct prismrv_device *pv)
 	outstanding = pv->ccb_submitted - pv->ccb_completed;
 	spin_unlock_irqrestore(&pv->event_lock, flags);
 
-	return outstanding >= 255;
+	return outstanding >= PRISMRV_CCB_MAX_OUTSTANDING;
 }
 
 /*
@@ -201,7 +208,7 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 					"CCB full for %dms — scheduling recovery\n",
 					PRISMRV_CCB_DRAIN_TIMEOUT_MS);
 				if (READ_ONCE(pv->hw_ready))
-					schedule_work(&pv->recovery_work);
+					prismrv_request_recovery(pv);
 
 				/*
 				 * Signal the fence with -ETIMEDOUT using the
@@ -314,18 +321,40 @@ static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
 	return (int)ret ?: -ETIMEDOUT;
 }
 
+static int prismrv_read_bo(void *ctx, struct drm_gem_object *bo, u64 off,
+			   void *dst, size_t len)
+{
+	struct iosys_map map;
+	int ret;
+
+	if (off > bo->size || len > bo->size - off)
+		return -EINVAL;
+	ret = drm_gem_vmap(bo, &map);
+	if (ret)
+		return ret;
+	iosys_map_memcpy_from(dst, &map, off, len);
+	drm_gem_vunmap(bo, &map);
+	return 0;
+}
+
 /*
- * Copy the user's command stream into a kernel-owned BO after validating
- * it.  Replaces objs[0] (the user's BO, which userspace can keep writing
- * to) with the snapshot, so what was validated is exactly what the GPU
- * executes.  Sleeps (vmap, allocation); call outside submit_rwsem.
+ * Build the kernel-owned snapshot the GPU will execute.
+ *
+ * The user's command stream and every TA packet block it references are
+ * copied into kernel memory, validated there (never in user memory), and
+ * laid out in one BO that has no handle and cannot be mapped by
+ * userspace; the DRAW addresses are rewritten to point into it.  objs[0]
+ * (the user's command BO) is replaced by the snapshot.  Textures and
+ * render targets stay where they are: they are data, and their extents
+ * were validated.  Sleeps; call outside submit_rwsem.
  */
 static int prismrv_snapshot_stream(struct prismrv_device *pv,
 				   struct drm_gem_object **objs,
 				   unsigned int num_bos, u32 cmd_size)
 {
-	struct iosys_map smap, dmap;
+	struct iosys_map dmap;
 	struct drm_gem_object *snap;
+	size_t size;
 	void *copy;
 	int ret;
 
@@ -336,14 +365,9 @@ static int prismrv_snapshot_stream(struct prismrv_device *pv,
 	if (!copy)
 		return -ENOMEM;
 
-	ret = drm_gem_vmap(objs[0], &smap);
+	ret = prismrv_read_bo(NULL, objs[0], 0, copy, cmd_size);
 	if (ret)
 		goto out_free;
-	if (smap.is_iomem)
-		memcpy_fromio(copy, smap.vaddr_iomem, cmd_size);
-	else
-		memcpy(copy, smap.vaddr, cmd_size);
-	drm_gem_vunmap(objs[0], &smap);
 
 	/* objs[1..] are the BOs the stream may reference */
 	ret = prismrv_validate_stream(pv, copy, cmd_size / 4, objs + 1, num_bos);
@@ -352,18 +376,34 @@ static int prismrv_snapshot_stream(struct prismrv_device *pv,
 		goto out_free;
 	}
 
-	snap = prismrv_bo_create(pv, cmd_size, 0);
+	size = prismrv_stream_snapshot_size(copy, cmd_size / 4);
+	if (size > PRISMRV_STREAM_MAX_BYTES) {
+		ret = -E2BIG;
+		goto out_free;
+	}
+
+	snap = prismrv_bo_create(pv, size, 0);
 	if (IS_ERR(snap)) {
 		ret = PTR_ERR(snap);
 		goto out_free;
 	}
 	ret = drm_gem_vmap(snap, &dmap);
+	if (ret || dmap.is_iomem) {
+		if (!ret)
+			drm_gem_vunmap(snap, &dmap);
+		drm_gem_object_put(snap);
+		ret = ret ?: -EIO;
+		goto out_free;
+	}
+	ret = prismrv_stream_snapshot_fill(copy, cmd_size / 4, objs + 1,
+					   num_bos, prismrv_bo_gpuva(snap),
+					   dmap.vaddr, prismrv_read_bo, NULL);
+	drm_gem_vunmap(snap, &dmap);
 	if (ret) {
+		dev_dbg(pv->drm.dev, "TA stream rejected\n");
 		drm_gem_object_put(snap);
 		goto out_free;
 	}
-	iosys_map_memcpy_to(&dmap, 0, copy, cmd_size);
-	drm_gem_vunmap(snap, &dmap);
 
 	drm_gem_object_put(objs[0]);
 	objs[0] = snap;		/* we own the creation reference */
@@ -397,7 +437,15 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * taking the read-lock so that recovery_work() can take the
 	 * write-lock without deadlocking against a sleeping submit.
 	 * ---------------------------------------------------------------- */
-	if (args->cmd_type >= PRISMRV_CMD_COUNT ||
+	/*
+	 * Only TA jobs are available to userspace.  The other service
+	 * routines (power, context suspend, cleanup, queue processing,
+	 * misc info, perf status, ...) are driver-internal and must never
+	 * be selectable through a render node; DATABREAKPOINT has no
+	 * routine in this uKernel at all (entry 0).  The enum keeps the
+	 * full list for the driver's own use.
+	 */
+	if (args->cmd_type != PRISMRV_CMD_TA ||
 	    args->num_bos > PRISMRV_MAX_SUBMIT_BOS ||
 	    args->num_in_fences > PRISMRV_MAX_IN_FENCES) {
 		ret = -EINVAL;
@@ -447,21 +495,6 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	ret = prismrv_snapshot_stream(pv, objs, args->num_bos, args->cmd_size);
 	if (ret)
 		goto err_objs;
-
-	/* implicit sync: wait for existing GPU fences on every BO */
-	for (i = 0; i <= args->num_bos; i++) {
-		long r;
-
-		if (!objs[i])
-			continue;
-		r = dma_resv_wait_timeout(objs[i]->resv,
-					  DMA_RESV_USAGE_READ,
-					  true, MAX_SCHEDULE_TIMEOUT);
-		if (r < 0) {
-			ret = r;
-			goto err_objs;
-		}
-	}
 
 	/* ----------------------------------------------------------------
 	 * Allocate the fence and sync_file before taking the lock.
@@ -551,6 +584,28 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 				drm_exec_fini(&exec);
 				goto err_unlock_bos_set;
 			}
+		}
+	}
+	/*
+	 * Implicit sync, atomically with the fence installation: wait for
+	 * the fences already on each BO while its reservation is held, so
+	 * no other submitter can slip a fence in between our wait and our
+	 * add (a wait done before taking the locks would let two
+	 * submitters both see "idle").  dma_resv_wait_timeout() is legal
+	 * with the lock held.  The waited-for fences are signalled by the
+	 * IRQ path, which never takes a reservation lock.  (Jobs of this
+	 * driver also run in CCB order, so the wait only matters for CPU
+	 * visibility and for future imported fences.)
+	 */
+	for (i = 0; i < f->num_bos; i++) {
+		long r = dma_resv_wait_timeout(f->bos[i]->resv,
+					       DMA_RESV_USAGE_READ, true,
+					       MAX_SCHEDULE_TIMEOUT);
+
+		if (r < 0) {
+			ret = r;
+			drm_exec_fini(&exec);
+			goto err_unlock_bos_set;
 		}
 	}
 	for (i = 0; i < f->num_bos; i++)

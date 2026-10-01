@@ -77,6 +77,24 @@ void prismrv_fence_release_bos(struct prismrv_fence *pf)
  *
  * Returns true if the counter advanced.
  */
+/*
+ * Ask for a GPU reset because the uKernel has stopped consuming commands.
+ * The request records how many commands had been consumed; recovery_work
+ * only resets if that number is still current, so a request made for a
+ * job that has meanwhile finished cannot reset an unrelated job that was
+ * submitted before the worker ran.
+ */
+void prismrv_request_recovery(struct prismrv_device *pv)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&pv->event_lock, flags);
+	prismrv_ccb_sync_locked(pv);
+	WRITE_ONCE(pv->recovery_req_completed, pv->ccb_completed);
+	spin_unlock_irqrestore(&pv->event_lock, flags);
+	schedule_work(&pv->recovery_work);
+}
+
 bool prismrv_ccb_sync_locked(struct prismrv_device *pv)
 {
 	u8 read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
@@ -152,7 +170,7 @@ static void prismrv_check_recovery(struct prismrv_device *pv)
 	/* HWRecoveryResetSGX equivalent: soft reset + re-run the init
 	 * sequence from a work item (sleeping allocations are not legal
 	 * in IRQ context). */
-	schedule_work(&pv->recovery_work);
+	prismrv_request_recovery(pv);
 }
 
 void prismrv_recovery_work(struct work_struct *work)
@@ -190,6 +208,26 @@ void prismrv_recovery_work(struct work_struct *work)
 	 */
 	down_write(&pv->submit_rwsem);
 	mutex_lock(&pv->init_mutex);
+
+	{
+		unsigned long flags;
+		bool progressed;
+
+		spin_lock_irqsave(&pv->event_lock, flags);
+		prismrv_ccb_sync_locked(pv);
+		progressed = pv->ccb_completed !=
+			     READ_ONCE(pv->recovery_req_completed);
+		spin_unlock_irqrestore(&pv->event_lock, flags);
+
+		if (progressed) {
+			dev_dbg(pv->drm.dev,
+				"stale recovery request (GPU made progress)\n");
+			mutex_unlock(&pv->init_mutex);
+			up_write(&pv->submit_rwsem);
+			pm_runtime_put_autosuspend(pv->drm.dev);
+			return;
+		}
+	}
 
 	if (!READ_ONCE(pv->hw_ready) || !atomic_read(&pv->busy_count)) {
 		/* retired or torn down while we waited for the locks */
@@ -248,7 +286,7 @@ void prismrv_hang_work(struct work_struct *work)
 		dev_err(pv->drm.dev, "no progress for %dms, resetting GPU\n",
 			PRISMRV_HANG_TIMEOUT_MS);
 		WRITE_ONCE(pv->last_progress, jiffies);
-		schedule_work(&pv->recovery_work);
+		prismrv_request_recovery(pv);
 	}
 	schedule_delayed_work(&pv->hang_work,
 			      msecs_to_jiffies(PRISMRV_HANG_TIMEOUT_MS / 2));
