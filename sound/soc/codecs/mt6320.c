@@ -7,7 +7,7 @@
  * (mt6589 AFE driver) and the sound card are separate drivers.
  *
  * Register map follows the MT6589 BSP AudDrv_ANA: the analog blocks sit
- * at 0x0700.. (AUDBUF/ZCD) and the ABB AFE bridge at 0x2000.., which
+ * at 0x0700.. (AUDBUF/ZCD) and the ABB AFE bridge at 0x4000.., which
  * differs from the MT6323 layout.  Audio clocks come from CCF through
  * the mt6320-clk provider instead of direct TOP_CKPDN poking.
  */
@@ -32,29 +32,33 @@
 #define MT6320_CODEC_FORMATS	SNDRV_PCM_FMTBIT_S16_LE
 
 /*
- * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x2000,
+ * Audio registers in the PMIC 16-bit space: ABB_AFE<->PMIC bridge @ 0x4000,
  * AUDTOP analog DAC/headphone block @ 0x0700.
  */
-#define MT6320_ABB_AFE_CON(n)		(0x2000 + (n) * 2)
-#define MT6320_ABB_AFE_DL_SRC2_CON0_H	0x2002
+#define MT6320_ABB_AFE_BASE		0x4000
+#define MT6320_ABB_AFE_CON(n)		(MT6320_ABB_AFE_BASE + (n) * 2)
+#define MT6320_ABB_AFE_DL_SRC2_CON0_H	(MT6320_ABB_AFE_CON(1))
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(3, 0)
-#define MT6320_ABB_AFE_UP8X_FIFO_CFG0	0x202c
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG0	0x2038
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG1	0x203a
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG2	0x203c
-#define MT6320_ABB_AFE_PMIC_NEWIF_CFG3	0x203e
 
-#define MT6320_AFUNC_AUD_CON2		0x2020
+#define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
 
 #define MT6320_PMIC_TRIM_ADDRESS1	0x01c2
 #define MT6320_PMIC_TRIM_ADDRESS2	0x01c4
 #define MT6320_PMIC_TRIM_REG1_DEFAULT	0x0220
 #define MT6320_PMIC_TRIM_REG2_DEFAULT	0x0006
-#define MT6320_E2_CID			0x2020
+#define MT6320_E2_CID			MT6320_AFUNC_AUD_CON2
 #define MT6320_PMIC_TRIM_SPK		0x01ca
-#define MT6320_SPK_AUTO_TRIM_CTRL	0x013a
-#define MT6320_SPK_AUTO_TRIM		0x014e
 #define MT6320_SPK_TRIM_DEFAULT		0x0010
+/*
+ * SPK_CON1 carries the measured class-D offset on E2 silicon.  E1 reads
+ * it from the trim efuse instead (see mt6320_apply_spk_trim()).
+ */
+#define MT6320_SPK_OFFSET_L_MODE	BIT(14)
+#define MT6320_SPK_OFFSET_L_SW		GENMASK(12, 8)
+/* SPK_CON11 is a one-hot software override selector, not a plain ramp. */
+#define MT6320_SPK_OUTSTG_EN_L_SW	BIT(11)
+#define MT6320_SPK_EN_L_SW		BIT(9)
+#define MT6320_SPK_EN_MODE		BIT(0)
 #define ZCD_GAIN_0DB			8
 #define ZCD_GAIN_CTL_MAX		0x0c	/* +8dB .. -4dB */
 #define ZCD_GAIN_REG(g)			(((g) << 8) | (g))
@@ -65,7 +69,7 @@ struct mt6320_codec_priv {
 	struct clk *clk_aud26m;		/* codec master clock via CCF */
 };
 
-static int mt6320_newif_rate_code(unsigned int rate)
+static int mt6320_dl_src_rate_code(unsigned int rate)
 {
 	switch (rate) {
 	case 8000:
@@ -99,18 +103,10 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 		snd_soc_component_get_drvdata(dai->component);
 	unsigned int rate = params_rate(params);
 	int rate_code;
-	int ret;
 
-	rate_code = mt6320_newif_rate_code(rate);
+	rate_code = mt6320_dl_src_rate_code(rate);
 	if (rate_code < 0)
 		return rate_code;
-
-	ret = regmap_update_bits(priv->regmap,
-				 MT6320_ABB_AFE_PMIC_NEWIF_CFG0,
-				 GENMASK(15, 12),
-				 rate_code << 12);
-	if (ret)
-		return ret;
 
 	return regmap_update_bits(priv->regmap,
 				  MT6320_ABB_AFE_DL_SRC2_CON0_H,
@@ -173,9 +169,6 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		ret = regmap_write(priv->regmap, MT6320_AUDNVREGGLB_CFG0, 0x000c);
 		if (ret)
 			return ret;
-		ret = regmap_write(priv->regmap, MT6320_AUD_NCP0, 0xe000);
-		if (ret)
-			return ret;
 		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON0, 0x102b);
 		if (ret)
 			return ret;
@@ -187,16 +180,20 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
+		ret = regmap_read(priv->regmap, MT6320_CID, &cid);
+		if (ret)
+			return ret;
+
 		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0001);
 		if (ret)
 			return ret;
 
-		ret = regmap_update_bits(priv->regmap, MT6320_AUD_NCP0,
-					 GENMASK(14, 13), 0);
-		if (ret)
-			return ret;
-
-		ret = regmap_read(priv->regmap, MT6320_CID, &cid);
+		/*
+		 * Return NCP to the documented idle value for this silicon
+		 * revision, which is also what power_init() leaves behind.
+		 */
+		ret = regmap_write(priv->regmap, MT6320_AUD_NCP0,
+				   cid >= MT6320_E2_CID ? 0x8000 : 0x9000);
 		if (ret)
 			return ret;
 
@@ -232,12 +229,6 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(6),  0x0218 },
 	{ MT6320_ABB_AFE_CON(7),  0x0204 },
 	{ MT6320_ABB_AFE_CON(10), 0x0001 },
-	/* NewIF serial link to the SoC AFE (up8x FIFO + DL/UL config). */
-	{ MT6320_ABB_AFE_UP8X_FIFO_CFG0,  0x0001 },
-	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG0, 0x8330 },	/* 48 kHz idle rate */
-	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG1, 0x0018 },
-	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG2, 0x302f },	/* UL up8x rxif ADC */
-	{ MT6320_ABB_AFE_PMIC_NEWIF_CFG3, 0xf872 },
 	/* Conservative default analog gain: headphone 0dB. */
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
 };
@@ -478,16 +469,16 @@ static int mt6320_apply_spk_trim(struct mt6320_codec_priv *priv)
 			goto trim_stop;
 		}
 
-		ret = regmap_write(priv->regmap, MT6320_SPK_AUTO_TRIM_CTRL,
-				   0x0802);
-		if (ret)
-			goto trim_stop;
-		ret = regmap_read(priv->regmap, MT6320_SPK_AUTO_TRIM, &reg);
+		/*
+		 * The trim engine has latched its result into SPK_CON1 by
+		 * the time the status bit clears; read it back from there.
+		 */
+		ret = regmap_read(priv->regmap, MT6320_SPK_CON1, &reg);
 		if (ret)
 			goto trim_stop;
 
-		polarity = FIELD_GET(BIT(9), reg);
-		trim = FIELD_GET(GENMASK(14, 10), reg);
+		polarity = FIELD_GET(MT6320_SPK_OFFSET_L_MODE, reg);
+		trim = FIELD_GET(MT6320_SPK_OFFSET_L_SW, reg);
 
 trim_stop:
 		cleanup_ret = regmap_write(priv->regmap, MT6320_SPK_CON9, 0x0000);
@@ -603,7 +594,15 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0f00);
+		/*
+		 * Take the class-D output stage and the L/R driver enables
+		 * under software control.  SPK_CON11 is a one-hot selector,
+		 * so drive the documented bits rather than a nibble pattern.
+		 */
+		return regmap_write(priv->regmap, MT6320_SPK_CON11,
+				    MT6320_SPK_OUTSTG_EN_L_SW |
+				    MT6320_SPK_EN_L_SW |
+				    MT6320_SPK_EN_MODE);
 
 	case SND_SOC_DAPM_POST_PMD:
 		ret = regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0000);
@@ -622,43 +621,18 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
-/* NEWIF serial link to the SoC AFE. */
-static int mt6320_newif_event(struct snd_soc_dapm_widget *w,
-			      struct snd_kcontrol *kcontrol, int event)
-{
-	struct mt6320_codec_priv *priv =
-		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
-	int ret;
-
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),
-				   0x0001);
-		if (ret)
-			return ret;
-
-		return regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11),
-				    0x0303);
-
-	case SND_SOC_DAPM_POST_PMD:
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(11),
-				   0x0000);
-		if (ret)
-			return ret;
-
-		return regmap_write(priv->regmap, MT6320_ABB_AFE_CON(0),
-				    0x0000);
-	}
-
-	return 0;
-}
-
 static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("Analog", SND_SOC_NOPM, 0, 0,
 			    mt6320_analog_event,
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_SUPPLY("NEWIF", SND_SOC_NOPM, 0, 0, mt6320_newif_event,
-			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	/*
+	 * NEWIF is the serial link to the SoC AFE.  This generation of
+	 * MT6320 has no PMIC-side NEWIF configuration registers, so the
+	 * link is programmed entirely by the SoC AFE driver
+	 * (mt6589-afe-pcm).  The widget stays in the DAPM graph to keep
+	 * the routing unchanged, but has no PM callback.
+	 */
+	SND_SOC_DAPM_SUPPLY("NEWIF", SND_SOC_NOPM, 0, 0, NULL, 0),
 	SND_SOC_DAPM_DAC_E("DAC", NULL, SND_SOC_NOPM, 0, 0, mt6320_dac_event,
 			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUT_DRV_E("HP Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
