@@ -704,8 +704,11 @@ static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
 	r->ssid_len = sme->ssid_len;
 
 	r->bssid = NULL;
-	if (sme->bssid)
+	if (sme->bssid) {
 		r->bssid = kmemdup(sme->bssid, ETH_ALEN, GFP_KERNEL);
+		if (!r->bssid)
+			goto fail;
+	}
 
 	r->channel = sme->channel;
 	r->channel_hint = sme->channel_hint;
@@ -725,21 +728,36 @@ static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
 	r->crypto.control_port = sme->crypto.control_port;
 	r->crypto.control_port_over_nl80211 =
 		sme->crypto.control_port_over_nl80211;
-	r->ie = sme->ie && sme->ie_len ?
-		kmemdup(sme->ie, sme->ie_len, GFP_KERNEL) : NULL;
-	r->ie_len = r->ie ? sme->ie_len : 0;
+	if (sme->ie && sme->ie_len) {
+		r->ie = kmemdup(sme->ie, sme->ie_len, GFP_KERNEL);
+		if (!r->ie)
+			goto fail;
+		r->ie_len = sme->ie_len;
+	}
 
 	/* WEP and PMK key material is referenced by pointer upstream. */
 	if (sme->key && sme->key_len) {
 		r->key = kmemdup(sme->key, sme->key_len, GFP_KERNEL);
-		r->key_len = r->key ? sme->key_len : 0;
-	} else {
-		r->key = NULL;
-		r->key_len = 0;
+		if (!r->key)
+			goto fail;
+		r->key_len = sme->key_len;
 	}
 
 	wl->conn_retry_valid = true;
+	mutex_unlock(&wl->cfg_mutex);
+	return;
 
+fail:
+	/*
+	 * A partial copy would reconnect with the wrong key material, so
+	 * leave nothing saved rather than something subtly wrong.
+	 */
+	kfree(r->ssid);
+	kfree(r->bssid);
+	kfree(r->ie);
+	kfree(r->key);
+	memset(r, 0, sizeof(*r));
+	wl->conn_retry_valid = false;
 	mutex_unlock(&wl->cfg_mutex);
 }
 

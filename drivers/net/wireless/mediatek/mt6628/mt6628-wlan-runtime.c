@@ -661,6 +661,13 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	unsigned int loops;
 	int ret;
 
+	/*
+	 * The firmware may have been holding the chip in its low power
+	 * state, so take Driver Own back before reading anything.  This has
+	 * to happen in process context: the transition polls and can sleep.
+	 */
+	mt6628_wlan_pm_resume(wl);
+
 	sdio_claim_host(wl->func);
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
 		u32 whisr, wtsr0, wtsr1, rx_len;
@@ -768,13 +775,12 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 		return;
 
 	/*
-	 * The firmware may be holding the chip in its low power state.
-	 * Take Driver Own back before touching any register, and leave the
-	 * SDIO interrupt masked so the ownership transition and the
-	 * register reads that follow are not interrupted.
+	 * This runs in hard IRQ context, so it must not sleep.  Reclaiming
+	 * Driver Own polls for the LP engine and can take seconds, so that
+	 * is deferred to the work handler.  Mask the interrupt first so the
+	 * ownership transition and the register reads that follow in the
+	 * work handler are not re-entered.
 	 */
-	mt6628_wlan_pm_resume(wl);
-
 	mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
 	schedule_work(&wl->irq_work);
 }
