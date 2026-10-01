@@ -21,6 +21,7 @@
 
 #define MT6628_WLAN_TX_TC_NUM		6
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
+#define MT6628_WLAN_KEY_INDEX_MAX	3
 
 /*
  * Wire values used by CMD_UPDATE_STA_RECORD_T.ucStaState.
@@ -68,6 +69,13 @@ struct mt6628_wlan {
 	u8 conn_rf_sco;
 	u8 *conn_key;
 	size_t conn_key_len;
+	/*
+	 * Bit per key index, tracked separately for pairwise (PTK) and
+	 * group (GTK) keys so that teardown can tell the firmware to
+	 * remove exactly the keys that were installed.
+	 */
+	u8 pairwise_key_mask;
+	u8 group_key_mask;
 	struct cfg80211_bss *conn_bss;
 	u8 *conn_req_ie;
 	size_t conn_req_ie_len;
@@ -147,6 +155,7 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 			const struct key_params *params);
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);
+void mt6628_wlan_flush_keys(struct mt6628_wlan *wl);
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 			 size_t frame_len, bool wait_for_status, bool need_ack);

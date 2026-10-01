@@ -72,6 +72,9 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 	if (!wl->runtime_started || !wl->fw_running || !wl->netdev)
 		return;
 
+	/* Keys are indexed by peer, so drop them before the STA-REC goes. */
+	mt6628_wlan_flush_keys(wl);
+
 	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
 		ret = mt6628_wlan_activate_bss(wl, false);
 		if (ret)

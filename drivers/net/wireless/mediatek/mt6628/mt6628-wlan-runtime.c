@@ -239,6 +239,13 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	wl->conn_state = 0;
 	wl->conn_secure = false;
 	wl->conn_aid = 0;
+	/*
+	 * The firmware is about to be reset, so every key it held disappears
+	 * with it.  Drop the bookkeeping instead of leaving stale masks that
+	 * a later connection would try to remove from a fresh firmware.
+	 */
+	wl->pairwise_key_mask = 0;
+	wl->group_key_mask = 0;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
 	mutex_unlock(&wl->cfg_mutex);

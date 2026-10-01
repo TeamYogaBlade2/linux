@@ -46,7 +46,7 @@
 #define MT6628_PS_PROFILE_CAM		0
 #define MT6628_PS_PROFILE_FAST_PSP	2
 
-#define MT6628_KEY_INDEX_MAX		3
+#define MT6628_KEY_INDEX_MAX		MT6628_WLAN_KEY_INDEX_MAX
 #define MT6628_KEY_MATERIAL_LEN		32
 #define MT6628_KEY_RSC_LEN		16
 
@@ -431,6 +431,7 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	u8 broadcast[ETH_ALEN];
 	u8 response[4];
 	size_t response_len;
+	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
@@ -495,10 +496,23 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	if (params->seq_len)
 		memcpy(cmd.key_rsc, params->seq, params->seq_len);
 
-	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
-				    &cmd, sizeof(cmd), response, sizeof(response),
-				    &response_len,
-				    MT6628_EVENT_ID_CMD_RESULT, 1000);
+	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
+				   &cmd, sizeof(cmd), response, sizeof(response),
+				   &response_len,
+				   MT6628_EVENT_ID_CMD_RESULT, 1000);
+	if (ret)
+		return ret;
+
+	/*
+	 * Only remember the key once the firmware has accepted it, so that
+	 * teardown never tries to remove something that was never installed.
+	 */
+	if (pairwise)
+		wl->pairwise_key_mask |= BIT(key_index);
+	else
+		wl->group_key_mask |= BIT(key_index);
+
+	return 0;
 }
 
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
@@ -509,12 +523,14 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 	u8 broadcast[ETH_ALEN];
 	u8 response[4];
 	size_t response_len;
+	int ret;
 
 	/*
-	 * Key deletion is normally part of disconnect teardown. Treat it
-	 * as a no-op after the runtime/security state has already gone away.
+	 * Key deletion is normally part of disconnect teardown.  It is still
+	 * allowed once the connection has been marked disconnected, because
+	 * teardown removes the keys after dropping that state.
 	 */
-	if (!wl->runtime_started || !wl->fw_running || !wl->conn_secure)
+	if (!wl->runtime_started || !wl->fw_running)
 		return 0;
 	if (key_index > MT6628_KEY_INDEX_MAX)
 		return -EINVAL;
@@ -535,10 +551,48 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 	cmd.net_type_index = 0;
 	cmd.key_id = key_index;
 
-	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
-				    &cmd, sizeof(cmd), response, sizeof(response),
-				    &response_len,
-				    MT6628_EVENT_ID_CMD_RESULT, 1000);
+	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
+				   &cmd, sizeof(cmd), response, sizeof(response),
+				   &response_len,
+				   MT6628_EVENT_ID_CMD_RESULT, 1000);
+	if (!ret) {
+		if (pairwise)
+			wl->pairwise_key_mask &= ~BIT(key_index);
+		else
+			wl->group_key_mask &= ~BIT(key_index);
+	}
+
+	return ret;
+}
+
+void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
+{
+	u8 pairwise_mask = wl->pairwise_key_mask;
+	u8 group_mask = wl->group_key_mask;
+	u8 broadcast[ETH_ALEN];
+	u8 i;
+
+	wl->pairwise_key_mask = 0;
+	wl->group_key_mask = 0;
+
+	/*
+	 * Nothing to undo, or the firmware is already gone: either way the
+	 * masks above are cleared, because the keys cannot outlive the
+	 * connection they belonged to.
+	 */
+	if (!pairwise_mask && !group_mask)
+		return;
+	if (!wl->runtime_started || !wl->fw_running)
+		return;
+
+	eth_broadcast_addr(broadcast);
+
+	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++) {
+		if (pairwise_mask & BIT(i))
+			mt6628_wlan_del_key(wl, i, true, wl->conn_bssid);
+		if (group_mask & BIT(i))
+			mt6628_wlan_del_key(wl, i, false, broadcast);
+	}
 }
 
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
@@ -714,5 +768,6 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_activate_bss);
 EXPORT_SYMBOL_GPL(mt6628_wlan_remove_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_add_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_del_key);
+EXPORT_SYMBOL_GPL(mt6628_wlan_flush_keys);
 EXPORT_SYMBOL_GPL(mt6628_wlan_set_power_mgmt);
 EXPORT_SYMBOL_GPL(mt6628_wlan_mgmt_tx);
