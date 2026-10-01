@@ -2768,12 +2768,6 @@ config SND_SOC_ML26124
 	tristate
 	depends on I2C
 
-config SND_SOC_MT6323
-	tristate "MediaTek MT6323 Codec"
-	help
-	  Enable support for the platform which uses MT6323 as
-	  external codec device.
-
 config SND_SOC_MT6320
 	tristate "MediaTek MT6320 Codec"
 	depends on MFD_MT6397
