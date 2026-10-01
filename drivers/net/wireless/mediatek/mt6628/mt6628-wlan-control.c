@@ -533,10 +533,12 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	 * Only remember the key once the firmware has accepted it, so that
 	 * teardown never tries to remove something that was never installed.
 	 */
+	mutex_lock(&wl->cfg_mutex);
 	if (pairwise)
 		wl->pairwise_key_mask |= BIT(key_index);
 	else
 		wl->group_key_mask |= BIT(key_index);
+	mutex_unlock(&wl->cfg_mutex);
 
 	return 0;
 }
@@ -582,10 +584,12 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 				   &response_len,
 				   MT6628_EVENT_ID_CMD_RESULT, 1000);
 	if (!ret) {
+		mutex_lock(&wl->cfg_mutex);
 		if (pairwise)
 			wl->pairwise_key_mask &= ~BIT(key_index);
 		else
 			wl->group_key_mask &= ~BIT(key_index);
+		mutex_unlock(&wl->cfg_mutex);
 	}
 
 	return ret;
@@ -593,13 +597,24 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 
 void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 {
-	u8 pairwise_mask = wl->pairwise_key_mask;
-	u8 group_mask = wl->group_key_mask;
+	u8 pairwise_mask;
+	u8 group_mask;
 	u8 broadcast[ETH_ALEN];
 	u8 i;
 
+	/*
+	 * Take and clear the masks in one step.  add_key()/del_key() can run
+	 * concurrently with the teardown that flushes them, and reading then
+	 * clearing separately would drop a key that was installed in
+	 * between, leaving it installed in the firmware with nothing left to
+	 * remove it later.
+	 */
+	mutex_lock(&wl->cfg_mutex);
+	pairwise_mask = wl->pairwise_key_mask;
+	group_mask = wl->group_key_mask;
 	wl->pairwise_key_mask = 0;
 	wl->group_key_mask = 0;
+	mutex_unlock(&wl->cfg_mutex);
 
 	/*
 	 * Nothing to undo, or the firmware is already gone: either way the
