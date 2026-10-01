@@ -11,6 +11,7 @@
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/reset/mt6589-resets.h>
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
+#include <dt-bindings/memory/mt6589-larb-port.h>
 #include <dt-bindings/power/mt6589-power.h>
 #include <dt-bindings/thermal/thermal.h>
 
@@ -682,6 +683,33 @@
 			nvmem-cells = <&thermal_cal_data>;
 			nvmem-cell-names = "calibration-data";
 			#thermal-sensor-cells = <1>;
+		};
+
+		jpgdec: jpeg-decoder@15009000 {
+			compatible = "mediatek,mt6589-jpgdec";
+			reg = <0x15009000 0x1000>;
+			interrupts = <GIC_SPI 148 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&imgsys CLK_IMAGE_JPGD_SMI>,
+				 <&imgsys CLK_IMAGE_JPGD_JPG>;
+			clock-names = "jpgdec-smi",
+				      "jpgdec";
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+			iommus = <&iommu MT6589_M4U_PORT_JPGDEC_WDMA>,
+				 <&iommu MT6589_M4U_PORT_JPGDEC_BSDMA>;
+		};
+
+		jpgenc: jpeg-encoder@1500a000 {
+			compatible = "mediatek,mt6589-jpgenc",
+				     "mediatek,mtk-jpgenc";
+			reg = <0x1500a000 0x1000>;
+			interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&imgsys CLK_IMAGE_JPGE_SMI>,
+				 <&imgsys CLK_IMAGE_JPGE_JPG>;
+			clock-names = "jpgenc-smi",
+				      "jpgenc";
+			power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+			iommus = <&iommu MT6589_M4U_PORT_JPGENC_RDMA>,
+				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
 		};
 
 		audsys: syscon@12070000 {
