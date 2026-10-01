@@ -178,6 +178,9 @@ CONFIG_PACKET=y
 ## Wi-Fi / Bluetooth
 
 ## Thermal
+CONFIG_THERMAL=y
+CONFIG_MTK_THERMAL=y
+CONFIG_MTK_SOC_THERMAL=y
 
 ## Modem
 
