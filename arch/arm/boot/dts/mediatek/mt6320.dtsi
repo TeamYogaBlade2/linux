@@ -45,12 +45,12 @@
 			};
 		};
 
-		mt6320clock: mt6320clock {
+		mt6320clock: clocks {
 			compatible = "mediatek,mt6320-clk";
 			#clock-cells = <1>;
 		};
 
-		mt6320regulator: mt6320regulator {
+		mt6320regulator: regulators {
 			compatible = "mediatek,mt6320-regulator";
 
 			/* BUCK regulators */
