@@ -892,7 +892,7 @@ static const struct mtk_smi_common_plat mtk_smi_common_gen2 = {
 static const struct mtk_smi_common_plat mtk_smi_common_mt6589 = {
 	.type     = MTK_SMI_GEN0,
 	.init     = mtk_smi_common_mt6589_init,
- 	/* LARB0→MMU0, LARB1→MMU1, LARB2→MMU0, LARB3→MMU1, LARB4→MMU1 */
+	/* LARB0→MMU0, LARB1→MMU1, LARB2→MMU0, LARB3→MMU1, LARB4→MMU1 */
 	.bus_sel  = 0x110,
 };
 
