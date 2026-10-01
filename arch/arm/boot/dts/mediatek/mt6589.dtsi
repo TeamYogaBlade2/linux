@@ -734,6 +734,8 @@
 				clock-names = "afe", "i2s";
 				iram = <&afe_sram>;
 				interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
+
+				status = "disabled";
 			};
 		};
 
