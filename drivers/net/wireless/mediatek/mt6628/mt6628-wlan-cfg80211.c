@@ -524,6 +524,13 @@ static void mt6628_roc_expire(struct mt6628_wlan *wl, u64 cookie)
 	wl->roc_duration = 0;
 	mutex_unlock(&wl->cfg_mutex);
 
+	/*
+	 * Give the channel back.  Without this the firmware would still be
+	 * holding the grant and the next remain_on_channel request, or a
+	 * reconnect, would be refused.
+	 */
+	mt6628_wlan_release_channel(wl);
+
 	cfg80211_remain_on_channel_expired(&wl->wdev, cookie,
 					   n_chans ? chans[0] : NULL,
 					   GFP_KERNEL);
