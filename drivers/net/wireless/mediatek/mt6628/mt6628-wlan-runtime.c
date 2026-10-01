@@ -252,7 +252,9 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 {
 	struct mt6628_wlan *wl =
 		container_of(work, struct mt6628_wlan, recovery_work);
+	struct cfg80211_connect_params retry = {};
 	bool notify_disconnect;
+	bool retry_saved;
 	int ret;
 
 	if (!wl->runtime_started || !wl->driver_owned) {
@@ -264,7 +266,7 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	notify_disconnect = wl->connected;
 	wl->fw_running = false;
 	wl->connected = false;
-	wl->conn_state = 0;
+	wl->conn_state = MT6628_CONN_DISCONNECTED;
 	wl->conn_secure = false;
 	wl->conn_aid = 0;
 	/*
@@ -287,6 +289,14 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	 * cleanup path does not try to send commands to the asserted
 	 * firmware.
 	 */
+	/*
+	 * Tearing the runtime down also tears down the cfg80211 state, which
+	 * drops the saved connect parameters.  Keep a copy so the association
+	 * can be restored once the firmware is back; runtime_start() rebuilds
+	 * everything else from scratch.
+	 */
+	retry_saved = mt6628_conn_take_retry(wl, &retry);
+
 	mt6628_wlan_runtime_stop(wl);
 
 	ret = mt6628_wlan_force_firmware_reset(wl);
@@ -297,7 +307,18 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	if (!ret)
 		ret = mt6628_wlan_runtime_start(wl);
 
+	if (retry_saved && !ret)
+		mt6628_conn_restore_retry(wl, &retry);
+
 	if (ret) {
+		/* Recovery failed: nothing will retry, so release the copy. */
+		if (retry_saved) {
+			kfree(retry.ssid);
+			kfree(retry.bssid);
+			kfree(retry.ie);
+			kfree(retry.key);
+		}
+
 		dev_err(&wl->func->dev,
 			"MT6628 firmware recovery failed: %d\n", ret);
 	} else {

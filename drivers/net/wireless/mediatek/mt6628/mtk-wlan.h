@@ -224,6 +224,10 @@ void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
 void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl);
 void mt6628_roc_work(struct work_struct *work);
 void mt6628_conn_schedule_retry(struct mt6628_wlan *wl);
+bool mt6628_conn_take_retry(struct mt6628_wlan *wl,
+			     struct cfg80211_connect_params *out);
+void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
+			       struct cfg80211_connect_params *params);
 void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl);
 int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 				struct cfg80211_connect_params *sme);

@@ -48,6 +48,41 @@ static int mt6628_send_deauth_to(struct mt6628_wlan *wl, const u8 *da,
 
 static bool mt6628_deauth_rate_limit(struct mt6628_wlan *wl, const u8 *da);
 static void mt6628_conn_retry_work(struct work_struct *work);
+/*
+ * Detach the saved connect parameters so they can outlive the cfg80211
+ * teardown performed during firmware recovery, and put them back
+ * afterwards.  Ownership of the copied buffers moves with the struct.
+ */
+bool mt6628_conn_take_retry(struct mt6628_wlan *wl, struct cfg80211_connect_params *out)
+{
+	bool valid;
+
+	mutex_lock(&wl->cfg_mutex);
+	valid = wl->conn_retry_valid;
+	if (valid)
+		*out = wl->conn_retry;
+	wl->conn_retry_valid = false;
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (valid)
+		memset(&wl->conn_retry, 0, sizeof(wl->conn_retry));
+
+	return valid;
+}
+
+void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
+			       struct cfg80211_connect_params *params)
+{
+	mutex_lock(&wl->cfg_mutex);
+	kfree(wl->conn_retry.ssid);
+	kfree(wl->conn_retry.bssid);
+	kfree(wl->conn_retry.ie);
+	kfree(wl->conn_retry.key);
+	wl->conn_retry = *params;
+	wl->conn_retry_valid = true;
+	mutex_unlock(&wl->cfg_mutex);
+}
+
 static void mt6628_conn_clear_retry(struct mt6628_wlan *wl);
 int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			       struct cfg80211_connect_params *sme);
