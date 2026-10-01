@@ -182,6 +182,29 @@ theoretical MT6589 concern would affect every platform and need hardware on each
 
 There are therefore no known outstanding defects in the tree.
 
+## Verified reachable, not just present
+
+Confirmed the ported code actually runs on the target rather than merely compiling:
+
+- Every defconfig symbol exists and maps to real code: `SND_SOC_MT6589`,
+  `SND_SOC_MT6589_MT6320`, `SND_SOC_MT6320`, `SND_SOC_MT6320_ACCDET`,
+  `MTK_MT6628_WLAN`, `MTK_MT6628_STP`, `MTK_MT6628_FM`, `BT_MT6628_STP`,
+  `GNSS_MT6628`, `WLAN_VENDOR_MEDIATEK_MT6628` are all `=y`, and each is declared in
+  a real Kconfig that selects the driver.
+- The object files and their `built-in.a` archives contain the expected entry points,
+  so the drivers are linked into the image rather than built and dropped.
+- Device-tree status for the display pipeline: `ovl`, `rdma0`, `color`, `tdshp` and
+  `dispsys` have no `status` property, so they are enabled. `dsi` is `disabled` in
+  the SoC dtsi but `mt6589-lenovo-b8000.dtsi` overrides it to `okay` and attaches the
+  panel. The only disabled node in that area is the BLS backlight PWM, which is
+  correct: this panel is not backlit.
+- The panel compatible in the DT (`boe,hx8896-a01-panel`) matches the driver's
+  `of_device_id` entry exactly.
+- The audio sound card (`mediatek,mt6589-mt6320-sound`) and `&mt6320_accdet` come
+  from `mt6589-lenovo-blade.dtsi`, which the B8000 files include.
+
+So the fixes in this tree are not just compiled in, they are enabled on the board.
+
 ## Process notes
 
 - A clean build and a plausible commit message carry almost no assurance here.
