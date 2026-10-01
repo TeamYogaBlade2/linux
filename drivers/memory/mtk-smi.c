@@ -49,11 +49,20 @@
 #define SMI_LARB_SW_FLAG		0x40
 #define SMI_LARB_SW_FLAG_1		0x1
 
-#define SMI_LARB_BWFILTER_EN     0x60
-#define SMI_LARB_OSTD_CTRL_EN    0x64
+/* mt6589, mt8135 */
+#define SMI_LARB_BWFILTER_EN_V1	0x2c
+
+/* mt2601, mt6572, mt6571, mt6582, mt6592, mt8127 */
+#define SMI_LARB_BWFILTER_EN_V2	0x60
+
+#define SMI_LARB_OSTD_CTRL_EN	0x64
 
 #define SMI_LARB_OSTDL_PORT		0x200
 #define SMI_LARB_OSTDL_PORTx(id)	(SMI_LARB_OSTDL_PORT + (((id) & 0x1f) << 2))
+
+/* mt6589  */
+#define SMI_LARB_SHARE_EN		0x210
+#define SMI_LARB_ROUTE_SEL		0x220
 
 #define SMI_LARB_FIFO_STAT0      0x600
 
@@ -98,7 +107,8 @@
 #define MTK_SMI_FLAG_SW_FLAG		BIT(1)
 #define MTK_SMI_FLAG_SLEEP_CTL		BIT(2)
 #define MTK_SMI_FLAG_CFG_PORT_SEC_CTL	BIT(3)
-#define MTK_SMI_FLAG_BW_CALIBRATE     BIT(4)
+#define MTK_SMI_FLAG_BW_CALIBRATE	BIT(4)
+#define MTK_SMI_FLAG_BWFILTER_REG_V2	BIT(5)
 #define MTK_SMI_CAPS(flags, _x)		(!!((flags) & (_x)))
 
 struct mtk_smi_reg_pair {
@@ -201,7 +211,7 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
 	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
 					      NULL;
-	int i, m4u_port_id, larb_port_num;
+	int i, m4u_port_id, larb_port_num, offset;
 	u32 sec_con_val, reg_val, tmp;
 	int ret;
 
@@ -232,10 +242,16 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 
 	/* some gen 0 SoCs need BW calibration */
 	if (MTK_SMI_CAPS(larb_gen->flags_general, MTK_SMI_FLAG_BW_CALIBRATE)) {
+		if (MTK_SMI_CAPS(larb_gen->flags_general,
+				 MTK_SMI_FLAG_BWFILTER_REG_V2))
+			offset = SMI_LARB_BWFILTER_EN_V2;
+		else
+			offset = SMI_LARB_BWFILTER_EN_V1;
+
 		reg_val = readl_relaxed(larb->base + SMI_LARB_STAT);
 		if (!reg_val) {
 			writel_relaxed(0xffffffff,
-				       larb->base + SMI_LARB_BWFILTER_EN);
+				       larb->base + offset);
 
 			ret = readl_poll_timeout(
 				larb->base + SMI_LARB_FIFO_STAT0, tmp,
@@ -244,10 +260,42 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 				dev_warn(dev,
 					 "BW limiter calibration timeout\n");
 
-			writel_relaxed(0, larb->base + SMI_LARB_BWFILTER_EN);
+			writel_relaxed(0, larb->base + offset);
 			writel_relaxed(0xffffffff,
-				       larb->base + SMI_LARB_OSTD_CTRL_EN);
+				       larb->base + offset);
 		}
+	}
+
+	return 0;
+}
+
+static int mtk_smi_larb_config_port_mt6589(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	int ret;
+
+	/* Execute the common Gen0 port configuration first */
+	ret = mtk_smi_larb_config_port_gen0(dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * MT6589 requires additional LARB-local settings:
+	 * - Disable share for all ports
+	 * - Route specific ports to EMI instead of MCI
+	 */
+	writel_relaxed(0x0, larb->base + SMI_LARB_SHARE_EN);
+
+	switch (larb->larbid) {
+	case 2:
+		writel_relaxed(0x1e, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
+	case 4:
+		writel_relaxed(0xffffffff, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
+	default:
+		writel_relaxed(0x0, larb->base + SMI_LARB_ROUTE_SEL);
+		break;
 	}
 
 	return 0;
@@ -347,6 +395,8 @@ static int mtk_smi_larb_config_port_gen2_general(struct device *dev)
 	}
 	return 0;
 }
+
+
 
 static const u8 mtk_smi_larb_mt6893_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[0] = {0x2, 0x6, 0x2, 0x2, 0x2, 0x28, 0x18, 0x18, 0x1, 0x1, 0x1, 0x8,
@@ -556,6 +606,12 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 	.larb_direct_to_common_mask = BIT(8) | BIT(9),      /* bdpsys */
 };
 
+static const struct mtk_smi_larb_gen mtk_smi_larb_mt6589 = {
+	.port_in_larb =  { 0, 10, 17, 29, 44 ,56 },
+	.config_port = mtk_smi_larb_config_port_mt6589,
+	.flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
+};
+
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6779 = {
 	.config_port  = mtk_smi_larb_config_port_gen2_general,
 	.larb_direct_to_common_mask =
@@ -613,6 +669,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt8195 = {
 static const struct of_device_id mtk_smi_larb_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-larb", .data = &mtk_smi_larb_mt2701},
 	{.compatible = "mediatek,mt2712-smi-larb", .data = &mtk_smi_larb_mt2712},
+	{.compatible = "mediatek,mt6589-smi-larb", .data = &mtk_smi_larb_mt6589},
 	{.compatible = "mediatek,mt6779-smi-larb", .data = &mtk_smi_larb_mt6779},
 	{.compatible = "mediatek,mt6795-smi-larb", .data = &mtk_smi_larb_mt8173},
 	{.compatible = "mediatek,mt6893-smi-larb", .data = &mtk_smi_larb_mt6893},
@@ -804,6 +861,10 @@ static struct platform_driver mtk_smi_larb_driver = {
 	}
 };
 
+static const struct mtk_smi_reg_pair mtk_smi_common_mt6589_init[SMI_COMMON_INIT_REGS_NR] = {
+	{0x200, 0x24}, /* SMI_L1LEN */
+};
+
 static const struct mtk_smi_reg_pair mtk_smi_common_mt6795_init[SMI_COMMON_INIT_REGS_NR] = {
 	{SMI_L1_ARB, 0x1b},
 	{SMI_M4U_TH, 0xce810c85},
@@ -826,6 +887,13 @@ static const struct mtk_smi_common_plat mtk_smi_common_gen1 = {
 
 static const struct mtk_smi_common_plat mtk_smi_common_gen2 = {
 	.type	  = MTK_SMI_GEN2,
+};
+
+static const struct mtk_smi_common_plat mtk_smi_common_mt6589 = {
+	.type     = MTK_SMI_GEN0,
+	.init     = mtk_smi_common_mt6589_init,
+	/* LARB0→MMU0, LARB1→MMU1, LARB2→MMU0, LARB3→MMU1, LARB4→MMU1 */
+	.bus_sel  = 0x110,
 };
 
 static const struct mtk_smi_common_plat mtk_smi_common_mt6779 = {
@@ -908,6 +976,7 @@ static const struct mtk_smi_common_plat mtk_smi_common_mt8365 = {
 static const struct of_device_id mtk_smi_common_of_ids[] = {
 	{.compatible = "mediatek,mt2701-smi-common", .data = &mtk_smi_common_gen1},
 	{.compatible = "mediatek,mt2712-smi-common", .data = &mtk_smi_common_gen2},
+	{.compatible = "mediatek,mt6589-smi-common", .data = &mtk_smi_common_mt6589},
 	{.compatible = "mediatek,mt6779-smi-common", .data = &mtk_smi_common_mt6779},
 	{.compatible = "mediatek,mt6795-smi-common", .data = &mtk_smi_common_mt6795},
 	{.compatible = "mediatek,mt6893-smi-common", .data = &mtk_smi_common_mt6893},
@@ -1018,7 +1087,7 @@ static int __maybe_unused mtk_smi_common_resume(struct device *dev)
 	for (i = 0; i < SMI_COMMON_INIT_REGS_NR && init && init[i].offset; i++)
 		writel_relaxed(init[i].value, common->base + init[i].offset);
 
-	if (common->plat->type == MTK_SMI_GEN2)
+	if (common->plat->bus_sel)
 		writel(bus_sel, common->base + SMI_BUS_SEL);
 
 	return 0;
