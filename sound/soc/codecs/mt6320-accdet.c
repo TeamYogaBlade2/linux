@@ -35,6 +35,14 @@
 #define MT6320_ACCDET_DEBOUNCE0_VALUE	0x0800
 #define MT6320_ACCDET_DEBOUNCE1_VALUE	0x0800
 #define MT6320_ACCDET_DEBOUNCE3_VALUE	0x0020
+/*
+ * Hook switch debounce while a headset is present.  The stock driver
+ * shortens it so a remote button press is noticed quickly during a
+ * call, then restores it once the hook switch settles.
+ */
+#define MT6320_ACCDET_DEBOUNCE0_BTN	0x0400
+/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
+#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
 
 struct mt6320_accdet {
 	struct device *dev;
@@ -192,7 +200,38 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 		}
 		break;
 	case 1:
+		/*
+		 * Entering MIC_BIAS: shorten the hook switch debounce so a
+		 * remote button press is picked up quickly, and re-assert
+		 * the mic bias duty cycle.  The stock driver restores the
+		 * regular debounce on the next transition out of MIC_BIAS.
+		 */
+		if (priv->last_state != 1) {
+			ret = regmap_write(priv->regmap,
+					   MT6320_ACCDET_DEBOUNCE0,
+					   MT6320_ACCDET_DEBOUNCE0_BTN);
+			if (ret)
+				return;
+			ret = regmap_write(priv->regmap,
+					   MT6320_ACCDET_PWM_WIDTH,
+					   MT6320_ACCDET_PWM_WIDTH_VALUE);
+			if (ret)
+				return;
+			ret = regmap_write(priv->regmap,
+					   MT6320_ACCDET_PWM_THRESH,
+					   MT6320_ACCDET_PWM_WIDTH_VALUE);
+			if (ret)
+				return;
+		}
+
 		mt6320_accdet_report(priv, SND_JACK_HEADSET);
+		break;
+	case 2:
+		/* Leaving MIC_BIAS: restore the regular debounce window. */
+		ret = regmap_write(priv->regmap, MT6320_ACCDET_DEBOUNCE0,
+				   MT6320_ACCDET_DEBOUNCE0_VALUE);
+		if (ret)
+			return;
 		break;
 	case 3:
 		mt6320_accdet_report(priv, 0);
@@ -387,6 +426,16 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
+	/*
+	 * Stop the key scanner before taking the lock on plug-out: the
+	 * worker needs the lock itself, so cancelling it underneath would
+	 * deadlock.  It would otherwise re-arm itself, read the ACCDET
+	 * state again and could report a second removal, and it reads the
+	 * AUXADC, which no longer makes sense once the jack is empty.
+	 */
+	if (!inserted)
+		cancel_delayed_work_sync(&priv->key_work);
+
 	mutex_lock(&priv->lock);
 
 	if (!!inserted == priv->plugged)
@@ -410,6 +459,16 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 					    "failed to configure plug-in IRQ: %d\n",
 					    ret);
 	} else {
+		/*
+		 * Drop the micbias/AUXADC switch back to 1.9 V mode before
+		 * declaring the jack empty, otherwise the PMIC keeps
+		 * driving mic bias into an unpopulated connector.  The
+		 * AUXADC driver asserts the same switch for each voltage
+		 * read, so restore it here on the way out too.
+		 */
+		regmap_write(priv->regmap, MT6320_ACCDET_CON0,
+			     MT6320_ACCDET_CON0_MICBIAS_1V9);
+
 		ret = mt6320_accdet_disable(priv);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
