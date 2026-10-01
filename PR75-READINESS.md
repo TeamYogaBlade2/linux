@@ -28,6 +28,32 @@ downstream code that demonstrably runs on this silicon.
 | **MT6589 DRM display** | downstream + datasheet | Most register work confirmed against downstream. Two fixes rest on the datasheet alone: `OVL_CON[23:16]` is `HORI_BLOCK_NUM` (so the Y2R matrix-enable bit was corrupting it), and `DSI_PHY_TIMCON2[15:8]` is reserved (downstream's struct independently names it `RSV8`, which is corroboration). Clock-gating fix confirmed by downstream enabling all three clocks. |
 | **MT6628 combo: STP / BT / FM / GNSS** | downstream | Large implementations present. **I did not review these at all** — they predate this session. Treat as unreviewed. |
 
+## Audio scope: DL1 playback only — this is not a complete MT6589 audio driver
+
+Confirmed by inspection: `mt6589-afe-pcm.c` declares only `.playback` on the
+AFE DAI, `mt6320.c` declares only `.playback` on the codec DAI, and the machine
+driver has a single DAI link.  There is no capture device, so `arecord` cannot
+work at all.
+
+Absent relative to downstream, and genuinely missing rather than merely
+unverified:
+
+- **VUL / microphone capture** and the MT6320 ADC input path — the single largest
+  functional gap.  Downstream has a full capture DMA ring (I2S ADC → VUL →
+  AFE_VUL_BASE/CUR/END, IRQ2) with input routing I03/I04 → O09/O10.
+- Speaker/microphone mixer controls; only a headphone volume control exists.
+- DL2, AWB, VUL_DATA2, DAI/MOD_DAI, second I2S, sidetone, hardware digital gain.
+- Voice/modem PCM (`mt_soc_voice.c`, PCM2_VOICE).  Arguably out of scope for a
+  Wi-Fi tablet, but it is absent.
+
+Present and reasonable for the scope: DL1 playback, 8–48 kHz S16_LE, headphone and
+speaker analog paths with full power sequencing, de-pop, NCP and EFUSE trimming,
+plus headset detection and three button keys wired to the ALSA jack.
+
+So the honest description is *a minimal ASoC port that makes DL1 playback work*,
+not a complete MT6589 audio driver.  The natural next increment is VUL capture and
+the MT6320 ADC path; everything else is larger again.
+
 ## Tier 3 — explicitly not ready
 
 - **MT6628 roaming** — deliberately not ported. The firmware event carries only
