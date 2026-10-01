@@ -2,7 +2,7 @@
 /*
  * MediaTek MT6589 Display BLS PWM Driver
  *
- * Copyright (c) 2026 MediaTek Inc.
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
  * The MT6589 BLS (Backlight Scaler) module provides a PWM generator
  * for LCD backlight control, integrated with gamma correction LUTs,
@@ -303,6 +303,6 @@ static struct platform_driver mt6589_bls_pwm_driver = {
 };
 module_platform_driver(mt6589_bls_pwm_driver);
 
-MODULE_AUTHOR("MediaTek");
+MODULE_AUTHOR("Akari Tsuyukusa");
 MODULE_DESCRIPTION("MediaTek MT6589 Display BLS PWM Driver");
 MODULE_LICENSE("GPL");
