@@ -28,20 +28,36 @@ downstream code that demonstrably runs on this silicon.
 | **MT6589 DRM display** | downstream + datasheet | Most register work confirmed against downstream. Two fixes rest on the datasheet alone: `OVL_CON[23:16]` is `HORI_BLOCK_NUM` (so the Y2R matrix-enable bit was corrupting it), and `DSI_PHY_TIMCON2[15:8]` is reserved (downstream's struct independently names it `RSV8`, which is corroboration). Clock-gating fix confirmed by downstream enabling all three clocks. |
 | **MT6628 combo: STP / BT / FM / GNSS** | downstream | Large implementations present. **I did not review these at all** — they predate this session. Treat as unreviewed. |
 
-## Audio scope: DL1 playback only — this is not a complete MT6589 audio driver
+## Audio scope: DL1 playback + VUL capture
 
-Confirmed by inspection: `mt6589-afe-pcm.c` declares only `.playback` on the
-AFE DAI, `mt6320.c` declares only `.playback` on the codec DAI, and the machine
-driver has a single DAI link.  There is no capture device, so `arecord` cannot
-work at all.
+Both DAIs are now bidirectional: `mt6589-afe-vul` capture was added alongside
+`mt6589-afe-dl1` playback, the MT6320 codec has a capture stream on its AIF1, and
+the machine driver has a VUL Capture DAI link.  `arecord` should work.
 
-Absent relative to downstream, and genuinely missing rather than merely
-unverified:
+The VUL path follows downstream `mt_soc_pcm_capture.c`, and every register was
+checked rather than assumed:
 
-- **VUL / microphone capture** and the MT6320 ADC input path — the single largest
-  functional gap.  Downstream has a full capture DMA ring (I2S ADC → VUL →
-  AFE_VUL_BASE/CUR/END, IRQ2) with input routing I03/I04 → O09/O10.
-- Speaker/microphone mixer controls; only a headphone volume control exists.
+- DMA ring at AFE_VUL_BASE/END/CUR (0x0080/0x0088/0x008c), confirmed in the
+  datasheet.
+- VUL memif enable at `AFE_DAC_CON0` bit 3 — the datasheet shows one enable per
+  memif (DL1 bit 1, DL2 bit 2, VUL bit 3, AWB bit 4) and downstream uses
+  `1 << (block + 1)` with `MEM_DL1 == 0`.  An earlier version of this commit
+  wrongly reused the DL1 bit, which would have started playback instead.
+- VUL sample rate in `AFE_DAC_CON1[19:16]` and channel select at bit 27, from
+  downstream `SetSampleRate`/`SetChannels` for `MEM_VUL` (masks 0x000f0000 and
+  1<<27) — my values match exactly.
+- IRQ2 enable at bit 1, rate at [11:8], counter in IRQ_MCU_CNT1, all confirmed
+  in the datasheet.
+- I2S ADC to VUL routing `AFE_CONN2` bit 29 (I04→O09) and bit 0 (I03→O10),
+  extracted from the downstream `mConnectionReg`/`mConnectionbits` tables.
+- Uplink SRC enable at `AFE_ADDA_UL_SRC_CON0` bit 0 and internal-ADC select at
+  `AFE_ADDA_TOP_CON0` bit 0, per `SetI2SAdcEnable()`/`SetI2SAdcIn()`.
+
+Still absent relative to downstream:
+
+- Speaker and microphone mixer controls.  Only a headphone volume control exists;
+  I did not add more because I could not find verified bit layouts for the other
+  gain fields, and guessing them would be worse than omitting them.
 - DL2, AWB, VUL_DATA2, DAI/MOD_DAI, second I2S, sidetone, hardware digital gain.
 - Voice/modem PCM (`mt_soc_voice.c`, PCM2_VOICE).  Arguably out of scope for a
   Wi-Fi tablet, but it is absent.
