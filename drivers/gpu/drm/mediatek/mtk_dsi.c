@@ -132,6 +132,12 @@
 
 #define DSI_PHY_TIMECON2	0x118
 #define CONT_DET			GENMASK(7, 0)
+/*
+ * DSI_PHY_TIMCON2[15:8].  On MT6589 this byte is reserved: the register has
+ * only CLK_HS_TRAIL[31:24], CLK_HS_ZERO[23:16] and CONT_DET[7:0], and the
+ * downstream register struct names this byte RSV8.  So the field is written
+ * only on the parts where it exists.
+ */
 #define DA_HS_SYNC			GENMASK(15, 8)
 #define CLK_ZERO			GENMASK(23, 16)
 #define CLK_TRAIL			GENMASK(31, 24)
@@ -196,6 +202,11 @@ struct mtk_dsi_driver_data {
 	bool has_size_ctl;
 	bool cmdq_long_packet_ctl;
 	bool support_per_frame_lp;
+	/*
+	 * On this SoC DSI_PHY_TIMCON2[15:8] is reserved, not DA_HS_SYNC.
+	 * The real CONT_DET field is at [7:0].
+	 */
+	bool timcon2_no_da_hs_sync;
 };
 
 struct mtk_dsi {
@@ -278,9 +289,13 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 		  FIELD_PREP(TA_GET, timing->ta_get) |
 		  FIELD_PREP(DA_HS_EXIT, timing->da_hs_exit);
 
-	timcon2 = FIELD_PREP(DA_HS_SYNC, 1) |
-		  FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
-		  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
+	if (dsi->driver_data->timcon2_no_da_hs_sync)
+		timcon2 = FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
+			  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
+	else
+		timcon2 = FIELD_PREP(DA_HS_SYNC, 1) |
+			  FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
+			  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
 
 	timcon3 = FIELD_PREP(CLK_HS_PREP, timing->clk_hs_prepare) |
 		  FIELD_PREP(CLK_HS_POST, timing->clk_hs_post) |
@@ -1298,6 +1313,7 @@ static const struct mtk_dsi_driver_data mt2701_dsi_driver_data = {
 static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.reg_cmdq_off = 0x180,
 	.reg_vm_cmd_off = 0x130,
+	.timcon2_no_da_hs_sync = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
