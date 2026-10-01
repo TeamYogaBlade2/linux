@@ -42,6 +42,12 @@
 
 #define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
 
+/* Analog microphone input: AUXADC channel 0 with its buffer enabled. */
+#define MT6320_AUXADC_CON0_AUXMIC	GENMASK(11, 7)
+#define MT6320_AUXADC_CON0_AUXMIC_VAL	0x10b0
+/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
+#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
+
 /*
  * Headphone amplifier trim lives in the efuse data-out words.  The
  * kernel's MT6320 register header still labels these
@@ -633,6 +639,31 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+/* Analog mic input: AUXADC channel 0, buffer on, analog switch to 1.9 V. */
+static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
+			    struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6320_codec_priv *priv =
+		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	int ret;
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON0,
+					 MT6320_AUXADC_CON0_AUXMIC,
+					 MT6320_AUXADC_CON0_AUXMIC_VAL);
+		if (ret)
+			return ret;
+
+		return regmap_write(priv->regmap, MT6320_ACCDET_CON0,
+				    MT6320_ACCDET_CON0_MICBIAS_1V9);
+	case SND_SOC_DAPM_POST_PMD:
+		return regmap_write(priv->regmap, MT6320_AUXADC_CON0, 0);
+	}
+
+	return 0;
+}
+
 static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("Analog", SND_SOC_NOPM, 0, 0,
 			    mt6320_analog_event,
@@ -653,6 +684,10 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 	SND_SOC_DAPM_OUT_DRV_E("Speaker Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
 			       mt6320_speaker_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_ADC_E("AIF1 Capture", NULL, SND_SOC_NOPM, 0, 0,
+			   mt6320_mic_event,
+			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_INPUT("Mic Bias"),
 	SND_SOC_DAPM_OUTPUT("Headphone"),
 	SND_SOC_DAPM_SPK("Speaker", NULL),
 };
@@ -666,6 +701,7 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker Driver", NULL, "DAC" },
 	{ "Speaker Driver", NULL, "Analog" },
 	{ "Speaker", NULL, "Speaker Driver" },
+	{ "Mic Bias", NULL, "AIF1 Capture" },
 };
 
 /* Output volume: -4dB .. +8dB in 1dB steps. */
@@ -705,6 +741,13 @@ static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 			.stream_name = "AIF1 Playback",
 			.channels_min = 1,
 			.channels_max = 2,
+			.rates = MT6320_CODEC_RATES,
+			.formats = MT6320_CODEC_FORMATS,
+		},
+		.capture = {
+			.stream_name = "AIF1 Capture",
+			.channels_min = 1,
+			.channels_max = 1,
 			.rates = MT6320_CODEC_RATES,
 			.formats = MT6320_CODEC_FORMATS,
 		},

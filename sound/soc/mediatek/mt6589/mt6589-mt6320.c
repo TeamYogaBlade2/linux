@@ -22,11 +22,21 @@ SND_SOC_DAILINK_DEFS(playback,
 	DAILINK_COMP_ARRAY(COMP_CODEC("mt6320-sound", "mt6320-snd-codec-aif1")),
 	DAILINK_COMP_ARRAY(COMP_EMPTY()));
 
+SND_SOC_DAILINK_DEFS(capture,
+	DAILINK_COMP_ARRAY(COMP_CPU("mt6589-afe-vul")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("mt6320-sound", "mt6320-snd-codec-aif1")),
+	DAILINK_COMP_ARRAY(COMP_EMPTY()));
+
 static struct snd_soc_dai_link mt6589_mt6320_dai_links[] = {
 	{
 		.name = "DL1",
 		.stream_name = "DL1 Playback",
 		SND_SOC_DAILINK_REG(playback),
+	},
+	{
+		.name = "VUL Capture",
+		.stream_name = "VUL Capture",
+		SND_SOC_DAILINK_REG(capture),
 	},
 };
 

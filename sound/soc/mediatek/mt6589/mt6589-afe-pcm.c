@@ -35,6 +35,19 @@
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
+#define AFE_DAC_CON1_VUL_RATE	GENMASK(19, 16)
+#define AFE_DAC_CON1_VUL_MONO	BIT(27)
+#define AFE_VUL_BASE		0x0080
+#define AFE_VUL_CUR		0x008c
+#define AFE_VUL_END		0x0088		/* ring end, inclusive */
+
+/* Internal ADC select in ADDA_TOP_CON0. */
+#define AFE_ADDA_TOP_CON0	0x0120
+#define AFE_ADDA_TOP_CON0_INTERNAL_ADC	BIT(0)
+
+/* Uplink SRC: voice mode select [25:23], I2S input control. */
+#define AFE_ADDA_UL_SRC_CON0	0x0114
+
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
 #define AFE_DL1_END		0x0048		/* ring end, inclusive */
@@ -42,9 +55,12 @@
 #define AFE_MEMIF_PBUF_SIZE_DL1	GENMASK(17, 16)
 #define AFE_IRQ_MCU_CON		0x03a0
 #define AFE_IRQ_MCU_CON_IRQ1_ON		BIT(0)
+#define AFE_IRQ_MCU_CON_IRQ2_ON		BIT(1)
 #define AFE_IRQ_MCU_CON_IRQ1_RATE	GENMASK(7, 4)
+#define AFE_IRQ_MCU_CON_IRQ2_RATE	GENMASK(11, 8)
 #define AFE_IRQ_MCU_STATUS	0x03a4
 #define AFE_IRQ_MCU_STATUS_IRQ1	BIT(0)
+#define AFE_IRQ_MCU_STATUS_IRQ2	BIT(1)
 #define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
 #define AFE_IRQ_MCU_CLR		0x03a8
 #define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | GENMASK(4, 0))
@@ -59,6 +75,11 @@
 #define AFE_CONN1_DL1_O3	BIT(21)		/* DL1 ch1 -> O3 */
 #define AFE_CONN2		0x0028
 #define AFE_CONN2_DL1_O4	BIT(6)		/* DL1 ch2 -> O4 */
+/* I2S ADC -> VUL.  From the downstream mConnectionReg/mConnectionbits rows
+ * for I03->O10 and I04->O09.
+ */
+#define AFE_CONN2_VUL_O9	BIT(29)	/* I04 -> O09 */
+#define AFE_CONN2_VUL_O10	BIT(0)	/* I03 -> O10 */
 #define AFE_ADDA_DL_SRC2_CON0	0x0108
 #define AFE_ADDA_DL_SRC2_CON0_BASE 0x03001802	/* SRC-disabled base */
 #define AFE_ADDA_DL_SRC2_CON0_RATE GENMASK(31, 28)
@@ -83,12 +104,20 @@ static const struct regmap_config mt6589_afe_regmap_config = {
 	.max_register = 0x0ffc,
 };
 
+static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
+				  struct snd_pcm_substream *substream);
+static int mt6589_afe_vul_start(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream);
+static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
+					 struct snd_pcm_substream *substream);
+
 struct mt6589_afe {
 	struct device *dev;
 	struct regmap *regmap;
 	struct clk *clk;
 	struct clk *clk_i2s;
 	struct snd_pcm_substream *dl1_substream;	/* active DL1 stream */
+	struct snd_pcm_substream *vul_substream;	/* active VUL stream */
 };
 
 /* Hz -> AFE sample-rate code. */
@@ -136,6 +165,16 @@ static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 			.formats = SNDRV_PCM_FMTBIT_S16_LE,
 		},
 	},
+	{
+		.name = "mt6589-afe-vul",
+		.capture = {
+			.stream_name = "VUL Capture",
+			.channels_min = 1,
+			.channels_max = 2,
+			.rates = SNDRV_PCM_RATE_8000_48000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+		},
+	},
 };
 
 static const struct snd_pcm_hardware mt6589_afe_hardware = {
@@ -177,17 +216,25 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 	u32 base = lower_32_bits(runtime->dma_addr);
 	int ret;
 
-	/* program the DL1 memif DMA ring (in the AFE on-chip SRAM) */
-	ret = regmap_write(afe->regmap, AFE_DL1_BASE, base);
+	/* Program this direction's memif DMA ring, in the AFE on-chip SRAM. */
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		ret = regmap_write(afe->regmap, AFE_DL1_BASE, base);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
+		if (ret)
+			return ret;
+
+		return regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE,
+					 AFE_MEMIF_PBUF_SIZE_DL1);
+	}
+
+	ret = regmap_write(afe->regmap, AFE_VUL_BASE, base);
 	if (ret)
 		return ret;
 
-	ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
-	if (ret)
-		return ret;
-
-	ret = regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE,
-				AFE_MEMIF_PBUF_SIZE_DL1);
+	ret = regmap_write(afe->regmap, AFE_VUL_END, base + bytes - 1);
 	if (ret)
 		return ret;
 
@@ -202,6 +249,9 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
 	int rate_code = mt6589_afe_rate_code(runtime->rate);
 	u32 adda_con0;
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
+		return mt6589_afe_vul_prepare(comp, substream);
 	int ret;
 
 	if (adda_code < 0 || rate_code < 0)
@@ -333,6 +383,19 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	int ret;
 
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		switch (cmd) {
+		case SNDRV_PCM_TRIGGER_START:
+		case SNDRV_PCM_TRIGGER_RESUME:
+			return mt6589_afe_vul_start(comp, substream);
+		case SNDRV_PCM_TRIGGER_STOP:
+		case SNDRV_PCM_TRIGGER_SUSPEND:
+			return mt6589_afe_vul_stop_substream(comp, substream);
+		default:
+			return -EINVAL;
+		}
+	}
+
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
@@ -401,7 +464,9 @@ static snd_pcm_uframes_t mt6589_afe_pcm_pointer(struct snd_soc_component *comp,
 	u32 base = lower_32_bits(runtime->dma_addr);
 	unsigned int cur = 0;
 
-	regmap_read(afe->regmap, AFE_DL1_CUR, &cur);
+	regmap_read(afe->regmap,
+		    substream->stream == SNDRV_PCM_STREAM_CAPTURE ?
+		    AFE_VUL_CUR : AFE_DL1_CUR, &cur);
 	if (cur < base || cur >= base + runtime->dma_bytes)
 		return 0;
 	return bytes_to_frames(runtime, cur - base);
@@ -417,6 +482,137 @@ static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 					      comp->dev, size, size);
 }
 
+static int mt6589_afe_vul_stop(struct mt6589_afe *afe);
+static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
+					 struct snd_pcm_substream *substream);
+
+/* VUL capture: internal ADC -> I2S in -> VUL memif. */
+static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
+				  struct snd_pcm_substream *substream)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int ret;
+
+	/* Select the internal ADC, matching SetI2SAdcIn(). */
+	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_TOP_CON0,
+				AFE_ADDA_TOP_CON0_INTERNAL_ADC);
+	if (ret)
+		return ret;
+
+	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_VUL_RATE,
+				 FIELD_PREP(AFE_DAC_CON1_VUL_RATE, rate_code));
+	if (ret)
+		return ret;
+
+	/* One VUL buffer holds a single interleaved stream. */
+	return regmap_set_bits(afe->regmap, AFE_DAC_CON1,
+			       AFE_DAC_CON1_VUL_MONO);
+}
+
+static int mt6589_afe_vul_start(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	u32 base = lower_32_bits(runtime->dma_addr);
+	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int ret;
+
+	afe->vul_substream = substream;
+
+	ret = regmap_write(afe->regmap, AFE_VUL_CUR, base);
+	if (ret)
+		goto err;
+
+	/* I2S ADC input, then the uplink SRC that feeds the VUL memif. */
+	ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	if (ret)
+		goto err;
+
+	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				 AFE_IRQ_MCU_CON_IRQ2_RATE,
+				 FIELD_PREP(AFE_IRQ_MCU_CON_IRQ2_RATE, rate_code));
+	if (ret)
+		goto err;
+
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CNT1,
+			   runtime->period_size);
+	if (ret)
+		goto err;
+
+	/* Route the I2S ADC channels into the VUL memory interface. */
+	ret = regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O9);
+	if (ret)
+		goto err;
+
+	ret = regmap_set_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O10);
+	if (ret)
+		goto err;
+
+	/* Start the memif before the interrupt, as the DL1 path does. */
+	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+				 AFE_DAC_CON0_DL1_ON, AFE_DAC_CON0_DL1_ON);
+	if (ret)
+		goto err;
+
+	ret = regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON,
+			      AFE_IRQ_MCU_CON_IRQ2_ON);
+	if (ret)
+		goto err;
+
+	return regmap_set_bits(afe->regmap, AFE_DAC_CON0,
+			       AFE_DAC_CON0_AFE_ON);
+
+err:
+	mt6589_afe_vul_stop(afe);
+	return ret;
+}
+
+static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
+{
+	int ret, first_err = 0;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				AFE_IRQ_MCU_CON_IRQ2_ON);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O9);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_CONN2, AFE_CONN2_VUL_O10);
+	if (ret && !first_err)
+		first_err = ret;
+
+	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	if (ret && !first_err)
+		first_err = ret;
+
+	/*
+	 * Ack a period that landed after IRQ2 was disabled, so it does not
+	 * fire again on the next start.
+	 */
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+			   AFE_IRQ_MCU_CLR_NOSTATUS);
+	if (ret && !first_err)
+		first_err = ret;
+
+	afe->vul_substream = NULL;
+	return first_err;
+}
+
+static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
+					 struct snd_pcm_substream *substream)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+
+	return mt6589_afe_vul_stop(afe);
+}
+
 static const struct snd_soc_component_driver mt6589_afe_component = {
 	.name = "mt6589-afe-pcm",
 	.open = mt6589_afe_pcm_open,
@@ -427,7 +623,9 @@ static const struct snd_soc_component_driver mt6589_afe_component = {
 	.pcm_new = mt6589_afe_pcm_new,
 };
 
-/* IRQ1 marks a DL1 period; hardirq (fast_io regmap, atomic PCM). Active-low. */
+/* IRQ1 marks a DL1 period, IRQ2 a VUL one; hardirq, fast_io regmap,
+ * atomic PCM.  Active-low.
+ */
 static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
 	struct mt6589_afe *afe = dev_id;
@@ -455,6 +653,9 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 
 	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
 		snd_pcm_period_elapsed(afe->dl1_substream);
+
+	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && afe->vul_substream)
+		snd_pcm_period_elapsed(afe->vul_substream);
 
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, status);
 	if (ret)
