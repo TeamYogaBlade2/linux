@@ -22,6 +22,10 @@
 
 #define MT6628_CONNECT_MAX_IE_LEN       600
 
+/* Bounded retries so an unavailable AP cannot leave us looping. */
+#define MT6628_CONN_RETRY_MAX	5
+#define MT6628_CONN_RETRY_DELAY_MS	2000
+
 #define MT6628_ASSOC_CAPABILITY         (WLAN_CAPABILITY_ESS | \
 					     WLAN_CAPABILITY_SHORT_PREAMBLE | \
 					     WLAN_CAPABILITY_SHORT_SLOT_TIME)
@@ -47,6 +51,10 @@ static int mt6628_send_deauth_to(struct mt6628_wlan *wl, const u8 *da,
 				 const u8 *sa, const u8 *bssid, u16 reason);
 
 static bool mt6628_deauth_rate_limit(struct mt6628_wlan *wl, const u8 *da);
+static void mt6628_conn_retry_work(struct work_struct *work);
+static void mt6628_conn_clear_retry(struct mt6628_wlan *wl);
+int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
+			       struct cfg80211_connect_params *sme);
 
 static void mt6628_conn_free_ies(struct mt6628_wlan *wl)
 {
@@ -630,6 +638,9 @@ static void mt6628_connect_timeout_work(struct work_struct *work)
 void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl)
 {
 	INIT_DELAYED_WORK(&wl->conn_timeout_work, mt6628_connect_timeout_work);
+	INIT_DELAYED_WORK(&wl->conn_retry_work, mt6628_conn_retry_work);
+	wl->conn_retry_valid = false;
+	wl->conn_retry_count = 0;
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
 	wl->conn_auth_mode = MT6628_AUTH_MODE_OPEN;
 	wl->conn_enc_status = MT6628_ENCRYPTION_DISABLED;
@@ -645,10 +656,224 @@ void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl)
 void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl)
 {
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
+	cancel_delayed_work_sync(&wl->conn_retry_work);
+	mt6628_conn_clear_retry(wl);
 	mt6628_conn_fw_cleanup(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 	mt6628_conn_set_disconnected(wl);
+}
+
+
+/*
+ * Remember the parameters of a requested connection so that a firmware
+ * reset can be recovered from without waiting for userspace to notice.
+ *
+ * Only a copy is kept: the caller owns sme and its crypto/key material
+ * for the duration of connect() only.
+ */
+static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
+				   const struct cfg80211_connect_params *sme)
+{
+	struct cfg80211_connect_params *r = &wl->conn_retry;
+
+	mutex_lock(&wl->cfg_mutex);
+
+	/*
+	 * Release the previous copy first.  A reconnect attempt passes
+	 * sme parameters that were themselves copied out of this struct, so
+	 * dropping the old allocations must not happen after the caller's
+	 * buffers have been handed to connect().
+	 */
+	kfree(r->ssid);
+	kfree(r->bssid);
+	kfree(r->ie);
+	kfree(r->key);
+	memset(r, 0, sizeof(*r));
+
+	r->ssid = kmemdup(sme->ssid, sme->ssid_len, GFP_KERNEL);
+	if (!r->ssid) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+	r->ssid_len = sme->ssid_len;
+
+	r->bssid = NULL;
+	if (sme->bssid)
+		r->bssid = kmemdup(sme->bssid, ETH_ALEN, GFP_KERNEL);
+
+	r->channel = sme->channel;
+	r->channel_hint = sme->channel_hint;
+	r->privacy = sme->privacy;
+	r->auth_type = sme->auth_type;
+	r->key_idx = sme->key_idx;
+	r->mfp = sme->mfp;
+	/* The crypto settings are a nested struct, not flat members. */
+	r->crypto.wpa_versions = sme->crypto.wpa_versions;
+	r->crypto.cipher_group = sme->crypto.cipher_group;
+	r->crypto.n_ciphers_pairwise = sme->crypto.n_ciphers_pairwise;
+	memcpy(r->crypto.ciphers_pairwise, sme->crypto.ciphers_pairwise,
+	       sizeof(r->crypto.ciphers_pairwise));
+	r->crypto.n_akm_suites = sme->crypto.n_akm_suites;
+	memcpy(r->crypto.akm_suites, sme->crypto.akm_suites,
+	       sizeof(r->crypto.akm_suites));
+	r->crypto.control_port = sme->crypto.control_port;
+	r->crypto.control_port_over_nl80211 =
+		sme->crypto.control_port_over_nl80211;
+	r->ie = sme->ie && sme->ie_len ?
+		kmemdup(sme->ie, sme->ie_len, GFP_KERNEL) : NULL;
+	r->ie_len = r->ie ? sme->ie_len : 0;
+
+	/* WEP and PMK key material is referenced by pointer upstream. */
+	if (sme->key && sme->key_len) {
+		r->key = kmemdup(sme->key, sme->key_len, GFP_KERNEL);
+		r->key_len = r->key ? sme->key_len : 0;
+	} else {
+		r->key = NULL;
+		r->key_len = 0;
+	}
+
+	wl->conn_retry_valid = true;
+
+	mutex_unlock(&wl->cfg_mutex);
+}
+
+static void mt6628_conn_clear_retry(struct mt6628_wlan *wl)
+{
+	struct cfg80211_connect_params *r;
+
+	mutex_lock(&wl->cfg_mutex);
+	r = &wl->conn_retry;
+	wl->conn_retry_valid = false;
+	wl->conn_retry_count = 0;
+	kfree(r->ssid);
+	kfree(r->bssid);
+	kfree(r->ie);
+	kfree(r->key);
+	memset(r, 0, sizeof(*r));
+	mutex_unlock(&wl->cfg_mutex);
+}
+
+/*
+ * Re-associate after the firmware has been restarted underneath us.
+ *
+ * wpa_supplicant has been told the link went down and will normally ask
+ * us to reconnect, but that only happens once it gets around to it, and
+ * after a firmware reset the association can be re-established just as
+ * well from here.  Give up after a bounded number of attempts so a
+ * genuinely unavailable AP does not leave us looping forever.
+ */
+void mt6628_conn_schedule_retry(struct mt6628_wlan *wl)
+{
+	if (!wl || !wl->runtime_started)
+		return;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (!wl->conn_retry_valid || wl->conn_state != MT6628_CONN_DISCONNECTED) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+	wl->conn_retry_count = 0;
+	mutex_unlock(&wl->cfg_mutex);
+
+	schedule_delayed_work(&wl->conn_retry_work,
+			      msecs_to_jiffies(MT6628_CONN_RETRY_DELAY_MS));
+}
+
+static void mt6628_conn_retry_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl = container_of(to_delayed_work(work),
+					     struct mt6628_wlan,
+					     conn_retry_work);
+	struct cfg80211_connect_params retry;
+	u8 *ssid, *bssid, *ie, *key;
+	bool retry_again;
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running || !wl->netdev) {
+		mt6628_conn_clear_retry(wl);
+		return;
+	}
+
+	mutex_lock(&wl->cfg_mutex);
+	if (!wl->conn_retry_valid ||
+	    wl->conn_state != MT6628_CONN_DISCONNECTED ||
+	    wl->conn_retry_count >= MT6628_CONN_RETRY_MAX) {
+		mutex_unlock(&wl->cfg_mutex);
+		mt6628_conn_clear_retry(wl);
+		return;
+	}
+	wl->conn_retry_count++;
+	mutex_unlock(&wl->cfg_mutex);
+
+	/* Take a private copy: connect() may run against cleared state. */
+	mutex_lock(&wl->cfg_mutex);
+	retry = wl->conn_retry;
+	ssid = kmemdup(retry.ssid, retry.ssid_len, GFP_KERNEL);
+	bssid = retry.bssid ? kmemdup(retry.bssid, ETH_ALEN, GFP_KERNEL) : NULL;
+	ie = retry.ie ? kmemdup(retry.ie, retry.ie_len, GFP_KERNEL) : NULL;
+	key = retry.key ? kmemdup(retry.key, retry.key_len, GFP_KERNEL) : NULL;
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!ssid || (retry.bssid && !bssid) ||
+	    (retry.ie && !ie) || (retry.key && !key)) {
+		kfree(ssid);
+		kfree(bssid);
+		kfree(ie);
+		kfree(key);
+		mt6628_conn_clear_retry(wl);
+		return;
+	}
+
+	retry.ssid = ssid;
+	retry.ssid_len = retry.ssid_len;
+	retry.bssid = bssid;
+	retry.ie = ie;
+	retry.ie_len = ie ? retry.ie_len : 0;
+	retry.key = key;
+	retry.key_len = key ? retry.key_len : 0;
+
+	ret = mt6628_cfg80211_connect(wl->wiphy, wl->netdev, &retry);
+
+	/*
+	 * connect() took its own copy of these parameters on success, or
+	 * never consumed them, so release ours either way.  The saved state
+	 * was replaced under the lock by save_retry(), so nothing else
+	 * refers to them.
+	 */
+	kfree(ssid);
+	kfree(bssid);
+	kfree(ie);
+	kfree(key);
+
+	if (ret == -EBUSY || ret == -EALREADY) {
+		/* A connect is already running; let it take over. */
+		mt6628_conn_clear_retry(wl);
+		return;
+	}
+
+	if (ret) {
+		dev_warn(&wl->func->dev,
+			 "reconnect after firmware reset failed: %d\n", ret);
+
+		/* Back off and try again while attempts remain. */
+		mutex_lock(&wl->cfg_mutex);
+		retry_again = wl->conn_retry_valid &&
+			      wl->conn_retry_count < MT6628_CONN_RETRY_MAX;
+		mutex_unlock(&wl->cfg_mutex);
+
+		if (retry_again)
+			schedule_delayed_work(&wl->conn_retry_work,
+					      msecs_to_jiffies(
+							MT6628_CONN_RETRY_DELAY_MS));
+		else
+			mt6628_conn_clear_retry(wl);
+		return;
+	}
+
+	dev_info(&wl->func->dev,
+		 "reconnecting after firmware reset (attempt %u)\n",
+		 wl->conn_retry_count);
 }
 
 int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
@@ -810,6 +1035,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	mod_delayed_work(system_wq, &wl->conn_timeout_work,
 			msecs_to_jiffies(MT6628_CONNECT_TIMEOUT_MS));
+
+	/*
+	 * Remember how to get back here, so a firmware reset can be
+	 * recovered from without waiting for userspace.
+	 */
+	mt6628_conn_save_retry(wl, sme);
+
 	return 0;
 
 err_reset:
@@ -839,6 +1071,10 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 		return -ENODEV;
 
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
+
+	/* An explicit disconnect means the user no longer wants to retry. */
+	cancel_delayed_work_sync(&wl->conn_retry_work);
+	mt6628_conn_clear_retry(wl);
 
 	mutex_lock(&wl->cfg_mutex);
 	connected = wl->conn_state == MT6628_CONN_CONNECTED;

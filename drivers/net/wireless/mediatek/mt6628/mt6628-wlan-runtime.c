@@ -286,11 +286,19 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	if (!ret)
 		ret = mt6628_wlan_runtime_start(wl);
 
-	if (ret)
+	if (ret) {
 		dev_err(&wl->func->dev,
 			"MT6628 firmware recovery failed: %d\n", ret);
-	else
+	} else {
 		dev_info(&wl->func->dev, "MT6628 firmware recovery complete\n");
+
+		/*
+		 * The firmware came back without any association, so try to
+		 * restore the one we had.  This is best effort: userspace is
+		 * free to reconnect on its own.
+		 */
+		mt6628_conn_schedule_retry(wl);
+	}
 
 	atomic_set(&wl->recovery_pending, 0);
 }

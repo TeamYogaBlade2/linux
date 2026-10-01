@@ -91,6 +91,16 @@ struct mt6628_wlan {
 	struct cfg80211_bss *conn_bss;
 	u8 *conn_req_ie;
 	size_t conn_req_ie_len;
+	/*
+	 * Parameters of the last requested connection, kept so a firmware
+	 * reset can be recovered from by associating again on the driver's
+	 * own initiative.  Cleared on an explicit disconnect or whenever the
+	 * connection is otherwise abandoned.
+	 */
+	struct cfg80211_connect_params conn_retry;
+	bool conn_retry_valid;
+	struct delayed_work conn_retry_work;
+	unsigned int conn_retry_count;
 	u8 *conn_resp_ie;
 	size_t conn_resp_ie_len;
 	struct delayed_work conn_timeout_work;
@@ -188,6 +198,7 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);
 void mt6628_cfg80211_connect_init(struct mt6628_wlan *wl);
+void mt6628_conn_schedule_retry(struct mt6628_wlan *wl);
 void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl);
 int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 				struct cfg80211_connect_params *sme);
