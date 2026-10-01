@@ -1,0 +1,35 @@
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6320 headset accessory detector
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+properties:
+  compatible:
+    const: mediatek,mt6320-accdet
+
+  detect-gpios:
+    maxItems: 1
+
+  io-channels:
+    maxItems: 1
+
+  io-channel-names:
+    const: key
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: accdet
+
+required:
+  - compatible
+  - detect-gpios
+  - io-channels
+  - io-channel-names
+  - clocks
+  - clock-names
+
+additionalProperties: false
