@@ -38,8 +38,6 @@
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
 #define AFE_DL1_END		0x0048		/* ring end, inclusive */
-#define AFE_MEMIF_MAXLEN	0x03d4
-#define AFE_MEMIF_MAXLEN_DL1	GENMASK(3, 0)
 #define AFE_MEMIF_PBUF_SIZE	0x03d8
 #define AFE_MEMIF_PBUF_SIZE_DL1	GENMASK(17, 16)
 #define AFE_IRQ_MCU_CON		0x03a0
@@ -75,7 +73,7 @@
 #define AFE_ADDA_NEWIF_CFG0	0x0138		/* AFE<->PMIC serial link (NEWIF) */
 #define AFE_ADDA_NEWIF_CFG0_VAL	0x03f87201	/* up8x TXIF saturation on */
 #define AFE_ADDA_NEWIF_CFG1	0x013c
-#define AFE_ADDA_NEWIF_CFG1_VAL	0x03117180
+#define AFE_ADDA_NEWIF_CFG1_VOICE	GENMASK(11, 10)
 
 static const struct regmap_config mt6589_afe_regmap_config = {
 	.reg_bits = 32,
@@ -181,11 +179,6 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 		return ret;
 
 	ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
-	if (ret)
-		return ret;
-
-	ret = regmap_clear_bits(afe->regmap, AFE_MEMIF_MAXLEN,
-				AFE_MEMIF_MAXLEN_DL1);
 	if (ret)
 		return ret;
 
@@ -349,16 +342,22 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 		if (ret)
 			goto err_stop;
 
-		ret = regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON,
-				      AFE_IRQ_MCU_CON_IRQ1_ON);
-		if (ret)
-			goto err_stop;
-
+		/*
+		 * Start the DL1 memory path before the period interrupt is
+		 * enabled, as the stock mtk_pcm_dl1_start() does, so a
+		 * period interrupt cannot arrive against a stopped DL1.
+		 */
 		ret = regmap_set_bits(afe->regmap, AFE_DAC_CON0,
 				      AFE_DAC_CON0_DL1_ON);
 		if (ret)
 			goto err_stop;
 
+		ret = regmap_set_bits(afe->regmap, AFE_IRQ_MCU_CON,
+				      AFE_IRQ_MCU_CON_IRQ1_ON);
+		if (ret)
+			goto err_stop;
+
+		/* EnableAfe() is last in the stock start sequence. */
 		ret = regmap_set_bits(afe->regmap, AFE_DAC_CON0,
 				      AFE_DAC_CON0_AFE_ON);
 		if (ret)
@@ -490,9 +489,15 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(afe->regmap),
 				     "failed to init AFE regmap\n");
 
-	/* power on the AFE top + the SoC side of the AFE<->PMIC link */
-	ret = regmap_write(afe->regmap, AUDIO_TOP_CON0,
-			   AUDIO_TOP_CON0_AFE_ON);
+	/*
+	 * Power on the AFE top.  AUDIO_TOP_CON0 also carries the CCF clock
+	 * gate bits for the AFE (bit 2) and I2S (bit 6) blocks, which were
+	 * just enabled above through the clk provider, so touch only the
+	 * AFE power bit.
+	 */
+	ret = regmap_update_bits(afe->regmap, AUDIO_TOP_CON0,
+				 AUDIO_TOP_CON0_AFE_ON,
+				 AUDIO_TOP_CON0_AFE_ON);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "failed to enable AFE\n");
@@ -503,8 +508,16 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to configure AFE NEWIF\n");
 
-	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG1,
-			   AFE_ADDA_NEWIF_CFG1_VAL);
+	/*
+	 * AFE_ADDA_NEWIF_CFG1 carries the voice-mode delay selection in
+	 * bits [11:10], which downstream programs per stream from the
+	 * uplink (ADC) sample rate.  There is no capture path here, so
+	 * apply the non-zero delay the stock driver uses for its default
+	 * case rather than writing a whole-register value.
+	 */
+	ret = regmap_update_bits(afe->regmap, AFE_ADDA_NEWIF_CFG1,
+				 AFE_ADDA_NEWIF_CFG1_VOICE,
+				 AFE_ADDA_NEWIF_CFG1_VOICE);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "failed to configure AFE NEWIF delay\n");
