@@ -106,6 +106,21 @@ Claims from that review that were checked and found **false**:
   `.routes = mt6589_dispsys_routing_table`.  The earlier TDSHP revert was the
   complete fix, not half of it.
 
+### Found by a final audit of the ownership FSM
+
+The runtime power state machine reclaims Driver Own from the 32-bit register
+helpers, but the bulk transfers call `sdio_writesb()`/`sdio_readsb()` directly
+against WTDR0/WTDR1 and WRDR0/WRDR1 and so bypassed it entirely.  The practical
+consequence: after the idle timer handed the chip to the firmware, a queued data
+frame written to WTDR0 would not take ownership back, and the TX_DONE interrupt
+that releases the resource depends on that ownership.  The frame went to a chip
+the driver no longer owned, so no TX_DONE arrived and the resource was never
+released — a transmit stall that only cleared on the next interrupt.  Fixed in
+all six bulk transfer sites.
+
+This is the same class as the six other bugs the audit found: the feature itself
+was correct, and the defect was in how it interacted with a path added elsewhere.
+
 ### Known open, needs hardware
 
 - `mtk_dsi.c` sets `DSI_EN` (bit 1) and `DPHY_RESET` (bit 2) in `DSI_COM_CON`,
@@ -131,6 +146,12 @@ Claims from that review that were checked and found **false**:
   function of those, so no register is miscomputed.  Whether a 0.72% slow link
   tears on this panel is a panel characteristic, not a driver issue.
   The mode itself is self-consistent: 1416 x 822 totals give 59.9999 Hz.
+- **Display power domains** — the OVL and RDMA nodes declare
+  `power-domains = <&spm MT6589_POWER_DOMAIN_DIS>` but take no domain reference,
+  and there is no mediatek DRM node in the tree that does.  Not changed: all
+  display blocks share one domain and RDMA0's own `pm_runtime_get_sync()` powers it
+  on, so the omission is inert here, and adding a reference would introduce a
+  power-off path that does not exist today.
 - **Panel DCS init sequence** — `boe_hx8896_a01` has no `.init_sequence`, but its
   delays (prepare 120 ms, enable 100 ms, disable 320 ms) are specific rather than
   defaults, which suggests they were measured.  aquaris-5 has no HX8896 panel
