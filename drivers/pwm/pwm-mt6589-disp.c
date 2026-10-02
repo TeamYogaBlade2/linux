@@ -245,6 +245,15 @@ static const struct pwm_ops mt6589_bls_pwm_ops = {
 	.apply = mt6589_bls_pwm_apply,
 };
 
+/*
+ * There is exactly one BLS block, and its state hangs off the pwm_chip -
+ * never off device drvdata, unlike the OVL/RDMA/COLOR/DSI drivers which call
+ * platform_set_drvdata() in their own probe.  So dev_get_drvdata() on the
+ * DDP component device is always NULL, which is what silently turned every
+ * ddp_bls hook into a no-op.  Keep the instance here instead.
+ */
+static struct mt6589_bls_pwm *bls_ddp;
+
 static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -351,6 +360,13 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "failed to add PWM chip\n");
 
+	/*
+	 * The DDP hooks reach the block through this pointer: the CRTC hands
+	 * out the component device, and dev_get_drvdata() there is NULL
+	 * because this driver's state lives on the pwm_chip.
+	 */
+	bls_ddp = bls;
+
 	return 0;
 }
 
@@ -366,48 +382,13 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
  *
  * These are exported so mtk_ddp_comp.c can drive BLS as a real component.
  */
-static int mt6589_bls_pwm_match(struct device *dev, const void *data)
-{
-	struct device_node *node = dev_of_node(dev);
-
-	if (!node)
-		return 0;
-
-	return node == (const struct device_node *)data;
-}
-
-/*
- * Map a DDP component device to the BLS block.
- *
- * The BL component is a private device the CRTC creates for itself, so
- * dev_get_drvdata() finds nothing there - only the PWM driver's own device
- * carries the data.  Look the driver instance up by the component's DT node
- * instead, falling back to dev_get_drvdata() for callers that do pass the
- * real device.
- */
-static struct mt6589_bls_pwm *mt6589_bls_ddp_dev(struct device *dev)
-{
-	struct device *pwm_dev;
-
-	if (!dev)
-		return NULL;
-
-	pwm_dev = bus_find_device(&platform_bus_type, NULL, dev->of_node,
-				  &mt6589_bls_pwm_match);
-	if (!pwm_dev)
-		return dev_get_drvdata(dev);
-
-	return dev_get_drvdata(pwm_dev);
-}
-
 int mt6589_bls_ddp_clk_enable(struct device *dev)
 {
 	/*
-	 * The BL component is a private device the CRTC creates for itself, so
-	 * dev_get_drvdata() finds nothing there - only the PWM driver's own
-	 * device has that data.  Take the clock from the component's device
-	 * node instead, which is the same source the generic
-	 * mtk_ddp_clk_enable() uses through of_clk_get(node, 0).
+	 * Take the clock from the component's node, the same source the
+	 * generic mtk_ddp_clk_enable() uses through of_clk_get(node, 0). It is
+	 * the same clock the PWM driver holds, and disable() must resolve it
+	 * the same way or the reference leaks.
 	 */
 	return clk_prepare_enable(of_clk_get(dev->of_node, 0));
 }
@@ -433,7 +414,7 @@ void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
 			   unsigned int h, unsigned int vrefresh,
 			   unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
-	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
+	struct mt6589_bls_pwm *bls = bls_ddp;
 
 	if (!bls || !w || !h)
 		return;
@@ -451,7 +432,7 @@ EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
  */
 void mt6589_bls_ddp_start(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
+	struct mt6589_bls_pwm *bls = bls_ddp;
 
 	if (!bls)
 		return;
@@ -463,7 +444,7 @@ EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
 void mt6589_bls_ddp_stop(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
+	struct mt6589_bls_pwm *bls = bls_ddp;
 
 	if (!bls)
 		return;
