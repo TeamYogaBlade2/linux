@@ -593,35 +593,18 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to initialize ACCDET\n");
 
-	/*
-	 * The PMIC's own ACCDET interrupt is optional.  Plug and unplug is
-	 * driven by the detect GPIO below, which is what actually works on
-	 * this part, and the ACCDET interrupt only adds the debounced key
-	 * reports.  The binding for this driver declares no interrupt
-	 * property at all, so demanding one here made probe fail with
-	 * -ENXIO and took the whole headset detector with it.
-	 *
-	 * Take it when the device tree does describe one, and otherwise
-	 * carry on with the GPIO path alone.
-	 */
-	priv->accdet_irq = platform_get_irq_byname(pdev, "accdet_irq");
-	if (priv->accdet_irq == -ENXIO) {
-		priv->accdet_irq = 0;
-	} else if (priv->accdet_irq < 0) {
-		return dev_err_probe(&pdev->dev, priv->accdet_irq,
-				     "failed to get ACCDET irq\n");
-	}
+	priv->accdet_irq =
+		platform_get_irq_byname(pdev, "accdet_irq");
+	if (priv->accdet_irq < 0)
+		return priv->accdet_irq;
 
-	if (priv->accdet_irq) {
-		ret = devm_request_threaded_irq(&pdev->dev,
-						 priv->accdet_irq,
-						 NULL, mt6320_accdet_irq,
-						 IRQF_ONESHOT,
-						 "mt6320-accdet", priv);
-		if (ret)
-			return dev_err_probe(&pdev->dev, ret,
-					     "failed to request ACCDET IRQ\n");
-	}
+	ret = devm_request_threaded_irq(&pdev->dev, priv->accdet_irq,
+					NULL, mt6320_accdet_irq,
+					IRQF_ONESHOT,
+					"mt6320-accdet", priv);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to request ACCDET IRQ\n");
 
 	priv->eint_irq = gpiod_to_irq(priv->detect);
 	if (priv->eint_irq < 0)
