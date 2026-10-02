@@ -629,15 +629,6 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	if (ret)
 		goto err_reg;
 
-	/*
-	 * Name the domain being powered on.  Every failure below funnels into
-	 * a bare -EPROBE_DEFER from __genpd_dev_pm_attach() with no message,
-	 * because dev_pm_domain_attach() runs before ->probe() - so without
-	 * this a domain that will not power up looks identical to a device
-	 * whose driver has not been called yet.
-	 */
-	dev_info(scpsys->dev, "powering on domain %s\n", pd->genpd.name);
-
 	if (pd->data->ext_buck_iso_offs && MTK_SCPD_CAPS(pd, MTK_SCPD_EXT_BUCK_ISO))
 		regmap_clear_bits(scpsys->base, pd->data->ext_buck_iso_offs,
 				  pd->data->ext_buck_iso_mask);
@@ -650,18 +641,8 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	else
 		ret = scpsys_ctl_pwrseq_on(pd);
 
-	if (ret) {
-		u32 ctl = 0, sta = 0, sta2 = 0;
-
-		regmap_read(scpsys->base, pd->data->ctl_offs, &ctl);
-		regmap_read(scpsys->base, pd->data->pwr_sta_offs, &sta);
-		regmap_read(scpsys->base, pd->data->pwr_sta2nd_offs, &sta2);
-		dev_err(scpsys->dev,
-			"%s: pwrseq_on failed: %d ctl=0x%08x sta=0x%08x sta2=0x%08x want=0x%08x\n",
-			pd->genpd.name, ret, ctl, sta, sta2,
-			pd->data->sta_mask);
+	if (ret)
 		goto err_pwr_ack;
-	}
 
 	/*
 	 * In MT8189 mminfra power domain, the bus protect policy separates
@@ -685,13 +666,8 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	}
 
 	ret = scpsys_sram_enable(pd);
-	if (ret < 0) {
-		dev_err(scpsys->dev,
-			"%s: sram_enable failed: %d (ack mask 0x%08x, ctl 0x%08x)\n",
-			pd->genpd.name, ret, pd->data->sram_pdn_ack_bits,
-			pd->data->ctl_offs);
+	if (ret < 0)
 		goto err_disable_subsys_clks;
-	}
 
 	ret = scpsys_bus_protect_disable(pd, 0);
 	if (ret < 0)
