@@ -674,9 +674,24 @@
 			#clock-cells = <1>;
 		};
 
-		fhctl: clock-controller@f1005000 {
+		/*
+		 * FHCTL sits in the perisys block at 0x11006000, not at
+		 * 0xf1005000.  The datasheet memory map lists FHCTL between
+		 * IRDA (0x11005000) and UART0 (0x11007000); 0xf1005000 maps
+		 * back to 0x11005000, which is IRDA.
+		 *
+		 * Pointing this at the wrong window is why hopping never
+		 * worked: PLL_HP_CON0 happens to exist at the right offset in
+		 * some other block, so hp_en read back plausibly, while every
+		 * FHCTLx register read as zero and the DDS monitor never
+		 * reached the new value - "FHCTL hopping timeout" on every
+		 * attempt.  The stock tree carries the same wrong constant
+		 * (FHCTL_BASE 0xF1005000 in mt_fhreg.h), so it cannot be used
+		 * as corroboration here.
+		 */
+		fhctl: clock-controller@11006000 {
 			compatible = "mediatek,mt6589-fhctl";
-			reg = <0xf1005000 0x100>;
+			reg = <0x11006000 0x100>;
 			clocks = <&apmixedsys CLK_APMIXED_ARMPLL>,
 				 <&apmixedsys CLK_APMIXED_MAINPLL>,
 				 <&apmixedsys CLK_APMIXED_MSDCPLL>,
