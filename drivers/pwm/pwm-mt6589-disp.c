@@ -28,7 +28,6 @@
 #define BLS_EN				0x0000
 #define BLS_RST				0x0004
 #define BLS_BLS_SETTING			0x0008
-#define BLS_HIS_SETTING			0x000C
 #define BLS_INTEN			0x0010
 #define BLS_INTSTA			0x0014
 #define BLS_SRC_SIZE			0x0018
@@ -328,12 +327,12 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	writel(0x0, bls->base + BLS_INTEN);
 
 	/*
-	 * BLS_HIS_SETTING:
-	 * bit1: Histogram_Mode = 1 (histogram of input data, w/o inverse gamma)
-	 * bit0: Histogram_Auto_Clear = 1 (auto-clear histogram at frame start)
-	 * We do not use the histogram engine, but keep downstream default.
+	 * There is no histogram setting register on this part.  The stock
+	 * driver's BLS map goes BLS_BLS_SETTING at +0x08 straight to
+	 * BLS_INTEN at +0x10, and the data sheet does not document +0x0c
+	 * either, so the write that used to be here was reaching an
+	 * undocumented offset.  The histogram engine is not used.
 	 */
-	writel(0x00000003, bls->base + BLS_HIS_SETTING);
 
 	/*
 	 * Start the block as part of the display pipeline rather than leaving
