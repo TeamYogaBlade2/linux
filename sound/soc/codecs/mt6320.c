@@ -772,7 +772,14 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 };
 
 static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
-	{ "DAC", NULL, "AIF1 Playback" },
+	/*
+	 * The AFE side of these two routes is the AFE's DAI stream widget,
+	 * named after its DAI stream_name - "DL1 Playback" and "VUL Capture"
+	 * in mt6589-afe-pcm.c - not a separate set of AFE endpoints.  A DAI
+	 * gets an auto-created DAPM widget under that name and
+	 * dapm_connect_dai_pair() joins the two DAIs through it.
+	 */
+	{ "DAC", NULL, "DL1 Playback" },
 	{ "DAC", NULL, "NEWIF" },
 	{ "HP Driver", NULL, "DAC" },
 	{ "HP Driver", NULL, "Analog" },
@@ -780,7 +787,7 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker Driver", NULL, "DAC" },
 	{ "Speaker Driver", NULL, "Analog" },
 	{ "Speaker", NULL, "Speaker Driver" },
-	{ "Mic Bias", NULL, "AIF1 Capture" },
+	{ "Mic Bias", NULL, "VUL Capture" },
 };
 
 /* Output volume: -4dB .. +8dB in 1dB steps. */

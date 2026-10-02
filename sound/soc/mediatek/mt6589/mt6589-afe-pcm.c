@@ -234,8 +234,8 @@ static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 	if (!afe)
 		return -ENODEV;
 
-	/* Capture widgets are VUL and "AIF1 Capture"; the rest are playback. */
-	capture = !strcmp(w->name, "VUL") || !strcmp(w->name, "AIF1 Capture");
+	/* Capture widgets are VUL and "VUL Capture"; the rest are playback. */
+	capture = !strcmp(w->name, "VUL") || !strcmp(w->name, "VUL Capture");
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
@@ -664,28 +664,36 @@ static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
 /*
  * DAPM graph.
  *
- * Without these the codec's routes have nothing to attach to: mt6320.c
- * declares { "DAC", NULL, "AIF1 Playback" } and { "Mic Bias", NULL, "AIF1
- * Capture" }, and a route naming a widget that does not exist can never
- * be walked, so the DAC is never powered up and mt6320_dac_event() never
- * runs.  That is what kept the whole analog side dead.
+ * Without these the codec's routes have nothing to attach to: a route
+ * naming a widget that does not exist can never be walked, so the DAC is
+ * never powered up and mt6320_dac_event() never runs.  That is what kept
+ * the whole analog side dead.
  *
- * The names have to match the codec's: the playback stream is "AIF1
- * Playback" and the capture stream "AIF1 Capture", and the memory
- * interface feeding the interconnect is "DL1" / "VUL".
+ * The memory interfaces feeding the interconnect are "DL1" and "VUL", and
+ * the interconnect itself runs DL1 left/right into I05/I06 and out to
+ * O03/O04 - the path the stock driver builds with SetinputConnection(I05,
+ * O03) and SetinputConnection(I06, O04).
  */
 static const struct snd_soc_dapm_widget mt6589_afe_widgets[] = {
 	/*
  * The stream endpoints are plain output widgets rather than AIF widgets:
  * SND_SOC_DAPM_AIF_* wants a register and a mask, and the AFE drives these
- * from prepare()/trigger() rather than from a DAPM register bit.  What
- * matters here is only that the widget names exist so the codec's routes
- * can be walked.
+ * from prepare()/trigger() rather than from a DAPM register bit.
+ *
+ * The names here are the DAI stream_names ("DL1 Playback" and "VUL
+ * Capture").  A DAI gets an auto-created DAPM widget named after its own
+ * stream_name, and dapm_connect_dai_pair() joins the codec to the AFE
+ * through exactly those two widgets - so the codec's routes have to name
+ * these, not a separate set of "AIF1 ..." endpoints.
+ *
+ * DL1 and VUL carry the event handler that powers the memory interface as
+ * DAPM walks the graph; DL1 Playback and VUL Capture do not, since the
+ * auto-created widgets already do that job.
  */
-SND_SOC_DAPM_OUT_DRV_E("AIF1 Playback", SND_SOC_NOPM, 0, 0, NULL, 0,
+SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
 		      mt6589_afe_memif_event,
 		      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
-	SND_SOC_DAPM_OUT_DRV_E("AIF1 Capture", SND_SOC_NOPM, 0, 0, NULL, 0,
+	SND_SOC_DAPM_OUT_DRV_E("VUL", SND_SOC_NOPM, 0, 0, NULL, 0,
 			      mt6589_afe_memif_event,
 			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
 	SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
@@ -710,14 +718,14 @@ SND_SOC_DAPM_OUT_DRV_E("AIF1 Playback", SND_SOC_NOPM, 0, 0, NULL, 0,
 
 static const struct snd_soc_dapm_route mt6589_afe_routes[] = {
 	/* Playback: AIF1 -> DL1 memory interface -> I05/I06 -> O03/O04. */
-	{ "DL1", NULL, "AIF1 Playback" },
+	{ "DL1", NULL, "DL1 Playback" },
 	{ "I05", NULL, "DL1" },
 	{ "I06", NULL, "DL1" },
 	{ "O03", NULL, "I05" },
 	{ "O04", NULL, "I06" },
 	/* Capture: I03/I04 -> VUL memory interface -> AIF1. */
-	{ "I03", NULL, "AIF1 Capture" },
-	{ "I04", NULL, "AIF1 Capture" },
+	{ "I03", NULL, "VUL Capture" },
+	{ "I04", NULL, "VUL Capture" },
 	{ "VUL", NULL, "I03" },
 	{ "VUL", NULL, "I04" },
 };
