@@ -253,6 +253,7 @@ static const struct pwm_ops mt6589_bls_pwm_ops = {
  * ddp_bls hook into a no-op.  Keep the instance here instead.
  */
 static struct mt6589_bls_pwm *bls_ddp;
+static struct clk *bls_ddp_clk;
 
 static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 {
@@ -367,6 +368,15 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	 */
 	bls_ddp = bls;
 
+	/*
+	 * Keep the DDP-side clock handle: the component hooks cannot get one
+	 * themselves, since dev_get_drvdata() on the component device is NULL.
+	 */
+	bls_ddp_clk = devm_clk_get(dev, NULL);
+	if (IS_ERR(bls_ddp_clk))
+		return dev_err_probe(dev, PTR_ERR(bls_ddp_clk),
+				     "failed to get the BLS clock\n");
+
 	return 0;
 }
 
@@ -385,23 +395,22 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 int mt6589_bls_ddp_clk_enable(struct device *dev)
 {
 	/*
-	 * Take the clock from the component's node, the same source the
-	 * generic mtk_ddp_clk_enable() uses through of_clk_get(node, 0). It is
-	 * the same clock the PWM driver holds, and disable() must resolve it
-	 * the same way or the reference leaks.
+	 * bls_ddp_clk is the component's clock, taken once at probe from the
+	 * same node the generic mtk_ddp_clk_enable() uses. Resolving it again
+	 * per enable/disable would take a reference each time, and the
+	 * disable side has no way to put it.
 	 */
-	return clk_prepare_enable(of_clk_get(dev->of_node, 0));
+	if (!bls_ddp_clk)
+		return -ENODEV;
+
+	return clk_prepare_enable(bls_ddp_clk);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_enable);
 
 void mt6589_bls_ddp_clk_disable(struct device *dev)
 {
-	struct clk *clk = of_clk_get(dev->of_node, 0);
-
-	if (IS_ERR(clk))
-		return;
-
-	clk_disable_unprepare(clk);
+	if (bls_ddp_clk)
+		clk_disable_unprepare(bls_ddp_clk);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_disable);
 
