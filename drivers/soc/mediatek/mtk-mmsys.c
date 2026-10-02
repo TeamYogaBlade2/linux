@@ -42,16 +42,8 @@ static const struct mtk_mmsys_driver_data mt6589_dispsys_driver_data = {
 	.clk_driver = "clk-mt6589-disp",
 	.routes = mt6589_dispsys_routing_table,
 	.num_routes = ARRAY_SIZE(mt6589_dispsys_routing_table),
-	/*
-	 * No reset controller here.  clk-mt6589-disp already registers one
-	 * for this same DISP_SW_RST_B register through its rst_desc, and
-	 * two controllers bound to one device tree node makes
-	 * __reset_find_rcdev() return whichever registered first - so which
-	 * one answered a resets lookup came down to probe order.  That is
-	 * the only kind of tie this tree has been bitten by twice, and the
-	 * clk driver is the sole owner for the other MT6589 blocks that have
-	 * one (mfg, pericfg), so it owns this one too.
-	 */
+	.sw0_rst_offset = MT6589_DISP_SW_RST_B,
+	.num_resets = MT6589_DISP_NUM_RESETS,
 };
 
 static const struct mtk_mmsys_driver_data mt6779_mmsys_driver_data = {

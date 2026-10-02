@@ -41,13 +41,15 @@
  */
 
 /*
- * DISPSYS software reset (SW_RST_B at 0x140) is owned by clk-mt6589-disp,
- * which declares it through mtk_clk_rst_desc and registers the reset
- * controller.  mtk-mmsys deliberately does not register a second one for
- * this block: two controllers on one node would leave it to probe order
- * to decide which answered a resets lookup.  Bit assignments are in
+ * DISPSYS software reset.  The register is the active-low SW_RST_B form
+ * shared with the other MediaTek MMSYS blocks: a 0 bit holds its component
+ * in reset and a 1 releases it, and the register resets to all ones.  That
+ * is the same polarity mtk_mmsys_reset_update() drives by default, so no
+ * per-SoC override is needed.  Bit assignments are in
  * include/dt-bindings/reset/mt6589-resets.h.
  */
+#define MT6589_DISP_SW_RST_B			0x140
+#define MT6589_DISP_NUM_RESETS			21
 
 #define MT6589_DISP_SCL_MOUT_EN		0x020
 #define MT6589_DISP_OVL_MOUT_EN		0x024
