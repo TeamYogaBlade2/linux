@@ -295,8 +295,12 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		ret = regmap_write(priv->regmap, MT6320_TOP_CKPDN_CLR, 0x0003);
+		if (ret)
+			return ret;
+
 		/*
-		 * Follow the stock sequence from
+		 * The digital path registers, following
 		 * AudioPlatformDevice::AnalogOpen() for DEVICE_OUT_DAC.  The
 		 * addresses are the vendor's, so each entry names its
 		 * register explicitly: MT6320_ABB_AFE_CON(n) computes
@@ -574,6 +578,16 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		/*
+		 * TOP_CKPDN_CLR selects the audio clock for the speaker
+		 * route: the stock driver writes 0x0607 here when opening
+		 * DEVICE_OUT_SPEAKER, against 0x0003 for the DAC and
+		 * headphone paths (AudioPlatformDevice::AnalogOpen).
+		 */
+		ret = regmap_write(priv->regmap, MT6320_TOP_CKPDN_CLR, 0x0607);
+		if (ret)
+			return ret;
+
 		ret = mt6320_apply_spk_trim(priv);
 		if (ret)
 			return ret;
