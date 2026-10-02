@@ -1348,6 +1348,14 @@
 				 <&vencsys CLK_VENC_VEN>;
 			clock-names = "apb", "smi";
 			power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
+			/*
+			 * VENC is unused on this board and its power domain
+			 * does not come up, so leave the node out of the M4U's
+			 * larb list.  mtk_iommu_v1_probe() skips unavailable
+			 * larbs, whereas a larb that probes and then fails to
+			 * get its domain makes the whole M4U defer forever.
+			 */
+			status = "disabled";
 		};
 
 		larb1: larb@16010000 {
@@ -1359,6 +1367,8 @@
 				 <&vdecsys CLK_VDEC1_SMI>;
 			clock-names = "apb", "smi";
 			power-domains = <&spm MT6589_POWER_DOMAIN_VDE>;
+			/* Unused, and its VDE power domain does not come up. See larb0. */
+			status = "disabled";
 		};
 
 		larb2: larb@14010000 {
