@@ -267,8 +267,11 @@ void prismrv_recovery_work(struct work_struct *work)
 	/*
 	 * Step 4: tear down old HW state and reinitialise.
 	 */
+	prismrv_devfreq_pause(pv);
 	prismrv_hw_fini(pv);
 	ret = prismrv_hw_init(pv);
+	if (!ret)
+		prismrv_devfreq_resume(pv);
 	if (ret) {
 		/*
 		 * hw_ready stays false.  The runtime-PM core still thinks
@@ -331,8 +334,14 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 	enable = readl(pv->regs + EUR_CR_EVENT_HOST_ENABLE);
 	status &= enable;
 
-	clear = status & (EUR_CR_EVENT_HOST_CLEAR_SW_EVENT_MASK |
-			  PRISMRV_IRQ_COMPLETION_EVENTS);
+	/*
+	 * Acknowledge EVERY enabled event, not just the ones this driver
+	 * knows: an enabled-but-unacknowledged source would re-raise the
+	 * line forever.  (The stock init script enables only SW_EVENT in
+	 * EVENT_HOST_ENABLE and nothing in ENABLE2; the generic mask keeps
+	 * working if a different script enables more.)
+	 */
+	clear = status & ~EUR_CR_EVENT_STATUS_MASTER_INTERRUPT_MASK;
 	if (!clear)
 		return IRQ_NONE;
 
@@ -354,8 +363,20 @@ irqreturn_t prismrv_irq_thread(int irq, void *data)
 	 * by the uKernel) say nothing about progress and are ignored;
 	 * a silent hang is caught by the hang watchdog instead.
 	 */
-	if (status & PRISMRV_IRQ_COMPLETION_EVENTS) {
+	/*
+	 * The stock init script enables only EUR_CR_EVENT_SW_EVENT towards
+	 * the host: the uKernel reports completions by raising a software
+	 * event (and setting HostCtl.ui32InterruptFlags), NOT through the
+	 * TA_FINISHED / PIXELBE_END_RENDER bits.  A SW event is therefore
+	 * the normal completion trigger and must run the retirement scan.
+	 * It is only an *indication*, so a scan that retires nothing says
+	 * nothing about a hang; only the hardware completion bits (should a
+	 * different script enable them) count towards recovery.
+	 */
+	if (status & (PRISMRV_IRQ_COMPLETION_EVENTS |
+		      EUR_CR_EVENT_STATUS_SW_EVENT_MASK)) {
 		if (!prismrv_handle_completion(pv) &&
+		    (status & PRISMRV_IRQ_COMPLETION_EVENTS) &&
 		    atomic_read(&pv->busy_count) > 0)
 			prismrv_check_recovery(pv);
 	}
@@ -398,8 +419,11 @@ int prismrv_hw_reinit(struct prismrv_device *pv)
 		mutex_lock(&pv->mmu_lock);
 		prismrv_mmu_invalidate_all_bos(pv);
 		mutex_unlock(&pv->mmu_lock);
+		prismrv_devfreq_pause(pv);
 		prismrv_hw_fini(pv);
 		ret = prismrv_hw_init(pv);
+		if (!ret)
+			prismrv_devfreq_resume(pv);
 	}
 	mutex_unlock(&pv->init_mutex);
 	up_write(&pv->submit_rwsem);

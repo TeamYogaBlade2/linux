@@ -241,3 +241,29 @@ void prismrv_devfreq_fini(struct prismrv_device *pv)
 		pv->devfreq.devfreq = NULL;
 	}
 }
+
+/*
+ * DVFS must be quiescent around EVERY transition of the clock / reset /
+ * MMU state, not only runtime suspend: recovery, explicit re-init and
+ * teardown call hw_fini()/hw_init() directly.  devfreq_suspend_device()
+ * is reference counted by the core, but our callers do not nest cleanly
+ * (a failed re-init leaves the device "paused" until a later one
+ * succeeds), so the pause state is tracked here with one flag and
+ * pause/resume are idempotent.
+ *
+ * resume only takes effect while the hardware is up: a failed hw_init()
+ * keeps DVFS paused until prismrv_hw_reinit() or runtime resume succeeds.
+ */
+void prismrv_devfreq_pause(struct prismrv_device *pv)
+{
+	if (pv->devfreq.devfreq &&
+	    atomic_cmpxchg(&pv->devfreq_paused, 0, 1) == 0)
+		devfreq_suspend_device(pv->devfreq.devfreq);
+}
+
+void prismrv_devfreq_resume(struct prismrv_device *pv)
+{
+	if (pv->devfreq.devfreq && READ_ONCE(pv->hw_ready) &&
+	    atomic_cmpxchg(&pv->devfreq_paused, 1, 0) == 1)
+		devfreq_resume_device(pv->devfreq.devfreq);
+}

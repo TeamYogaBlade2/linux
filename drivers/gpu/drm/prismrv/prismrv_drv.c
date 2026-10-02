@@ -272,6 +272,7 @@ static void prismrv_teardown(struct platform_device *pdev)
 	 * error instead of hanging.
 	 */
 	pm_runtime_get_sync(&pdev->dev);
+	prismrv_devfreq_pause(pv);
 	mutex_lock(&pv->init_mutex);
 	prismrv_hw_fini(pv);   /* retires pending fences */
 	prismrv_fw_release(pv); /* free uKernel DMA — device is going away */
@@ -300,8 +301,7 @@ static int prismrv_runtime_suspend(struct device *dev)
 	 * the reset line are being switched off.  Resume re-enables it only
 	 * after the hardware is back up.
 	 */
-	if (pv->devfreq.devfreq)
-		devfreq_suspend_device(pv->devfreq.devfreq);
+	prismrv_devfreq_pause(pv);
 
 	/*
 	 * Take the submit write-lock so no new submits can start while
@@ -395,8 +395,7 @@ static int prismrv_runtime_resume(struct device *dev)
 		prismrv_clks_off(pv, pv->nr_clocks);
 		return ret;
 	}
-	if (pv->devfreq.devfreq)
-		devfreq_resume_device(pv->devfreq.devfreq);
+	prismrv_devfreq_resume(pv);
 	return 0;
 }
 
