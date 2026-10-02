@@ -121,7 +121,6 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &mt6589_mt6320_card;
 	struct device_node *platform_node;
-	struct device_node *codec_node;
 	struct snd_soc_dai_link *dai_link;
 	int i, ret;
 
@@ -132,25 +131,22 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				     "missing mediatek,platform\n");
 
-	codec_node = of_parse_phandle(pdev->dev.of_node,
-				      "mediatek,audio-codec", 0);
-	if (!codec_node)
-		return dev_err_probe(&pdev->dev, -EINVAL,
-				     "missing mediatek,audio-codec\n");
-
 	/*
-	 * The DL1 CPU DAI and the PCM platform both live on the AFE node;
-	 * the MT6320 is the codec on the other end.  Without the codec
-	 * component bound here the card has no DAI at the far end of the
-	 * link, so nothing in mt6320.c runs - no DAPM, and with it none of
-	 * the analog path setup that playback needs.
+	 * Both links declare their CPU by name (COMP_CPU("mt6589-afe-dl1")),
+	 * so leave the CPU component alone - adding of_node as well would make
+	 * it invalid, since snd_soc_dlc_component_is_invalid() rejects a dlc
+	 * that has both a name and a node.
+	 *
+	 * The platform component is declared COMP_EMPTY(), and that is fatal:
+	 * the card fails to register with
+	 *	ASoC: Neither Component name/of_node are set for DL1
+	 * so fill it on every link.
+	 *
+	 * The codec is likewise found by the name the dai_link already
+	 * declares, so no phandle is needed for it.
 	 */
 	for_each_card_prelinks(card, i, dai_link) {
-		if (dai_link->codecs->name)
-			continue;
-		dai_link->cpus->of_node = platform_node;
 		dai_link->platforms->of_node = platform_node;
-		dai_link->codecs->of_node = codec_node;
 	}
 
 	if (of_property_present(pdev->dev.of_node, "audio-routing")) {

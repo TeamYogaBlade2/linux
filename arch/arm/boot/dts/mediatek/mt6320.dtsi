@@ -51,7 +51,7 @@
 			#clock-cells = <1>;
 		};
 
-		mt6320_codec: audio-codec {
+		audio-codec {
 			compatible = "mediatek,mt6320-sound";
 			clocks = <&mt6320clock MT6320_TOPCKPDN_AUD_26M>;
 			clock-names = "top-aud26m";

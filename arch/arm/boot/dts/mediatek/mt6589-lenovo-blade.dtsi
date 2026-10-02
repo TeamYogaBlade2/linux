@@ -38,12 +38,6 @@
 	sound: sound {
 		compatible = "mediatek,mt6589-mt6320-sound";
 		mediatek,platform = <&afe>;
-		/*
-		 * The MT6320 codec is an MFD cell of the PMIC, created by
-		 * mt6397-core for the "mediatek,mt6320" node, so the far end
-		 * of both dai links is that child node - not this sound node.
-		 */
-		mediatek,audio-codec = <&mt6320_codec>;
 		aux-devs = <&mt6320_accdet>;
 	};
 };
