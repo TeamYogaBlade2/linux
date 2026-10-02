@@ -108,7 +108,21 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = BIT(8),
 		.ctl_offs = SPM_VDE_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		/*
+		 * VDE has one SRAM power-down acknowledge bit, not four.
+		 * The stock driver waits on VDE_SRAM_ACK = (0x1 << 12) in both
+		 * directions (mt_spm_mtcmos.c), where VEN uses (0xf << 12).
+		 * Asking for all four here made scpsys_sram_enable() poll
+		 * until MTK_POLL_TIMEOUT for three bits the hardware never
+		 * asserts, and genpd_power_on() then failed.
+		 *
+		 * That failure is invisible in the log: it happens in
+		 * dev_pm_domain_attach(), before ->probe() runs, so the device
+		 * only ever shows as
+		 * "platform 16010000.larb: deferred probe pending:
+		 * (reason unknown)" and the driver prints nothing at all.
+		 */
+		.sram_pdn_ack_bits = BIT(12),
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
