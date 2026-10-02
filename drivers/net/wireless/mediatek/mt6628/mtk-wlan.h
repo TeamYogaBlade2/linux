@@ -148,8 +148,6 @@ struct mt6628_wlan {
 	struct sk_buff_head rx_queue;
 	struct sk_buff_head event_queue;
 	struct sk_buff_head mgmt_queue;
-	struct sk_buff_head async_event_queue;
-	struct sk_buff_head async_mgmt_queue;
 	atomic_t mgmt_pending;
 	wait_queue_head_t event_wait;
 	bool (*event_handler)(struct mt6628_wlan *, struct sk_buff *);

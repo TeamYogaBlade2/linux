@@ -92,8 +92,6 @@ static void mt6628_runtime_free_queues(struct mt6628_wlan *wl)
 	skb_queue_purge(&wl->rx_queue);
 	skb_queue_purge(&wl->event_queue);
 	skb_queue_purge(&wl->mgmt_queue);
-	skb_queue_purge(&wl->async_event_queue);
-	skb_queue_purge(&wl->async_mgmt_queue);
 }
 
 static void mt6628_runtime_event_work(struct work_struct *work)
@@ -185,11 +183,21 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 		if (wl->event_handler && wl->event_handler(wl, skb))
 			continue;
 
-		if (skb_queue_len(&wl->async_event_queue) >=
-		    256)
-			goto drop;
-		skb_queue_tail(&wl->async_event_queue, skb);
-		continue;
+		/*
+		 * Unhandled event.  The firmware raises about forty event
+		 * ids and only the few above mean anything in station mode;
+		 * the rest are AP/P2P, debug or test paths.  There is no
+		 * consumer for async_event_queue, so queueing the skb here
+		 * only pins it until the device goes away: it is never
+		 * dequeued, never inspected, and nothing else frees it.  That
+		 * leaked every such event for the lifetime of the driver, and
+		 * because mt6628_wlan_give_firmware_own() refuses to hand the
+		 * chip over while this queue is non-empty, the radio could
+		 * never enter its idle state once one arrived.
+		 *
+		 * Drop it, as the bounded path already did.
+		 */
+		goto drop;
 
 drop:
 		kfree_skb(skb);
@@ -205,10 +213,9 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
 	while ((skb = skb_dequeue(&wl->mgmt_queue))) {
 		if (wl->mgmt_handler) {
 			wl->mgmt_handler(wl, skb);
-		} else if (skb_queue_len(&wl->async_mgmt_queue) >= 256) {
-			kfree_skb(skb);
 		} else {
-			skb_queue_tail(&wl->async_mgmt_queue, skb);
+			/* No handler installed: see the event path above. */
+			kfree_skb(skb);
 		}
 
 		if (atomic_dec_and_test(&wl->mgmt_pending))
@@ -833,8 +840,6 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	skb_queue_head_init(&wl->rx_queue);
 	skb_queue_head_init(&wl->event_queue);
 	skb_queue_head_init(&wl->mgmt_queue);
-	skb_queue_head_init(&wl->async_event_queue);
-	skb_queue_head_init(&wl->async_mgmt_queue);
 	init_waitqueue_head(&wl->event_wait);
 	atomic_set(&wl->mgmt_pending, 0);
 	spin_lock_init(&wl->mgmt_tx_lock);
@@ -1045,9 +1050,7 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	if (!skb_queue_empty(&wl->rx_queue) ||
 	    !skb_queue_empty(&wl->event_queue) ||
 	    !skb_queue_empty(&wl->mgmt_queue) ||
-	    !skb_queue_empty(&wl->tx_queue) ||
-	    !skb_queue_empty(&wl->async_event_queue) ||
-	    !skb_queue_empty(&wl->async_mgmt_queue))
+	    !skb_queue_empty(&wl->tx_queue))
 		return -EBUSY;
 
 	sdio_claim_host(wl->func);
