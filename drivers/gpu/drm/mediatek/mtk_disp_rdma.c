@@ -488,7 +488,10 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	}
 
 	if (priv->data->reset) {
-		priv->rstc = devm_reset_control_get(dev, "reset");
+		/* Look the reset up by index; see the note in mtk_disp_ovl.c
+		 * about the missing "reset-names" on the display nodes.
+		 */
+		priv->rstc = devm_reset_control_get(dev, NULL);
 		if (IS_ERR(priv->rstc)) {
 			ret = PTR_ERR(priv->rstc);
 			pm_runtime_put_sync(dev);

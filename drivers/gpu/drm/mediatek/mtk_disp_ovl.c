@@ -803,7 +803,15 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to enable ovl clks\n");
 
-	priv->rstc = devm_reset_control_get(dev, "reset");
+	/*
+	 * Look the reset up by index.  Passing a name would make the core
+	 * search the "reset-names" property first, and the display nodes
+	 * carry a bare "resets = <&dispsys MT6589_DISP_OVL_RST>" with no
+	 * reset-names, so a named lookup fails with -ENOENT before any reset
+	 * controller is ever consulted.  Every other MediaTek display driver
+	 * here looks its reset up this way for the same reason.
+	 */
+	priv->rstc = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(priv->rstc)) {
 		ret = PTR_ERR(priv->rstc);
 		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
