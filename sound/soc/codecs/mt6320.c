@@ -311,15 +311,15 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		 * driver writes 0x007f, and the rest is what the chip needs to
 		 * pass samples at all.
 		 */
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON11, 0x0006);
-		if (ret)
-			return ret;
-
 		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON12, 0xc3a1);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON12, 0x0003);
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x0006);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x0003);
 		if (ret)
 			return ret;
 
