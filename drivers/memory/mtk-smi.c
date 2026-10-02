@@ -781,13 +781,26 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 	ret = mtk_smi_dts_clk_init(dev, &larb->smi, mtk_smi_larb_clks,
 				   MTK_SMI_LARB_REQ_CLK_NR, MTK_SMI_LARB_OPT_CLK_NR);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "failed to get clocks\n");
 
 	larb->smi.dev = dev;
 
 	ret = mtk_smi_device_link_common(dev, &larb->smi_common_dev);
-	if (ret < 0)
+	if (ret < 0) {
+		/*
+		 * dev_err_probe() deliberately stays quiet for -EPROBE_DEFER,
+		 * and that is the one failure here that has no other trace:
+		 * a LARB waiting on smi-common shows up in the boot log only
+		 * as "deferred probe pending: (reason unknown)".  Name it, so
+		 * the distinction between "smi-common has not probed" and a
+		 * real error is visible without adding a debug build.
+		 */
+		if (ret == -EPROBE_DEFER)
+			dev_info(dev, "deferring: smi-common not ready yet\n");
+		else
+			dev_err(dev, "failed to link to smi-common: %d\n", ret);
 		return ret;
+	}
 
 	pm_runtime_enable(dev);
 	platform_set_drvdata(pdev, larb);

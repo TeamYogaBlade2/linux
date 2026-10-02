@@ -1033,6 +1033,15 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 		if (!plarbdev->dev.driver) {
 			of_node_put(larbnode);
 			put_device(&plarbdev->dev);
+			/*
+			 * Silently deferring here is what makes an M4U that
+			 * never comes up hard to diagnose: the boot log only
+			 * ever says "deferred probe pending: (reason
+			 * unknown)".  Name the LARB that is missing its
+			 * driver.
+			 */
+			dev_info(dev, "deferring: larb %d has no driver yet\n",
+				 i);
 			ret = -EPROBE_DEFER;
 			goto out_put_larbs;
 		}
