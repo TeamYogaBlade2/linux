@@ -28,6 +28,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
@@ -650,6 +651,94 @@ static void mt6628_wlan_sdio_remove(struct sdio_func *func)
 	sdio_set_drvdata(func, NULL);
 }
 
+/*
+ * System suspend/resume.
+ *
+ * The runtime idle path already hands the chip back to the firmware
+ * whenever the queues drain, so there is no separate "low power" state to
+ * program here.  Suspend only has to make that handoff happen at a point
+ * of our choosing, and cancel the idle countdown so the delayed work does
+ * not fire into a suspended system.
+ */
+static int mt6628_wlan_suspend(struct device *dev)
+{
+	struct sdio_func *func = dev_get_drvdata(dev);
+	struct mt6628_wlan *wl;
+	int ret;
+
+	if (!func)
+		return 0;
+
+	wl = sdio_get_drvdata(func);
+	if (!wl)
+		return 0;
+
+	/*
+	 * Cancel first: the idle work takes the SDIO host lock, and letting
+	 * it run while we are suspending would race the handoff below.
+	 */
+	cancel_delayed_work(&wl->pm_work);
+
+	if (!wl->runtime_started)
+		return 0;
+
+	/* Already idle: the firmware owns the chip and there is nothing to do. */
+	if (wl->pm_idle)
+		return 0;
+
+	ret = mt6628_wlan_give_firmware_own(wl);
+	if (ret == -EBUSY) {
+		/*
+		 * Traffic is still in flight, so the firmware refused to take
+		 * the chip.  Refusing the suspend is the only honest answer:
+		 * carrying on would leave the radio owned by the driver with
+		 * no way to service it while the rest of the system sleeps.
+		 */
+		dev_warn_ratelimited(dev,
+				     "deferring suspend, traffic still in flight\n");
+		return -EBUSY;
+	}
+
+	if (ret) {
+		dev_warn_ratelimited(dev,
+				     "failed to hand the chip to the firmware: %d\n",
+				     ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int mt6628_wlan_resume(struct device *dev)
+{
+	struct sdio_func *func = dev_get_drvdata(dev);
+	struct mt6628_wlan *wl;
+
+	if (!func)
+		return 0;
+
+	wl = sdio_get_drvdata(func);
+	if (!wl)
+		return 0;
+
+	/*
+	 * Reclaim Driver Own before anything else touches the chip.  A
+	 * failure here is not fatal: the driver stays with the firmware, and
+	 * the first register access retries through mt6628_wlan_pm_busy().
+	 */
+	mt6628_wlan_pm_resume(wl);
+
+	return 0;
+}
+
+static const struct dev_pm_ops mt6628_wlan_pm_ops = {
+	.suspend = mt6628_wlan_suspend,
+	.resume = mt6628_wlan_resume,
+	.freeze = mt6628_wlan_suspend,
+	.thaw = mt6628_wlan_resume,
+	.restore = mt6628_wlan_resume,
+};
+
 static const struct sdio_device_id mt6628_wlan_sdio_ids[] = {
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT6628) },
 	{ }
@@ -661,6 +750,7 @@ static struct sdio_driver mt6628_wlan_driver = {
 	.probe = mt6628_wlan_sdio_probe,
 	.remove = mt6628_wlan_sdio_remove,
 	.id_table = mt6628_wlan_sdio_ids,
+	.drv.pm = &mt6628_wlan_pm_ops,
 };
 module_sdio_driver(mt6628_wlan_driver);
 
