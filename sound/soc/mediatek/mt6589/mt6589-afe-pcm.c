@@ -676,29 +676,18 @@ static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
  */
 static const struct snd_soc_dapm_widget mt6589_afe_widgets[] = {
 	/*
- * The stream endpoints are plain output widgets rather than AIF widgets:
- * SND_SOC_DAPM_AIF_* wants a register and a mask, and the AFE drives these
- * from prepare()/trigger() rather than from a DAPM register bit.
- *
- * The names here are the DAI stream_names ("DL1 Playback" and "VUL
- * Capture").  A DAI gets an auto-created DAPM widget named after its own
- * stream_name, and dapm_connect_dai_pair() joins the codec to the AFE
- * through exactly those two widgets - so the codec's routes have to name
- * these, not a separate set of "AIF1 ..." endpoints.
- *
- * DL1 and VUL carry the event handler that powers the memory interface as
- * DAPM walks the graph; DL1 Playback and VUL Capture do not, since the
- * auto-created widgets already do that job.
- */
-SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
+	 * DL1 and VUL are the memory interfaces.  They carry an event
+	 * handler that powers DAC_CON0 as DAPM walks the graph, mirroring
+	 * what the stock driver does around SetMEMIFEnable().
+	 *
+	 * The stream endpoints themselves ("DL1 Playback", "VUL Capture")
+	 * need no widget of their own: a DAI gets an auto-created one named
+	 * after its stream_name, and dapm_connect_dai_pair() joins the codec
+	 * to the AFE through exactly those.
+	 */
+	SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
 		      mt6589_afe_memif_event,
 		      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
-	SND_SOC_DAPM_OUT_DRV_E("VUL", SND_SOC_NOPM, 0, 0, NULL, 0,
-			      mt6589_afe_memif_event,
-			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
-	SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
-			      mt6589_afe_memif_event,
-			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
 	SND_SOC_DAPM_OUT_DRV_E("VUL", SND_SOC_NOPM, 0, 0, NULL, 0,
 			      mt6589_afe_memif_event,
 			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
