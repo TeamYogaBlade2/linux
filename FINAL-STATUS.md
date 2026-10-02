@@ -239,20 +239,29 @@ different register map and so could not be reused, and a second driver
 matching `mediatek,mt6589-disp-pwm` would have raced the PWM driver for the
 node rather than fixing it. It was reverted and the existing owner corrected.
 
-With those in place the panel still shows no picture, and the boot log adds one
-more fact: larb0 and larb1 defer **without printing anything at all**, including
-the messages added earlier for a failed clock lookup or a smi-common wait.
-Silence on both means the deferral happens before the driver's probe reaches
-either, so it is not the clock fetch and not the smi link. The candidate
-pre-probe deferral points were checked and eliminated: no node carries a
-`supplies` property, the power-domain provider is up, and `KEEP_DEFAULT_OFF`
-only sets the initial power state rather than deferring. A further diagnostic
-now prints the provider each clock resolves to, from inside the probe, to
-settle which of "deferring before probe" and "clock lookup fails" is the case.
+### larb0 and larb1, and what the M4U was waiting for
 
-The M4U is the practical consequence either way: it is what programs the page
-tables RDMA fetches through, and while it is not probed the display engines
-cannot complete a frame.
+larb0 and larb1 deferred without printing anything at all, which ruled out the
+clock fetch and the smi link. A power-on diagnostic in
+`scpsys_power_on()` then showed both failing with `-ETIMEDOUT`, which identified
+the cause: they sit behind the VENC and VDE power domains.
+
+Those two are the only MT6589 domains carrying `MTK_SCPD_KEEP_DEFAULT_OFF` that
+have a live consumer, so `genpd_power_on()` actually executes for them at attach
+instead of early-returning - and `PWR_STATUS` resets to `0x0007E06F`, which has
+`venc[7]` and `vdec[8]` clear while `display[3]` and `isp[5]` are set.
+
+`mtk_iommu_v1_probe()` walks every node in `mediatek,larbs` and defers on any
+that has no driver, so one LARB that probes and then fails to get its domain held
+the whole M4U off - and the M4U is what programs the page tables RDMA fetches
+through. Nothing on this board uses VENC or VDEC, and no display component needs
+those LARBs: ovl and rdma use the ports behind larb2, the dispsys one. So larb0
+and larb1 are left disabled. `mtk_iommu_v1` already skips unavailable nodes, so
+no driver change was needed, and disabling is strictly better than tolerating a
+missing driver, since a LARB that probes and then defers cannot be skipped.
+
+The temporary power-on diagnostic has been removed again now that this is
+understood.
 
 Two further differences from the stock driver were examined and deliberately
 left alone. `RDMA_FIFO_CON` is rewritten at CRTC enable with a
