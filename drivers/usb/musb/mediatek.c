@@ -8,7 +8,6 @@
  */
 
 #include <linux/clk.h>
-#include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -492,19 +491,9 @@ static int mtk_musb_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(glue->rstc),
 				"failed to get reset control\n");
 
-	if (glue->rstc) {
-		ret = reset_control_assert(glue->rstc);
-		if (ret)
-			return dev_err_probe(dev, ret,
-					"failed to assert usb ip reset\n");
-
-		msleep(10);
-
-		ret = reset_control_deassert(glue->rstc);
-		if (ret)
-			return dev_err_probe(dev, ret,
-					"failed to deassert usb ip reset\n");
-	}
+	ret = reset_control_reset(glue->rstc);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to reset usb ip\n");
 
 	pdata->config = &mtk_musb_hdrc_config;
 	pdata->platform_ops = &mtk_musb_ops;
