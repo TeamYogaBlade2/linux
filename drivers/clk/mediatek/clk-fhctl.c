@@ -46,6 +46,15 @@ static const struct fhctl_offset fhctl_offset_v2 = {
  * is triggered through DDS bit 31.  The global "handoff permission"
  * register is PLL_HP_CON0 at apmixed offset 0x14 and the two slope
  * values live in the hopping SRAM at 0x20 / 0x24.
+ *
+ * The channel registers are addressed through fhx_base, which is already
+ * the channel's own base (fhx_offset is 0x4c for FHCTL0, 0x5c for FHCTL1,
+ * and so on, matching OFFSET_FHCTLx_CFG in the stock mt_fhreg.h).  These
+ * offsets are therefore relative to that base and must be the per-register
+ * delta from the channel's CFG - not the absolute offsets.  Carrying the
+ * absolute values here added the channel base twice and every access landed
+ * 0x4c past the intended register, which is how hopping ended up writing a
+ * zero to some other block and then timing out on the DDS monitor.
  */
 static const struct fhctl_offset fhctl_offset_v3 = {
 	.offset_hp_en = 0x14,
@@ -53,11 +62,11 @@ static const struct fhctl_offset fhctl_offset_v3 = {
 	.offset_rst_con = 0x24,
 	.offset_slope0 = 0x20,
 	.offset_slope1 = 0x24,
-	.offset_cfg = 0x4c,
-	.offset_updnlmt = 0x50,
-	.offset_dds = 0x54,
-	.offset_dvfs = 0x54,
-	.offset_mon = 0x58,
+	.offset_cfg = 0x0,
+	.offset_updnlmt = 0x4,
+	.offset_dds = 0x8,
+	.offset_dvfs = 0x8,
+	.offset_mon = 0xc,
 };
 
 const struct fhctl_offset *fhctl_get_offset_table(enum fhctl_variant v)
