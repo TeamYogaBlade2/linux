@@ -81,6 +81,7 @@
 #define MT6589_BLS_SEL_IN_MASK		0x1
 
 /* RDMA0_SOUT_SEL */
+#define MT6589_RDMA0_SOUT_DSI0		0x0
 #define MT6589_RDMA0_SOUT_DBI		0x1
 #define MT6589_RDMA0_SOUT_DPI0		0x2
 #define MT6589_RDMA0_SOUT_MASK		0x3
@@ -128,10 +129,17 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
 	 *   BLS feeds RDMA0 via direct-link (no SEL register needed).
 	 *   RDMA0_SOUT_SEL steers RDMA0's output to the target interface.
 	 *
-	 * DSI0: default output selection (val=0x0); no SOUT entry needed
-	 * as the hardware resets to DSI0.  Only the MOUT/SEL entries for
-	 * the OVL→COLOR and COLOR→BLS hops are required for this path.
+	 * DSI0 is the reset default (val=0x0), but write it explicitly
+	 * anyway.  The bootloader hands the panel a live DSI link, so the
+	 * register arrives holding whatever the previous kernel left in it,
+	 * and mtk_mmsys_ddp_disconnect() can clear it on the way down.
+	 * Assuming a reset value is what left this path unprogrammed.
 	 */
+
+	/* RDMA0 → DSI0 (main LCD path) */
+	MMSYS_ROUTE(RDMA0, DSI0,
+		    MT6589_DISP_RDMA0_OUT_SEL,
+		    MT6589_RDMA0_SOUT_MASK, MT6589_RDMA0_SOUT_DSI0),
 
 	/* RDMA0 → DBI */
 	MMSYS_ROUTE(RDMA0, DBI0,
