@@ -799,6 +799,37 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 
 	larb->smi.dev = dev;
 
+	/*
+	 * Both of these have been checked against the device tree and come out
+	 * sound, so say so at runtime: which provider node the clocks come
+	 * from, and what each lookup resolved to.  A LARB that defers without
+	 * ever printing anything is deferring before this function runs at all,
+	 * and this line is what distinguishes the two cases.
+	 */
+	{
+		struct of_phandle_args clk_args;
+		int i;
+
+		/*
+		 * Name each clock provider this node resolves against, and say
+		 * whether it resolved at all.  A LARB that defers without ever
+		 * printing anything is deferring before this function runs, so
+		 * this is what separates "the clock provider is missing" from
+		 * "something earlier in probe".
+		 */
+		for (i = 0; i < 2; i++) {
+			if (of_parse_phandle_with_args(dev->of_node, "clocks",
+						       "#clock-cells", i,
+						       &clk_args))
+				dev_info(dev, "clock %d: no provider\n", i);
+			else
+				dev_info(dev, "clock %d: %pOF id %d -> %s\n",
+					 i, clk_args.np, clk_args.args_count ?
+					 clk_args.args[0] : -1,
+					 clk_args.np->name);
+		}
+	}
+
 	ret = mtk_smi_device_link_common(dev, &larb->smi_common_dev);
 	if (ret < 0) {
 		/*
