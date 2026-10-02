@@ -426,9 +426,15 @@ static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG2, 0x0082);
 		if (ret)
 			return ret;
-		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0c0c);
-		if (ret)
-			return ret;
+		/*
+		 * Leave ZCD_CON2's volume fields alone.  Bits [3:0] and
+		 * [11:8] are the headphone left/right volume indexes - the
+		 * stock driver writes them only from its volume setter
+		 * (AudioMachineDevice, masks 0x0000000f and 0x00000f00) - so
+		 * a full-word 0x0c0c here both forced index 12, the maximum
+		 * of +8 dB, and discarded whatever the "Headphone Volume"
+		 * control had set.
+		 */
 		ret = regmap_update_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
 					 BIT(0), BIT(0));
 		if (ret)
@@ -604,9 +610,11 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		ret = regmap_write(priv->regmap, MT6320_IBIASDIST_CFG0, 0x0552);
 		if (ret)
 			return ret;
-		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0c0c);
-		if (ret)
-			return ret;
+		/*
+		 * As in the headphone path, do not write ZCD_CON2 wholesale:
+		 * bits [3:0] and [11:8] are the headphone volume indexes and
+		 * belong to the volume control.
+		 */
 		ret = regmap_write(priv->regmap, MT6320_ZCD_CON3, 0x000f);
 		if (ret)
 			return ret;
