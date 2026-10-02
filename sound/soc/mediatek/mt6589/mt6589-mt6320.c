@@ -105,8 +105,19 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 		return 0;
 	}
 
-	return snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack,
-					  NULL);
+	/*
+	 * Headphone detection is optional, so never let this fail the card.
+	 * snd_soc_card_late_probe() runs through soc_card_ret(), and any
+	 * negative return from here is fatal - the card is abandoned and
+	 * never registered.  -ENOTSUPP in particular comes back whenever the
+	 * component has no set_jack callback.
+	 */
+	ret = snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack, NULL);
+	if (ret)
+		dev_info(card->dev,
+			 "headset detection unavailable: %d\n", ret);
+
+	return 0;
 }
 
 static struct snd_soc_card mt6589_mt6320_card = {
