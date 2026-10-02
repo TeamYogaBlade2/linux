@@ -79,7 +79,8 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_ISP,
 		.ctl_offs = SPM_ISP_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		/* Two acknowledge bits, not four: ISP_SRAM_ACK = (0x3 << 12). */
+		.sram_pdn_ack_bits = GENMASK(13, 12),
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
