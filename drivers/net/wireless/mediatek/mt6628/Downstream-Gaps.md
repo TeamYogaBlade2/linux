@@ -92,7 +92,7 @@ Implementing the cfg80211 op would mean publishing numbers the hardware never
 produced. `iw survey` output would look measured while being fiction, so the op
 is left unimplemented.
 
-#### Roaming — `EVENT_ID_ROAMING_STATUS` cannot be used as-is
+#### Roaming — `EVENT_ID_ROAMING_STATUS` cannot be used as-is (resolved driver-side)
 
 `CFG_SUPPORT_ROAMING` is 1 for MT6628 (`include/config.h:1462`) and
 `nic_rx.c:2113` does dispatch `EVENT_ID_ROAMING_STATUS`, so this is live
@@ -122,11 +122,13 @@ background-scan request path and a BSS descriptor pool — none of which exist i
 this driver, which keeps scan results in cfg80211's BSS list instead
 (`cfg80211_inform_bss_frame()`).
 
-**If roaming is wanted, do it driver-driven**: trigger on link degradation or on
-an explicit cfg80211 request, pick a candidate from the cfg80211 BSS cache using
-the RCPI already collected, and reuse the existing
-`mt6628_cfg80211_connect()`. That path reuses audited code. Do not port the
-firmware FSM.
+**Resolution:** the firmware FSM was not ported, and the driver-driven approach
+this section recommends is what now runs — see `mt6628_roam_start()`. On beacon
+loss it picks a candidate from the cfg80211 BSS cache, requiring a 10 dB gain
+over the AP just lost and excluding that AP outright, then reuses the existing
+`mt6628_cfg80211_connect()` with the saved IE and key material. The RCPI
+collected during scanning is what cfg80211 turned into `bss->signal` in the
+first place, so no separate signal path was needed.
 
 #### AWB / second I2S / hardware digital gain — no producer on this board
 
@@ -224,8 +226,15 @@ wanted here, give the queue a real consumer first.
 
 ### 2.5 Behavioural notes
 
-- **Roaming:** absent, so a link that moves between APs stays down until
-  userspace notices. This is the most user-visible gap in normal use.
+- **Roaming:** driver-driven, not firmware-driven. `EVENT_ID_ROAMING_STATUS`
+  carries no BSSID, so the firmware path is unusable here; instead the
+  driver walks the cfg80211 BSS cache on beacon loss and reconnects to the
+  strongest same-SSID entry that beats the AP just lost by 10 dB, reusing
+  the saved IE and key material. One attempt per link loss, budget refilled
+  only by a successful association; a failed roam falls back to the bounded
+  reconnect path. It does not roam to a *different* network, and it does
+  not carry traffic across the move (cfg80211 is told the link dropped
+  first), so userspace may still see a brief disconnect and reconnect.
 - **Regulatory:** hard-coded channels with fixed max power; a 5 GHz channel on a
   DFS channel would be used without CAC.
 - **Suspend/resume:** implemented. Suspend cancels the idle countdown and hands
@@ -252,7 +261,7 @@ wanted here, give the queue a real consumer first.
 | System suspend / resume | complete (idle hand-off driven from `.drv.pm`) |
 | Firmware recovery + reconnect | complete |
 | `get_survey` | impossible — no firmware command |
-| Roaming | not implemented — event carries no target |
+| Roaming | driver-driven from the BSS cache (not the firmware FSM) |
 | AWB / 2nd I2S / HW gain | no producer (FM audio only) |
 | DL2 | dead upstream too |
 | Voice / modem PCM / DAI / sidetone | out of scope |
