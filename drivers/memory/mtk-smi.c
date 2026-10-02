@@ -774,14 +774,28 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	larb->larb_gen = of_device_get_match_data(dev);
+	if (!larb->larb_gen)
+		return dev_err_probe(dev, -ENODEV,
+				     "no matching larb_gen for compatible\n");
+
 	larb->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(larb->base))
-		return PTR_ERR(larb->base);
+		return dev_err_probe(dev, PTR_ERR(larb->base),
+				     "failed to map registers\n");
 
+	/*
+	 * Name the provider as well as the error: "apb"/"smi" resolve by name
+	 * against the clock-names of whichever node the clocks property points
+	 * at, and a node with none is a plausible mistake that otherwise
+	 * shows up only as an unattributed -ENOENT.
+	 */
 	ret = mtk_smi_dts_clk_init(dev, &larb->smi, mtk_smi_larb_clks,
 				   MTK_SMI_LARB_REQ_CLK_NR, MTK_SMI_LARB_OPT_CLK_NR);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to get clocks\n");
+	if (ret) {
+		dev_err(dev, "%s: failed to get clocks (%d), first clock node: %pOF\n",
+			dev_name(dev), ret, dev->of_node);
+		return ret;
+	}
 
 	larb->smi.dev = dev;
 
