@@ -74,9 +74,19 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	if (ret)
 		return ret;
 
+	/*
+	 * The jack is optional.  Returning -EPROBE_DEFER here would look
+	 * like a deferral to snd_soc_card_late_probe(), but soc-core treats
+	 * any negative return as fatal and abandons the card, so the whole
+	 * sound card would stay unregistered forever.  The accdet component
+	 * is not a DT dependency of this node, so there is nothing to
+	 * actually wait for.
+	 */
 	accdet = snd_soc_lookup_component_by_name("mt6320-accdet");
-	if (!accdet)
-		return -EPROBE_DEFER;
+	if (!accdet) {
+		dev_info(card->dev, "no headset detection support\n");
+		return 0;
+	}
 
 	return snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack,
 					  NULL);
