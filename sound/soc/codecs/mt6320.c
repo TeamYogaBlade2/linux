@@ -255,7 +255,17 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
-/* Analog idle baseline from the stock power-on sequence. */
+/*
+ * Analog idle baseline.
+ *
+ * The register values and their order come from the stock power-on
+ * sequence in AudioPlatformDevice::AnalogOpen() (DEVICE_OUT_DAC), which
+ * sets up the MT6320 ABB digital path before the DAC is enabled.  Naming
+ * the registers from the MT6320 header is deliberate: MT6320_ABB_AFE_CON(n)
+ * computes 0x4000 + n * 2, which does not always land on the register the
+ * stock driver means - n = 14 is ANALDO_CON14 at 0x041c, whereas the
+ * 0xc3a1 write belongs to DIGLDO_CON12 at 0x0434.
+ */
 static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(1),  0x0009 },
 	{ MT6320_ABB_AFE_CON(3),  0x0221 },
@@ -263,6 +273,23 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(5),  0x0028 },
 	{ MT6320_ABB_AFE_CON(6),  0x0218 },
 	{ MT6320_ABB_AFE_CON(7),  0x0204 },
+	/* Clear the ABB digital-domain state; 0xc3a1 is the stock value. */
+	{ MT6320_DIGLDO_CON12,    0xc3a1 },
+	{ MT6320_DIGLDO_CON11,    0x0006 },
+	{ MT6320_DIGLDO_CON12,    0x0003 },
+	{ MT6320_DIGLDO_CON14,    0x000b },
+	{ MT6320_ANALDO_CON6,     0x001e },
+	/*
+	 * ANALDO_CON0 turns the digital path on.  The stock sequence writes
+	 * 0x007f here, where DAPM only ever sets BIT(0); the remaining bits
+	 * are what the chip needs to actually pass samples.
+	 */
+	{ MT6320_ANALDO_CON0,     0x007f },
+	{ MT6320_ANALDO_CON2,     0x1801 },
+	{ MT6320_ANALDO_CON1,     0x0000 },
+	{ MT6320_ANALDO_CON9,     0x00e1 },
+	{ MT6320_DIGLDO_CON3,     0x0000 },
+	{ MT6320_DIGLDO_CON2,     0x004f },
 	{ MT6320_ABB_AFE_CON(10), 0x0001 },
 	/* Conservative default analog gain: headphone 0dB. */
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
@@ -291,7 +318,7 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(14), 0xc3a1);
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON12, 0xc3a1);
 		if (ret)
 			return ret;
 
