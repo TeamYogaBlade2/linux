@@ -223,9 +223,21 @@ more:
   block in the middle of `OVL -> COLOR -> BLS -> RDMA0 -> DSI0` was never told to
   run. Nothing claimed its reset either, so `MT6589_DISP_BLS_RST` stayed wherever
   the bootloader left it - and the DISPSYS reset is active low, so a zero there
-  holds the block in reset indefinitely. There is now a minimal driver for the
-  MT6589 BLS block, which is not the MT8195 merge unit that `mtk_disp_merge.c`
-  drives and so cannot reuse its register map.
+  holds the block in reset indefinitely.
+- **BLS was disabled outright.** The BLS node is claimed by
+  `pwm-mt6589-disp`, which is correct: BLS is a display engine that also
+  generates the backlight PWM, and the two share one enable register. But
+  that driver only ever wrote `BLS_EN` as `BLS_EN_PWM_ONLY` (bit 31) or zero,
+  so the scaling stage never ran and the block RDMA0 fetches from was not
+  operating. It now writes `0x80010001`, the value the stock driver uses
+  whenever BLS is enabled for display, and brightness zero clears only the
+  PWM duty rather than the whole block.
+
+An earlier attempt at this added a separate `mtk-disp-bls` driver. That was
+wrong twice over: `mtk_disp_merge.c` drives the MT8195 merge unit with a
+different register map and so could not be reused, and a second driver
+matching `mediatek,mt6589-disp-pwm` would have raced the PWM driver for the
+node rather than fixing it. It was reverted and the existing owner corrected.
 
 Two further differences from the stock driver were examined and deliberately
 left alone. `RDMA_FIFO_CON` is rewritten at CRTC enable with a
