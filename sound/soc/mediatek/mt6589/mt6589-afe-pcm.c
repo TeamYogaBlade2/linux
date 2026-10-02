@@ -53,12 +53,16 @@
 #define AFE_VUL_CUR		0x008c
 #define AFE_VUL_END		0x0088		/* ring end, inclusive */
 
-/* Internal ADC select in ADDA_TOP_CON0. */
-#define AFE_ADDA_TOP_CON0	0x0120
-#define AFE_ADDA_TOP_CON0_INTERNAL_ADC	BIT(0)
-
-/* Uplink SRC: voice mode select [25:23], I2S input control. */
-#define AFE_ADDA_UL_SRC_CON0	0x0114
+/*
+ * There is no ADDA block on MT6589.  AFE_ADDA_TOP_CON0 (+0x120) and
+ * AFE_ADDA_UL_SRC_CON0 (+0x114) are MT6797 registers: this part's AFE map
+ * has nothing between +0x00e0 (AFE_MEMIF_MON4) and +0x0170 (AFE_FOC_CON),
+ * in both the data sheet and the vendor header.  The analogue source
+ * selection for the uplink is done through the GAIN2 connection registers
+ * and the interconnect CONN registers below instead.
+ */
+#define AFE_GAIN2_CON2		0x0430	/* I12 -> O00 path select */
+#define AFE_GAIN2_CON2_I12_O00_S	BIT(0)
 
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
@@ -79,9 +83,9 @@
 #define AFE_IRQ_MCU_CNT1	0x03ac	/* IRQ1 MCU counter */
 #define AFE_IRQ_MCU_CNT2	0x03b0	/* IRQ2 MCU counter */
 
-/* DL1 -> interconnect -> ADDA downlink SRC -> AFE<->PMIC link. */
+/* DL1 -> interconnect -> ASRC -> I2S DAC path. */
 #define AFE_I2S_CON1		0x0034
-#define AFE_I2S_CON1_BASE	0x00000008	/* I2S DAC format */
+#define AFE_I2S_CON1_BASE	0x00000008	/* I2S2_FMT: 0=EIAJ, 1=I2S; select I2S */
 #define AFE_I2S_CON1_RATE	GENMASK(11, 8)
 #define AFE_I2S_CON1_ON		BIT(0)
 #define AFE_CONN1		0x0024
@@ -98,21 +102,45 @@
 #define AFE_CONN3		0x002c
 #define AFE_CONN3_VUL_O9	BIT(0)		/* I03 -> O09 */
 #define AFE_CONN3_VUL_O10	BIT(3)		/* I04 -> O10 */
-#define AFE_ADDA_DL_SRC2_CON0	0x0108
-#define AFE_ADDA_DL_SRC2_CON0_BASE 0x03001802	/* SRC-disabled base */
-#define AFE_ADDA_DL_SRC2_CON0_RATE GENMASK(31, 28)
-#define AFE_ADDA_DL_SRC2_CON0_ON   BIT(0)
-#define AFE_ADDA_DL_SRC2_CON0_VOICE_MODE BIT(5)
-#define AFE_ADDA_DL_SRC2_CON1	0x010c
-#define AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE 0xf74f0000
-#define AFE_ADDA_UL_DL_CON0	0x0124
-#define AFE_ADDA_UL_DL_CON0_ON	BIT(0)
-#define AFE_ADDA_PREDIS_CON0	0x0260		/* ADDA downlink pre-distortion */
+/*
+ * Downlink sample-rate conversion on this part is the ASRC block at
+ * +0x500, not an ADDA SRC2.  There is no DL_SRC2_CON0/CON1, no UL_DL_CON0
+ * and no NEWIF register here; those offsets are MT6797.
+ *
+ * AFE_ASRC_CON0 is the control register: ASM_ON is the ASRC enable and
+ * CHSET_ON[3:2] selects which channel set is active (01 = TX).  The
+ * per-set frequency configuration lives in ASRC_CON1..CON3 as ASM_FREQ_n,
+ * 24-bit "frequency palette" values that define each set's input and
+ * output frequency.
+ *
+ * Those palette values are not mode codes and are not derived from the
+ * sample rate by any formula given here, so they are left at their reset
+ * default - the value the data sheet says is "set for TX OFS" - rather
+ * than written with a made-up index.  Only the enables are programmed.
+ */
+#define AFE_ASRC_CON0		0x0500
+#define AFE_ASRC_CON0_ASM_ON	BIT(0)		/* ASRC enabling signal */
+#define AFE_ASRC_CON0_CHSET_ON	GENMASK(3, 2)	/* 01: TX, 10: RX */
+#define AFE_ASRC_CON0_CHSET_ON_TX	(1 << 2)
+
+/*
+ * The downlink pre-distortion block is real on this part and lives at
+ * +0x260, so keep it - only the ADDA registers above it were wrong.
+ */
+#define AFE_ADDA_PREDIS_CON0	0x0260
 #define AFE_ADDA_PREDIS_CON1	0x0264
-#define AFE_ADDA_NEWIF_CFG0	0x0138		/* AFE<->PMIC serial link (NEWIF) */
-#define AFE_ADDA_NEWIF_CFG0_VAL	0x03f87201	/* up8x TXIF saturation on */
-#define AFE_ADDA_NEWIF_CFG1	0x013c
-#define AFE_ADDA_NEWIF_CFG1_VOICE	GENMASK(11, 10)
+/*
+ * There is no NEWIF (AFE<->PMIC serial link) register on MT6589.  The
+ * offsets this driver used to program - 0x0138 and 0x013c - are MT6797
+ * ADDA registers: MT6589's AFE map goes from AFE_MEMIF_MON4 at +0x00e0
+ * straight to AFE_FOC_CON at +0x0170 with nothing in between, in both the
+ * data sheet and the vendor header.  The values written (0x03f87201 and a
+ * GENMASK(11,10) update) come from the same MT6797 code, so both were
+ * landing on unbacked addresses.
+ *
+ * The AFE<->PMIC link on this part is brought up by the MT6320 codec side
+ * plus the AFE clocks taken above; nothing needs programming here.
+ */
 
 static const struct regmap_config mt6589_afe_regmap_config = {
 	.reg_bits = 32,
@@ -165,23 +193,6 @@ static int mt6589_afe_rate_code_sparse(unsigned int rate)
  * distinct from SampleRateTransform() above.
  */
 static int mt6589_afe_rate_code(unsigned int rate)
-{
-	switch (rate) {
-	case 8000:	return 0;
-	case 11025:	return 1;
-	case 12000:	return 2;
-	case 16000:	return 3;
-	case 22050:	return 4;
-	case 24000:	return 5;
-	case 32000:	return 6;
-	case 44100:	return 7;
-	case 48000:	return 8;
-	default:	return -EINVAL;
-	}
-}
-
-/* Hz -> ADDA downlink SRC input-mode code. */
-static int mt6589_afe_adda_rate_code(unsigned int rate)
 {
 	switch (rate) {
 	case 8000:	return 0;
@@ -289,16 +300,14 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
 	int rate_code = mt6589_afe_rate_code(runtime->rate);
 	int mcu_rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
-	u32 adda_con0;
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		return mt6589_afe_vul_prepare(comp, substream);
 	int ret;
 
-	if (adda_code < 0 || rate_code < 0 || mcu_rate_code < 0)
+	if (rate_code < 0 || mcu_rate_code < 0)
 		return -EINVAL;
 
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
@@ -331,18 +340,24 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (ret)
 		return ret;
 
-	/* Match the stock SetDLSrc2() sequence. */
-	adda_con0 = AFE_ADDA_DL_SRC2_CON0_BASE |
-		    FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code);
-	if (adda_code == 0 || adda_code == 3)
-		adda_con0 |= AFE_ADDA_DL_SRC2_CON0_VOICE_MODE;
-
-	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0, adda_con0);
+	/*
+	 * Rate-convert the downlink through the ASRC.  There is no ADDA
+	 * DL_SRC2 block on this part: the MT6589 equivalent is the ASRC TX
+	 * channel set, reached from the DL1 side through GAIN2_CON2 and
+	 * enabled with ASM_ON on ASRC_CON0.  The frequency palette in
+	 * ASRC_CON1 is left at its reset default rather than being written
+	 * with a value derived from the rate - see the comment on the
+	 * register definitions.
+	 */
+	ret = regmap_update_bits(afe->regmap, AFE_GAIN2_CON2,
+				 AFE_GAIN2_CON2_I12_O00_S,
+				 AFE_GAIN2_CON2_I12_O00_S);
 	if (ret)
 		return ret;
 
-	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
-			   AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE);
+	ret = regmap_update_bits(afe->regmap, AFE_ASRC_CON0,
+				 AFE_ASRC_CON0_CHSET_ON,
+				 AFE_ASRC_CON0_CHSET_ON_TX);
 	if (ret)
 		return ret;
 
@@ -391,18 +406,13 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				AFE_ADDA_DL_SRC2_CON0_ON);
+	ret = regmap_clear_bits(afe->regmap, AFE_ASRC_CON0,
+				AFE_ASRC_CON0_ASM_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
 	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON1,
 				AFE_I2S_CON1_ON);
-	if (ret && !first_err)
-		first_err = ret;
-
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				AFE_ADDA_UL_DL_CON0_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -456,18 +466,13 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 		afe->dl1_substream = substream;
 
 		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
-		ret = regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				      AFE_ADDA_DL_SRC2_CON0_ON);
+		ret = regmap_set_bits(afe->regmap, AFE_ASRC_CON0,
+				      AFE_ASRC_CON0_ASM_ON);
 		if (ret)
 			return ret;
 
 		ret = regmap_set_bits(afe->regmap, AFE_I2S_CON1,
 				      AFE_I2S_CON1_ON);
-		if (ret)
-			goto err_stop;
-
-		ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				      AFE_ADDA_UL_DL_CON0_ON);
 		if (ret)
 			goto err_stop;
 
@@ -545,9 +550,9 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
-	/* Select the internal ADC, matching SetI2SAdcIn(). */
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_TOP_CON0,
-				AFE_ADDA_TOP_CON0_INTERNAL_ADC);
+	/* Select the internal ADC as the capture source. */
+	ret = regmap_clear_bits(afe->regmap, AFE_GAIN2_CON2,
+				AFE_GAIN2_CON2_I12_O00_S);
 	if (ret)
 		return ret;
 
@@ -578,7 +583,8 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 		goto err;
 
 	/* I2S ADC input, then the uplink SRC that feeds the VUL memif. */
-	ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	ret = regmap_set_bits(afe->regmap, AFE_ASRC_CON0,
+			      AFE_ASRC_CON0_ASM_ON);
 	if (ret)
 		goto err;
 
@@ -639,7 +645,8 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	ret = regmap_clear_bits(afe->regmap, AFE_ASRC_CON0,
+				AFE_ASRC_CON0_ASM_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -776,26 +783,6 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (IS_ERR(afe->clk_i2s))
 		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
 				     "failed to get/enable the I2S clock\n");
-
-	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG0,
-			   AFE_ADDA_NEWIF_CFG0_VAL);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "failed to configure AFE NEWIF\n");
-
-	/*
-	 * AFE_ADDA_NEWIF_CFG1 carries the voice-mode delay selection in
-	 * bits [11:10], which downstream programs per stream from the
-	 * uplink (ADC) sample rate.  There is no capture path here, so
-	 * apply the non-zero delay the stock driver uses for its default
-	 * case rather than writing a whole-register value.
-	 */
-	ret = regmap_update_bits(afe->regmap, AFE_ADDA_NEWIF_CFG1,
-				 AFE_ADDA_NEWIF_CFG1_VOICE,
-				 AFE_ADDA_NEWIF_CFG1_VOICE);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "failed to configure AFE NEWIF delay\n");
 
 	/* mask all AFE IRQs + clear stale status before hooking the GIC */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CON, 0);
