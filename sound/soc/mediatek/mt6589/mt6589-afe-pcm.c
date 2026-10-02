@@ -25,6 +25,7 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/soc-dapm.h>
 #include <sound/tlv.h>
 
 /* AFE registers (classic mt65xx layout); stock magic values noted inline. */
@@ -213,6 +214,64 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	.periods_max = 16,
 	.buffer_bytes_max = 16 * 1024,		/* AFE on-chip SRAM */
 };
+
+/*
+ * Memory-interface power event for the DL1 and VUL widgets.
+ *
+ * The interconnect bits and the DAC_CON0 enables are programmed in
+ * prepare() and trigger(); this only turns the memory interface on and off
+ * as DAPM walks the graph, matching what the stock driver does between
+ * SetMEMIFEnable() and the stream teardown.
+ */
+static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
+				  struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(
+					snd_soc_dapm_to_component(w->dapm));
+	int ret;
+	bool capture;
+
+	if (!afe)
+		return -ENODEV;
+
+	/* Capture widgets are VUL and "AIF1 Capture"; the rest are playback. */
+	capture = !strcmp(w->name, "VUL") || !strcmp(w->name, "AIF1 Capture");
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		if (capture)
+			ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+						 AFE_DAC_CON0_VUL_ON,
+						 AFE_DAC_CON0_VUL_ON);
+		else
+			ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+						 AFE_DAC_CON0_DL1_ON,
+						 AFE_DAC_CON0_DL1_ON);
+		if (ret)
+			return ret;
+
+		return regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+					 AFE_DAC_CON0_AFE_ON,
+					 AFE_DAC_CON0_AFE_ON);
+	case SND_SOC_DAPM_POST_PMD:
+		if (capture) {
+			ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+						AFE_DAC_CON0_VUL_ON);
+			if (ret)
+				return ret;
+		} else {
+			ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+						AFE_DAC_CON0_DL1_ON);
+			if (ret)
+				return ret;
+		}
+
+		return regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+					 AFE_DAC_CON0_AFE_ON);
+	}
+
+	return 0;
+}
 
 static int mt6589_afe_pcm_open(struct snd_soc_component *comp,
 			       struct snd_pcm_substream *substream)
@@ -602,8 +661,73 @@ static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
 	return mt6589_afe_vul_stop(afe);
 }
 
+/*
+ * DAPM graph.
+ *
+ * Without these the codec's routes have nothing to attach to: mt6320.c
+ * declares { "DAC", NULL, "AIF1 Playback" } and { "Mic Bias", NULL, "AIF1
+ * Capture" }, and a route naming a widget that does not exist can never
+ * be walked, so the DAC is never powered up and mt6320_dac_event() never
+ * runs.  That is what kept the whole analog side dead.
+ *
+ * The names have to match the codec's: the playback stream is "AIF1
+ * Playback" and the capture stream "AIF1 Capture", and the memory
+ * interface feeding the interconnect is "DL1" / "VUL".
+ */
+static const struct snd_soc_dapm_widget mt6589_afe_widgets[] = {
+	/*
+ * The stream endpoints are plain output widgets rather than AIF widgets:
+ * SND_SOC_DAPM_AIF_* wants a register and a mask, and the AFE drives these
+ * from prepare()/trigger() rather than from a DAPM register bit.  What
+ * matters here is only that the widget names exist so the codec's routes
+ * can be walked.
+ */
+SND_SOC_DAPM_OUT_DRV_E("AIF1 Playback", SND_SOC_NOPM, 0, 0, NULL, 0,
+		      mt6589_afe_memif_event,
+		      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	SND_SOC_DAPM_OUT_DRV_E("AIF1 Capture", SND_SOC_NOPM, 0, 0, NULL, 0,
+			      mt6589_afe_memif_event,
+			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
+			      mt6589_afe_memif_event,
+			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	SND_SOC_DAPM_OUT_DRV_E("VUL", SND_SOC_NOPM, 0, 0, NULL, 0,
+			      mt6589_afe_memif_event,
+			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	/*
+	 * DL1 left/right go to I05/I06 and out to O03/O04, which is the
+	 * I2S_OUT_DAC path the stock driver builds with
+	 * SetinputConnection(I05, O03) and SetinputConnection(I06, O04).
+	 */
+	SND_SOC_DAPM_MIXER("I05", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_MIXER("I06", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_MIXER("O03", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_MIXER("O04", SND_SOC_NOPM, 0, 0, NULL, 0),
+	/* Capture: I03/I04 out to the VUL memory interface. */
+	SND_SOC_DAPM_MIXER("I03", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_MIXER("I04", SND_SOC_NOPM, 0, 0, NULL, 0),
+};
+
+static const struct snd_soc_dapm_route mt6589_afe_routes[] = {
+	/* Playback: AIF1 -> DL1 memory interface -> I05/I06 -> O03/O04. */
+	{ "DL1", NULL, "AIF1 Playback" },
+	{ "I05", NULL, "DL1" },
+	{ "I06", NULL, "DL1" },
+	{ "O03", NULL, "I05" },
+	{ "O04", NULL, "I06" },
+	/* Capture: I03/I04 -> VUL memory interface -> AIF1. */
+	{ "I03", NULL, "AIF1 Capture" },
+	{ "I04", NULL, "AIF1 Capture" },
+	{ "VUL", NULL, "I03" },
+	{ "VUL", NULL, "I04" },
+};
+
 static const struct snd_soc_component_driver mt6589_afe_component = {
 	.name = "mt6589-afe-pcm",
+	.dapm_widgets = mt6589_afe_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(mt6589_afe_widgets),
+	.dapm_routes = mt6589_afe_routes,
+	.num_dapm_routes = ARRAY_SIZE(mt6589_afe_routes),
 	.open = mt6589_afe_pcm_open,
 	.hw_params = mt6589_afe_pcm_hw_params,
 	.prepare = mt6589_afe_pcm_prepare,
