@@ -263,15 +263,15 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 }
 
 /*
- * Analog idle baseline.
+ * Analog idle baseline, before any stream is running.  The ABB digital
+ * path registers are programmed per-stream in mt6320_dac_event() rather
+ * than here, since the stock driver does that from AnalogOpen() each time
+ * the DAC path is opened and they depend on the sample rate.
  *
- * The register values and their order come from the stock power-on
- * sequence in AudioPlatformDevice::AnalogOpen() (DEVICE_OUT_DAC), which
- * sets up the MT6320 ABB digital path before the DAC is enabled.  Naming
- * the registers from the MT6320 header is deliberate: MT6320_ABB_AFE_CON(n)
- * computes 0x4000 + n * 2, which does not always land on the register the
- * stock driver means - n = 14 is ANALDO_CON14 at 0x041c, whereas the
- * 0xc3a1 write belongs to DIGLDO_CON12 at 0x0434.
+ * The values are the stock power-on sequence from
+ * AudioPlatformDevice::AnalogOpen().  MT6320_ABB_AFE_CON(n) computes
+ * 0x4000 + n * 2, which does not always land on the register the stock
+ * driver means, so the entries name their registers explicitly.
  */
 static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(1),  0x0009 },
@@ -280,23 +280,6 @@ static const struct reg_sequence mt6320_codec_init[] = {
 	{ MT6320_ABB_AFE_CON(5),  0x0028 },
 	{ MT6320_ABB_AFE_CON(6),  0x0218 },
 	{ MT6320_ABB_AFE_CON(7),  0x0204 },
-	/* Clear the ABB digital-domain state; 0xc3a1 is the stock value. */
-	{ MT6320_DIGLDO_CON12,    0xc3a1 },
-	{ MT6320_DIGLDO_CON11,    0x0006 },
-	{ MT6320_DIGLDO_CON12,    0x0003 },
-	{ MT6320_DIGLDO_CON14,    0x000b },
-	{ MT6320_ANALDO_CON6,     0x001e },
-	/*
-	 * ANALDO_CON0 turns the digital path on.  The stock sequence writes
-	 * 0x007f here, where DAPM only ever sets BIT(0); the remaining bits
-	 * are what the chip needs to actually pass samples.
-	 */
-	{ MT6320_ANALDO_CON0,     0x007f },
-	{ MT6320_ANALDO_CON2,     0x1801 },
-	{ MT6320_ANALDO_CON1,     0x0000 },
-	{ MT6320_ANALDO_CON9,     0x00e1 },
-	{ MT6320_DIGLDO_CON3,     0x0000 },
-	{ MT6320_DIGLDO_CON2,     0x004f },
 	{ MT6320_ABB_AFE_CON(10), 0x0001 },
 	/* Conservative default analog gain: headphone 0dB. */
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
@@ -312,16 +295,19 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(10), 0x0000);
-		if (ret)
-			return ret;
-
 		/*
-		 * AFUNC_AUD_CON2 bit 7 is owned by the shared Analog DAPM
-		 * supply.  Only touch the SDM/FIFO bits here.
+		 * Follow the stock sequence from
+		 * AudioPlatformDevice::AnalogOpen() for DEVICE_OUT_DAC.  The
+		 * addresses are the vendor's, so each entry names its
+		 * register explicitly: MT6320_ABB_AFE_CON(n) computes
+		 * 0x4000 + n * 2, which lands elsewhere for some of these.
+		 *
+		 * 0x4000 (ANALDO_CON0) is the register that enables the
+		 * digital path.  DAPM used to set only BIT(0) of it; the stock
+		 * driver writes 0x007f, and the rest is what the chip needs to
+		 * pass samples at all.
 		 */
-		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
-					 GENMASK(3, 0), 0x0006);
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON11, 0x0006);
 		if (ret)
 			return ret;
 
@@ -329,30 +315,39 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
-					 GENMASK(3, 0), 0x0003);
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON12, 0x0003);
 		if (ret)
 			return ret;
 
-		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
-					 GENMASK(3, 0), 0x000b);
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x000b);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(4), 0x001e);
+		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON6, 0x001e);
 		if (ret)
 			return ret;
 
-		ret = regmap_set_bits(priv->regmap,
-				      MT6320_ABB_AFE_CON(0), BIT(0));
+		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON0, 0x007f);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(2), 0x1801);
+		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON2, 0x1801);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_CON(9), 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON1, 0x0000);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON9, 0x00e1);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON3, 0x0000);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON2, 0x004f);
 		if (ret)
 			return ret;
 
