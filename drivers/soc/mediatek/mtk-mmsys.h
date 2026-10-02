@@ -136,7 +136,6 @@ struct mtk_mmsys_driver_data {
 	const unsigned int num_routes;
 	const u16 sw0_rst_offset;
 	const u8 *rst_tb;
-	const bool sw_rst_active_low;
 	const u32 num_resets;
 	const bool is_vppsys;
 	const u8 vsync_len;
