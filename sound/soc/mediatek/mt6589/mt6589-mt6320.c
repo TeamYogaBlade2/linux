@@ -12,6 +12,7 @@
 #include <linux/input.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
+#include <linux/string.h>
 
 #include <sound/jack.h>
 #include <sound/soc.h>
@@ -49,7 +50,8 @@ static struct snd_soc_jack_pin mt6589_mt6320_jack_pins[] = {
 
 static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 {
-	struct snd_soc_component *accdet;
+	struct snd_soc_component *accdet = NULL;
+	struct snd_soc_component *component;
 	int ret;
 
 	ret = snd_soc_card_jack_new_pins(card, "Headphone Jack", SND_JACK_HEADSET,
@@ -75,14 +77,29 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 		return ret;
 
 	/*
-	 * The jack is optional.  Returning -EPROBE_DEFER here would look
-	 * like a deferral to snd_soc_card_late_probe(), but soc-core treats
-	 * any negative return as fatal and abandons the card, so the whole
-	 * sound card would stay unregistered forever.  The accdet component
-	 * is not a DT dependency of this node, so there is nothing to
-	 * actually wait for.
+	 * Find the headset detector among this card's aux components.
+	 *
+	 * This must not use snd_soc_lookup_component_by_name().  That helper
+	 * takes client_mutex, and late_probe runs with client_mutex already
+	 * held: snd_soc_register_card() acquires it, then reaches
+	 * snd_soc_card_late_probe() through snd_soc_bind_card(), so a lookup
+	 * from here re-acquires a non-recursive mutex the caller already
+	 * holds and the card deadlocks part-way through probe.  That is why
+	 * enabling the AFE froze the boot: with the AFE node disabled the
+	 * DAI lookup defers and late_probe is never reached.
+	 *
+	 * aux-devs are bound by soc_bind_aux_dev(), which runs in the same
+	 * locked region but takes no lock of its own, so the component is
+	 * already on card->aux_comp_list by the time we get here.
 	 */
-	accdet = snd_soc_lookup_component_by_name("mt6320-accdet");
+	for_each_card_auxs(card, component) {
+		if (component->driver && component->driver->name &&
+		    !strcmp(component->driver->name, "mt6320-accdet")) {
+			accdet = component;
+			break;
+		}
+	}
+
 	if (!accdet) {
 		dev_info(card->dev, "no headset detection support\n");
 		return 0;

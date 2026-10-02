@@ -38,6 +38,7 @@
 	sound {
 		compatible = "mediatek,mt6589-mt6320-sound";
 		mediatek,platform = <&afe>;
+		aux-devs = <&mt6320_accdet>;
 	};
 };
 
