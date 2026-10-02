@@ -29,7 +29,15 @@
 
 /* AFE registers (classic mt65xx layout); stock magic values noted inline. */
 #define AUDIO_TOP_CON0		0x0000
-#define AUDIO_TOP_CON0_AFE_ON	0x00004000
+/*
+ * AUDIO_TOP_CON0 power bits: PDN_AFE at bit 2 and PDN_I2S at bit 6, both
+ * active-low ("0: Power on").  Bit 14 is APB3_SEL, the APB protocol select,
+ * and is left alone.  These are the same bits the clock driver gates
+ * CLK_AUDIO_AFE and CLK_AUDIO_I2S on, so the AFE must not touch them
+ * directly - see mt6589_afe_pcm_dev_probe().
+ */
+#define AUDIO_TOP_CON0_PDN_AFE		BIT(2)
+#define AUDIO_TOP_CON0_PDN_I2S		BIT(6)
 #define AFE_DAC_CON0		0x0010
 #define AFE_DAC_CON0_AFE_ON	BIT(0)
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
@@ -732,16 +740,6 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to set DMA mask\n");
 
-	afe->clk = devm_clk_get_enabled(dev, "afe");
-	if (IS_ERR(afe->clk))
-		return dev_err_probe(dev, PTR_ERR(afe->clk),
-				     "failed to get/enable the audio clock\n");
-
-	afe->clk_i2s = devm_clk_get_enabled(dev, "i2s");
-	if (IS_ERR(afe->clk_i2s))
-		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
-				     "failed to get/enable the I2S clock\n");
-
 	/* The AFE registers are in the parent audsys syscon window. */
 	ret = of_address_to_resource(dev->parent->of_node, 0, &res);
 	if (ret)
@@ -755,17 +753,29 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 				     "failed to init AFE regmap\n");
 
 	/*
-	 * Power on the AFE top.  AUDIO_TOP_CON0 also carries the CCF clock
-	 * gate bits for the AFE (bit 2) and I2S (bit 6) blocks, which were
-	 * just enabled above through the clk provider, so touch only the
-	 * AFE power bit.
+	 * Release the AFE and I2S power-down bits before anything enables
+	 * the clocks that live behind them, otherwise the register writes
+	 * that follow land on a block that is still powered down.
+	 *
+	 * PDN_AFE resets to 0 (powered on) but PDN_I2S resets to 1 (powered
+	 * down), so both are cleared explicitly.
 	 */
 	ret = regmap_update_bits(afe->regmap, AUDIO_TOP_CON0,
-				 AUDIO_TOP_CON0_AFE_ON,
-				 AUDIO_TOP_CON0_AFE_ON);
+				 AUDIO_TOP_CON0_PDN_AFE |
+				 AUDIO_TOP_CON0_PDN_I2S, 0);
 	if (ret)
 		return dev_err_probe(dev, ret,
-				     "failed to enable AFE\n");
+				     "failed to power on AFE\n");
+
+	afe->clk = devm_clk_get_enabled(dev, "afe");
+	if (IS_ERR(afe->clk))
+		return dev_err_probe(dev, PTR_ERR(afe->clk),
+				     "failed to get/enable the audio clock\n");
+
+	afe->clk_i2s = devm_clk_get_enabled(dev, "i2s");
+	if (IS_ERR(afe->clk_i2s))
+		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
+				     "failed to get/enable the I2S clock\n");
 
 	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG0,
 			   AFE_ADDA_NEWIF_CFG0_VAL);
