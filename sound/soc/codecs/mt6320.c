@@ -42,11 +42,27 @@
 
 #define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
 
-/* Analog microphone input: AUXADC channel 0 with its buffer enabled. */
-#define MT6320_AUXADC_CON0_AUXMIC	GENMASK(11, 7)
-#define MT6320_AUXADC_CON0_AUXMIC_VAL	0x10b0
-/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
-#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
+/*
+ * AUXADC channel select is CHSEL[10:7] (upmu_hw.h: RG_AUXADC_CHSEL mask 0xF,
+ * shift 7).  Channel 5 is the accessory-detect key voltage, the same one the
+ * IIO AUXADC driver uses; select it here so the audio mic path does not depend
+ * on that driver having run first.
+ */
+#define MT6320_AUXADC_CON0_CHSEL	GENMASK(10, 7)
+#define MT6320_AUXADC_CON0_CHSEL_ACCDET	0x5
+/*
+ * Mic bias / AUXADC switch.
+ *
+ * This board is built with ACCDET_28V_MODE (see the vendor
+ * accdet_custom_def.h), where the downstream driver does not use the
+ * ACCDET_RSV encoding at all: it drives AUDENCSPARE_CON0 (0x0732) to
+ * 0x01 to enable the switch and 0x00 to disable it.  The 0x1090 value is the
+ * 1.9 V path and selects RG_AUDACCDETVIN1PULLLOW, which is not what this
+ * hardware wants.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_MICBIAS_ENABLE	0x01
+#define MT6320_ACCDET_MICBIAS_DISABLE	0x00
 
 /*
  * Headphone amplifier trim lives in the efuse data-out words.  The
@@ -76,7 +92,8 @@
 /* SPK_CON11 is a one-hot software override selector, not a plain ramp. */
 #define MT6320_SPK_OUTSTG_EN_L_SW	BIT(11)
 #define MT6320_SPK_EN_L_SW		BIT(9)
-#define MT6320_SPK_EN_MODE		BIT(0)
+#define MT6320_SPK_OUTSTG_EN_R_SW	BIT(10)
+#define MT6320_SPK_EN_R_SW		BIT(8)
 #define ZCD_GAIN_0DB			8
 #define ZCD_GAIN_CTL_MAX		0x0c	/* +8dB .. -4dB */
 #define ZCD_GAIN_REG(g)			(((g) << 8) | (g))
@@ -613,14 +630,17 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 			return ret;
 
 		/*
-		 * Take the class-D output stage and the L/R driver enables
-		 * under software control.  SPK_CON11 is a one-hot selector,
-		 * so drive the documented bits rather than a nibble pattern.
+		 * Take both output stages and both driver enables under
+		 * software control, as the stock driver does with 0x0f00.
+		 * SPK_EN_MODE is deliberately not set: it makes the hardware
+		 * follow the register mode instead of reading the EN_L/EN_R_SW
+		 * bits, which would leave the enables above inert.
 		 */
 		return regmap_write(priv->regmap, MT6320_SPK_CON11,
 				    MT6320_SPK_OUTSTG_EN_L_SW |
+				    MT6320_SPK_OUTSTG_EN_R_SW |
 				    MT6320_SPK_EN_L_SW |
-				    MT6320_SPK_EN_MODE);
+				    MT6320_SPK_EN_R_SW);
 
 	case SND_SOC_DAPM_POST_PMD:
 		ret = regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0000);
@@ -650,14 +670,20 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON0,
-					 MT6320_AUXADC_CON0_AUXMIC,
-					 MT6320_AUXADC_CON0_AUXMIC_VAL);
+					 MT6320_AUXADC_CON0_CHSEL,
+					 FIELD_PREP(MT6320_AUXADC_CON0_CHSEL,
+						    MT6320_AUXADC_CON0_CHSEL_ACCDET));
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_ACCDET_CON0,
-				    MT6320_ACCDET_CON0_MICBIAS_1V9);
+		return regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				    MT6320_ACCDET_MICBIAS_ENABLE);
 	case SND_SOC_DAPM_POST_PMD:
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_DISABLE);
+		if (ret)
+			return ret;
+
 		return regmap_write(priv->regmap, MT6320_AUXADC_CON0, 0);
 	}
 

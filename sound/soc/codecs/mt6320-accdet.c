@@ -56,8 +56,14 @@
  * call, then restores it once the hook switch settles.
  */
 #define MT6320_ACCDET_DEBOUNCE0_BTN	0x0400
-/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
-#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
+/*
+ * Mic bias / AUXADC switch.  This board uses ACCDET_28V_MODE, where the
+ * downstream driver drives AUDENCSPARE_CON0 rather than the ACCDET_RSV
+ * (ACCDET_CON0) 1.9 V encoding.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_MICBIAS_ENABLE	0x01
+#define MT6320_ACCDET_MICBIAS_DISABLE	0x00
 
 struct mt6320_accdet {
 	struct device *dev;
@@ -239,9 +245,15 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 					   MT6320_ACCDET_PWM_WIDTH_VALUE);
 			if (ret)
 				return;
+			/*
+			 * The threshold keeps its own value.  Downstream
+			 * writes the width into this register too, but only
+			 * under ACCDET_PIN_RECOGNIZATION, which this board
+			 * does not enable.
+			 */
 			ret = regmap_write(priv->regmap,
 					   MT6320_ACCDET_PWM_THRESH,
-					   MT6320_ACCDET_PWM_WIDTH_VALUE);
+					   MT6320_ACCDET_PWM_THRESH_VALUE);
 			if (ret)
 				return;
 		}
@@ -488,8 +500,8 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		 * AUXADC driver asserts the same switch for each voltage
 		 * read, so restore it here on the way out too.
 		 */
-		regmap_write(priv->regmap, MT6320_ACCDET_CON0,
-			     MT6320_ACCDET_CON0_MICBIAS_1V9);
+		regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+			     MT6320_ACCDET_MICBIAS_ENABLE);
 
 		ret = mt6320_accdet_disable(priv);
 		if (ret)
