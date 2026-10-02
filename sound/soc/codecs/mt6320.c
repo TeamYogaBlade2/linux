@@ -639,9 +639,11 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG2, 0x0022);
 		if (ret)
 			return ret;
-		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0505);
-		if (ret)
-			return ret;
+		/*
+		 * The stock speaker sequence does not touch ZCD_CON2 at all;
+		 * its volume indexes belong to the volume control.  The
+		 * preceding write used to set 0x0505 here, forcing index 5.
+		 */
 		ret = regmap_write(priv->regmap, MT6320_ZCD_CON4, 0x0505);
 		if (ret)
 			return ret;
