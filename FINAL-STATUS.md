@@ -239,6 +239,21 @@ different register map and so could not be reused, and a second driver
 matching `mediatek,mt6589-disp-pwm` would have raced the PWM driver for the
 node rather than fixing it. It was reverted and the existing owner corrected.
 
+With those in place the panel still shows no picture, and the boot log adds one
+more fact: larb0 and larb1 defer **without printing anything at all**, including
+the messages added earlier for a failed clock lookup or a smi-common wait.
+Silence on both means the deferral happens before the driver's probe reaches
+either, so it is not the clock fetch and not the smi link. The candidate
+pre-probe deferral points were checked and eliminated: no node carries a
+`supplies` property, the power-domain provider is up, and `KEEP_DEFAULT_OFF`
+only sets the initial power state rather than deferring. A further diagnostic
+now prints the provider each clock resolves to, from inside the probe, to
+settle which of "deferring before probe" and "clock lookup fails" is the case.
+
+The M4U is the practical consequence either way: it is what programs the page
+tables RDMA fetches through, and while it is not probed the display engines
+cannot complete a frame.
+
 Two further differences from the stock driver were examined and deliberately
 left alone. `RDMA_FIFO_CON` is rewritten at CRTC enable with a
 pseudo-size/threshold pair where the stock driver writes it only during reset;
