@@ -225,6 +225,41 @@ static int fhctl_hopping(struct mtk_fh *fh, unsigned int new_dds,
 	unsigned long flags = 0;
 	int ret;
 
+	/*
+	 * Only channels with spread-spectrum clocking enabled are actually
+	 * driven through the hopping sequence.  The stock driver gates this on
+	 * a per-PLL status that defaults to disabled for every PLL here except
+	 * MSDCPLL (mt_freqhopping.c: "default SSC disable" for ARMPLL, MAINPLL,
+	 * TVDPLL, LVDSPLL; SSC enabled only for MEMPLL and MSDCPLL).
+	 *
+	 * Without that gate a plain frequency change on a channel with no SSC
+	 * still runs the full hop, and on this part that does not complete:
+	 * every FHCTL channel register reads back zero and the DDS monitor
+	 * never reaches the new value, so boot spent a second per attempt in
+	 * "FHCTL hopping timeout".  Fall back to a direct reprogramming of the
+	 * PCW field, which is what the data sheet prescribes for these
+	 * non-SDM PLLs anyway.
+	 */
+	if (!state->ssc_rate) {
+		unsigned int pcw;
+		u32 val;
+
+		/*
+		 * new_dds is the postdiv-adjusted PCW value already computed
+		 * by mtk_fhctl_set_rate(); apply it directly rather than
+		 * running the hop.
+		 */
+		pcw = new_dds & data->dds_mask;
+
+		spin_lock_irqsave(lock, flags);
+		val = readl(pll->pcw_addr);
+		writel((val & ~data->dds_mask) | pcw | data->pcwchg,
+		       pll->pcw_addr);
+		spin_unlock_irqrestore(lock, flags);
+
+		return 0;
+	}
+
 	if (postdiv) {
 		pll_postdiv = __get_postdiv(pll);
 
