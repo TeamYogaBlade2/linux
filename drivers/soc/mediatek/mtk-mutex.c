@@ -27,6 +27,14 @@
 #define DISP_REG_MUTEX(n)			(0x24 + 0x20 * (n))
 #define DISP_REG_MUTEX_RST(n)			(0x28 + 0x20 * (n))
 /*
+ * MUTEX interrupt enable, one bit per mutex ID.  The downstream driver
+ * programs this before releasing the mutex and refuses to continue if it
+ * does not match, because the completion status is only latched while the
+ * matching interrupt is unmasked.  Mainline never writes this register.
+ */
+#define DISP_REG_MUTEX_INTEN			0x00
+#define DISP_REG_MUTEX_INTEN_ALL		0x3cf
+/*
  * Some SoCs may have multiple MUTEX_MOD registers as more than 32 mods
  * are present, hence requiring multiple 32-bits registers.
  *
@@ -356,6 +364,7 @@ struct mtk_mutex_data {
 	const u16 mutex_mod1_reg;
 	const u16 mutex_sof_reg;
 	const bool no_clk;
+	const bool needs_mutex_inten;
 };
 
 struct mtk_mutex_ctx {
@@ -765,7 +774,9 @@ static const struct mtk_mutex_data mt6589_mutex_driver_data = {
 	.mutex_mod = mt6589_mutex_mod,
 	.mutex_sof = mt8167_mutex_sof,
 	.mutex_mod_reg = MT2701_MUTEX0_MOD0,
+	.mutex_mod1_reg = MT2701_MUTEX0_MOD1,
 	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
+	.needs_mutex_inten = true,
 };
 
 static const struct mtk_mutex_data mt6795_mutex_driver_data = {
@@ -1002,6 +1013,18 @@ void mtk_mutex_enable(struct mtk_mutex *mutex)
 						 mutex[mutex->id]);
 
 	WARN_ON(&mtx->mutex[mutex->id] != mutex);
+
+	/*
+	 * Unmask the mutex completion interrupt for this ID first.  The
+	 * downstream driver refuses to release a mutex whose INTEN does not
+	 * match, and a mutex that never signals completion makes
+	 * mtk_mutex_acquire() spin for its full 10ms timeout and then carry
+	 * on anyway, which shows up as a pipeline that is programmed but
+	 * never updates.
+	 */
+	if (mtx->data->needs_mutex_inten)
+		writel(DISP_REG_MUTEX_INTEN_ALL,
+		       mtx->regs + DISP_REG_MUTEX_INTEN);
 
 	writel(1, mtx->regs + DISP_REG_MUTEX_EN(mutex->id));
 }
