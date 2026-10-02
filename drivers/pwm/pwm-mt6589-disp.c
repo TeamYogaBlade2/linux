@@ -366,26 +366,61 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
  *
  * These are exported so mtk_ddp_comp.c can drive BLS as a real component.
  */
+static int mt6589_bls_pwm_match(struct device *dev, const void *data)
+{
+	struct device_node *node = dev_of_node(dev);
+
+	if (!node)
+		return 0;
+
+	return node == (const struct device_node *)data;
+}
+
+/*
+ * Map a DDP component device to the BLS block.
+ *
+ * The BL component is a private device the CRTC creates for itself, so
+ * dev_get_drvdata() finds nothing there - only the PWM driver's own device
+ * carries the data.  Look the driver instance up by the component's DT node
+ * instead, falling back to dev_get_drvdata() for callers that do pass the
+ * real device.
+ */
+static struct mt6589_bls_pwm *mt6589_bls_ddp_dev(struct device *dev)
+{
+	struct device *pwm_dev;
+
+	if (!dev)
+		return NULL;
+
+	pwm_dev = bus_find_device(&platform_bus_type, NULL, dev->of_node,
+				  &mt6589_bls_pwm_match);
+	if (!pwm_dev)
+		return dev_get_drvdata(dev);
+
+	return dev_get_drvdata(pwm_dev);
+}
+
 int mt6589_bls_ddp_clk_enable(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
-
-	if (!bls)
-		return -ENODEV;
-
-	return clk_prepare_enable(bls->clk_main);
+	/*
+	 * The BL component is a private device the CRTC creates for itself, so
+	 * dev_get_drvdata() finds nothing there - only the PWM driver's own
+	 * device has that data.  Take the clock from the component's device
+	 * node instead, which is the same source the generic
+	 * mtk_ddp_clk_enable() uses through of_clk_get(node, 0).
+	 */
+	return clk_prepare_enable(of_clk_get(dev->of_node, 0));
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_enable);
 
 void mt6589_bls_ddp_clk_disable(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+	struct clk *clk = of_clk_get(dev->of_node, 0);
 
-	if (!bls || !bls->clk_enabled)
+	if (IS_ERR(clk))
 		return;
 
-	clk_disable_unprepare(bls->clk_main);
-	bls->clk_enabled = false;
+	clk_disable_unprepare(clk);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_disable);
 
@@ -398,7 +433,7 @@ void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
 			   unsigned int h, unsigned int vrefresh,
 			   unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
-	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
 
 	if (!bls || !w || !h)
 		return;
@@ -416,7 +451,7 @@ EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
  */
 void mt6589_bls_ddp_start(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
 
 	if (!bls)
 		return;
@@ -428,7 +463,7 @@ EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
 void mt6589_bls_ddp_stop(struct device *dev)
 {
-	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+	struct mt6589_bls_pwm *bls = mt6589_bls_ddp_dev(dev);
 
 	if (!bls)
 		return;
