@@ -20,6 +20,9 @@
 #include <linux/pwm.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
+#include <linux/soc/mediatek/mtk-cmdq.h>
+
+#include "mt6589-bls-ddp.h"
 
 /* Register offsets (relative to BLS base address) */
 #define BLS_EN				0x0000
@@ -351,6 +354,90 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	return 0;
 }
+
+/*
+ * DDP component side.
+ *
+ * On MT6589 the BLS block sits inside the display data path -
+ * OVL -> COLOR -> BLS -> RDMA0 -> DSI0 - and also generates the backlight
+ * PWM.  The stock driver enables MT_CG_DISP0_BLS in disp_bls_config() and
+ * programs BLS_SRC_SIZE from the mode, so treating the block as PWM only
+ * leaves a stage of the pipeline unclocked and unsized, and OVL then reports
+ * "RDMA0 didn't complete frame" forever.
+ *
+ * These are exported so mtk_ddp_comp.c can drive BLS as a real component.
+ */
+int mt6589_bls_ddp_clk_enable(struct device *dev)
+{
+	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+
+	if (!bls)
+		return -ENODEV;
+
+	return clk_prepare_enable(bls->clk_main);
+}
+EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_enable);
+
+void mt6589_bls_ddp_clk_disable(struct device *dev)
+{
+	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+
+	if (!bls || !bls->clk_enabled)
+		return;
+
+	clk_disable_unprepare(bls->clk_main);
+	bls->clk_enabled = false;
+}
+EXPORT_SYMBOL_GPL(mt6589_bls_ddp_clk_disable);
+
+/*
+ * BLS_SRC_SIZE carries the size of the picture entering the block.  Without
+ * it the block has no idea how wide the frame is, which is what the stock
+ * driver programs from the mode (ddp_bls.c: (srcHeight << 16) | srcWidth).
+ */
+void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
+			   unsigned int h, unsigned int vrefresh,
+			   unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
+{
+	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+
+	if (!bls || !w || !h)
+		return;
+
+	writel((h << 16) | w, bls->base + BLS_SRC_SIZE);
+}
+EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
+
+/*
+ * Run the block as part of the display pipeline rather than leaving it as a
+ * backlight generator.  0x80010001 is the value the stock driver waits for
+ * when enabling BLS for display (ddp_drv.c, ddp_bls.c); 0x80000000, which
+ * this driver used to write, is "only enable PWM" per its own comment in
+ * ddp_bls.c.
+ */
+void mt6589_bls_ddp_start(struct device *dev)
+{
+	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+
+	if (!bls)
+		return;
+
+	writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
+	bls->bls_enabled = true;
+}
+EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
+
+void mt6589_bls_ddp_stop(struct device *dev)
+{
+	struct mt6589_bls_pwm *bls = dev_get_drvdata(dev);
+
+	if (!bls)
+		return;
+
+	writel(0x0, bls->base + BLS_EN);
+	bls->bls_enabled = false;
+}
+EXPORT_SYMBOL_GPL(mt6589_bls_ddp_stop);
 
 static const struct of_device_id mt6589_bls_pwm_of_match[] = {
 	{ .compatible = "mediatek,mt6589-disp-pwm" },
