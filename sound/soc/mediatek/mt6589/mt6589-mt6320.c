@@ -121,6 +121,7 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &mt6589_mt6320_card;
 	struct device_node *platform_node;
+	struct device_node *codec_node;
 	struct snd_soc_dai_link *dai_link;
 	int i, ret;
 
@@ -131,10 +132,25 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				     "missing mediatek,platform\n");
 
-	/* The DL1 CPU DAI and the PCM platform both live on the AFE node. */
+	codec_node = of_parse_phandle(pdev->dev.of_node,
+				      "mediatek,audio-codec", 0);
+	if (!codec_node)
+		return dev_err_probe(&pdev->dev, -EINVAL,
+				     "missing mediatek,audio-codec\n");
+
+	/*
+	 * The DL1 CPU DAI and the PCM platform both live on the AFE node;
+	 * the MT6320 is the codec on the other end.  Without the codec
+	 * component bound here the card has no DAI at the far end of the
+	 * link, so nothing in mt6320.c runs - no DAPM, and with it none of
+	 * the analog path setup that playback needs.
+	 */
 	for_each_card_prelinks(card, i, dai_link) {
+		if (dai_link->codecs->name)
+			continue;
 		dai_link->cpus->of_node = platform_node;
 		dai_link->platforms->of_node = platform_node;
+		dai_link->codecs->of_node = codec_node;
 	}
 
 	if (of_property_present(pdev->dev.of_node, "audio-routing")) {
