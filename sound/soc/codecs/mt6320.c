@@ -38,7 +38,14 @@
 #define MT6320_ABB_AFE_BASE		0x4000
 #define MT6320_ABB_AFE_CON(n)		(MT6320_ABB_AFE_BASE + (n) * 2)
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H	(MT6320_ABB_AFE_CON(1))
-#define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(3, 0)
+/*
+ * The sample rate lives in bits [15:12], not a low nibble. The stock
+ * driver sets this register as 0x0300 | GetDLFrequency(rate), where
+ * GetDLFrequency() returns the code shifted left by twelve: 48 kHz gives
+ * 8 << 12, so the register becomes 0x8300.
+ */
+#define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(15, 12)
+#define MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE	0x0300
 
 #define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
 
@@ -146,8 +153,8 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	return regmap_update_bits(priv->regmap,
 				  MT6320_ABB_AFE_DL_SRC2_CON0_H,
 				  MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE,
-				  FIELD_PREP(MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE,
-					     rate_code));
+				  MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
+				  (rate_code << 12));
 }
 
 static const struct snd_soc_dai_ops mt6320_dai_ops = {
