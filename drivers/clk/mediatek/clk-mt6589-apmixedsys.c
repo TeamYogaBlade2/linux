@@ -232,12 +232,12 @@ enum fh_pll_id {
 	}
 
 static struct mtk_pllfh_data pllfhs[] = {
-//	_FH(CLK_APMIXED_ARMPLL,  FH_ARMPLL,  0x4c),	/* CH0 */
-//	_FH(CLK_APMIXED_MAINPLL, FH_MAINPLL, 0x5c),	/* CH1 */
-//	/* CH2 = MEMPLL, not registered */
-//	_FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x7c),	/* CH3 */
-//	_FH(CLK_APMIXED_TVDPLL,  FH_TVDPLL,  0x8c),	/* CH4 */
-//	_FH(CLK_APMIXED_LVDSPLL, FH_LVDSPLL, 0x9c),	/* CH5 */
+	_FH(CLK_APMIXED_ARMPLL,  FH_ARMPLL,  0x4c),	/* CH0 */
+	_FH(CLK_APMIXED_MAINPLL, FH_MAINPLL, 0x5c),	/* CH1 */
+	/* CH2 = MEMPLL, not registered */
+	_FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x7c),	/* CH3 */
+	_FH(CLK_APMIXED_TVDPLL,  FH_TVDPLL,  0x8c),	/* CH4 */
+	_FH(CLK_APMIXED_LVDSPLL, FH_LVDSPLL, 0x9c),	/* CH5 */
 };
 
 static const struct mtk_pll_div_table mt6589_isppll_div_table[] = {
