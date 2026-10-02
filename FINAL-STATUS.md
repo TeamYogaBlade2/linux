@@ -187,7 +187,32 @@ mt8173, mt8183, mt8183-2l, mt8192, mt8192-2l, mt8195) and this behaviour is
 identical on all of them and unchanged by this port. Changing shared code for a
 theoretical MT6589 concern would affect every platform and need hardware on each.
 
-There are therefore no known outstanding defects in the tree.
+## First hardware boot — three defects the review had missed
+
+Source review said the tree was clean. The first real boot log showed
+otherwise, which is the point at which those claims were withdrawn:
+
+- **`devm_reset_control_get(dev, "reset")` in ovl and rdma.** Given a name, the
+  reset core searches the node's `reset-names` first and returns `-ENOENT` when
+  there is no match — before consulting any controller. The display nodes carry a
+  bare `resets = <&dispsys N>` with no `reset-names`, so all three components died:
+  `error -ENOENT: failed to get reset control`. With ovl and both RDMA units gone
+  there is no pipeline to drive DSI at all, which is why the panel stayed black.
+  Now looked up by index, as `mtk_disp_merge.c` and `mtk_dsi.c` already do.
+- **`late_probe()` returning `-EPROBE_DEFER`.** `snd_soc_card_late_probe()`'s
+  return goes straight to `if (ret < 0) goto probe_end`, so a deferral abandons the
+  card: `No soundcards found`, then the device parked in the deferred list. The
+  accdet is not a DT dependency of the sound node, so the card now proceeds
+  without it.
+- **One claim of mine was wrong and was reverted.** `mt6320-accdet` was patched to
+  tolerate a missing `accdet_irq` on the theory that the DT omits it. It does not:
+  `mt6397-core` supplies it as a named MFD resource (`DEFINE_RES_IRQ_NAMED`), so
+  there was never an `-ENXIO`. The patch was reverted rather than left in place
+  on a false rationale.
+
+The lesson is the same one the MT6628 audit reached: a clean build and a
+plausible commit message carry almost no assurance, and the display code was
+reviewed twice without this being noticed.
 
 ## Verified reachable, not just present
 
