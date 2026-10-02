@@ -134,6 +134,15 @@ static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 			list_first_entry(&signalled, struct prismrv_fence, node);
 		list_del_init(&pf->node);
 
+		/*
+		 * The GPU may have written any BO of the job (render
+		 * targets) through its own non-coherent path: make the
+		 * results visible to the CPU BEFORE anyone is told the job
+		 * is done.
+		 */
+		for (unsigned int i = 0; i < pf->num_bos; i++)
+			prismrv_bo_sync_for_cpu(pf->bos[i]);
+
 		dma_fence_signal(&pf->base);
 		/*
 		 * Release the BO references AFTER signalling: waiters that
@@ -259,7 +268,19 @@ void prismrv_recovery_work(struct work_struct *work)
 	 * Step 4: tear down old HW state and reinitialise.
 	 */
 	prismrv_hw_fini(pv);
-	prismrv_hw_init(pv);
+	ret = prismrv_hw_init(pv);
+	if (ret) {
+		/*
+		 * hw_ready stays false.  The runtime-PM core still thinks
+		 * the device is active, so nothing would ever re-run the
+		 * resume path; the next submit retries through
+		 * prismrv_hw_reinit() instead of failing with -ENODEV
+		 * forever.
+		 */
+		dev_err(pv->drm.dev,
+			"recovery: re-initialisation failed (%d); will retry on next submit\n",
+			ret);
+	}
 
 	mutex_unlock(&pv->init_mutex);
 	up_write(&pv->submit_rwsem);
@@ -292,6 +313,15 @@ void prismrv_hang_work(struct work_struct *work)
 			      msecs_to_jiffies(PRISMRV_HANG_TIMEOUT_MS / 2));
 }
 
+/*
+ * Hard IRQ: latch and acknowledge the event bits, then wake the thread.
+ *
+ * Retiring a fence has to do cache maintenance for every BO of the job
+ * (dma_sync_sgtable_for_cpu(), potentially large) before the fence may
+ * be signalled, so the real work runs in the IRQ thread.  Completion
+ * itself is judged from the CCB read_offset in memory, not from the
+ * status bits, so acknowledging first loses nothing.
+ */
 irqreturn_t prismrv_irq_handler(int irq, void *data)
 {
 	struct prismrv_device *pv = data;
@@ -305,6 +335,17 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 			  PRISMRV_IRQ_COMPLETION_EVENTS);
 	if (!clear)
 		return IRQ_NONE;
+
+	atomic_or(status, &pv->irq_events);
+	writel(clear | EUR_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT_MASK,
+	       pv->regs + EUR_CR_EVENT_HOST_CLEAR);
+	return IRQ_WAKE_THREAD;
+}
+
+irqreturn_t prismrv_irq_thread(int irq, void *data)
+{
+	struct prismrv_device *pv = data;
+	u32 status = atomic_xchg(&pv->irq_events, 0);
 
 	/*
 	 * A completion event that does not advance read_offset (no fence
@@ -320,13 +361,12 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 	}
 
 	/*
-	 * HostCtl flag path (REVIEW R6): the uKernel raises bits in
-	 * ui32InterruptFlags to request host-side services; the host
-	 * acknowledges by writing the same mask into ui32ClearFlags
-	 * (vendor SGXMKIF_HOST_CTL convention).  Actual service dispatch
-	 * (e.g. PROCESS_QUEUES follow-up) happens through the CCB.
+	 * HostCtl flag path: the uKernel raises bits in ui32InterruptFlags
+	 * to request host-side services; the host acknowledges by writing
+	 * the same mask into ui32ClearFlags (vendor SGXMKIF_HOST_CTL
+	 * convention).
 	 */
-	if (pv->hostctl) {
+	if (READ_ONCE(pv->hw_ready) && pv->hostctl) {
 		u32 flags = le32_to_cpu(READ_ONCE(pv->hostctl->ui32InterruptFlags));
 
 		if (flags) {
@@ -337,9 +377,31 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 			       pv->regs + EUR_CR_EVENT_KICK);
 		}
 	}
-
-	clear |= EUR_CR_EVENT_HOST_CLEAR_MASTER_INTERRUPT_MASK;
-	writel(clear, pv->regs + EUR_CR_EVENT_HOST_CLEAR);
-
 	return IRQ_HANDLED;
+}
+
+/**
+ * prismrv_hw_reinit() - bring a device whose hw_ready is false back up.
+ *
+ * Called from submit with a runtime-PM reference held (clocks are on).
+ * hw_ready is false either because probe/resume could not initialise the
+ * hardware or because a recovery failed half way; both leave the PM core
+ * believing the device is active, so the resume callback would not run.
+ */
+int prismrv_hw_reinit(struct prismrv_device *pv)
+{
+	int ret = 0;
+
+	down_write(&pv->submit_rwsem);
+	mutex_lock(&pv->init_mutex);
+	if (!READ_ONCE(pv->hw_ready)) {
+		mutex_lock(&pv->mmu_lock);
+		prismrv_mmu_invalidate_all_bos(pv);
+		mutex_unlock(&pv->mmu_lock);
+		prismrv_hw_fini(pv);
+		ret = prismrv_hw_init(pv);
+	}
+	mutex_unlock(&pv->init_mutex);
+	up_write(&pv->submit_rwsem);
+	return ret;
 }

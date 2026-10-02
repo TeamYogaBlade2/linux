@@ -36,8 +36,17 @@ static int prismrv_read_gpu_grade(struct device *dev)
 
 	cell = devm_nvmem_cell_get(dev, "gpu_grade");
 	if (IS_ERR(cell)) {
-		/* no cell wired up: treat as unfused (grade 0 = slowest) */
-		return 0;
+		int err = PTR_ERR(cell);
+
+		/*
+		 * Only "no such cell / no nvmem" means unfused (grade 0 =
+		 * slowest).  -EPROBE_DEFER must reach the caller: running
+		 * with grade 0 only because the eFuse provider has not
+		 * probed yet would pick the wrong OPP table for good.
+		 */
+		if (err == -ENOENT || err == -ENODEV)
+			return 0;
+		return err;
 	}
 
 	buf = nvmem_cell_read(cell, &len);
@@ -77,8 +86,11 @@ static int prismrv_read_sw_efuse_force(struct device *dev)
 	int val;
 
 	cell = devm_nvmem_cell_get(dev, "gpu_sw_efuse");
-	if (IS_ERR(cell))
-		return 0;
+	if (IS_ERR(cell)) {
+		int err = PTR_ERR(cell);
+
+		return (err == -ENOENT || err == -ENODEV) ? 0 : err;
+	}
 	buf = nvmem_cell_read(cell, &len);
 	devm_nvmem_cell_put(dev, cell);
 	if (IS_ERR(buf))

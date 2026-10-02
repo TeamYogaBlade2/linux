@@ -259,8 +259,10 @@ struct prismrv_device {
 	struct list_head pending_fences; /* completed in order by the IRQ */
 	atomic_t missed_completions;
 	atomic_t busy_count;
-	atomic_t fence_context;		/* dma_fence context id */
-	atomic_t fence_seqno;		/* per-context sequence number */
+	u64 fence_context;		/* one dma_fence timeline: the CCB */
+	atomic64_t fence_seqno;		/* assigned under submit_order */
+	struct mutex submit_order;	/* seqno order == CCB order */
+	atomic_t irq_events;		/* event bits latched by the hard IRQ */
 	struct work_struct recovery_work;
 	struct delayed_work hang_work;
 	unsigned long last_progress;	/* jiffies of the last fence retirement */
@@ -307,6 +309,10 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 			       size_t size);
 
 irqreturn_t prismrv_irq_handler(int irq, void *data);
+irqreturn_t prismrv_irq_thread(int irq, void *data);
+int prismrv_hw_reinit(struct prismrv_device *pv);
+void prismrv_bo_sync_for_device(struct drm_gem_object *obj);
+void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj);
 void prismrv_recovery_work(struct work_struct *work);
 bool prismrv_ccb_sync_locked(struct prismrv_device *pv);
 void prismrv_request_recovery(struct prismrv_device *pv);

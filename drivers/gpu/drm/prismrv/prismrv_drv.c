@@ -12,6 +12,8 @@
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
 #include <linux/delay.h>
+#include <linux/devfreq.h>
+#include <linux/dma-fence.h>
 #include <linux/string.h>
 #include <linux/dma-mapping.h>
 
@@ -180,8 +182,11 @@ static int prismrv_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 	pv->irq = irq;
-	ret = devm_request_irq(&pdev->dev, irq, prismrv_irq_handler,
-			       IRQF_SHARED, dev_name(&pdev->dev), pv);
+	pv->fence_context = dma_fence_context_alloc(1);
+	mutex_init(&pv->submit_order);
+	ret = devm_request_threaded_irq(&pdev->dev, irq, prismrv_irq_handler,
+					prismrv_irq_thread, IRQF_SHARED,
+					dev_name(&pdev->dev), pv);
 	if (ret)
 		return ret;
 
@@ -290,6 +295,15 @@ static int prismrv_runtime_suspend(struct device *dev)
 	struct prismrv_device *pv = dev_get_drvdata(dev);
 
 	/*
+	 * Stop DVFS first: devfreq changes the core clock and reads its
+	 * rate from its own worker, which must not run while the clocks and
+	 * the reset line are being switched off.  Resume re-enables it only
+	 * after the hardware is back up.
+	 */
+	if (pv->devfreq.devfreq)
+		devfreq_suspend_device(pv->devfreq.devfreq);
+
+	/*
 	 * Take the submit write-lock so no new submits can start while
 	 * we tear down, and wait for any in-flight submit to finish.
 	 */
@@ -377,9 +391,13 @@ static int prismrv_runtime_resume(struct device *dev)
 	mutex_unlock(&pv->init_mutex);
 	up_write(&pv->submit_rwsem);
 
-	if (ret)
+	if (ret) {
 		prismrv_clks_off(pv, pv->nr_clocks);
-	return ret;
+		return ret;
+	}
+	if (pv->devfreq.devfreq)
+		devfreq_resume_device(pv->devfreq.devfreq);
+	return 0;
 }
 
 static const struct dev_pm_ops prismrv_pm_ops = {

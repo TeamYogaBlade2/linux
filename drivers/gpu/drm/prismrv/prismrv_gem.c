@@ -337,3 +337,31 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 	}
 	return 0;
 }
+
+/*
+ * Non-coherent DMA ownership hand-over.  The BO's pages are DMA-mapped
+ * once (drm_gem_shmem_get_pages_sgt) and stay mapped for the BO's life,
+ * so the CPU/device caches must be synchronised explicitly whenever the
+ * owner changes: CPU -> device before a job that may read or write the
+ * BO is kicked, device -> CPU before the job's fence is signalled.
+ * Write-combined (PRISMRV_BO_UNCACHED) BOs have no CPU cache lines to
+ * maintain.  Directions are BIDIRECTIONAL because any BO of a job may be
+ * both read and written by the GPU (render targets are textures too).
+ */
+void prismrv_bo_sync_for_device(struct drm_gem_object *obj)
+{
+	struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(obj);
+
+	if (shmem->sgt && !shmem->map_wc)
+		dma_sync_sgtable_for_device(obj->dev->dev, shmem->sgt,
+					    DMA_BIDIRECTIONAL);
+}
+
+void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj)
+{
+	struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(obj);
+
+	if (shmem->sgt && !shmem->map_wc)
+		dma_sync_sgtable_for_cpu(obj->dev->dev, shmem->sgt,
+					 DMA_BIDIRECTIONAL);
+}

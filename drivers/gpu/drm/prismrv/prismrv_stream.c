@@ -474,8 +474,14 @@ int prismrv_validate_stream(struct prismrv_device *pv, const u32 *stream,
 			break;
 		}
 
-		case OP_SET_TEXTURE:	/* slot, w, h, va, stride, format */
-			if (n != 6 || p[0] >= MAX_TEXTURE_SLOTS)
+		case OP_SET_TEXTURE:	/* slot, w, h, va, stride, format,
+					 * wrap_s, wrap_t, min, mag, mip */
+			if (n != 11 || p[0] >= MAX_TEXTURE_SLOTS)
+				return -EINVAL;
+			/* PIPE_TEX_WRAP_* 0-7, PIPE_TEX_FILTER_* 0-1,
+			 * PIPE_TEX_MIPFILTER_* 0-2 */
+			if (p[6] > 7 || p[7] > 7 || p[8] > 1 || p[9] > 1 ||
+			    p[10] > 2)
 				return -EINVAL;
 			if (!prismrv_surface_ok(bos, num_bos, p[3], p[1], p[2],
 						p[4], p[5]))

@@ -339,15 +339,37 @@ static int prismrv_read_bo(void *ctx, struct drm_gem_object *bo, u64 off,
 			   void *dst, size_t len)
 {
 	struct iosys_map map;
+	long w;
 	int ret;
 
 	if (off > bo->size || len > bo->size - off)
 		return -EINVAL;
-	ret = drm_gem_vmap(bo, &map);
+
+	/*
+	 * The snapshot must see the BO's final contents: a job that is
+	 * still writing it (e.g. it is that job's render target) has to
+	 * finish first, and the GPU's writes have to be visible to the CPU.
+	 * Wait for the existing fences under the reservation lock so
+	 * nothing new can be queued between the wait and the read.
+	 */
+	ret = dma_resv_lock_interruptible(bo->resv, NULL);
 	if (ret)
 		return ret;
+	w = dma_resv_wait_timeout(bo->resv, DMA_RESV_USAGE_WRITE, true,
+				  MAX_SCHEDULE_TIMEOUT);
+	if (w < 0) {
+		dma_resv_unlock(bo->resv);
+		return w;
+	}
+	ret = drm_gem_shmem_vmap_locked(to_drm_gem_shmem_obj(bo), &map);
+	if (ret) {
+		dma_resv_unlock(bo->resv);
+		return ret;
+	}
+	prismrv_bo_sync_for_cpu(bo);
 	iosys_map_memcpy_from(dst, &map, off, len);
-	drm_gem_vunmap(bo, &map);
+	drm_gem_shmem_vunmap_locked(to_drm_gem_shmem_obj(bo), &map);
+	dma_resv_unlock(bo->resv);
 	return 0;
 }
 
@@ -444,6 +466,17 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		return ret;
 
+	/* a failed probe/recovery leaves hw_ready false with the PM core
+	 * believing the device is active: retry the bring-up here */
+	if (!READ_ONCE(pv->hw_ready)) {
+		ret = prismrv_hw_reinit(pv);
+		if (ret) {
+			dev_err(pv->drm.dev, "GPU re-initialisation failed (%d)\n", ret);
+			ret = -ENODEV;
+			goto err_pm;
+		}
+	}
+
 	/* ----------------------------------------------------------------
 	 * Phase 1 — outside submit_rwsem: validate, GEM lookup, fence wait.
 	 *
@@ -523,14 +556,22 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	spin_lock_init(&f->lock);
 	INIT_LIST_HEAD(&f->node);
 	f->ccb_slot = 0xFFFF;
+	/*
+	 * One timeline for the whole device: the CCB runs jobs in order, so
+	 * fences share a context and seqno order must equal CCB order.
+	 * submit_order serialises "take seqno" .. "publish in CCB"; it is
+	 * dropped on every exit path below.
+	 */
+	mutex_lock(&pv->submit_order);
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
-		       atomic_inc_return(&pv->fence_context),
-		       atomic_inc_return(&pv->fence_seqno));
+		       pv->fence_context,
+		       atomic64_inc_return(&pv->fence_seqno));
 	/* ref #1: held by this function; transferred to sync_file below */
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
 		ret = fd;
+		mutex_unlock(&pv->submit_order);
 		goto err_fence_put;
 	}
 
@@ -635,6 +676,14 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 */
 	dma_fence_get(&f->base);	/* ref #3: for pending_fences */
 
+	/*
+	 * Hand every BO of the job to the device: write back whatever the
+	 * CPU left in its caches (vertex data, textures, the kernel-written
+	 * snapshot) before the uKernel can see the command.
+	 */
+	for (i = 0; i < f->num_bos; i++)
+		prismrv_bo_sync_for_device(f->bos[i]);
+
 	ret = prismrv_ccb_schedule(pv, args->cmd_type, cmd_data, f);
 	if (ret) {
 		/*
@@ -659,6 +708,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	args->out_fence_fd = fd;
 	fd_install(fd, sf->file);
 
+	mutex_unlock(&pv->submit_order);
 	up_read(&pv->submit_rwsem);
 	/* PM ref is kept; handle_completion() / hw_fini() will release it */
 	return 0;
@@ -668,6 +718,7 @@ err_unlock_bos_set:
 	 * Release the BO refs now; f itself will be freed when sf drops ref. */
 	prismrv_fence_release_bos(f);
 err_unlock:
+	mutex_unlock(&pv->submit_order);
 	up_read(&pv->submit_rwsem);
 	fput(sf->file);		/* drops sf + its fence ref */
 	put_unused_fd(fd);
@@ -683,6 +734,7 @@ err_unlock:
 	return ret;
 
 err_put_fd:
+	mutex_unlock(&pv->submit_order);
 	put_unused_fd(fd);
 err_fence_put:
 	dma_fence_put(&f->base);	/* drop ref #1 */
