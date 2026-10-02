@@ -927,7 +927,6 @@
 			#pwm-cells = <2>;
 			clocks = <&dispsys CLK_DISP0_BLS>;
 			clock-names = "main";
-			resets = <&dispsys MT6589_DISP_BLS_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 			status = "disabled";
 		};

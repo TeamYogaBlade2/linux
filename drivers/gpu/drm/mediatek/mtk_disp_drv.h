@@ -76,12 +76,6 @@ void mtk_merge_stop_cmdq(struct device *dev, struct cmdq_pkt *cmdq_pkt);
 enum drm_mode_status mtk_merge_mode_valid(struct device *dev,
 					  const struct drm_display_mode *mode);
 
-void mtk_bls_config(struct device *dev, unsigned int width,
-		    unsigned int height, unsigned int vrefresh,
-		    unsigned int bpc, struct cmdq_pkt *cmdq_pkt);
-void mtk_bls_start(struct device *dev);
-void mtk_bls_stop(struct device *dev);
-
 void mtk_ovl_bgclr_in_on(struct device *dev);
 void mtk_ovl_bgclr_in_off(struct device *dev);
 void mtk_ovl_bypass_shadow(struct device *dev);

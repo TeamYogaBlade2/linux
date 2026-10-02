@@ -369,16 +369,6 @@ static const struct mtk_ddp_comp_funcs ddp_ovl = {
 	.is_afbc_supported = mtk_ovl_is_afbc_supported,
 };
 
-/*
- * MT6589 BLS.  The merge funcs above are for the MT8195 merge unit, which
- * is a different register block, so BLS needs its own set.
- */
-static const struct mtk_ddp_comp_funcs ddp_bls = {
-	.config = mtk_bls_config,
-	.start = mtk_bls_start,
-	.stop = mtk_bls_stop,
-};
-
 static const struct mtk_ddp_comp_funcs ddp_postmask = {
 	.clk_enable = mtk_ddp_clk_enable,
 	.clk_disable = mtk_ddp_clk_disable,
@@ -476,7 +466,7 @@ struct mtk_ddp_comp_match {
 static const struct mtk_ddp_comp_match mtk_ddp_matches[DDP_COMPONENT_DRM_ID_MAX] = {
 	[DDP_COMPONENT_AAL0]		= { MTK_DISP_AAL,		0, &ddp_aal },
 	[DDP_COMPONENT_AAL1]		= { MTK_DISP_AAL,		1, &ddp_aal },
-	[DDP_COMPONENT_BLS]		= { MTK_DISP_BLS,		0, &ddp_bls },
+	[DDP_COMPONENT_BLS]		= { MTK_DISP_BLS,		0, NULL },
 	[DDP_COMPONENT_CCORR]		= { MTK_DISP_CCORR,		0, &ddp_ccorr },
 	[DDP_COMPONENT_COLOR0]		= { MTK_DISP_COLOR,		0, &ddp_color },
 	[DDP_COMPONENT_COLOR1]		= { MTK_DISP_COLOR,		1, &ddp_color },
