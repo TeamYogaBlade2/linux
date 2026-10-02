@@ -214,12 +214,13 @@ BUILD_DATE_CODE
 STA_STATISTICS_UPDATE
 ```
 
-Unhandled events are not lost: anything the event handler does not claim is
-queued to `wl->async_event_queue`, bounded at 256 entries
-(`mt6628-wlan-runtime.c:186-191`), and dropped past that. There is no consumer
-for that queue, so in practice such events are discarded. That is the intended
-behaviour for events with no STA-mode meaning, but it means the infrastructure
-is a placeholder rather than an extension point.
+Unhandled events are discarded: anything the event handler does not claim is
+freed immediately. This used to be a 256-entry queue
+(`wl->async_event_queue`) that nothing ever drained, which both leaked every
+such event and — because `mt6628_wlan_give_firmware_own()` treats a non-empty
+queue as outstanding traffic — permanently prevented the radio from reaching
+its idle state. The queues have been removed. If an extension point is ever
+wanted here, give the queue a real consumer first.
 
 ### 2.5 Behavioural notes
 
@@ -227,7 +228,12 @@ is a placeholder rather than an extension point.
   userspace notices. This is the most user-visible gap in normal use.
 - **Regulatory:** hard-coded channels with fixed max power; a 5 GHz channel on a
   DFS channel would be used without CAC.
-- **Suspend/resume:** not implemented for the WLAN device.
+- **Suspend/resume:** implemented. Suspend cancels the idle countdown and hands
+  the chip to the firmware, refusing the suspend (`-EBUSY`) if traffic is still
+  in flight. `freeze`/`thaw` share that path and `restore` reclaims Driver Own.
+  The firmware is not told to enter a separate low-power mode — this chip has no
+  such command — so the radio simply ends up firmware-owned, which is the same
+  state the runtime idle path already uses.
 - **Concurrency:** the command engine is single-outstanding (`cmd_mutex`), so
   only one command transaction is in flight at a time.
 
@@ -243,6 +249,7 @@ is a placeholder rather than an extension point.
 | Station statistics | complete (signal, TX packets, retries) |
 | Remain-on-channel | complete |
 | Ownership power management | complete |
+| System suspend / resume | complete (idle hand-off driven from `.drv.pm`) |
 | Firmware recovery + reconnect | complete |
 | `get_survey` | impossible — no firmware command |
 | Roaming | not implemented — event carries no target |
@@ -253,7 +260,7 @@ is a placeholder rather than an extension point.
 | VHT | not implemented |
 | DFS / regulatory | not implemented |
 | PMF, SAE, 802.1X | not implemented |
-| `async_event_queue` | placeholder, no consumer |
+| `async_event_queue` | removed — unhandled events are freed, not queued |
 
 The driver is a complete STA-mode full-MAC driver. Everything in the "blocked"
 and "out of scope" rows is absent for a reason other than the port falling
