@@ -13,6 +13,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mtk_crtc.h"
@@ -211,6 +212,7 @@ struct mtk_disp_ovl_data {
 struct mtk_disp_ovl {
 	struct drm_crtc			*crtc;
 	struct clk_bulk_data		*clks;
+	struct reset_control		*rstc;
 	int				num_clks;
 	void __iomem			*regs;
 	struct cmdq_client_reg		cmdq_reg;
@@ -790,6 +792,30 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->regs))
 		return dev_err_probe(dev, PTR_ERR(priv->regs),
 				     "failed to ioremap ovl\n");
+
+	/*
+	 * Reset the engine before touching it.  Writing the registers
+	 * directly needs the block's clock running, but the bootloader can
+	 * leave it in a state where the engine is still fetching, so assert
+	 * the reset first and release it with the clocks enabled.
+	 */
+	ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to enable ovl clks\n");
+
+	priv->rstc = devm_reset_control_get(dev, "reset");
+	if (IS_ERR(priv->rstc)) {
+		ret = PTR_ERR(priv->rstc);
+		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+		return dev_err_probe(dev, ret,
+				     "failed to get reset control\n");
+	}
+
+	ret = reset_control_reset(priv->rstc);
+	if (ret) {
+		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+		return dev_err_probe(dev, ret, "failed to reset ovl\n");
+	}
 
 	/* Stop any leftover OVL activity from bootloader */
 	writel(0x0, priv->regs + DISP_REG_OVL_EN);

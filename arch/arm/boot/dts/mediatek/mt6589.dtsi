@@ -934,6 +934,7 @@
 			reg = <0x1400a000 0x1000>;
 			interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP0_COLOR>;
+			resets = <&dispsys MT6589_DISP_COLOR_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
@@ -942,6 +943,7 @@
 			reg = <0x1400b000 0x1000>;
 			interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP0_2DSHP>;
+			resets = <&dispsys MT6589_DISP_TDSHP_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
@@ -1269,6 +1271,7 @@
 				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
 				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
+			resets = <&dispsys MT6589_DISP_OVL_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
@@ -1280,6 +1283,7 @@
 				 <&dispsys CLK_DISP0_RDMA0_SMI>,
 				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
+			resets = <&dispsys MT6589_DISP_RDMA0_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
@@ -1291,6 +1295,7 @@
 				 <&dispsys CLK_DISP0_RDMA1_SMI>,
 				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
 			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
+			resets = <&dispsys MT6589_DISP_RDMA1_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
@@ -1313,6 +1318,7 @@
 			clock-names = "engine", "digital", "hs";
 			phys = <&mipi_tx0>;
 			phy-names = "dphy";
+			resets = <&dispsys MT6589_DISP_DSI_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 			status = "disabled";
 		};

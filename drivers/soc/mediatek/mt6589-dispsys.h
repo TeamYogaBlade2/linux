@@ -40,6 +40,14 @@
  *   WDMA0_SEL     0x1           0x0=SCL
  */
 
+/*
+ * DISPSYS software reset, active low (0 holds the block in reset, 1
+ * releases it; the register resets to all ones).  Bit assignments are in
+ * include/dt-bindings/reset/mt6589-resets.h.
+ */
+#define MT6589_DISP_SW_RST_B			0x140
+#define MT6589_DISP_NUM_RESETS			21
+
 #define MT6589_DISP_SCL_MOUT_EN		0x020
 #define MT6589_DISP_OVL_MOUT_EN		0x024
 #define MT6589_DISP_COLOR_MOUT_EN	0x028

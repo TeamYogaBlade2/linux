@@ -42,6 +42,9 @@ static const struct mtk_mmsys_driver_data mt6589_dispsys_driver_data = {
 	.clk_driver = "clk-mt6589-disp",
 	.routes = mt6589_dispsys_routing_table,
 	.num_routes = ARRAY_SIZE(mt6589_dispsys_routing_table),
+	.sw0_rst_offset = MT6589_DISP_SW_RST_B,
+	.num_resets = MT6589_DISP_NUM_RESETS,
+	.sw_rst_active_low = true,
 };
 
 static const struct mtk_mmsys_driver_data mt6779_mmsys_driver_data = {
@@ -351,6 +354,15 @@ static int mtk_mmsys_reset_update(struct reset_controller_dev *rcdev, unsigned l
 	reg = mmsys->data->sw0_rst_offset + offset;
 
 	spin_lock_irqsave(&mmsys->lock, flags);
+
+	/*
+	 * Most of these registers are active high, where asserting means
+	 * driving the bit low.  The MT6589 DISPSYS reset is the opposite:
+	 * SW_RST_B holds a block in reset while its bit reads 0 and releases
+	 * it when it reads 1, so the two writes have to be swapped there.
+	 */
+	if (mmsys->data->sw_rst_active_low)
+		assert = !assert;
 
 	if (assert)
 		mtk_mmsys_update_bits(mmsys, reg, BIT(id), 0, NULL);
