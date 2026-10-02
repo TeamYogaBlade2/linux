@@ -117,6 +117,7 @@ struct mt6628_wlan {
 	 */
 	struct cfg80211_connect_params conn_retry;
 	bool conn_retry_valid;
+	unsigned int roam_count;
 	struct delayed_work conn_retry_work;
 	unsigned int conn_retry_count;
 	u8 *conn_resp_ie;

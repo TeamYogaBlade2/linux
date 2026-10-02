@@ -11,6 +11,8 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 
+#include <net/cfg80211.h>
+
 #include "mtk-wlan-hif.h"
 #include "mtk-wlan.h"
 
@@ -218,6 +220,233 @@ void mt6628_cfg80211_fw_send_deauth(struct mt6628_wlan *wl,
 			      WLAN_REASON_CLASS3_FRAME_FROM_NONASSOC_STA);
 }
 
+/*
+ * Driver-driven roaming.
+ *
+ * The firmware's own roaming cannot be used: EVENT_ID_ROAMING_STATUS
+ * carries only {u2Event, u2Data} with no BSSID, and the target AP is
+ * picked inside downstream's roaming_fsm.c from the driver's private
+ * scan cache, then handed to the AIS state machine.  Neither exists here
+ * and neither is worth porting, because the cfg80211 BSS cache already
+ * holds the scan results.
+ *
+ * So on beacon loss, look through that cache for a better BSS on the
+ * same SSID and reconnect to it.  The saved connect parameters supply
+ * the SSID, the IE and the key material, so this needs no userspace
+ * involvement and no new crypto handling.
+ */
+
+/*
+ * Only consider a candidate clearly better than the AP just lost.  dBm is
+ * negative, so this is a margin of roughly 10 dB: enough to follow a
+ * client from one AP to a genuinely nearer one, but not enough to chase
+ * small fluctuations between two similar candidates.
+ */
+#define MT6628_ROAM_MIN_GAIN_DBM	10
+/* One roam attempt per link loss; further recovery is the retry path. */
+#define MT6628_ROAM_MAX_ATTEMPTS	1
+
+/*
+ * Candidate search context, threaded through cfg80211_bss_iter().
+ */
+struct mt6628_roam_search {
+	const u8 *ssid;
+	size_t ssid_len;
+	const u8 *avoid_bssid;
+	int cur_dbm;
+	int best_dbm;
+	bool found;
+	u8 bssid[ETH_ALEN];
+};
+
+/*
+ * bss->signal is in dBm: this driver reports MBM, so cfg80211 normalises
+ * to dBm for us when the entry is created.  Reject a value of 0, which
+ * cfg80211 uses for "unknown".
+ */
+static void mt6628_roam_consider(struct wiphy *wiphy,
+				 struct cfg80211_bss *bss, void *data)
+{
+	struct mt6628_roam_search *s = data;
+	const struct element *elem;
+
+	if (!bss || bss->signal <= 0)
+		return;
+
+	/* Never pick the AP we just lost; that is not a roam. */
+	if (s->avoid_bssid && !memcmp(bss->bssid, s->avoid_bssid, ETH_ALEN))
+		return;
+
+	/* A non-empty SSID must match exactly. */
+	if (s->ssid_len) {
+		elem = ieee80211_bss_get_elem(bss, WLAN_EID_SSID);
+		if (!elem || elem->datalen != s->ssid_len ||
+		    memcmp(elem->data, s->ssid, s->ssid_len))
+			return;
+	}
+
+	/*
+	 * Demand a clear gain over the AP we just lost, otherwise the link
+	 * would flap between equally good candidates as their beacons
+	 * alternate.  Once one candidate clears the bar, prefer the best.
+	 */
+	if (!s->found &&
+	    bss->signal < s->cur_dbm + MT6628_ROAM_MIN_GAIN_DBM)
+		return;
+	if (!s->found || bss->signal > s->best_dbm) {
+		s->best_dbm = bss->signal;
+		ether_addr_copy(s->bssid, bss->bssid);
+		s->found = true;
+	}
+}
+
+/*
+ * Pick the strongest cached BSS advertising @ssid that is clearly better
+ * than the AP just lost.  Returns true and copies the BSSID when one is
+ * found.
+ */
+static bool mt6628_roam_find_candidate(struct mt6628_wlan *wl,
+				       const u8 *ssid, size_t ssid_len,
+				       const u8 *avoid_bssid,
+				       int cur_dbm,
+				       u8 *out_bssid)
+{
+	struct mt6628_roam_search search = {
+		.ssid		= ssid,
+		.ssid_len	= ssid_len,
+		.avoid_bssid	= avoid_bssid,
+		.cur_dbm	= cur_dbm,
+		.best_dbm	= cur_dbm,
+	};
+
+	cfg80211_bss_iter(wl->wiphy, NULL, mt6628_roam_consider, &search);
+	if (!search.found)
+		return false;
+
+	ether_addr_copy(out_bssid, search.bssid);
+	return true;
+}
+
+/*
+ * Score the BSS we just lost.  Its cached entry still holds the last
+ * beacon we heard, which is the fair comparison for a candidate.
+ */
+struct mt6628_roam_current {
+	u8 bssid[ETH_ALEN];
+	int dbm;
+	bool found;
+};
+
+static void mt6628_roam_score_current(struct wiphy *wiphy,
+				      struct cfg80211_bss *bss, void *data)
+{
+	struct mt6628_roam_current *c = data;
+
+	if (c->found || !bss || bss->signal <= 0)
+		return;
+	if (memcmp(bss->bssid, c->bssid, ETH_ALEN))
+		return;
+
+	c->dbm = bss->signal;
+	c->found = true;
+}
+
+/*
+ * Re-associate to a stronger BSS after beacon loss.
+ *
+ * Runs from the workqueue, so it may sleep.  Returns true if a roam was
+ * started; false leaves the existing retry path in charge.
+ */
+static bool mt6628_roam_start(struct mt6628_wlan *wl)
+{
+	struct mt6628_roam_current cur = { .dbm = -127 };
+	struct cfg80211_connect_params params = {};
+	u8 candidate[ETH_ALEN];
+	u8 *ssid;
+	bool have_cur_bssid;
+	int ret;
+
+	if (!wl->netdev || !wl->wiphy || !wl->runtime_started)
+		return false;
+
+	if (wl->roam_count >= MT6628_ROAM_MAX_ATTEMPTS)
+		return false;
+
+	/*
+	 * Snapshot the SSID and the AP we are leaving.  A hidden SSID was
+	 * never recorded, and an empty one would match every BSS in range,
+	 * so in neither case is there anything to roam towards.
+	 */
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_state != MT6628_CONN_DISCONNECTED ||
+	    !wl->conn_retry_valid ||
+	    !wl->conn_retry.ssid || !wl->conn_retry.ssid_len) {
+		mutex_unlock(&wl->cfg_mutex);
+		return false;
+	}
+	/*
+	 * Copy the SSID out: it stays a borrowed pointer in params, and the
+	 * saved buffer is consumed by take_retry() further down.
+	 */
+	ssid = kmemdup(wl->conn_retry.ssid, wl->conn_retry.ssid_len,
+		       GFP_KERNEL);
+	params.ssid_len = wl->conn_retry.ssid_len;
+	have_cur_bssid = !!wl->conn_retry.bssid;
+	if (have_cur_bssid)
+		memcpy(cur.bssid, wl->conn_retry.bssid, ETH_ALEN);
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!ssid)
+		return false;
+	params.ssid = ssid;
+
+	if (have_cur_bssid)
+		cfg80211_bss_iter(wl->wiphy, NULL,
+				  mt6628_roam_score_current, &cur);
+
+	if (!mt6628_roam_find_candidate(wl, params.ssid, params.ssid_len,
+					have_cur_bssid ? cur.bssid : NULL,
+					cur.dbm, candidate)) {
+		kfree(ssid);
+		return false;
+	}
+
+	/*
+	 * Claim the saved parameters and retarget them at the new AP.  The
+	 * key material and the IE are reused verbatim: this is the same
+	 * network, only a different radio front end.
+	 */
+	if (!mt6628_conn_take_retry(wl, &params)) {
+		kfree(ssid);
+		return false;
+	}
+	kfree(ssid);
+
+	params.bssid = candidate;
+	wl->roam_count++;
+
+	dev_info(&wl->func->dev,
+		 "roaming from %pM (%d dBm) to %pM\n",
+		 have_cur_bssid ? cur.bssid : (const u8 *)"", cur.dbm,
+		 candidate);
+
+	ret = mt6628_cfg80211_connect(wl->wiphy, wl->netdev, &params);
+
+	/* connect() copied what it needs; these are ours to release. */
+	kfree(params.ie);
+	kfree(params.key);
+
+	if (ret) {
+		dev_info(&wl->func->dev,
+			 "roam attempt failed (%d), falling back to reconnect\n",
+			 ret);
+		mt6628_conn_schedule_retry(wl);
+		return false;
+	}
+
+	return true;
+}
+
 void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
 {
 	bool connected;
@@ -244,6 +473,14 @@ void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 	mutex_unlock(&wl->cfg_mutex);
+
+	/*
+	 * Beacon loss is usually the AP moving rather than leaving, so try
+	 * to follow it before handing the problem to userspace.  Run from
+	 * the workqueue, which this already is.
+	 */
+	if (!mt6628_roam_start(wl))
+		mt6628_conn_schedule_retry(wl);
 }
 
 static bool mt6628_connect_is_wpa_psk(
@@ -1294,6 +1531,8 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 	cancel_delayed_work(&wl->conn_timeout_work);
 	wl->connected = true;
 	wl->conn_state = MT6628_CONN_CONNECTED;
+	/* A working link earns a fresh roam budget for the next loss. */
+	wl->roam_count = 0;
 	if (wl->netdev)
 		netif_carrier_on(wl->netdev);
 
