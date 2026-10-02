@@ -248,6 +248,11 @@ static int fhctl_hopping(struct mtk_fh *fh, unsigned int new_dds,
 		 * new_dds is the postdiv-adjusted PCW value already computed
 		 * by mtk_fhctl_set_rate(); apply it directly rather than
 		 * running the hop.
+		 *
+		 * The postdiv handling below is deliberately not reached: it
+		 * only does anything for a PLL that has a postdiv divider
+		 * table, and every channel without SSC on this part - ARMPLL,
+		 * MAINPLL, TVDPLL, LVDSPLL - is declared without one.
 		 */
 		pcw = new_dds & data->dds_mask;
 
