@@ -18,6 +18,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
+#include <linux/reset.h>
 #include <linux/slab.h>
 
 /* Register offsets (relative to BLS base address) */
@@ -83,6 +84,22 @@
 /* BLS_EN bit definitions */
 #define BLS_EN_PWM_ONLY			BIT(31)			/* Enable PWM, others off */
 
+/*
+ * BLS running as part of the display pipeline.
+ *
+ * This driver originally only ever wrote BLS_EN_PWM_ONLY, or zero, which
+ * leaves the block as a pure backlight PWM generator: the BLS data path
+ * stays disabled, so on the OVL -> COLOR -> BLS -> RDMA0 -> DSI0 path the
+ * block RDMA0 fetches from is not running and no frame completes.
+ *
+ * The value is the one the stock driver writes whenever BLS is enabled for
+ * display (ddp_bls.c disp_bls_set_aal(), and the resume path in ddp_drv.c).
+ * Bit 0 enables the block; the high bits are latches the hardware sets once
+ * it has caught up, so they are part of the target value rather than
+ * separate writes.
+ */
+#define BLS_EN_DISPLAY			0x80010001
+
 /* BLS_PWM_DUTY format */
 #define PWM_DUTY_MIN_LEVEL		BIT(19)			/* Lower bound (fixed to 1) */
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
@@ -94,7 +111,9 @@ struct mt6589_bls_pwm {
 	void __iomem *base;
 	struct clk *clk_main;
 	unsigned int max_level;
+	struct reset_control *rstc;
 	bool clk_enabled;
+	bool bls_enabled;
 };
 
 static inline struct mt6589_bls_pwm *to_mt6589_bls_pwm(struct pwm_chip *chip)
@@ -192,13 +211,26 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
 
-		/* Enable PWM (only PWM, keep BLS engine off) */
-		writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
+		/*
+		 * Run the block as a whole.  The backlight PWM and the BLS
+		 * data path share BLS_EN, so selecting PWM-only here would
+		 * disable the scaling stage the display pipeline needs.
+		 */
+		writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
+		bls->bls_enabled = true;
 	} else {
-		/* Disable PWM output */
-		writel(0x0, bls->base + BLS_EN);
+		/*
+		 * Brightness zero: stop driving the backlight PWM duty, but
+		 * leave the BLS data path alone.  Writing 0 here would take
+		 * the block out of the display pipeline entirely, so a panel
+		 * that was merely dark would also stop passing frames.
+		 */
+		writel(0x0, bls->base + BLS_PWM_DUTY);
 
-		if (bls->clk_enabled) {
+		if (bls->bls_enabled) {
+			writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
+		} else if (bls->clk_enabled) {
+			writel(0x0, bls->base + BLS_EN);
 			clk_disable_unprepare(bls->clk_main);
 			bls->clk_enabled = false;
 		}
@@ -239,11 +271,26 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	/* Reset the BLS module (optional, downstream does this) */
-	writel(0x0, bls->base + BLS_RST);	/* release reset */
+	/*
+	 * Release the block's reset properly.  BLS sits in the middle of the
+	 * OVL -> COLOR -> BLS -> RDMA0 -> DSI0 path, so while its reset bit
+	 * is asserted the block RDMA0 fetches from is held in reset.  The
+	 * DISPSYS reset is active low, so clearing the bit releases it, which
+	 * is what writing 0 does here; the reset controller added to the node
+	 * performs the same toggle and leaves the block out of reset too.
+	 *
+	 * Look the reset up by index: the node carries a bare resets property
+	 * with no reset-names, and a named lookup fails with -ENOENT before any
+	 * reset controller is consulted.
+	 */
+	bls->rstc = devm_reset_control_get(dev, NULL);
+	if (IS_ERR(bls->rstc))
+		return dev_err_probe(dev, PTR_ERR(bls->rstc),
+				     "failed to get reset control\n");
 
-	/* Set source size (unknown, use default 0, <unk>) */
-	writel(0x0, bls->base + BLS_SRC_SIZE);
+	ret = reset_control_reset(bls->rstc);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to reset BLS\n");
 
 	/* Initialize PWM control: clock divider, idle level high */
 	writel(0x00050000 | PWM_DEFAULT_DIV, bls->base + BLS_PWM_CON);
@@ -251,11 +298,22 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	/* Duty gain = 1.0 (0x100 = 256/256) */
 	writel(0x00000100, bls->base + BLS_PWM_DUTY_GAIN);
 
-	/* Disable BLS processing, keep only PWM enabled eventually */
+	/*
+	 * Leave the scaling stage configured but not yet started: BLS_SETTING
+	 * stays 0 here and the block is enabled below, once the pipeline is
+	 * ready for it.  The register is not touched again afterwards.
+	 */
 	writel(0x0, bls->base + BLS_BLS_SETTING);
 
-	/* Enable PWM-only mode */
-	writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
+	/*
+	 * BLS_SRC_SIZE is the width of the picture entering the block.  The
+	 * stock driver programs it from the display mode; this driver leaves
+	 * it at 0 because it only ever modelled the backlight PWM.  Set it to
+	 * 0 here explicitly so the register is not left holding whatever the
+	 * bootloader left, and note that the frame size itself still comes
+	 * from the DRM path.
+	 */
+	writel(0x0, bls->base + BLS_SRC_SIZE);
 
 	/* Initialize gamma LUT (identity) */
 	mt6589_bls_gamma_init(bls);
@@ -274,8 +332,14 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	 */
 	writel(0x00000003, bls->base + BLS_HIS_SETTING);
 
-	/* Disable BLS module for now, it will be enabled on first apply */
-	writel(0x0, bls->base + BLS_EN);
+	/*
+	 * Start the block as part of the display pipeline rather than leaving
+	 * it off.  It used to be zeroed here and only ever set to the
+	 * PWM-only value, which means the BLS data path never ran at all and
+	 * the main LCD path had nothing to fetch from.
+	 */
+	writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
+	bls->bls_enabled = true;
 
 	clk_disable_unprepare(bls->clk_main);
 
