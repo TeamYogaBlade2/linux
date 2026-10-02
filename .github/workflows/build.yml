@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Build the Lenovo Yoga Tablet (MT6589) port and check the device tree.
+#
+# The kernel is built with the in-tree LLVM support: ARCH=arm with LLVM=1
+# makes the build invoke plain `clang` with --target=arm-linux-gnueabi and
+# link with ld.lld, so no separate arm cross toolchain is required.
+
+name: build
+
+on:
+  push:
+    branches:
+      - 'dev/v7.1/mt6589-drm-ox-alpha'
+  pull_request:
+    branches:
+      - 'dev/v7.1/mt6589-drm-ox-alpha'
+  workflow_dispatch:
+
+env:
+  DEFCONFIG: lenovo-blade_defconfig
+  ARCH: arm
+  LLVM: 1
+
+jobs:
+  build:
+    name: Build ${{ matrix.defconfig }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        defconfig:
+          - lenovo-blade_defconfig
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential \
+            dwarves libelf-dev libssl-dev python3 \
+            llvm-dev clang lld git rsync cpio kmod pahole zstd
+
+      - name: Cache ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.defconfig }}-linux
+          # ccache is not installed on the image by default
+          restore-keys: |
+            ${{ matrix.defconfig }}-linux-
+
+      - name: Configure
+        run: |
+          make ${{ env.DEFCONFIG }}
+
+      - name: Build
+        run: |
+          make -j"$(nproc)" 2>&1 | tee build.log
+          test -f arch/arm/boot/zImage
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Install the DTBs
+        if: success()
+        run: |
+          sudo make ARCH=${{ env.ARCH }} LLVM=${{ env.LLVM }} \
+            INSTALL_MOD_PATH="$PWD/modules" dtbs_install HOST_MOD="/tmp" \
+            DEPMOD=/bin/true modules_install
+
+  dtbs_check:
+    name: dtbs_check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dtc and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential libelf-dev \
+            python3 python3-pip python3-setuptools llvm-dev clang lld
+
+      - name: Install dtschema
+        run: |
+          # dtbs_check pulls the devicetree binding schemas through
+          # dtschema, which is not vendored in this tree.
+          python3 -m pip install --upgrade pip
+          # The tree requires dtschema >= 2023.9 (see
+          # Documentation/devicetree/bindings/Makefile, DT_SCHEMA_MIN_VERSION).
+          python3 -m pip install "dtschema>=2023.9"
+
+      - name: Run dtbs_check
+        run: |
+          make ARCH=${{ env.ARCH }} LLVM=${{ env.LLVM }} dtbs_check
+
+  dt_binding_check:
+    name: dt_binding_check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential libelf-dev \
+            python3 python3-pip python3-setuptools llvm-dev clang lld
+
+      - name: Install dtschema
+        run: |
+          python3 -m pip install --upgrade pip
+          # The tree requires dtschema >= 2023.9 (see
+          # Documentation/devicetree/bindings/Makefile, DT_SCHEMA_MIN_VERSION).
+          python3 -m pip install "dtschema>=2023.9"
+
+      - name: Run dt_binding_check
+        run: |
+          make ARCH=${{ env.ARCH }} LLVM=${{ env.LLVM }} dt_binding_check
