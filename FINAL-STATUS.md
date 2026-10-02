@@ -210,9 +210,37 @@ otherwise, which is the point at which those claims were withdrawn:
   there was never an `-ENXIO`. The patch was reverted rather than left in place
   on a false rationale.
 
+A second round of review, once the display components began binding, found two
+more:
+
+- **`RDMA0_OUT_SEL` was never written.** The routing table had entries for
+  RDMA0 to DBI and RDMA0 to DPI0 but none for RDMA0 to DSI0, on the stated
+  assumption that DSI0 is the hardware reset default. The bootloader hands the
+  panel a live DSI link, so the register arrives holding the previous kernel's
+  value. Downstream writes it explicitly rather than trusting the reset value.
+- **BLS was a complete no-op.** `DDP_COMPONENT_BLS` carried `funcs = NULL`, and
+  every DDP hook is guarded by `if (comp->funcs && comp->funcs->x)`, so the
+  block in the middle of `OVL -> COLOR -> BLS -> RDMA0 -> DSI0` was never told to
+  run. Nothing claimed its reset either, so `MT6589_DISP_BLS_RST` stayed wherever
+  the bootloader left it - and the DISPSYS reset is active low, so a zero there
+  holds the block in reset indefinitely. There is now a minimal driver for the
+  MT6589 BLS block, which is not the MT8195 merge unit that `mtk_disp_merge.c`
+  drives and so cannot reuse its register map.
+
+Two further differences from the stock driver were examined and deliberately
+left alone. `RDMA_FIFO_CON` is rewritten at CRTC enable with a
+pseudo-size/threshold pair where the stock driver writes it only during reset;
+that is upstream shared code working as designed for nine other SoCs, and
+matching the stock value would regress them. `OVL_RDMAx_MEM_GMC` is computed
+from `GMC_THRESHOLD_HIGH` rather than the stock hard-coded `0x0101a06b`; these
+are ultra-prefetch thresholds, the stock value is not a shift of the same
+constant so the two are not directly comparable, and the field is not documented
+in the data sheet. Neither plausibly stops frames, and the pipeline does not get
+far enough to tell.
+
 The lesson is the same one the MT6628 audit reached: a clean build and a
 plausible commit message carry almost no assurance, and the display code was
-reviewed twice without this being noticed.
+reviewed three times without the routing or BLS gaps being noticed.
 
 ## Verified reachable, not just present
 
