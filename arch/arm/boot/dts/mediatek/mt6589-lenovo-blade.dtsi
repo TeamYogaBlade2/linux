@@ -9,6 +9,7 @@
 
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
+#include "mt6589-vcodec.dtsi"
 
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 
