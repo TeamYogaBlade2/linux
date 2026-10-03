@@ -202,6 +202,19 @@ void mtk_rdma_clk_disable(struct device *dev)
 
 void mtk_rdma_start(struct device *dev)
 {
+	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
+
+	/*
+	 * Enable the engine's interrupts before the engine itself, as the
+	 * stock driver does (RDMAStart() writes INT_ENABLE = 0x3F, then
+	 * ENGINE_EN; RDMAConfig() writes 0x1F).  Starting the engine first
+	 * leaves any status latched from before running - the reset path
+	 * zeroes INT_STATUS, but nothing clears EOF_ABNORMAL raised while
+	 * the engine was idle - and a latched status keeps the OVL reporting
+	 * "RDMA0 didn't complete frame" on every frame.
+	 */
+	writel(0x3f, rdma->regs + DISP_REG_RDMA_INT_ENABLE);
+
 	rdma_update_bits(dev, DISP_REG_RDMA_GLOBAL_CON, RDMA_ENGINE_EN,
 			 RDMA_ENGINE_EN);
 }

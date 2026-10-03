@@ -21,6 +21,7 @@
 #include "mtk_disp_drv.h"
 #include "mtk_drm_drv.h"
 
+#define DISP_REG_OVL_STA				0x0000
 #define DISP_REG_OVL_INTEN					0x0004
 #define OVL_FME_CPL_INT							BIT(1)
 #define OVL_FME_UND_INT							BIT(2)
@@ -234,6 +235,20 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
 
+	/*
+	 * Report OVL_STA alongside the interrupt status.  Bit 0 is OVL_RUN
+	 * and bit 1 is RDMA0_IDLE, so one line separates the possibilities:
+	 * run=0 with RDMA0 idle means the engine never started, run=1 with
+	 * RDMA0 not idle means RDMA stalled fetching, both idle means nothing
+	 * is triggering start-of-frame.
+	 */
+	if (reg & (priv->data->fme_und_bit | priv->data->rdma0_eof_abn_bit)) {
+		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
+
+		pr_err("OVL: underflow intsta=%#x sta=%#x (run=%d rdma0_idle=%d)\n",
+		       reg, sta, !!(sta & 1), !!(sta & 0x2));
+	}
+
 	if (reg & priv->data->fme_und_bit)
 		pr_err("OVL: OVL frame underflow\n");
 	if (reg & priv->data->rdma0_eof_abn_bit)
@@ -245,8 +260,13 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	if (reg & priv->data->rdma1_fifo_und_bit)
 		pr_err("OVL: RDMA1 FIFO underflow\n");
 
-	/* Clear frame completion interrupt */
-	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
+	/*
+	 * Clear only the bits we handled.  The OVL interrupt is level
+	 * triggered, so writing 0 to the whole status register can wipe a
+	 * condition that arrived after the readl above - and an uncleared
+	 * status re-enters this handler forever with nothing ever changing.
+	 */
+	writel(reg, priv->regs + DISP_REG_OVL_INTSTA);
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
