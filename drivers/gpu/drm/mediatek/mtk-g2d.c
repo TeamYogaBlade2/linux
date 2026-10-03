@@ -100,7 +100,6 @@ struct mtk_g2d {
 	void __iomem *regs;
 	struct clk *clk_engine;
 	struct clk *clk_smi;
-	struct iommu_domain *iommu;
 	struct mutex lock;
 	spinlock_t busy_lock;
 	bool busy;
