@@ -459,6 +459,38 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 {
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
+	/*
+	 * Soft reset first, wait for it to take effect, then release it, and
+	 * only then program the mode. The order matters: the reset clears the
+	 * engine's configuration, so writing OVL_ROI_SIZE and OVL_ROI_BGCLR
+	 * before asserting it left the block with no frame size at all, and
+	 * the stock driver has the same order - OVLReset() runs and only then
+	 * OVLConfig() writes OVL_ROI_SIZE (ddp_ovl.c).
+	 *
+	 * The data sheet requires polling the engine's run bit until it reads
+	 * 0 before the reset is released.
+	 */
+	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
+
+	if (!cmdq_pkt) {
+		unsigned int i;
+
+		for (i = 0; i < 10000; i++) {
+			/*
+			 * Wait for OVL_STA bit0 (OVL_RUN) to drop. This used
+			 * to poll OVL_INTSTA bit0, but that is OVL_REG_CMT -
+			 * a latched event, not the run state - so the loop
+			 * could exit while the engine was still running and
+			 * the reset had not taken effect.
+			 */
+			if (!(readl(ovl->regs + DISP_REG_OVL_STA) & BIT(0)))
+				break;
+			cpu_relax();
+		}
+	}
+
+	mtk_ddp_write(cmdq_pkt, 0x0, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
+
 	if (w != 0 && h != 0)
 		mtk_ddp_write_relaxed(cmdq_pkt, h << 16 | w, &ovl->cmdq_reg, ovl->regs,
 				      DISP_REG_OVL_ROI_SIZE);
@@ -469,38 +501,6 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 	 */
 	mtk_ddp_write_relaxed(cmdq_pkt, OVL_COLOR_ALPHA, &ovl->cmdq_reg,
 			      ovl->regs, DISP_REG_OVL_ROI_BGCLR);
-
-	/*
-	 * Soft reset, then wait for it to take effect before releasing it.
-	 * The data sheet is explicit: after triggering the SW reset, poll the
-	 * engine's run bit until it reads 0, and only then write the reset
-	 * back to 0.  The stock driver does exactly this (OVLReset() polls
-	 * OVL_INTSTA bit 0 up to 10000 times).  Clearing the reset straight
-	 * away can leave the engine mid-reset, which is where "underflow
-	 * forever" comes from.
-	 */
-	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
-
-	if (!cmdq_pkt) {
-		unsigned int i;
-
-		for (i = 0; i < 10000; i++) {
-			/*
-			 * Wait for OVL_STA bit0 (OVL_RUN) to drop, which is
-			 * what the data sheet requires after a software
-			 * reset. This used to poll OVL_INTSTA bit0, but
-			 * that is OVL_REG_CMT - a latched event, not the
-			 * run state - so the loop could exit while the
-			 * engine was still running and the reset had not
-			 * taken effect.
-			 */
-			if (!(readl(ovl->regs + DISP_REG_OVL_STA) & BIT(0)))
-				break;
-			cpu_relax();
-		}
-	}
-
-	mtk_ddp_write(cmdq_pkt, 0x0, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
 }
 
 unsigned int mtk_ovl_layer_nr(struct device *dev)
