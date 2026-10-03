@@ -419,7 +419,27 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 			      DISP_RDMA_MEM_SRC_PITCH);
 	mtk_ddp_write(cmdq_pkt, rdma->data->mem_gmc_val, &rdma->cmdq_reg, rdma->regs,
 		      DISP_RDMA_MEM_GMC_SETTING_0);
-	mtk_ddp_write_mask(cmdq_pkt, RDMA_MODE_MEMORY, &rdma->cmdq_reg, rdma->regs,
+	/*
+	 * MODE_SEL in GLOBAL_CON selects how RDMA0 gets its pixels:
+	 *
+	 *	0: Direct link mode
+	 *	1: Memory mode
+	 *
+	 * This path is OVL -> RDMA0 -> DSI, and the stock driver programs
+	 * RDMA_MODE_DIRECT_LINK (ddp_path.c: RDMAConfig(0,
+	 * RDMA_MODE_DIRECT_LINK, ...)).  Memory mode instead points RDMA0 at
+	 * its own MEM_MODE ring, and on this configuration no plane is ever
+	 * attached to RDMA0 - mtk_crtc_num_comp_planes() only creates planes
+	 * for components 0 and 1, and MT6589's COLOR claims none, so every
+	 * plane lands on OVL.  RDMA0 would then be enabled with an
+	 * address nobody programmed and fetch from garbage:
+	 *
+	 *	OVL: underflow intsta=0x35 sta=0x1d (run=1 rdma0_idle=0)
+	 *
+	 * Leave MODE_SEL clear so RDMA0 passes the OVL's output straight
+	 * through.
+	 */
+	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
 
 }
