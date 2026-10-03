@@ -576,13 +576,14 @@ static int a5142_probe(struct i2c_client *client)
 error_power_off:
 	a5142_power_off(a5142);
 error_pm:
-	pm_runtime_put(dev);
 	/*
-	 * Undo pm_runtime_enable() from the probe success path.  Nothing will
-	 * put the reference back once the probe fails, so leaving the framework
-	 * enabled here would leak the enabled state with the device.
+	 * Disable before dropping the reference.  pm_runtime_use_autosuspend()
+	 * is armed above, so pm_runtime_put() taking the count to zero can fire
+	 * a5142_runtime_suspend() while probe is still unwinding - which is how
+	 * this oops'd with a NULL call in the suspend path.
 	 */
 	pm_runtime_disable(dev);
+	pm_runtime_put(dev);
 	v4l2_async_unregister_subdev(&a5142->sd);
 
 	return ret;
