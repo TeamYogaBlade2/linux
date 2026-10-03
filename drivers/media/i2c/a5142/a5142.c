@@ -172,11 +172,38 @@ static int a5142_set_pad(struct v4l2_subdev *sd,
 			 struct v4l2_subdev_format *format)
 {
 	struct a5142 *a5142 = to_a5142(sd);
+	struct a5142_mode_info *mode;
+
+	/*
+	 * A sensor does not convert anything: the only formats it offers are the
+	 * Bayer orders its flips produce, and the sizes are the fixed set of
+	 * modes in a5142_modes.  So a request is snapped to the nearest mode,
+	 * which is what every other sensor driver in the tree does
+	 * (cf. imx219_set_pad_format()).
+	 */
+	mode = v4l2_find_nearest_size(a5142_modes, ARRAY_SIZE(a5142_modes),
+				      width, height,
+				      format->format.width,
+				      format->format.height);
 
 	mutex_lock(&a5142->lock);
 
-	format->format.width = a5142->cur_mode->width;
-	format->format.height = a5142->cur_mode->height;
+	/*
+	 * Only an ACTIVE format is applied to the device.  A TRY format is a
+	 * proposal the core is merely asking about, so it must be answered
+	 * with the snapped size without touching cur_mode or the timings -
+	 * otherwise querying a format would silently change the sensor.
+	 */
+	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
+		format->format.width = mode->width;
+		format->format.height = mode->height;
+		mutex_unlock(&a5142->lock);
+		return 0;
+	}
+
+	a5142->cur_mode = mode;
+	format->format.width = mode->width;
+	format->format.height = mode->height;
 	format->format.code = MEDIA_BUS_FMT_SBGGR10_1X10;
 	format->format.field = V4L2_FIELD_NONE;
 	format->format.colorspace = V4L2_COLORSPACE_SMPTE170M;
@@ -191,6 +218,22 @@ static int a5142_set_pad(struct v4l2_subdev *sd,
 	mutex_unlock(&a5142->lock);
 
 	return 0;
+}
+
+/*
+ * Seed the pad state from the mode the sensor comes up in.  The core
+ * allocates state->pads before calling this, so a single pad seeded with
+ * TRY semantics here is enough - that is also what imx219 does.
+ */
+static int a5142_init_state(struct v4l2_subdev *sd,
+			    struct v4l2_subdev_state *state)
+{
+	struct v4l2_subdev_format fmt = {
+		.which = V4L2_SUBDEV_FORMAT_TRY,
+		.pad = 0,
+	};
+
+	return a5142_set_pad(sd, state, &fmt);
 }
 
 static int a5142_enum_frame_size(struct v4l2_subdev *sd,
@@ -236,9 +279,13 @@ static int a5142_get_selection(struct v4l2_subdev *sd,
 
 static const struct v4l2_subdev_pad_ops a5142_pad_ops = {
 	.enum_frame_size = a5142_enum_frame_size,
-	.get_fmt = a5142_set_pad,
+	.get_fmt = v4l2_subdev_get_fmt,
 	.set_fmt = a5142_set_pad,
 	.get_selection = a5142_get_selection,
+};
+
+static const struct v4l2_subdev_internal_ops a5142_internal_ops = {
+	.init_state = a5142_init_state,
 };
 
 static int a5142_write_exposure(struct a5142 *a5142, u32 exposure)
@@ -528,6 +575,7 @@ static int a5142_probe(struct i2c_client *client)
 
 	a5142->sd.state_lock = &a5142->lock;
 	a5142->sd.ops = &a5142_subdev_ops;
+	a5142->sd.internal_ops = &a5142_internal_ops;
 
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
@@ -536,13 +584,23 @@ static int a5142_probe(struct i2c_client *client)
 	pm_runtime_mark_last_busy(dev);
 
 	/*
-	 * Take one reference and bring the sensor up so probe can verify the
-	 * chip ID on a powered sensor.  pm_runtime_enable() above is what makes
-	 * the runtime-PM state machine live at all: without it every
-	 * pm_runtime_get_sync()/put_sync() below is refused with -EAGAIN and
-	 * the sensor can never be powered back up after probe drops its
-	 * reference.  pm_runtime_set_active() alone only marks the device as
-	 * already-on; it does not start the framework.
+	 * Reference accounting for probe:
+	 *
+	 *  - pm_runtime_get_noresume() takes one temporary reference purely so
+	 *    the sensor can be powered up and its chip ID read below.  It is not
+	 *    a "keep it powered" reference; it exists only for this function.
+	 *  - a5142_power_on() brings the sensor up and a5142_check_sensor_id()
+	 *    verifies it is really there.
+	 *  - On success we drop that temporary reference with
+	 *    pm_runtime_put_autosuspend(), returning the usage counter to zero
+	 *    and arming the autosuspend timer.  The sensor really does power
+	 *    back down shortly after probe, and the first stream pays for its
+	 *    own power-up via pm_runtime_get_sync() in start_stream().
+	 *
+	 * Leaving the probe reference in place would pin the usage counter at
+	 * >= 1 forever, so autosuspend could never fire and the sensor would
+	 * stay powered for the whole life of the system -- which would also make
+	 * every per-stream pm_runtime_put_sync() a no-op underflow risk.
 	 */
 	pm_runtime_get_noresume(dev);
 
@@ -570,6 +628,22 @@ static int a5142_probe(struct i2c_client *client)
 
 	dev_info(dev, "%s: 5MP RAW sensor detected (2-lane MIPI CSI-2)\n",
 		 dev_name(dev));
+
+	/*
+	 * Drop the probe-time reference: mark the sensor as just-used and let
+	 * the autosuspend timer take it back down.  pm_runtime_put_autosuspend()
+	 * is used (not plain pm_runtime_put()) so the last-access timestamp is
+	 * refreshed and the drop routes straight to the autosuspend work.
+	 *
+	 * Note this only works because pm_runtime_enable() was called above: it
+	 * is what makes the runtime-PM state machine live, so that the get/put
+	 * pair here and every pm_runtime_get_sync()/put_sync() in the streaming
+	 * path are permitted at all.  Without it they would be refused with
+	 * -EACCES/-EAGAIN and the sensor could never be powered back up after
+	 * probe drops its reference.
+	 */
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
 
 	return 0;
 

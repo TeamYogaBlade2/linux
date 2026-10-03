@@ -672,8 +672,9 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 	 * was never enabled that call returns -EAGAIN because the framework is
 	 * disabled.  The whole receiver depends on that call to enable the
 	 * clocks, release the reset and initialise the D-PHY, so without this
-	 * the driver could never start a stream, and pm_runtime_get_noresume()
-	 * / pm_runtime_put() below would not balance either.
+	 * the driver could never start a stream, and the probe-time
+	 * pm_runtime_get_noresume()/pm_runtime_put_autosuspend() pair below
+	 * would not balance either.
 	 *
 	 * pm_runtime_set_active() above only marks the device as already on;
 	 * pm_runtime_enable() is what makes the state machine live.  The order
@@ -687,10 +688,24 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 	pm_runtime_mark_last_busy(dev);
 
 	/*
-	 * Take one reference and bring the hardware up, then drop back to
-	 * suspended so the first s_stream() pays for the power-up.  This
-	 * mirrors what the other receiver drivers do: probe leaves the
-	 * device quiesced but verified.
+	 * Reference accounting for probe:
+	 *
+	 *  - pm_runtime_get_noresume() takes one temporary reference purely so
+	 *    we can bring the hardware up here and verify it.  It is not a
+	 *    "keep it powered" reference: it exists only for the duration of
+	 *    this function.
+	 *  - mtk_csi2_rx_power_on() brings the receiver up.
+	 *  - On success we drop that temporary reference again with
+	 *    pm_runtime_put_autosuspend(), which returns the usage counter to
+	 *    zero and arms the autosuspend timer, so the receiver really does
+	 *    power off shortly after probe and the first s_stream() pays for
+	 *    its own power-up via pm_runtime_resume_and_get().  This mirrors
+	 *    what the other receiver drivers do: probe leaves the device
+	 *    quiesced but verified.
+	 *
+	 * Leaving the probe reference in place would pin the usage counter at
+	 * >= 1 forever, autosuspend could never fire, and the receiver would
+	 * stay powered for the whole life of the system.
 	 */
 	pm_runtime_get_noresume(dev);
 
@@ -700,16 +715,32 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 
 	dev_info(dev, "registered CSI-2 receiver %u\n", priv->port);
 
+	/*
+	 * Drop the probe-time reference: mark the block as just-used and let
+	 * the autosuspend timer take it back down.  pm_runtime_put_autosuspend()
+	 * is used (not plain pm_runtime_put()) so the last-access timestamp is
+	 * refreshed and the drop routes straight to the autosuspend work, which
+	 * is the same release the per-stream stop path uses.
+	 */
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
+
 	return 0;
 
 error_pm:
-	pm_runtime_put(dev);
 	/*
-	 * Undo pm_runtime_enable() from the probe success path.  Nothing will
-	 * put the reference back once the probe fails, so leaving the framework
-	 * enabled here would leak the enabled state with the device.
+	 * mtk_csi2_rx_power_on() failed, so nothing is left running: its
+	 * err_ labels have already undone the clocks and reset, and the only
+	 * step that could have left the D-PHY up (phy_power_on()) is itself
+	 * the last fallible one, so reaching here means it never came up.
+	 * There is consequently no power_off() to do here.  Drop the
+	 * temporary reference, then undo pm_runtime_enable().  Disable before
+	 * dropping the reference: pm_runtime_use_autosuspend() is armed above,
+	 * so the put taking the count to zero could otherwise fire
+	 * mtk_csi2_rx_runtime_suspend() while probe is still unwinding.
 	 */
 	pm_runtime_disable(dev);
+	pm_runtime_put(dev);
 	v4l2_async_unregister_subdev(&priv->sd);
 
 	return ret;
