@@ -23,6 +23,8 @@ enum g2d_format {
 struct g2d_format_info {
 	u32 clrfmt;
 	u32 bytes_per_pixel;
+	/* Required start-address alignment: 2, 4 or 1 for no constraint. */
+	u32 address_align;
 };
 
 int mtk_g2d_blt(struct mtk_g2d *g2d,

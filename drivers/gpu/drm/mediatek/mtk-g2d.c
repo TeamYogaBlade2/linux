@@ -79,8 +79,15 @@
 /* G2D_STATUS - reads 0 once the engine is idle. */
 #define G2D_STATUS_BUSY		BIT(0)
 
-/* G2D_IRQ */
-#define G2D_IRQ_ENABLE		BIT(0)
+/*
+ * G2D_IRQ mixes an interrupt status flag with the enable: IRQ_STA[8] is
+ * write-0-to-clear and EN[0] is a plain read/write enable, and both live in
+ * the same register.  Writing the whole register as 0 therefore clears the
+ * pending interrupt *and* disables the interrupt source; since the line is
+ * negative level sensitive, nothing would ever raise it again.
+ */
+#define G2D_IRQ_IRQ_STA		BIT(8)
+#define G2D_IRQ_EN		BIT(0)
 
 /* *_CON format and attribute fields, shared by SRC_CON and DST_CON. */
 #define G2D_CON_DI_ALP_MUL		BIT(13)
@@ -93,6 +100,14 @@
 
 /* G2D_ALP_CON */
 #define G2D_ALP_CON_MODE		GENMASK(1, 0)
+
+/* The pitch registers hold 14 bits, but 0x2000 is the usable maximum. */
+#define G2D_PITCH_MASK		GENMASK(13, 0)
+#define G2D_PITCH_MAX		0x2000
+
+/* W2M_SIZE WIDTH/HEIGHT are 12 bits with a documented range of 1..2048. */
+#define G2D_MAX_WIDTH		2048
+#define G2D_MAX_HEIGHT		2048
 
 #define G2D_TIMEOUT_US			100000
 
@@ -110,22 +125,27 @@ static const struct g2d_format_info g2d_formats[] = {
 	[g2d_clrfmt_rgb565]		= {
 		.clrfmt		= 0b001,
 		.bytes_per_pixel	= 2,
+		.address_align		= 2,
 	},
 	[g2d_clrfmt_pargb8888]		= {
 		.clrfmt		= 0b101,
 		.bytes_per_pixel	= 4,
+		.address_align		= 4,
 	},
 	[g2d_clrfmt_argb8888]		= {
 		.clrfmt		= 0b100,
 		.bytes_per_pixel	= 4,
+		.address_align		= 4,
 	},
 	[g2d_clrfmt_rgb888]		= {
 		.clrfmt		= 0b011,
 		.bytes_per_pixel	= 3,
+		.address_align		= 1,
 	},
 	[g2d_clrfmt_xrgb8888]		= {
 		.clrfmt		= 0b110,
 		.bytes_per_pixel	= 4,
+		.address_align		= 4,
 	},
 };
 
@@ -145,18 +165,23 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
 static irqreturn_t g2d_irq_handler(int irq, void *data)
 {
 	struct mtk_g2d *g2d = data;
-	u32 status;
+	u32 irq_reg;
 
-	status = readl(g2d->regs + G2D_STATUS);
-	if (!(status & G2D_STATUS_BUSY))
+	/*
+	 * The interrupt predicate is IRQ_STA, not STATUS.BUSY: by the time the
+	 * engine raises the interrupt it has normally finished the operation
+	 * and BUSY already reads 0, so gating on BUSY would make the handler
+	 * claim the interrupt is not ours.
+	 */
+	irq_reg = readl(g2d->regs + G2D_IRQ);
+	if (!(irq_reg & G2D_IRQ_IRQ_STA))
 		return IRQ_NONE;
 
 	/*
-	 * Clear by writing 0, per the data sheet's description of the
-	 * status register, then acknowledge the interrupt.
+	 * Clear IRQ_STA without touching EN: the two fields share G2D_IRQ,
+	 * and a write of 0 would leave EN at 0 and mute the line for good.
 	 */
-	writel(0, g2d->regs + G2D_STATUS);
-	writel(0, g2d->regs + G2D_IRQ);
+	writel(irq_reg & ~G2D_IRQ_IRQ_STA, g2d->regs + G2D_IRQ);
 
 	spin_lock_irq(&g2d->busy_lock);
 	g2d->busy = false;
@@ -204,6 +229,68 @@ static int g2d_check_fmt(u32 format)
 	return 0;
 }
 
+/**
+ * g2d_check_rect - validate one surface before any register is programmed.
+ * @pitch: pitch of that surface, in bytes
+ * @width: scan window width, in pixels
+ * @height: scan window height, in pixels
+ *
+ * Everything rejected here is a hard error rather than something to clamp:
+ * the pitch registers only hold 14 bits with 0x2000 as the usable maximum,
+ * so an over-large pitch would be silently truncated to a different (and
+ * possibly zero) pitch, and W2M_SIZE holds WIDTH and HEIGHT as 12 bits
+ * documented as 1..2048.
+ */
+static int g2d_check_rect(u32 pitch, u32 bpp, u32 width, u32 height)
+{
+	if (!width || width > G2D_MAX_WIDTH)
+		return -EINVAL;
+	if (!height || height > G2D_MAX_HEIGHT)
+		return -EINVAL;
+
+	/*
+	 * Pitch is in bytes: pitch / bpp must be at least the ROI width, and
+	 * the pitch must be a whole number of pixels.
+	 */
+	if (pitch > G2D_PITCH_MAX)
+		return -EINVAL;
+	if (pitch < width * bpp || pitch % bpp)
+		return -EINVAL;
+
+	return 0;
+}
+
+/**
+ * g2d_check_align - validate the computed start address of one surface.
+ * @addr: start address, already offset by x/y
+ *
+ * The data sheet requires 2-byte alignment for RGB565 and 4-byte alignment
+ * for the 8888 formats; RGB888 output may start at any address.
+ */
+static int g2d_check_align(dma_addr_t addr,
+			   const struct g2d_format_info *fmt)
+{
+	if (addr % fmt->address_align)
+		return -EINVAL;
+
+	return 0;
+}
+
+/**
+ * mtk_g2d_blt - copy one rectangular region between two surfaces.
+ * @x: x offset, in pixels, applied to both the source and the destination
+ * @y: y offset, in pixels, applied to both the source and the destination
+ *
+ * Limitation: the 2D engine has no independent source and destination
+ * origins, so a single x/y pair is used for both surfaces.  This function
+ * therefore only expresses a same-coordinate copy - it cannot blit a region
+ * from one position to a different position.  Callers must pre-compose
+ * such a move themselves (or use two calls with explicit offsets), and pass
+ * the destination address already advanced past the intended origin.
+ *
+ * The request is fully validated before any register is programmed, so a
+ * rejected request leaves the engine untouched.
+ */
 int mtk_g2d_blt(struct mtk_g2d *g2d,
 		dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
 		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
@@ -211,10 +298,8 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 {
 	u32 con, flip = 0;
 	u32 src_bpp, dst_bpp;
+	dma_addr_t src_addr, dst_addr;
 	int ret;
-
-	if (!width || !height)
-		return -EINVAL;
 
 	ret = g2d_check_fmt(src_fmt);
 	if (ret)
@@ -227,13 +312,28 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	dst_bpp = g2d_formats[dst_fmt].bytes_per_pixel;
 
 	/*
-	 * The pitch registers are in bytes and must satisfy
-	 * pitch / bytes_per_pixel >= width, and be a multiple of it.
+	 * Validate both surfaces up front: the registers must not be touched at
+	 * all unless the whole request is programmable.
 	 */
-	if (src_pitch < width * src_bpp || src_pitch % src_bpp)
-		return -EINVAL;
-	if (dst_pitch < width * dst_bpp || dst_pitch % dst_bpp)
-		return -EINVAL;
+	ret = g2d_check_rect(src_pitch, src_bpp, width, height);
+	if (ret)
+		return ret;
+	ret = g2d_check_rect(dst_pitch, dst_bpp, width, height);
+	if (ret)
+		return ret;
+
+	/*
+	 * x/y are pixel offsets into both surfaces, so the byte address handed
+	 * to the engine is the one that has to carry the format's alignment.
+	 */
+	src_addr = src + y * src_pitch + x * src_bpp;
+	dst_addr = dst + y * dst_pitch + x * dst_bpp;
+	ret = g2d_check_align(src_addr, &g2d_formats[src_fmt]);
+	if (ret)
+		return ret;
+	ret = g2d_check_align(dst_addr, &g2d_formats[dst_fmt]);
+	if (ret)
+		return ret;
 
 	mutex_lock(&g2d->lock);
 
@@ -251,9 +351,8 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
 	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
 	 */
-	writel((u32)(src + y * src_pitch + x * src_bpp),
-	       g2d->regs + G2D_SRC_ADDR);
-	writel(src_pitch & 0x3fff, g2d->regs + G2D_SRC_PITCH);
+	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
+	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
 	con = g2d_formats[src_fmt].clrfmt | flip;
 	writel(con, g2d->regs + G2D_SRC_CON);
 
@@ -272,9 +371,8 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	 * only the x=0,y=0 case behave.  So: window origin in the
 	 * destination, matching source offset in the source.
 	 */
-	writel((u32)(dst + y * dst_pitch + x * dst_bpp),
-	       g2d->regs + G2D_W2M_ADDR);
-	writel(dst_pitch & 0x3fff, g2d->regs + G2D_W2M_PITCH);
+	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
+	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
 	writel(g2d_formats[dst_fmt].clrfmt, g2d->regs + G2D_W2M_CON);
 
 	/*
@@ -299,18 +397,22 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 {
 	u32 con;
 	u32 bpp;
+	dma_addr_t dst_addr;
 	int ret;
-
-	if (!width || !height)
-		return -EINVAL;
 
 	ret = g2d_check_fmt(dst_fmt);
 	if (ret)
 		return ret;
 
 	bpp = g2d_formats[dst_fmt].bytes_per_pixel;
-	if (dst_pitch < width * bpp || dst_pitch % bpp)
-		return -EINVAL;
+	ret = g2d_check_rect(dst_pitch, bpp, width, height);
+	if (ret)
+		return ret;
+
+	dst_addr = dst + y * dst_pitch + x * bpp;
+	ret = g2d_check_align(dst_addr, &g2d_formats[dst_fmt]);
+	if (ret)
+		return ret;
 
 	mutex_lock(&g2d->lock);
 
@@ -319,9 +421,8 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 	 * engine, and COLOR_EN (bit 9, named DST_COLOR_EN on both control
 	 * registers) selects the constant colour instead of a buffer.
 	 */
-	writel((u32)(dst + y * dst_pitch + x * bpp),
-	       g2d->regs + G2D_W2M_ADDR);
-	writel(dst_pitch & 0x3fff, g2d->regs + G2D_W2M_PITCH);
+	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
+	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
 
 	con = g2d_formats[dst_fmt].clrfmt | G2D_CON_COLOR_EN;
 	writel(con, g2d->regs + G2D_W2M_CON);
@@ -388,8 +489,8 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	mutex_init(&g2d->lock);
 	spin_lock_init(&g2d->busy_lock);
 
-	/* ENABLE in G2D_IRQ, bit 0: enables the 2D engine interrupt. */
-	writel(G2D_IRQ_ENABLE, g2d->regs + G2D_IRQ);
+	/* G2D_IRQ EN, bit 0: enables the 2D engine interrupt. */
+	writel(G2D_IRQ_EN, g2d->regs + G2D_IRQ);
 
 	platform_set_drvdata(pdev, g2d);
 
