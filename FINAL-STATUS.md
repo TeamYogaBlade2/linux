@@ -12,6 +12,28 @@ Target DTS: `arch/arm/boot/dts/mediatek/mt6589-lenovo-b8000-f.dts`
 
 ## Audio — complete
 
+Later confirmed on hardware: the card registers (`ALSA device list: #0:
+mt6589-mt6320`) after four structural breaks that each masked the next, so a
+dozen individually-correct register fixes produced silence:
+
+- MT6797 ADDA/NEWIF registers had been adopted into the MT6589 AFE map. Seven
+  offsets do not exist on this part, and they were written on the live path, not
+  just at probe.
+- Neither dai link had a codec bound to it, so `soc_find_component()` returned
+  NULL and the card never registered at all — which made every codec-side fix
+  inert.
+- The AFE component had no DAPM graph, so the codec's routes had no endpoints.
+- The stream widgets had to be named after the DAI `stream_name`s
+  (`"DL1 Playback"`, `"VUL Capture"`); a DAI is auto-connected through the
+  widget carrying that name, so separate `"AIF1 ..."` endpoints went undriven.
+
+A system hang on the first period interrupt was the level-triggered AFE IRQ
+announcing the period before acking it, so the handler re-entered
+indefinitely. And `AFUNC_AUD_CON2` bit 7 is a *mute*, not an enable: the stock
+driver asserts it while configuring a path and clears it afterwards, where here
+it was set on power-up and only cleared on power-down, leaving the output muted
+for as long as it was playing.
+
 Fixed, each verified against the downstream source rather than assumed:
 
 - AFE register window was `0x2000`; downstream `AudioAnalogReg.h`/`AudDrv_Ana.h`
@@ -53,6 +75,42 @@ returns `void` and silently no-ops on an unmatched pair, so that replaced the on
 code programming `COLOR_MOUT_EN`/`BLS_SEL_IN` with two no-ops — CRTC with no
 output. Reverted just that hunk; the mutex mapping and `->stop()` fix were correct
 and were kept.
+
+## DRM — diagnosed from hardware, not inference
+
+Five rounds of static analysis could not separate the display failures, because
+"engine never started", "RDMA stalled fetching" and "SOF never triggered" all
+produced byte-identical logs. Adding an `OVL_STA` readback to the IRQ handler
+broke the tie in one boot:
+
+	OVL: underflow intsta=0x35 sta=0x1d (run=1 rdma0_idle=0)
+
+`OVL_RUN=1` said the overlay had started and was waiting; `RDMA0_IDLE=0` said
+RDMA0 was mid-transfer and never completing. Two further fixes followed from
+hardware evidence, each fixing a case the logs could not distinguish:
+
+- **RDMA0 was in memory mode.** `MODE_SEL=1` points RDMA0 at its own
+  `MEM_MODE` ring, but nothing attaches a plane to RDMA0 on this configuration:
+  `mtk_crtc_num_comp_planes()` creates planes only for components 0 and 1, and
+  MT6589's COLOR declares none while OVL claims all four. RDMA0 fetched from an
+  address no plane supplied. The stock driver uses `RDMA_MODE_DIRECT_LINK` for
+  this path. After this the underflow spam disappeared entirely.
+- **DSI drove zero lanes.** `mtk_dsi_rxtx_control()` writes `DSI_TXRX_CTRL`,
+  which carries `LANE_NUM`, and it was only ever called from `mtk_dsi_stop()` —
+  never from `mtk_dsi_poweron()`. `LANE_NUM` sat at its reset value of 0. That
+  is exactly the "no spam, no picture" signature: the pipeline ran correctly and
+  nothing reached the panel.
+
+Earlier fixes in this area, all verified against the datasheet or the stock
+driver: pitch is programmed in pixels rather than bytes (`addr + src_x*bpp +
+src_y*src_pitch` proves the unit), the OVL and RDMA start sequences match
+`OVLStart()`/`RDMAStart()`, the OVL soft reset polls `OVL_STA` before releasing,
+and `INTSTA` is cleared per-bit on a level-triggered line rather than wholesale.
+
+Two things that were *not* the cause, having been suspected and then checked:
+`MUTEX0_MOD`/`MUTEX0_SOF` are programmed correctly via `mtk_mutex_add_comp()`,
+and the DSI PHY node's `reg` size (`0x90`) covers the highest register the
+driver touches (`0x88`).
 
 ## MT6628 — features added, then audited
 
