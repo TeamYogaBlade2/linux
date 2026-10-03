@@ -437,7 +437,27 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 	mtk_ddp_write_relaxed(cmdq_pkt, OVL_COLOR_ALPHA, &ovl->cmdq_reg,
 			      ovl->regs, DISP_REG_OVL_ROI_BGCLR);
 
+	/*
+	 * Soft reset, then wait for it to take effect before releasing it.
+	 * The data sheet is explicit: after triggering the SW reset, poll the
+	 * engine's run bit until it reads 0, and only then write the reset
+	 * back to 0.  The stock driver does exactly this (OVLReset() polls
+	 * OVL_INTSTA bit 0 up to 10000 times).  Clearing the reset straight
+	 * away can leave the engine mid-reset, which is where "underflow
+	 * forever" comes from.
+	 */
 	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
+
+	if (!cmdq_pkt) {
+		unsigned int i;
+
+		for (i = 0; i < 10000; i++) {
+			if (!(readl(ovl->regs + DISP_REG_OVL_INTSTA) & 0x1))
+				break;
+			cpu_relax();
+		}
+	}
+
 	mtk_ddp_write(cmdq_pkt, 0x0, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
 }
 
