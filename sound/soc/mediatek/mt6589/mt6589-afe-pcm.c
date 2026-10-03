@@ -65,8 +65,6 @@
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
 #define AFE_DL1_END		0x0048		/* ring end, inclusive */
-#define AFE_MEMIF_PBUF_SIZE	0x03d8
-#define AFE_MEMIF_PBUF_SIZE_DL1	GENMASK(17, 16)
 #define AFE_IRQ_MCU_CON		0x03a0
 #define AFE_IRQ_MCU_CON_IRQ1_ON		BIT(0)
 #define AFE_IRQ_MCU_CON_IRQ2_ON		BIT(1)
@@ -302,12 +300,7 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
-		if (ret)
-			return ret;
-
-		return regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE,
-					 AFE_MEMIF_PBUF_SIZE_DL1);
+		return regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
 	}
 
 	ret = regmap_write(afe->regmap, AFE_VUL_BASE, base);
@@ -761,17 +754,27 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	}
 
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
-		snd_pcm_period_elapsed(afe->dl1_substream);
-
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && afe->vul_substream)
-		snd_pcm_period_elapsed(afe->vul_substream);
-
+	/*
+	 * Ack before announcing the period.  The line is level triggered, so
+	 * while the status is still set the handler runs again the moment it
+	 * returns; snd_pcm_period_elapsed() takes the stream lock and can
+	 * sleep, and doing that with the line still asserted is what wedged
+	 * the whole system on the first period interrupt.
+	 *
+	 * Note the status is captured first, so clearing it here still reports
+	 * the period that was just handled.
+	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, status);
 	if (ret)
 		dev_err_ratelimited(afe->dev,
 				    "failed to clear AFE IRQ status: %d\n",
 				    ret);
+
+	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
+		snd_pcm_period_elapsed(afe->dl1_substream);
+
+	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && afe->vul_substream)
+		snd_pcm_period_elapsed(afe->vul_substream);
 
 	return IRQ_HANDLED;
 }
