@@ -44,16 +44,42 @@ properties:
       than one of the three ISINK channels.  Such a node must not have a reg
       property, and is driven on/off only.
 
-  mediatek,isink-step:
-    maximum: 7
-    default: 0
+  mediatek,num-steps:
+    minimum: 1
+    maximum: 8
+    default: 4
     description: >
-      Initial current step code for this sink.  The MT6320 step field is three
-      bits wide, so 0..7 is representable, but the vendor driver only uses
-      codes 0..3: code 0 is the smallest step and code 3 is around 16 mA.
+      Number of current step codes this sink exposes.  This is the sink's
+      max_brightness and it is the only control on the current level: a
+      brightness of N selects current step N-1, so with the default of 4 a
+      brightness of 4 lights the sink at the highest step code available.
+      A brightness of 0 switches the sink off.
 
-      This sets the default current the sink comes up at; afterwards the LED
-      class drives the level through the same step codes.
+      The MT6320 step field is three bits wide, so 1..8 codes is
+      representable, but the vendor driver only uses codes 0..3.  A board
+      that wired its LED for a fixed current, as the vendor driver does, can
+      expose a single code with num-steps = 1 and then always run it at
+      brightness 1.
+
+  delay-on:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: >
+      Default blink on-time in milliseconds.  Must be set together with
+      delay-off, and both must be non-zero.  Optional; without it the LED has
+      no default timing, and a blink request that asks to keep the current
+      timing before the LED has ever been blinked is declined so that the
+      LED core picks the fallback instead.
+
+  delay-off:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: >
+      Default blink off-time in milliseconds.  Must be set together with
+      delay-on, and both must be non-zero.
+
+      These are the timings this LED is programmed with before it has been
+      blinked explicitly.  A blink request of zero for both, which the LED
+      core issues to mean "keep the current timing", re-applies these rather
+      than changing them.
 
   led-names:
     description: Deprecated, use label instead.
