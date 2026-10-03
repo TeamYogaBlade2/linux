@@ -263,22 +263,6 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
 
-	/*
-	 * One-shot readback after programming, because RDMA0 raising no
-	 * interrupt is indistinguishable from it being wedged: the OVL's
-	 * OVL_STA only reports RDMA0_IDLE, not why.  Log what the engine
-	 * actually latched so a stuck RDMA0 can be placed rather than
-	 * guessed at.  Rate limited so a per-frame failure cannot flood.
-	 */
-	if (!rdma->dbg_done) {
-		rdma->dbg_done = true;
-		dev_info(dev,
-			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n",
-			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
-			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
-			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
-			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1));
-	}
 
 
 	/*
@@ -314,6 +298,23 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	      RDMA_FIFO_PSEUDO_SIZE(rdma_fifo_size) |
 	      RDMA_OUTPUT_VALID_FIFO_THRESHOLD(threshold);
 	mtk_ddp_write(cmdq_pkt, reg, &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_FIFO_CON);
+
+	/*
+	 * One-shot readback after programming, because RDMA0 raising no
+	 * interrupt is indistinguishable from it being wedged: the OVL's
+	 * OVL_STA only reports RDMA0_IDLE, not why.  Log what the engine
+	 * actually latched so a stuck RDMA0 can be placed rather than
+	 * guessed at.  Guarded by a flag so a per-frame failure cannot flood.
+	 */
+	if (!rdma->dbg_done) {
+		rdma->dbg_done = true;
+		dev_info(dev,
+			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n",
+			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1));
+	}
 }
 
 static unsigned int rdma_fmt_convert_mt65xx(unsigned int fmt)
