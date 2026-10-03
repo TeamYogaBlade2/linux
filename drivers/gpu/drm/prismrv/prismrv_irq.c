@@ -268,7 +268,7 @@ void prismrv_recovery_work(struct work_struct *work)
 	/*
 	 * Step 4: tear down old HW state and reinitialise.
 	 */
-	prismrv_devfreq_pause(pv);
+	/* DVFS was paused before the soft reset above */
 	prismrv_hw_fini(pv);
 	ret = prismrv_hw_init(pv);
 	if (!ret)

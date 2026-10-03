@@ -43,14 +43,41 @@ static const struct of_device_id prismrv_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, prismrv_of_match);
 
+/*
+ * Every ioctl runs inside a drm_dev_enter()/drm_dev_exit() section.
+ * drm_ioctl_kernel() only tests drm_dev_is_unplugged() once, before the
+ * handler starts; drm_dev_unplug() waits for the sections opened here, and
+ * nothing else.  Without this, an ioctl that had passed that test could keep
+ * using the VA heap, the MMU, the CCB and the register window while
+ * prismrv_remove() was tearing them down.  The submit_rwsem stays a
+ * separate, inner lock for the *hardware state* (reset/resume vs. submit).
+ */
+#define PRISMRV_GUARDED_IOCTL(name)						\
+static int name##_guarded(struct drm_device *dev, void *data,			\
+			  struct drm_file *file)				\
+{										\
+	int idx, ret;								\
+										\
+	if (!drm_dev_enter(dev, &idx))						\
+		return -ENODEV;							\
+	ret = name(dev, data, file);						\
+	drm_dev_exit(idx);							\
+	return ret;								\
+}
+
+PRISMRV_GUARDED_IOCTL(prismrv_gem_create_ioctl)
+PRISMRV_GUARDED_IOCTL(prismrv_gem_mmap_offset_ioctl)
+PRISMRV_GUARDED_IOCTL(prismrv_submit_ioctl)
+PRISMRV_GUARDED_IOCTL(prismrv_get_param_ioctl)
+
 static const struct drm_ioctl_desc prismrv_ioctls[] = {
-	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_CREATE, prismrv_gem_create_ioctl,
+	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_CREATE, prismrv_gem_create_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_MMAP_OFFSET, prismrv_gem_mmap_offset_ioctl,
+	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_MMAP_OFFSET, prismrv_gem_mmap_offset_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(PRISMRV_SUBMIT, prismrv_submit_ioctl,
+	DRM_IOCTL_DEF_DRV(PRISMRV_SUBMIT, prismrv_submit_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(PRISMRV_GET_PARAM, prismrv_get_param_ioctl,
+	DRM_IOCTL_DEF_DRV(PRISMRV_GET_PARAM, prismrv_get_param_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 };
 
