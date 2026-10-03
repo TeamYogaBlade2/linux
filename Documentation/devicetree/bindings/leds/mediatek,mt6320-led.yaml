@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/mediatek,mt6320-led.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6320 PMIC LEDs
+
+maintainers:
+  - Lenovo Linux Team
+
+description: >
+  The MT6320 companion PMIC, used with MediaTek MT6589 SoCs, provides three
+  constant-current LED sinks (ISINK, called NLED in the vendor sources) plus
+  a fourth sink dedicated to the keypad backlight.  These LEDs are wired into
+  the PMIC rather than to SoC GPIOs, so each one needs its own current step,
+  dimming counter and enable bit programmed inside the PMIC.
+
+properties:
+  compatible:
+    oneOf:
+      - const: mediatek,mt6320-led
+      - items:
+          - const: mediatek,mt6320
+          - const: mediatek,mt6320-led
+    description: >
+      Conformance to the PMIC type is optional for compatibility with
+      existing vendor bindings, which often only set the first string.
+
+  reg:
+    description: >
+      Index of the LED current sink within the PMIC.  This is a channel
+      number, not an MMIO address: the sinks live in the ISINKS_CONx
+      registers and are addressed by an index 0, 1 or 2.
+    enum: [0, 1, 2]
+
+  label:
+    description: Name of the LED as it appears in sysfs.
+
+  mediatek,is-kpled:
+    type: boolean
+    description: >
+      This node is the dedicated keypad backlight sink on KPLED_CON0 rather
+      than one of the three ISINK channels.  Such a node must not have a reg
+      property, and is driven on/off only.
+
+  mediatek,isink-step:
+    maximum: 7
+    default: 0
+    description: >
+      Initial current step code for this sink.  The MT6320 step field is three
+      bits wide, so 0..7 is representable, but the vendor driver only uses
+      codes 0..3: code 0 is the smallest step and code 3 is around 16 mA.
+
+      This sets the default current the sink comes up at; afterwards the LED
+      class drives the level through the same step codes.
+
+  led-names:
+    description: Deprecated, use label instead.
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false

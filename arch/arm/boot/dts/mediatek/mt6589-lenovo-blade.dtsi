@@ -142,6 +142,27 @@
 &pmic {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pmic_eint_pins>;
+
+	/*
+	 * MT6320 LED current sinks.
+	 *
+	 * Only the dedicated keypad/button backlight is declared: the
+	 * vendor cust_leds.c marks red, green and blue as
+	 * MT65XX_LED_MODE_NONE on this board, so there is no RGB indicator
+	 * fitted.  Declaring three permanently-dark sinks would just add
+	 * sysfs entries that never light.
+	 *
+	 * The panel's own backlight is the display BLS PWM, declared
+	 * separately as backlight_lcd above.
+	 */
+	leds {
+		compatible = "mediatek,mt6320-led";
+
+		keypad-backlight {
+			label = "button-backlight";
+			mediatek,is-kpled;
+		};
+	};
 };
 
 &mt6320_accdet {

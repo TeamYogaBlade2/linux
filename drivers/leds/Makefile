@@ -126,3 +126,4 @@ obj-y					+= blink/
 
 # Simatic LED drivers
 obj-y					+= simatic/
+obj-$(CONFIG_LEDS_MT6320) += leds-mt6320.o
