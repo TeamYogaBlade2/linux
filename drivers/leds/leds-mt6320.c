@@ -1,0 +1,718 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * LED driver for the MediaTek MT6320 PMIC
+ *
+ * Drives the three constant-current LED (ISINK / "NLED") sinks that the MT6320
+ * exposes, plus the dedicated keypad LED.  The sinks are wired to LEDs on the
+ * board rather than to the SoC GPIOs, so they cannot be handled by
+ * drivers/leds/leds-gpio.c: each sink needs its own current step, its own
+ * PWM-mode selection and a shared boost clock, all inside the PMIC.
+ *
+ * Register map and bit positions come from the downstream MT6589 sources:
+ *   - aquaris-5/mediatek/platform/mt6589/kernel/core/include/mach/upmu_hw.h
+ *       ISINKS_CON0..6, KPLED_CON0, TOP_CKPDN, TOP_CKCON1 and the matching
+ *       PMIC_ISINK / PMIC_ISINKS / PMIC_KPLED mask-and-shift pairs
+ *   - aquaris-5/mediatek/platform/mt6589/kernel/drivers/power/upmu_common.c
+ *       the upmu_set_isinks_chN_en/mode/step(),
+ *       upmu_set_isink_dimN_duty/fsel(), upmu_set_rg_bst_drv_1m_ck_pdn()
+ *       and upmu_set_kpled_en/dim_duty() helpers
+ *   - aquaris-5/mediatek/platform/mt6589/kernel/drivers/leds/leds.c
+ *       the sequences in mt_set_led_brightness() this driver reproduces
+ *
+ * All the register addresses used here already exist in the mainline header
+ * (include/linux/mfd/mt6320/registers.h) and were cross-checked against the
+ * vendor header above; none of them needed to be added.
+ *
+ * Datasheet cross-check is only possible for the addresses, not the bits: the
+ * MT6320 is a companion PMIC and its register manual is not part of the
+ * MT6589 SoC datasheet (grep -c ISINK on the extracted MT6589 datasheet text
+ * returns 0).  Every bit position below is therefore taken from the vendor
+ * header and marked VERIFIED-HEADER in NOTES.md.
+ *
+ * This deliberately does not extend drivers/leds/rgb/leds-mt6370-rgb.c or
+ * drivers/leds/leds-mt6323.c.  The MT6370 driver drives an 8-bit-wide RGB
+ * block at 0x182-0x194 with one register per attribute per channel, while the
+ * MT6320 sinks are a 16-bit block at 0x056a-0x0580 where three channels share
+ * one enable register; no address overlaps and the register widths differ, so
+ * neither driver can simply be pointed at this part.  See NOTES.md.
+ *
+ * Copyright (C) 2026 Lenovo
+ */
+
+#include <linux/bitfield.h>
+#include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/kernel.h>
+#include <linux/leds.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
+#include <linux/property.h>
+#include <linux/regmap.h>
+
+#include <linux/mfd/mt6320/registers.h>
+#include <linux/mfd/mt6397/core.h>
+
+/*
+ * MT6320 drives three LED current sinks, plus a separate constant-current
+ * driver dedicated to the keypad backlight.  Channel indices match the
+ * "mediatek,mt6320-led" DT "reg" property and the ISINKS_CONx registers.
+ */
+#define MT6320_MAX_LEDS		3
+
+/*
+ * TOP_CKPDN bit 7, RG_BST_DRV_1M_CK_PDN, is the 1 MHz boost-converter clock
+ * that feeds the current sinks.  It is shared by all three sinks, so it is
+ * gated once in probe rather than per-LED, and left running afterwards -
+ * gating it per LED would tear down the boost rail under the other sinks.
+ * Across the whole downstream driver the un-gate calls are live but every
+ * gate-back call is commented out (leds.c:298,315,331,546,589,632,674 live;
+ * 556,598,641,686 are comments), so the rail is never parked once running.
+ *
+ * upmu_hw.h:702  PMIC_RG_BST_DRV_1M_CK_PDN_MASK 0x1
+ * upmu_hw.h:703  PMIC_RG_BST_DRV_1M_CK_PDN_SHIFT 7
+ */
+#define MT6320_BST_DRV_1M_CK_PDN	BIT(7)
+
+/*
+ * ISINKS_CON0/1/2 hold one dimming counter per channel.
+ * Duty is bits [12:8], fsel (the period divisor) is bits [4:0].
+ *
+ * upmu_hw.h:3632-3647
+ *   PMIC_ISINK_DIM{0,1,2}_DUTY_MASK 0x1F / _SHIFT 8
+ *   PMIC_ISINK_DIM{0,1,2}_FSEL_MASK 0x1F / _SHIFT 0
+ */
+#define MT6320_ISINK_DIM_DUTY_MASK	GENMASK(12, 8)
+#define MT6320_ISINK_DIM_FSEL_MASK	GENMASK(4, 0)
+
+/*
+ * ISINKS_CON3 gates the three sinks.  One bit each: CH0 bit 8, CH1 bit 9,
+ * CH2 bit 10.
+ *
+ * upmu_hw.h:3650-3655
+ *   PMIC_ISINKS_CH0_EN_MASK 0x1 / _SHIFT 8
+ *   PMIC_ISINKS_CH1_EN_MASK 0x1 / _SHIFT 9
+ *   PMIC_ISINKS_CH2_EN_MASK 0x1 / _SHIFT 10
+ */
+#define MT6320_ISINK_CH_EN(i)		BIT(8 + (i))
+
+/*
+ * ISINKS_CON4/5/6 hold per-channel mode and current step.
+ *
+ * The mode field selects the dimming source.  The downstream driver always
+ * writes PMIC_PWM_0 (leds_sw.h:12 enum { PMIC_PWM_0 = 0, ... }), i.e. the
+ * channel follows the shared dimming counter selected by the PWM number.
+ * Because this driver programs the counter itself, PMIC_PWM_0 is the only
+ * mode value it needs; the other two encodings are left alone.
+ *
+ *   upmu_hw.h:3670-3687
+ *     PMIC_ISINKS_CH{0,1,2}_MODE_MASK 0x3 / _SHIFT 8
+ *     PMIC_ISINKS_CH{0,1,2}_STEP_MASK 0x7 / _SHIFT 12
+ *
+ * Step is the current code: 0 selects the smallest step, and the downstream
+ * driver comments the extremes as 4 mA at code 0 (ch0, and ch1 in the
+ * ISINK01 case) up to 16 mA at code 3 (leds.c:533, :577, :620).
+ * The per-channel defaults below are the ones the BSP programs for this
+ * board's LEDs.
+ */
+#define MT6320_ISINK_CH_MODE_MASK	GENMASK(9, 8)
+#define MT6320_ISINK_CH_MODE_PWM0	0
+#define MT6320_ISINK_CH_STEP_MASK	GENMASK(14, 12)
+
+/*
+ * KPLED_CON0: dedicated keypad backlight sink, independent of the three
+ * ISINK channels.  Enable is bit 0, dimming duty is bits [12:8].
+ *
+ * upmu_hw.h:3612-3617
+ *   PMIC_KPLED_DIM_DUTY_MASK 0x1F / _SHIFT 8
+ *   PMIC_KPLED_EN_MASK 0x1 / _SHIFT 0
+ */
+#define MT6320_KPLED_EN			BIT(0)
+#define MT6320_KPLED_DIM_DUTY_MASK	GENMASK(12, 8)
+
+/*
+ * Dimensioning limits.
+ *
+ * max_brightness is the number of current-step codes plus one, so that a
+ * brightness of N maps onto step N-1 the way drivers/leds/leds-mt6323.c
+ * does (ISINK_CH_STEP(brightness - 1), leds-mt6323.c:169).  The MT6320 step
+ * field is three bits wide, so 0..7 is representable; the BSP only ever uses
+ * codes 0..3.
+ *
+ * The dimming counter is a 5-bit fsel counting a divided 1 MHz clock, and
+ * the BSP programs fsel=11 for its notification LEDs and fsel=1 for the
+ * slower button backlight, commenting the first as 0.25 kHz
+ * (leds.c:535-536).  fsel=0 stops the counter, so it cannot express a
+ * continuous "solid" level - a solid LED is produced by duty = fsel, the
+ * maximum value the field can hold, which is what the downstream driver does
+ * (upmu_set_isink_dim0_duty(15) with fsel 11, leds.c:535-536).
+ */
+#define MT6320_MAX_BRIGHTNESS		4	/* step codes 0..3 */
+#define MT6320_MAX_DUTY			31	/* duty field is 5 bits wide */
+#define MT6320_MAX_STEP			7	/* step field is 3 bits wide */
+
+/*
+ * Blink period selection.  The period is chosen by a clock-select nibble in
+ * ISINKS_CON8/9/10 (bits [15:12], "trf_sel") plus an fsel correction
+ * divider, NOT by fsel alone.  See mt6320_led_set_blink() for the tables,
+ * which are taken verbatim from the BSP.
+ *
+ * upmu_hw.h:3696-3709  PMIC_ISINKS_BREATH{0,1,2}_TRF_SEL_MASK 0x4 / _SHIFT 12
+ * upmu_common.c:21866  upmu_set_isinks_breath0_trf_sel() -> ISINKS_CON8
+ */
+#define MT6320_ISINK_TRF_SEL_MASK	GENMASK(15, 12)
+
+/*
+ * struct mt6320_led - one current sink
+ * @channel:	sink index, 0..MT6320_MAX_LEDS-1
+ * @parent:	the controller this sink belongs to
+ * @cdev:	the LED class device
+ * @current_brightness:	cached level, 0 when the sink is off
+ */
+struct mt6320_kpled;
+
+struct mt6320_led {
+	unsigned int			channel;
+	struct mt6320_leds		*parent;
+	struct led_classdev		cdev;
+	enum led_brightness		current_brightness;
+	/* current step programmed when this sink is first turned on */
+	u8				step;
+};
+
+/*
+ * struct mt6320_leds - the whole controller
+ * @dev:	the device doing the register writes
+ * @regmap:	the MT6320 regmap, borrowed from the parent MFD device
+ * @lock:	serialises brightness changes between LEDs
+ * @led:	per-channel state, NULL where the board has no LED fitted
+ */
+struct mt6320_leds {
+	struct device			*dev;
+	struct regmap			*regmap;
+	struct mutex			lock;
+	struct mt6320_led		*led[MT6320_MAX_LEDS];
+	/* dedicated keypad sink, if the board has one */
+	struct mt6320_kpled		*kpled;
+};
+
+/*
+ * Per-channel register offsets.
+ *
+ * The three dimming counters are in ISINKS_CON0/1/2, the three enable bits
+ * are all in ISINKS_CON3, and the mode+step pairs are in ISINKS_CON4/5/6.
+ * The register is the same for every channel within each group, so these
+ * are indexed by channel rather than being separate tables.
+ */
+static const u16 mt6320_isink_dim_reg[] = {
+	MT6320_ISINKS_CON0, MT6320_ISINKS_CON1, MT6320_ISINKS_CON2,
+};
+
+static const u16 mt6320_isink_cfg_reg[] = {
+	MT6320_ISINKS_CON4, MT6320_ISINKS_CON5, MT6320_ISINKS_CON6,
+};
+
+/*
+ * Per-channel clock-select registers used for blink timing.  These are the
+ * "breathN_trf_sel" fields the BSP uses (upmu_common.c:21866 for ch0), one per
+ * channel.
+ *
+ * upmu_hw.h:405-410  ISINKS_CON7..CON10 = 0x0578, 0x057A, 0x057C, 0x057E
+ */
+static const u16 mt6320_isink_trf_reg[] = {
+	MT6320_ISINKS_CON8, MT6320_ISINKS_CON9, MT6320_ISINKS_CON10,
+};
+
+#define MT6320_ISINKS_EN_REG	MT6320_ISINKS_CON3
+
+/*
+ * The current step programmed for each channel when the LED is first turned
+ * on.  These are the values the BSP uses for this board:
+ *   ch0 -> step 0 (leds.c:533, commented 4 mA)
+ *   ch1 -> step 3 (leds.c:577)
+ *
+ * Note the BSP's own comments disagree about what step 3 means: it is
+ * labelled 16 mA at leds.c:620 for ch2 but 4 mA at leds.c:577 for ch1,
+ * and leds.c:661 calls ch1 step 3 "4mA" as well.  The current scale is
+ * therefore NOT established; see NOTES.md.  Only the step *codes* are
+ * taken from here, and the mapping from brightness to step is this
+ * driver's own convention, not the BSP's.
+ *
+ * Taken as the default "on" current for a sink with no explicit step in DT.
+ */
+static const u8 mt6320_isink_def_step[] = { 0, 3, 3 };
+
+/*
+ * Set the sink's current step.  Called once, before the sink is enabled.
+ */
+static int mt6320_led_set_step(struct mt6320_led *led, u8 step)
+{
+	struct mt6320_leds *leds = led->parent;
+	int ret;
+
+	ret = regmap_update_bits(leds->regmap,
+				 mt6320_isink_cfg_reg[led->channel],
+				 MT6320_ISINK_CH_STEP_MASK | MT6320_ISINK_CH_MODE_MASK,
+				 FIELD_PREP(MT6320_ISINK_CH_STEP_MASK, step) |
+				 FIELD_PREP(MT6320_ISINK_CH_MODE_MASK,
+					    MT6320_ISINK_CH_MODE_PWM0));
+	return ret;
+}
+
+/*
+ * Put the sink into a steady level rather than a blink pattern.
+ *
+ * Steady is duty at the top of its range with the clock select pointed at
+ * the slowest available divider, which is what the BSP programs for a plain
+ * "on": duty 15, fsel 11, trf_sel 0 (leds.c:535-536 and :308).  The same state
+ * is reached here by holding the duty field at its maximum; the fsel/trf_sel
+ * values are the vendor's own, not derived here, because the divider encoding
+ * is undocumented in this tree.
+ */
+static int mt6320_led_set_steady(struct mt6320_led *led)
+{
+	struct mt6320_leds *leds = led->parent;
+	int ret;
+
+	/*
+	 * Maximum duty with the clock select cleared, matching the BSP's
+	 * steady-state programming (leds.c:308 sets breath0_trf_sel to 0).
+	 */
+	ret = regmap_update_bits(leds->regmap,
+				 mt6320_isink_trf_reg[led->channel],
+				 MT6320_ISINK_TRF_SEL_MASK, 0);
+	if (ret)
+		return ret;
+
+	return regmap_update_bits(leds->regmap,
+				 mt6320_isink_dim_reg[led->channel],
+				 MT6320_ISINK_DIM_DUTY_MASK,
+				 FIELD_PREP(MT6320_ISINK_DIM_DUTY_MASK,
+						   MT6320_MAX_DUTY));
+}
+
+/*
+ * Program a hardware blink pattern.
+ *
+ * fsel is NOT a period divider.  The period is chosen by a clock-select
+ * field (the "trf_sel" nibble in ISINKS_CON8/9/10, bits [15:12]) and fsel is
+ * only a small correction divider within that clock.  The BSP drives it as a
+ * lookup: a table of supported periods, a parallel table of clock selects,
+ * and a parallel table of fsel values (leds.c:264-268)
+ *
+ *	pmic_period_array[] = {250,500,1000,1250,1666,2000,2500,3333,4000,5000,6666,8000,10000};
+ *	pmic_clksel_array[]  = {  0,  0,   0,   0,   0,   0,    1,    1,    1,    2,    2,    2,     3};
+ *	pmic_freqsel_array[] = { 21, 22,  23,  24,  24,  24,   25,   25,   26,   26,   28,   28,    28};
+ *
+ * and picks the first entry whose period covers the requested one
+ * (find_time_index_pmic(), leds.c:271-281).  The duty field is a plain
+ * percentage of the period, computed as 32*on/period (leds.c:295).
+ *
+ * Those tables are reproduced verbatim below rather than re-derived: the
+ * clock-select encoding is not documented anywhere in this tree, and
+ * inverting it would be guesswork.  The exact resulting frequency is not
+ * stated by the BSP, so this is "the vendor's rate for this period", not a
+ * verified Hz figure.  Note also that every table entry is >= 250 ms, so a
+ * faster request rounds up to 250 ms - matching find_time_index_pmic(),
+ * which returns the first entry that covers the request (leds.c:271-281).
+ *
+ * One deliberate divergence: find_time_index_pmic() clamps an over-long
+ * request to the last entry (10000 ms).  This driver returns -EINVAL for
+ * anything past 10 s instead, so the LED core falls back to its software
+ * timer and blinks at the rate actually requested, rather than blinking at a
+ * capped rate the caller did not ask for.
+ *
+ * Returns -EINVAL when no entry covers the requested period, which is the
+ * documented way to ask the LED core to fall back to software blinking.
+ */
+static int mt6320_led_set_blink(struct mt6320_led *led,
+				unsigned int on_ms, unsigned int period_ms)
+{
+	static const unsigned int tbl_period[] = {
+		250, 500, 1000, 1250, 1666, 2000, 2500, 3333, 4000, 5000,
+		6666, 8000, 10000,
+	};
+	static const u8 tbl_clksel[] = {
+		0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3,
+	};
+	static const u8 tbl_fsel[] = {
+		21, 22, 23, 24, 24, 24, 25, 25, 26, 26, 28, 28, 28,
+	};
+	struct mt6320_leds *leds = led->parent;
+	unsigned int i, duty;
+	int ret;
+
+	if (!period_ms || on_ms >= period_ms)
+		return -EINVAL;
+
+	/* First entry that covers the requested period, else give up. */
+	for (i = 0; i < ARRAY_SIZE(tbl_period); i++)
+		if (period_ms <= tbl_period[i])
+			break;
+	if (i == ARRAY_SIZE(tbl_period))
+		return -EINVAL;
+
+	/* Duty is the on-fraction of the period, scaled the way the BSP does. */
+	duty = min_t(unsigned int, 32u * on_ms / period_ms, MT6320_MAX_DUTY);
+	if (on_ms && !duty)
+		duty = 1;
+
+	ret = regmap_update_bits(leds->regmap, mt6320_isink_dim_reg[led->channel],
+				 MT6320_ISINK_DIM_DUTY_MASK | MT6320_ISINK_DIM_FSEL_MASK,
+				 FIELD_PREP(MT6320_ISINK_DIM_DUTY_MASK, duty) |
+				 FIELD_PREP(MT6320_ISINK_DIM_FSEL_MASK, tbl_fsel[i]));
+	if (ret)
+		return ret;
+
+	return regmap_update_bits(leds->regmap,
+				 mt6320_isink_trf_reg[led->channel],
+				 MT6320_ISINK_TRF_SEL_MASK,
+				 FIELD_PREP(MT6320_ISINK_TRF_SEL_MASK, tbl_clksel[i]));
+}
+
+static int mt6320_led_hw_on(struct mt6320_led *led, enum led_brightness brightness)
+{
+	struct mt6320_leds *leds = led->parent;
+	enum led_brightness step;
+	int ret;
+
+	if (!led->current_brightness) {
+		ret = mt6320_led_set_step(led, led->step);
+		if (ret)
+			return ret;
+
+		/*
+		 * Apply the level before enabling the sink.  The boost rail is
+		 * shared, so programming the sink while it is still off avoids
+		 * a visible glitch on the other LEDs.
+		 */
+		ret = mt6320_led_set_steady(led);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * brightness selects the current step: 1 -> step 0, ...
+	 * The step field is only three bits wide, so clamp rather than let a
+	 * rogue value wrap into another channel's current range.
+	 */
+	step = min_t(enum led_brightness, brightness, MT6320_MAX_BRIGHTNESS) - 1;
+	ret = mt6320_led_set_step(led, step);
+	if (ret)
+		return ret;
+
+	return regmap_update_bits(leds->regmap, MT6320_ISINKS_EN_REG,
+				  MT6320_ISINK_CH_EN(led->channel),
+				  MT6320_ISINK_CH_EN(led->channel));
+}
+
+static int mt6320_led_hw_off(struct mt6320_led *led)
+{
+	struct mt6320_leds *leds = led->parent;
+
+	/*
+	 * Only drop the enable bit.  The boost clock stays on because the
+	 * other sinks may still be lit, and because re-enabling a rail takes
+	 * far longer than re-enabling a sink.
+	 */
+	return regmap_clear_bits(leds->regmap, MT6320_ISINKS_EN_REG,
+				 MT6320_ISINK_CH_EN(led->channel));
+}
+
+static int mt6320_led_set_brightness(struct led_classdev *cdev,
+				     enum led_brightness brightness)
+{
+	struct mt6320_led *led = container_of(cdev, struct mt6320_led, cdev);
+	int ret;
+
+	mutex_lock(&led->parent->lock);
+
+	if (!brightness)
+		ret = mt6320_led_hw_off(led);
+	else
+		ret = mt6320_led_hw_on(led, brightness);
+
+	if (!ret)
+		led->current_brightness = brightness;
+
+	mutex_unlock(&led->parent->lock);
+
+	return ret;
+}
+
+static enum led_brightness
+mt6320_led_get_brightness(struct led_classdev *cdev)
+{
+	struct mt6320_led *led = container_of(cdev, struct mt6320_led, cdev);
+	unsigned int status;
+	int ret;
+
+	ret = regmap_read(led->parent->regmap, MT6320_ISINKS_EN_REG, &status);
+	if (ret)
+		return led->current_brightness;
+
+	return status & MT6320_ISINK_CH_EN(led->channel) ?
+				 led->current_brightness : LED_OFF;
+}
+
+/*
+ * Hardware blink.  Anything the counter cannot express is handed back to the
+ * LED core, which falls back to its own timer when this returns -EINVAL.
+ */
+static int mt6320_led_hw_blink_set(struct led_classdev *cdev,
+				   unsigned long *delay_on,
+				   unsigned long *delay_off)
+{
+	struct mt6320_led *led = container_of(cdev, struct mt6320_led, cdev);
+	unsigned int on_ms, period_ms;
+	int ret;
+
+	/* The LED core asks for "as before" with both values zeroed. */
+	if (!*delay_on && !*delay_off) {
+		*delay_on = 500;
+		*delay_off = 500;
+	}
+
+	on_ms = *delay_on;
+	period_ms = *delay_on + *delay_off;
+
+	/*
+	 * Everything below touches the same per-channel registers that
+	 * brightness_set does, so the whole sequence is done under the lock
+	 * rather than just the enable - otherwise a concurrent brightness
+	 * change can interleave with the dimming setup.
+	 */
+	mutex_lock(&led->parent->lock);
+	ret = mt6320_led_set_blink(led, on_ms, period_ms);
+	if (!ret) {
+		ret = mt6320_led_hw_on(led, led->cdev.max_brightness);
+		if (!ret)
+			led->current_brightness = led->cdev.max_brightness;
+	}
+	mutex_unlock(&led->parent->lock);
+
+	return ret;
+}
+
+/*
+ * Keypad backlight.
+ *
+ * This is a fourth, independent sink on KPLED_CON0 rather than one of the
+ * three ISINK channels, so it gets its own class device and a pair of simple
+ * on/off helpers rather than sharing the channel machinery above.
+ */
+struct mt6320_kpled {
+	struct mt6320_leds		*parent;
+	struct led_classdev		cdev;
+	enum led_brightness		current_brightness;
+};
+
+static enum led_brightness
+mt6320_kpled_get_brightness(struct led_classdev *cdev)
+{
+	struct mt6320_kpled *kpled = container_of(cdev, struct mt6320_kpled, cdev);
+	unsigned int status;
+
+	if (regmap_read(kpled->parent->regmap, MT6320_KPLED_CON0, &status))
+		return kpled->current_brightness;
+
+	return status & MT6320_KPLED_EN ? LED_ON : LED_OFF;
+}
+
+static int mt6320_kpled_set_brightness(struct led_classdev *cdev,
+				       enum led_brightness brightness)
+{
+	struct mt6320_kpled *kpled = container_of(cdev, struct mt6320_kpled, cdev);
+	int ret;
+
+	mutex_lock(&kpled->parent->lock);
+
+	if (!brightness) {
+		ret = regmap_clear_bits(kpled->parent->regmap,
+					 MT6320_KPLED_CON0, MT6320_KPLED_EN);
+	} else {
+		/*
+		 * Duty 9 is what the BSP programs for this sink
+		 * (upmu_set_kpled_dim_duty(0x9), leds.c:506-507).
+		 */
+		ret = regmap_update_bits(kpled->parent->regmap,
+					 MT6320_KPLED_CON0,
+					 MT6320_KPLED_EN | MT6320_KPLED_DIM_DUTY_MASK,
+					 MT6320_KPLED_EN |
+					 FIELD_PREP(MT6320_KPLED_DIM_DUTY_MASK, 9));
+	}
+
+	if (!ret)
+		kpled->current_brightness = brightness;
+
+	mutex_unlock(&kpled->parent->lock);
+
+	return ret;
+}
+
+static int mt6320_led_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct device_node *np = dev_of_node(dev);
+	struct mt6397_chip *chip = dev_get_drvdata(dev->parent);
+	struct mt6320_leds *leds;
+	struct mt6320_led *led;
+	int ret;
+
+	if (!chip || !chip->regmap)
+		return dev_err_probe(dev, -EPROBE_DEFER,
+				     "no MT6320 regmap from parent\n");
+
+	leds = devm_kzalloc(dev, sizeof(*leds), GFP_KERNEL);
+	if (!leds)
+		return -ENOMEM;
+
+	leds->dev = dev;
+	leds->regmap = chip->regmap;
+	mutex_init(&leds->lock);
+	platform_set_drvdata(pdev, leds);
+
+	/*
+	 * Bring up the shared 1 MHz boost-converter clock once.  All three
+	 * sinks are fed from it, so it must be running before any sink is
+	 * enabled, and it is deliberately never gated again.
+	 */
+	ret = regmap_clear_bits(leds->regmap, MT6320_TOP_CKPDN_CLR,
+				 MT6320_BST_DRV_1M_CK_PDN);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to un-gate BST clock\n");
+
+	for_each_available_child_of_node_scoped(np, child) {
+		struct led_init_data init_data = {};
+		struct mt6320_kpled *kpled;
+		u32 reg, step;
+
+		/*
+		 * A "keypad" child is the dedicated KPLED sink and does not
+		 * consume an ISINK channel.
+		 */
+		if (of_property_read_bool(child, "mediatek,is-kpled")) {
+			kpled = devm_kzalloc(dev, sizeof(*kpled), GFP_KERNEL);
+			if (!kpled)
+				return -ENOMEM;
+
+			leds->kpled = kpled;
+			kpled->parent = leds;
+			kpled->cdev.max_brightness = 1;
+			kpled->cdev.brightness_set_blocking =
+						mt6320_kpled_set_brightness;
+			kpled->cdev.brightness_get =
+				mt6320_kpled_get_brightness;
+
+			if (of_property_read_string(child, "label",
+						   &kpled->cdev.name) ||
+			    !kpled->cdev.name)
+				kpled->cdev.name = dev_name(dev);
+
+			init_data.fwnode = of_fwnode_handle(child);
+			ret = devm_led_classdev_register_ext(dev, &kpled->cdev,
+							    &init_data);
+			if (ret)
+				return dev_err_probe(dev, ret,
+						     "failed to register keypad LED\n");
+
+			continue;
+		}
+
+		ret = of_property_read_u32(child, "reg", &reg);
+		if (ret)
+			return dev_err_probe(dev, ret, "missing led 'reg'\n");
+
+		if (reg >= MT6320_MAX_LEDS || leds->led[reg])
+			return dev_err_probe(dev, -EINVAL,
+					     "invalid led reg %u\n", reg);
+
+		led = devm_kzalloc(dev, sizeof(*led), GFP_KERNEL);
+		if (!led)
+			return -ENOMEM;
+
+		led->channel = reg;
+		led->parent = leds;
+		leds->led[reg] = led;
+
+		/*
+		 * "mediatek,isink-step" overrides the default current for
+		 * this sink.  The value is a raw step code used when the sink
+		 * is first enabled; afterwards the LED class drives the level
+		 * through the same step codes.
+		 */
+		reg = mt6320_isink_def_step[led->channel];
+		ret = of_property_read_u32(child, "mediatek,isink-step", &step);
+		if (!ret)
+			reg = step;
+		else if (ret != -EINVAL)
+			return dev_err_probe(dev, ret, "bad isink-step\n");
+
+		/* the step field is three bits wide */
+		if (reg > MT6320_MAX_STEP)
+			return dev_err_probe(dev, -EINVAL,
+					     "isink-step %u out of range\n", reg);
+
+		led->step = reg;
+
+		led->cdev.max_brightness = MT6320_MAX_BRIGHTNESS;
+		led->cdev.brightness_set_blocking = mt6320_led_set_brightness;
+		led->cdev.brightness_get = mt6320_led_get_brightness;
+		led->cdev.blink_set = mt6320_led_hw_blink_set;
+
+		init_data.fwnode = of_fwnode_handle(child);
+		ret = devm_led_classdev_register_ext(dev, &led->cdev, &init_data);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to register LED\n");
+
+		/*
+		 * Honour the DT default state before the class device starts
+		 * driving the sink.
+		 */
+		if (led_init_default_state_get(of_fwnode_handle(child)) ==
+							 LEDS_DEFSTATE_ON) {
+			ret = mt6320_led_set_brightness(&led->cdev,
+							led->cdev.max_brightness);
+			if (ret)
+				return dev_err_probe(dev, ret,
+						     "failed to set default state\n");
+		}
+	}
+
+	return 0;
+}
+
+static void mt6320_led_remove(struct platform_device *pdev)
+{
+	struct mt6320_leds *leds = platform_get_drvdata(pdev);
+	int i;
+
+	for (i = 0; i < MT6320_MAX_LEDS; i++)
+		if (leds->led[i])
+			mt6320_led_hw_off(leds->led[i]);
+
+	if (leds->kpled)
+		mt6320_kpled_set_brightness(&leds->kpled->cdev, LED_OFF);
+
+	mutex_destroy(&leds->lock);
+}
+
+static const struct of_device_id mt6320_led_of_match[] = {
+	{ .compatible = "mediatek,mt6320-led" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, mt6320_led_of_match);
+
+static struct platform_driver mt6320_led_driver = {
+	.probe		= mt6320_led_probe,
+	.remove		= mt6320_led_remove,
+	.driver		= {
+		.name		= "mt6320-led",
+		.of_match_table	= mt6320_led_of_match,
+	},
+};
+
+module_platform_driver(mt6320_led_driver);
+
+MODULE_DESCRIPTION("LED driver for MediaTek MT6320 PMIC");
+MODULE_LICENSE("GPL");

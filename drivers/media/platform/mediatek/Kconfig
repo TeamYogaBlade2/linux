@@ -7,3 +7,44 @@ source "drivers/media/platform/mediatek/mdp/Kconfig"
 source "drivers/media/platform/mediatek/vcodec/Kconfig"
 source "drivers/media/platform/mediatek/vpu/Kconfig"
 source "drivers/media/platform/mediatek/mdp3/Kconfig"
+
+
+config VIDEO_MEDIATEK_VCODEC_MT6589
+	tristate "MediaTek MT6589 video codec (VENC/VDEC)"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on COMMON_CLK
+	depends on HAS_IOMEM
+	depends on MTK_SMI || (COMPILE_TEST && MTK_SMI=n)
+	help
+	  Say Y here if you want to use the MediaTek MT6589 hardware video
+	  encoder and decoder.
+
+	  The MT6589 codec is an RTL accelerator with no coprocessor and no
+	  firmware, unlike the later MediaTek VPU generations handled by
+	  CONFIG_VIDEO_MEDIATEK_VCODEC.  The encoder is a hardwired H.264 and
+	  VP8 block at 0x17002000, described in data sheet chapter 60, and
+	  the decoder is a multi-standard block (MPEG-1/2/4, DivX, Xvid,
+	  H.263, VC-1, WMV9, H.264 up to level 4.2, VP8) at 0x16000000.
+
+	  This driver provides the hardware resource layer for those blocks:
+	  clock gating in the VEN and VDE domains, the two interrupt lines
+	  and the per-engine hardware mutex that lets several userspace
+	  instances share one engine.
+
+	  It does not implement bitstream parsing, rate control or any
+	  codec logic.  Those ship only as closed-source userspace
+	  libraries with no corresponding open kernel-side programming
+	  model, and the decoder has no register-definition section in the
+	  data sheet, so a V4L2 or V4L2-mem2mem interface cannot be built
+	  from the available documentation.  The recovered ABI and the parts
+	  that remain unknown are written up in RECOVERED-ABI.md in this
+	  directory.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called mtk-vcodec-mt6589.
+
+source "drivers/media/platform/mediatek/mtk-csi2-rx/Kconfig"
+
+source "drivers/media/platform/mediatek/mtk-scam/Kconfig"
+
+source "drivers/media/platform/mediatek/mtk-cam/Kconfig"

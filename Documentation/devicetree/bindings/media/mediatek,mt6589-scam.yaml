@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-scam.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 sensor-CAM (SCAM) adaptor
+
+maintainers:
+  - Lenovo Linux Team
+
+description: >
+  The SCAM blocks sit between each CSI-2 receiver and the CAM/ISP on the
+  MT6589.  They take the unpacked byte stream plus the frame and line
+  synchronisation the receiver produces, convert it to the ISP's line-based
+  handshake, and raise the interrupts the ISP uses.
+
+  The blocks are at 0x15008200 with a 0x80 stride between the two instances.
+
+  WARNING: the driver behind this binding is partial.  The reset, enable
+  and size path is implemented and it will probe, but the pixel-format
+  handling and the media-controller glue towards the ISP are not written.
+  It will not yet produce frames.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-scam
+
+  reg:
+    description: Register window of the sensor front end.
+    maxItems: 1
+
+  mediatek,scam-port:
+    description: |
+      Which SCAM instance this node programs.  Port 0 is SCAM1 at
+      0x15008200, port 1 is SCAM2 at 0x15008280.  On the Lenovo YOGA
+      Tablet 8/10 port 0 is the main (rear) camera.
+    enum: [0, 1]
+    default: 0
+
+  power-domains:
+    maxItems: 1
+
+  resets:
+    maxItems: 1
+
+  ports:
+    $ref: /schemas/graph/ports.yaml#
+
+required:
+  - compatible
+  - reg
+  - mediatek,scam-port
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    scam: scam@15008200 {
+        compatible = "mediatek,mt6589-scam";
+        reg = <0x0 0x15008000 0x0 0x900>;
+
+        mediatek,scam-port = <0>;
+
+        port {
+            endpoint {
+                remote-endpoint = <&cam_in>;
+            };
+        };
+    };
+
+...

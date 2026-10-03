@@ -1791,3 +1791,5 @@ config VIDEO_MAX96717
 endmenu
 
 endif # VIDEO_DEV
+
+source "drivers/media/i2c/a5142/Kconfig"

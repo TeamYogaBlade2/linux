@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026 Akari Tsuyukusa
+ */
+
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
+#include <dt-bindings/memory/mt6589-larb-port.h>
+#include <dt-bindings/power/mt6589-power.h>
+
+/*
+ * MediaTek MT6589 video codec (VENC + VDEC).
+ *
+ * The two blocks are separate register windows in separate power domains with
+ * separate clock controllers, so one node covering both mirrors the vendor
+ * device (a single /dev/vcodec serving both directions).  Note the register
+ * bases differ from the "syscon" clock nodes: vencsys is at 0x17000000 and
+ * vdecsys at 0x16000000, while the engines themselves are at 0x17002000 and
+ * 0x16000000 respectively.
+ *
+ * The vendor driver treats these as two clocks from vdecsys
+ * (MT_CG_VDEC0_VDE and MT_CG_VDEC1_SMI) plus one from vencsys (MT_CG_VENC_VEN),
+ * and needs the LARB SMI clocks on at the same time as the engines.
+ */
+
+&soc {
+vcodec: vcodec@17002000 {
+	compatible = "mediatek,mt6589-vcodec";
+	/*
+	 * VENC is 4 KiB at 0x17002000 (data sheet ch.60 and ch.61, both the
+	 * H.264/VP8 and the MPEG-4 encoder).
+	 *
+	 * VDEC is 0x29000 at 0x16020000 - NOT 0x16000000, which is the vdecsys
+	 * clock controller.  0x16020000 is mt_reg_base.h VDEC_BASE 0xF6020000
+	 * after the +0xE0000000 remap.  The data sheet has no register-definition
+	 * section for the decoder at all (ch.59 stops at the block diagram and
+	 * the string "16000000" does not appear anywhere in it), so the offsets
+	 * come from the vendor LDVT register-level test harness.
+	 */
+	reg = <0x17002000 0x1000>,
+	      <0x16020000 0x29000>;
+
+	/*
+	 * VENC IRQ is MT_VENC_IRQ_ID = GIC_PRIVATE_SIGNALS(32) + 136 = SPI 136,
+	 * VDEC IRQ is MT_VDEC_IRQ_ID = 32 + 140 = SPI 140
+	 * (kernel/core/include/mach/mt_irq.h:101,103).
+	 *
+	 * The vendor driver registers VENC with IRQF_TRIGGER_LOW and VDEC with
+	 * IRQF_TRIGGER_HIGH (videocodec_kernel_driver.c:2104,2113), so the two
+	 * lines are genuinely wired with opposite polarity.
+	 */
+	interrupts = <GIC_SPI 136 IRQ_TYPE_LEVEL_LOW>,
+		     <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
+
+	clocks = <&vencsys CLK_VENC_VEN>,
+		 <&vdecsys CLK_VDEC0_VDE>,
+		 <&vdecsys CLK_VDEC1_SMI>;
+	clock-names = "venc",
+		      "vdec-vde",
+		      "vdec-smi";
+
+	/*
+	 * VENC lives in the VEN domain and VDEC in VDE.  Both arrive powered off
+	 * at reset and must be brought up by the SCM power sequence; see
+	 * drivers/pmdomain/mediatek/mt6589-power-domains.md, which records that
+	 * larb0/larb1 are currently disabled because that power-on fails on this
+	 * platform.  The VEN domain in particular still waits on all four SRAM
+	 * acknowledge bits, which the stock driver also does, so its failure is
+	 * undiagnosed.
+	 *
+	 * Both domains are best-effort here: the driver tolerates a missing
+	 * domain so that the node can be enabled while the VEN/VDE power
+	 * sequence is still being worked on.
+	 */
+	power-domains = <&spm MT6589_POWER_DOMAIN_VEN>,
+			<&spm MT6589_POWER_DOMAIN_VDE>;
+
+	iommus = <&iommu MT6589_M4U_PORT_VENC_CUR_LUMA>,
+		 <&iommu MT6589_M4U_PORT_VENC_CUR_CHROMA>,
+		 <&iommu MT6589_M4U_PORT_VENC_BSDMA>,
+		 <&iommu MT6589_M4U_PORT_HW_VDEC_PP_EXT>,
+		 <&iommu MT6589_M4U_PORT_HW_VDEC_VLD_EXT>;
+};
+};

@@ -25,6 +25,11 @@ config MTK_DEVAPC
 	  unexpected transaction.
 	  The violation information is logged for further analysis or
 	  countermeasures.
+	  Some MediaTek SoCs additionally implement a per-slave permission
+	  field which decides, per bus master, whether a slave may be accessed
+	  at all.  Where the SoC supports this, the driver applies the
+	  "mediatek,devapc-forbid-slaves" property.  See the binding for the
+	  property format; slaves not named there stay unprotected.
 
 config MTK_DVFSRC
 	tristate "MediaTek DVFSRC Support"

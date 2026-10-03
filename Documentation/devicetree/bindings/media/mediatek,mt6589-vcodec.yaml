@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR MIT)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mediatek,mt6589-vcodec.yaml#
+$schema: http://devicetree.org/schemas/bindings.yaml#
+
+title: MediaTek MT6589 Video Codec (VENC and VDEC)
+
+description: >
+  The MT6589 video codec is a hardwired RTL accelerator with two register
+  blocks: an H.264/VP8 video encoder (VENC) and a multi-standard video decoder
+  (VDEC).  Unlike the later MediaTek VPU/IPI generations there is no
+  coprocessor and no firmware: both blocks are programmed through MMIO by the
+  driver, and power is a plain clock gate in the VEN and VDE power domains.
+
+  This binding describes a single node covering both blocks, mirroring the
+  vendor topology where one /dev/vcodec serves both the encoder and the
+  decoder.
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+properties:
+  compatible:
+    oneOf:
+      - items:
+          - const: mediatek,mt6589-vcodec
+
+  reg:
+    minItems: 2
+    maxItems: 2
+    description: |
+      Two register windows, in order: the encoder followed by the decoder.
+
+      The encoder is 4 KiB at 0x17002000 and is documented twice over: data
+      sheet chapter 60 (H.264 and VP8) and chapter 61 (MPEG-4), the latter
+      starting at offset 0x600 inside the same window.
+
+      The decoder is 0x29000 bytes at 0x16020000, itself split into a MISC
+      block at offset 0 and a VLD (bitstream parser) block at offset 0x1000.
+      Note this is 0x16020000 and NOT 0x16000000, which is the vdecsys clock
+      controller.  It comes from the stock mt_reg_base.h VDEC_BASE 0xF6020000
+      after the +0xE0000000 remap.  The data sheet contains no register
+      definition for the decoder at all, so a binding cannot describe its
+      register layout.
+
+  interrupts:
+    minItems: 2
+    maxItems: 2
+    description: |
+      Two interrupt lines, in order: the encoder followed by the decoder.
+      The two are wired with opposite polarity: the encoder interrupt is
+      asserted low and the decoder interrupt is asserted high, so the DT must
+      use IRQ_TYPE_LEVEL_LOW for the first and IRQ_TYPE_LEVEL_HIGH for the
+      second.  Using one polarity for both will silently never fire.
+
+  clocks:
+    minItems: 3
+    maxItems: 3
+    description: |
+      Three clock gates, in order: the encoder engine, the decoder engine and
+      the decoder SMI (LARB) clock.  clock-names is required because the
+      encoder clock comes from the vencsys provider and the two decoder
+      clocks from vdecsys, and each provider numbers its own gates from zero,
+      so the provider-local clock ids overlap and are not a unique key.
+
+  clock-names:
+    items:
+      - const: venc
+      - const: vdec-vde
+      - const: vdec-smi
+
+  power-domains:
+    minItems: 2
+    maxItems: 2
+    description: |
+      The encoder and decoder power domains, VEN and VDE, in that order.
+      Both are powered off at reset and require the SCM power-on sequence.
+
+  iommus:
+    minItems: 1
+    items:
+      description: M4U port for a codec DMA engine.
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+
+additionalProperties: false

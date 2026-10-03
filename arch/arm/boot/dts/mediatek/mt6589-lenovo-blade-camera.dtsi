@@ -1,0 +1,203 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * MIPI CSI-2 receiver and D-PHY nodes for the Lenovo YOGA Tablet 8/10
+ * (MT6589).
+ *
+ * DRAFT: not merged, and the receiver cannot probe yet.  See README.md for
+ * what is verified and what is still missing.  The summary is:
+ *
+ *   - The receiver register map is transcribed from the MT6589 data sheet.
+ *   - The two clock gates it needs are drafted but their bit positions are
+ *     unverified.
+ *   - The D-PHY node below exists to get the media graph topology right,
+ *     but the PHY driver's register offsets cannot be written yet because
+ *     the MT6589 data sheet does not document the MIPI RX PHY at all.
+ *
+ * Address map of the sensor front end, from the data sheet:
+ *
+ *   0x15008000  seninf_top       per-port parallel clock gates
+ *   0x15008010  seninf
+ *   0x15008100  csi2 receiver 0  (main camera)
+ *   0x15008180  csi2 receiver 1
+ *   0x15008200  SCAM adaptor 0
+ *   0x15008400  seninf_ccir656
+ *   0x15008500  N3D
+ *   0x15009000  jpgdec
+ *   0x1500A000  jpgenc
+ *   0x15004000  CAM / ISP
+ *
+ * Note this window is NOT inside the imgsys syscon node, which only covers
+ * 0x15000000/0x1000.  The sensor front end therefore needs its own node,
+ * and it takes a multi-range reg in the same style as smi_common in
+ * mt6589.dtsi rather than being nested under &imgsys.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/phy/phy.h>
+
+/ {
+	/*
+	 * The whole sensor front end: the two CSI-2 receivers, the SCAM
+	 * adaptors that follow them, the CCIR-656 and N3D blocks, and the
+	 * CAM/ISP they feed.
+	 *
+	 * The ranges are listed as separate entries rather than one span so
+	 * that the documented holes are not claimed as registers.
+	 */
+	seninf: csi2-rx@15008000 {
+		compatible = "mediatek,mt6589-csi2-rx";
+		reg = <0x0 0x15008000 0x0 0x900>,
+		      <0x0 0x15009000 0x0 0x400>,
+		      <0x0 0x1500A000 0x0 0x400>;
+
+		/*
+		 * No "clocks" here on purpose.  The receiver wants seninf, csi2
+		 * and tg_grp gates, but the MT6589 clock bindings stop at
+		 * CLK_IMAGE_FPC (11) and the data sheet does not describe the
+		 * CAM_TG_CG register those gate bits would live in, so their
+		 * positions cannot be derived.  The driver takes all three as
+		 * optional, so it probes and programs the ports without them;
+		 * add the property once the real bit positions are read from
+		 * hardware.  Inventing gate bits risks disabling a block some
+		 * other driver is using.
+		 */
+
+		/*
+		 * Port 0 is the seninf1/csi2 receiver pair at 0x15008100, which
+		 * carries the main (rear) camera.  A second receiver at
+		 * 0x15008180 would be port 1 for the front camera; it is not
+		 * drafted here.
+		 */
+		mediatek,seninf-port = <0>;
+
+		/*
+		 * img_rst in the data sheet resets "imgsys and its related
+		 * pad macro (cam, mipi_rx)", so the sensor front end shares
+		 * the imgsys top reset, which is TOPRGU bit 5.
+		 *
+		 * TODO: topckgen (syscon@10000100) owns TOPRGU, but it declares
+		 * only #clock-cells, not #reset-cells, and no in-tree DTS
+		 * references a TOPRGU reset yet.  Adding #reset-cells = <1> to
+		 * that node is a prerequisite for this reference to resolve, so
+		 * it is left commented out for now to keep the node buildable.
+		 */
+		// resets = <&topckgen MT6589_TOPRGU_IMG_RST>;
+
+		/*
+		 * The D-PHY this receiver sits on top of.  Named "dphy" to
+		 * match the MT6589 DSI, which uses phy-names = "dphy" for its
+		 * TX PHY.
+		 */
+		phys = <&mipi_csi_phy0>;
+		phy-names = "dphy";
+
+		ports {
+			/* Sink: the D-PHY feeds the receiver. */
+			seninf_in: port@0 {
+				seninf_in_ep: endpoint {
+					remote-endpoint = <&csi2_phy0_out_ep>;
+				};
+			};
+
+			/* Source: the receiver feeds the SCAM adaptor. */
+			seninf_out: port@1 {
+				seninf_out_ep: endpoint {
+					remote-endpoint = <&scam_in_ep>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * The MIPI CSI-2 D-PHY below the receiver.
+	 *
+	 * This node exists so that the media graph is complete:
+	 * sensor -> D-PHY -> CSI-2 receiver -> SCAM -> ISP.  Without it the
+	 * receiver's source endpoint has nothing to point at and the
+	 * v4l2_async_notifier chain never completes, so mtk-csi2-rx never
+	 * registers.
+	 *
+	 * BLOCKED: the driver for this is a documented stub.  The MT6589
+	 * data sheet does not contain the MIPI RX PHY register map at all
+	 * (the PHY appears only as the word "mipi_rx" in the img_rst reset
+	 * description), and there is no vendor PHY driver for this SoC in
+	 * the reference tree to compare against.  The reg below is a
+	 * placeholder address and is NOT known to be correct.
+	 */
+	mipi_csi_phy0: mipi-csi-phy {
+		compatible = "mediatek,mt6589-mipi-csi-dphy";
+		reg = <0x0 0x15008000 0x0 0x900>;
+
+		/* CSI0, the 4-lane D-PHY on DVDD18_MIPIRX: the main camera. */
+		mediatek,mipi-csi-port = <0>;
+
+		/* The A5142 is a 2-lane sensor. */
+		num-lanes = <2>;
+
+		/*
+		 * MT6589 has no C-PHY, so the mode comes from phy-type rather
+		 * than from a PHY cell.  This mirrors the in-tree MT8365
+		 * SENINF PHY contract (mediatek,mt8365-csi-rx).
+		 */
+		phy-type = <PHY_TYPE_DPHY>;
+		#phy-cells = <0>;
+
+		ports {
+			/* Sink: the sensor's MIPI pins. */
+			csi2_phy0_in: port@0 {
+				csi2_phy0_in_ep: endpoint {
+					remote-endpoint = <&a5142_out_ep>;
+				};
+			};
+
+			/* Source: towards the CSI-2 receiver. */
+			csi2_phy0_out: port@1 {
+				csi2_phy0_out_ep: endpoint {
+					remote-endpoint = <&seninf_in_ep>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * The SCAM adaptor for port 0, and the CAM/ISP it feeds.  Both are
+	 * described so that the media graph closes out end to end; see
+	 * README.md for how much of each is actually implemented.
+	 */
+	scam: scam@15008200 {
+		compatible = "mediatek,mt6589-scam";
+		reg = <0x0 0x15008000 0x0 0x900>;
+
+		mediatek,scam-port = <0>;
+
+		/* See the note on the receiver node about topckgen. */
+		// resets = <&topckgen MT6589_TOPRGU_IMG_RST>;
+
+		ports {
+			scam_in: port@0 {
+				scam_in_ep: endpoint {
+					remote-endpoint = <&seninf_out_ep>;
+				};
+			};
+
+			scam_out: port@1 {
+				scam_out_ep: endpoint {
+					remote-endpoint = <&cam_in_ep>;
+				};
+			};
+		};
+	};
+
+	cam: cam@15004000 {
+		compatible = "mediatek,mt6589-cam";
+		reg = <0x0 0x15004000 0x0 0x400>;
+
+		ports {
+			cam_in: port@0 {
+				cam_in_ep: endpoint {
+					remote-endpoint = <&scam_out_ep>;
+				};
+			};
+		};
+	};
+};

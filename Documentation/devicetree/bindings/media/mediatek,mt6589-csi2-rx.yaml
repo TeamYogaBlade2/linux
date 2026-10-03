@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-csi2-rx.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 MIPI CSI-2 Receiver
+
+maintainers:
+  - Lenovo Linux Team
+
+description: |
+  The MT6589 image subsystem contains two independent MIPI CSI-2 receivers
+  (called seninf/csi2 in the vendor sources) in a single register window at
+  0x15008000, one per camera port.  Each receiver unpacks the MIPI packets,
+  checks their ECC/CRC, and forwards the raw byte stream together with
+  frame and line synchronisation to the sensor-CAM (SCAM) block that feeds
+  the ISP.
+
+  One DT node describes the window; mediatek,seninf-port selects which of
+  the two receivers the node programs.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-csi2-rx
+
+  reg:
+    description: |
+      Register window covering the whole sensor front end: seninf_top at
+      0x15008000, the two csi2 receivers at 0x15008100 and 0x15008180, and
+      the SCAM blocks at 0x15008200.
+    maxItems: 1
+
+  mediatek,seninf-port:
+    description: |
+      Which receiver in the window this node programs.  Port 0 is the
+      seninf1/csi2 receiver pair at 0x15008100, port 1 is seninf2/csi2 at
+      0x15008180.  On the Lenovo YOGA Tablet 8/10 port 0 is the main (rear)
+      camera and port 1 is the front camera.
+    enum: [0, 1]
+    default: 0
+
+  clocks:
+    description: |
+      Three clocks are required, in this order:
+        seninf - the sensor front end block itself
+        csi2   - the CSI-2 receiver sampling logic
+        tg_grp - the timing generator feeding the parallel sensor clock
+
+      The MT6589 gate bits behind these names are not yet present in
+      drivers/clk/mediatek/clk-mt6589-img.c; see the README before enabling
+      this node.
+    minItems: 3
+    maxItems: 3
+
+  clock-names:
+    items:
+      - seninf
+      - csi2
+      - tg_grp
+
+  phys:
+    description: |
+      The MIPI CSI-2 D-PHY this receiver sits on top of.  The driver
+      initialises and powers it on with the receiver and releases it on
+      power-off.  Optional: a node without it still probes, but its lanes
+      stay idle.
+    maxItems: 1
+
+  phy-names:
+    description: Name of the D-PHY reference in "phys".
+    const: dphy
+
+  resets:
+    maxItems: 1
+
+  reset-names:
+    const: seninf
+
+  power-domains:
+    maxItems: 1
+
+  # The receiver presents one sink pad on the media graph.  Its source pad
+  # is the sensor.
+  ports:
+    $ref: /schemas/graph/ports.yaml#
+
+    properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
+required:
+  - compatible
+  - reg
+  - mediatek,seninf-port
+  - clocks
+  - clock-names
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    csi2-rx@csi2rx {
+        compatible = "mediatek,mt6589-csi2-rx";
+        reg = <0x0 0x15008000 0x0 0x400>;
+
+        mediatek,seninf-port = <0>;
+
+        clocks = <&imgsys CLK_IMAGE_SENINF>,
+                 <&imgsys CLK_IMAGE_SENINF_CSI2>,
+                 <&imgsys CLK_IMAGE_SEN_TG>;
+        clock-names = "seninf", "csi2", "tg_grp";
+
+        resets = <&toprgu MT6589_TOPRGU_IMG_RST>;
+
+        port {
+            endpoint {
+                remote-endpoint = <&a5142_out>;
+            };
+        };
+    };
+
+...

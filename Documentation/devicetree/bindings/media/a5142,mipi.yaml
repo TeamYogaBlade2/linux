@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/a5142,mipi.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: A5142 CMOS Image Sensor
+
+maintainers:
+  - Lenovo Linux Team
+
+description: |
+  The A5142 is a 5 megapixel RAW CMOS image sensor with a 2-lane MIPI
+  CSI-2 output and a separate SCCB control bus.  It is the main (rear)
+  camera of the Lenovo YOGA Tablet 8/10, which uses the MediaTek MT6589
+  SoC.
+
+  The SCCB bus is I2C compatible and appears on the I2C host bus, so this
+  node is a normal I2C device.
+
+properties:
+  compatible:
+    const: a5142,mipi
+
+  reg:
+    description: I2C address of the SCCB interface.
+    enum: [0x6c]
+
+  clocks:
+    description: |
+      The sensor master clock.  The vendor driver programs the sensor PLL
+      assuming a 26 MHz CAM_MCLK, so a clock frequency of 26 MHz is
+      required.  On MT6589 this is the image subsystem CAM_CAM clock.
+    maxItems: 1
+
+  clock-frequency:
+    description: Frequency of the SCCB control bus, in Hz.
+    default: 100000
+
+  pwdn-gpios:
+    description: |
+      GPIO connected to the sensor PWDN pin, if any.  Must be asserted
+      high to power the sensor down.  The sensor requires 20 ms after
+      PWDN rises before the SCCB is accessible.
+
+  reset-gpios:
+    description: |
+      GPIO connected to the sensor RESET pin, if any.  Must be asserted
+      low to hold the sensor in reset.
+
+  vdda-supply:
+    description: Regulator for the sensor analogue core (AVDD).
+
+  vddd-supply:
+    description: Regulator for the sensor digital core (DVDD).
+
+  vddaaf-supply:
+    description: Regulator for the sensor analogue filter (VAF).
+
+  enable-gpios:
+    maxItems: 1
+
+  rotation:
+    description: Rotation of the sensor relative to the display.
+    enum: [0, 90, 180, 270]
+
+  horizontal-flip:
+    type: boolean
+
+  vertical-flip:
+    type: boolean
+
+  clock-names:
+    const:
+      items:
+        - name
+      list:
+        - name
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    a5142: camera@6c {
+        compatible = "a5142,mipi";
+        reg = <0x6c>;
+
+        clocks = <&imgsys CLK_IMAGE_CAM_CAM>;
+        clock-frequency = <400000>;
+
+        pwdn-gpios = <&pio 211 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&pio 212 GPIO_ACTIVE_HIGH>;
+
+        vdda-supply = <&mt6320_ldo_vcama>;
+        vddd-supply = <&mt6320_ldo_vgp1>;
+        vddaaf-supply = <&mt6320_ldo_vgp3>;
+    };
+
+...

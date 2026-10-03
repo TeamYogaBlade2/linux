@@ -11,6 +11,9 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
+#include <linux/property.h>
+
+#include "mtk-devapc-mt6589.h"
 
 #define VIO_MOD_TO_REG_IND(m)	((m) / 32)
 #define VIO_MOD_TO_REG_OFF(m)	((m) % 32)
@@ -47,6 +50,31 @@ struct mtk_devapc_data {
 	/* numbers of violation index */
 	u32 vio_idx_num;
 	const struct mtk_devapc_regs_ofs *regs_ofs;
+	/*
+	 * Number of independent DEVAPC instances.  1 for the monolithic
+	 * MT6779/MT8186 blocks, MT6589_DEVPAPC_INSTANCES for MT6589.
+	 */
+	u32 nr_instances;
+};
+
+/*
+ * MT6589 supports multiple independent DEVAPC instances, each split across an
+ * always-on (permission) window and a power-down (violation) window.  The
+ * single-instance SoCs reuse infra_base for both.
+ */
+struct mtk_devapc_instance {
+	void __iomem *ao_base;
+	void __iomem *pd_base;
+	u32 nr_modules;
+	u32 dxs_vio_sta_bit;
+};
+
+/* A slave whose permission the DT asks us to program. */
+struct mtk_devapc_forbid {
+	u8 instance;
+	u8 module;
+	u8 dom_mask;	/* bitmask of enum mt6589_devapc_domain */
+	u8 perm;	/* enum mt6589_devapc_perm */
 };
 
 struct mtk_devapc_context {
@@ -54,6 +82,7 @@ struct mtk_devapc_context {
 	void __iomem *infra_base;
 	struct clk *infra_clk;
 	const struct mtk_devapc_data *data;
+	struct mtk_devapc_instance inst[MT6589_DEVPAPC_INSTANCES];
 };
 
 static void clear_vio_status(struct mtk_devapc_context *ctx)
@@ -198,11 +227,205 @@ static irqreturn_t devapc_violation_irq(int irq_number, void *data)
 	return IRQ_HANDLED;
 }
 
+
+/*
+ * mt6589_write_perm - program one slave's permission for each requested domain
+ *		       master of one instance.
+ */
+static void mt6589_write_perm(struct mtk_devapc_instance *in,
+			      const struct mtk_devapc_forbid *f)
+{
+	enum mt6589_devapc_domain dom;
+
+	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
+		u32 shift, reg, val;
+
+		if (!(f->dom_mask & BIT(dom)))
+			continue;
+
+		reg = MT6589_DEVPAPC_APC_REG(dom, f->module);
+		shift = MT6589_DEVPAPC_PERM_SHIFT(f->module);
+
+		val = readl(in->ao_base + reg);
+		val &= ~MT6589_DEVPAPC_PERM_MASK(f->module);
+		val |= (u32)f->perm << shift;
+		writel(val, in->ao_base + reg);
+	}
+}
+
+/*
+ * mt6589_prepare_inst - clear stale violation status and unmask the module
+ *			 interrupts for one instance.
+ */
+static void mt6589_prepare_inst(struct mtk_devapc_instance *in)
+{
+	enum mt6589_devapc_domain dom;
+	u32 mask = GENMASK(in->nr_modules - 1, 0);
+
+	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
+		writel(mask, in->pd_base + MT6589_DEVPAPC_VIO_STA_REG(dom));
+		writel(0, in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom));
+	}
+
+	/*
+	 * Clear APC_CON bit2 ("stop") in both windows.  The downstream driver
+	 * does this in init_devpac() for all five instances; leaving the bit set
+	 * means the instance never raises an interrupt.
+	 */
+	writel(readl(in->ao_base + MT6589_DEVPAPC_APC_CON) &
+	       ~MT6589_DEVPAPC_APC_CON_STOP,
+	       in->ao_base + MT6589_DEVPAPC_APC_CON);
+	writel(readl(in->pd_base + MT6589_DEVPAPC_PD_APC_CON) &
+	       ~MT6589_DEVPAPC_APC_CON_STOP,
+	       in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
+}
+
+/*
+ * mt6589_extract_vio_dbg - decode VIO_DBG0/VIO_DBG1 from one instance.  The
+ *			   field layout matches the shared struct; only the base
+ *			   pointer differs from the single-instance case.
+ */
+static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
+				   struct mtk_devapc_instance *in)
+{
+	struct mtk_devapc_vio_dbgs vio;
+
+	vio.vio_dbg0 = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
+	vio.vio_dbg1 = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG1);
+
+	if (vio.dbg0_bits.vio_w)
+		dev_info(ctx->dev, "write violation\n");
+	else if (vio.dbg0_bits.vio_r)
+		dev_info(ctx->dev, "read violation\n");
+
+	dev_info(ctx->dev, "Bus ID:0x%x, Dom ID:0x%x, Vio Addr:0x%x\n",
+		 vio.dbg0_bits.mstid, vio.dbg0_bits.dmnid,
+		 (u32)((vio.dbg0_bits.addr_h << 24) | vio.vio_dbg1));
+}
+
+/*
+ * mt6589_violation_irq - MT6589 has no VIO_SHIFT_* registers: VIO_DBG0 and
+ *			 VIO_DBG1 are latched directly, and writing bit31 of
+ *			 VIO_DBG0 clears them.  The MT6779 shift handshake would
+ *			 read an unrelated register and time out here, so walk the
+ *			 instances directly instead.
+ */
+static irqreturn_t mt6589_violation_irq(int irq, void *data)
+{
+	struct mtk_devapc_context *ctx = data;
+	unsigned int i;
+
+	for (i = 0; i < ctx->data->nr_instances; i++) {
+		struct mtk_devapc_instance *in = &ctx->inst[i];
+
+		/* Does this instance have a pending violation? */
+		if (!(readl(in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA) &
+		      in->dxs_vio_sta_bit))
+			continue;
+
+		/* Write-1-to-clear releases the debug latch, then decode it. */
+		writel(MT6589_DEVPAPC_VIO_DBG0_CLR,
+		       in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
+		mt6589_extract_vio_dbg(ctx, in);
+
+		/* Acknowledge the instance-level status. */
+		writel(in->dxs_vio_sta_bit,
+		       in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA);
+	}
+
+	return IRQ_HANDLED;
+}
+
+/*
+ * mt6589_apply_forbid - parse "mediatek,devapc-forbid-slaves" and program the
+ *		       named slaves.  The property is a flat list of 4-tuples:
+ *
+ *   <instance> <module> <domain-mask> <perm>
+ *
+ * where domain-mask is a bitmask of the domain indices (1 = AP, 2 = MD1,
+ * 4 = MD2, 8 = MM) and perm is 0..3.  Slaves not listed stay at L0.
+ */
+static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
+{
+	struct device_node *node = ctx->dev->of_node;
+	struct mtk_devapc_forbid f;
+	u32 val;
+	int n = 0;
+
+	while (n < 64 &&
+	       !of_property_read_u32_index(node,
+					"mediatek,devapc-forbid-slaves",
+					n * 4, &val)) {
+		f.instance = val;
+
+		if (of_property_read_u32_index(node,
+					       "mediatek,devapc-forbid-slaves",
+					       n * 4 + 1, &val))
+			break;
+		f.module = val;
+
+		if (of_property_read_u32_index(node,
+					       "mediatek,devapc-forbid-slaves",
+					       n * 4 + 2, &val))
+			break;
+		f.dom_mask = val;
+
+		if (of_property_read_u32_index(node,
+					       "mediatek,devapc-forbid-slaves",
+					       n * 4 + 3, &val))
+			break;
+		f.perm = val;
+
+		n++;
+
+		if (f.instance >= ctx->data->nr_instances) {
+			dev_warn(ctx->dev, "forbid: instance %u out of range\n",
+				 f.instance);
+			continue;
+		}
+
+		if (f.module >= ctx->inst[f.instance].nr_modules) {
+			dev_warn(ctx->dev,
+				 "forbid: module %u out of range for instance %u\n",
+				 f.module, f.instance);
+			continue;
+		}
+
+		if (f.perm > MT6589_APC_L3) {
+			dev_warn(ctx->dev, "forbid: bad perm %u\n", f.perm);
+			continue;
+		}
+
+		mt6589_write_perm(&ctx->inst[f.instance], &f);
+	}
+
+	if (n)
+		dev_info(ctx->dev, "forbidding %d slave permission field(s)\n", n);
+}
+
+/*
+ * mt6589_start - prepare every instance and apply the DT permission table.
+ */
+static void mt6589_start(struct mtk_devapc_context *ctx)
+{
+	unsigned int i;
+
+	for (i = 0; i < ctx->data->nr_instances; i++)
+		mt6589_prepare_inst(&ctx->inst[i]);
+
+	mt6589_apply_forbid(ctx);
+}
+
 /*
  * start_devapc - unmask slave's irq to start receiving devapc violation.
  */
 static void start_devapc(struct mtk_devapc_context *ctx)
 {
+	if (ctx->data->nr_instances > 1) {
+		mt6589_start(ctx);
+		return;
+	}
+
 	writel(BIT(31), ctx->infra_base + ctx->data->regs_ofs->apc_con_offset);
 
 	mask_module_irq(ctx, false);
@@ -213,6 +436,22 @@ static void start_devapc(struct mtk_devapc_context *ctx)
  */
 static void stop_devapc(struct mtk_devapc_context *ctx)
 {
+	if (ctx->data->nr_instances > 1) {
+		unsigned int i;
+
+		for (i = 0; i < ctx->data->nr_instances; i++) {
+			struct mtk_devapc_instance *in = &ctx->inst[i];
+			enum mt6589_devapc_domain dom;
+
+			for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++)
+				writel(GENMASK(31, 0),
+				       in->pd_base +
+				       MT6589_DEVPAPC_VIO_MASK_REG(dom));
+		}
+
+		return;
+	}
+
 	mask_module_irq(ctx, true);
 
 	writel(BIT(2), ctx->infra_base + ctx->data->regs_ofs->apc_con_offset);
@@ -239,6 +478,13 @@ static const struct mtk_devapc_data devapc_mt8186 = {
 	.regs_ofs = &devapc_regs_ofs_mt6779,
 };
 
+static const struct mtk_devapc_data devapc_mt6589 = {
+	/* MT6589 has no flat violation index space; modules are per instance. */
+	.vio_idx_num = 0,
+	.regs_ofs = NULL,
+	.nr_instances = MT6589_DEVPAPC_INSTANCES,
+};
+
 static const struct of_device_id mtk_devapc_dt_match[] = {
 	{
 		.compatible = "mediatek,mt6779-devapc",
@@ -246,6 +492,9 @@ static const struct of_device_id mtk_devapc_dt_match[] = {
 	}, {
 		.compatible = "mediatek,mt8186-devapc",
 		.data = &devapc_mt8186,
+	}, {
+		.compatible = "mediatek,mt6589-devapc",
+		.data = &devapc_mt6589,
 	}, {
 	},
 };
@@ -256,9 +505,10 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	struct device_node *node = pdev->dev.of_node;
 	struct mtk_devapc_context *ctx;
 	u32 devapc_irq;
+	unsigned int i;
 	int ret;
 
-	if (IS_ERR(node))
+	if (!node)
 		return -ENODEV;
 
 	ctx = devm_kzalloc(&pdev->dev, sizeof(*ctx), GFP_KERNEL);
@@ -268,26 +518,63 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	ctx->data = of_device_get_match_data(&pdev->dev);
 	ctx->dev = &pdev->dev;
 
-	ctx->infra_base = of_iomap(node, 0);
-	if (!ctx->infra_base)
-		return -EINVAL;
+	if (ctx->data->nr_instances > 1) {
+		/*
+		 * MT6589 describes each instance as a pair of reg entries: the
+		 * always-on permission window followed by the power-down
+		 * violation window, so instance n uses reg 2n and 2n+1.
+		 */
+		for (i = 0; i < ctx->data->nr_instances; i++) {
+			struct mtk_devapc_instance *in = &ctx->inst[i];
+
+			/*
+			 * devm_platform_ioremap_resource() validates each window
+			 * against its own "reg" entry, so a missing or malformed
+			 * region is reported here instead of faulting later.
+			 */
+			in->ao_base = devm_platform_ioremap_resource(pdev,
+								      i * 2);
+			if (IS_ERR(in->ao_base)) {
+				ret = PTR_ERR(in->ao_base);
+				in->ao_base = NULL;
+				goto err_unmap_inst;
+			}
+
+			in->pd_base = devm_platform_ioremap_resource(pdev,
+								      i * 2 + 1);
+			if (IS_ERR(in->pd_base)) {
+				ret = PTR_ERR(in->pd_base);
+				in->pd_base = NULL;
+				goto err_unmap_inst;
+			}
+
+			in->nr_modules = MT6589_DEVPAPC_MAX_MODULES;
+			in->dxs_vio_sta_bit = BIT(i);
+		}
+	} else {
+		ctx->infra_base = of_iomap(node, 0);
+		if (!ctx->infra_base)
+			return -EINVAL;
+	}
 
 	devapc_irq = irq_of_parse_and_map(node, 0);
 	if (!devapc_irq) {
 		ret = -EINVAL;
-		goto err;
+		goto err_unmap_inst;
 	}
 
 	ctx->infra_clk = devm_clk_get_enabled(&pdev->dev, "devapc-infra-clock");
 	if (IS_ERR(ctx->infra_clk)) {
 		ret = -EINVAL;
-		goto err;
+		goto err_unmap_inst;
 	}
 
-	ret = devm_request_irq(&pdev->dev, devapc_irq, devapc_violation_irq,
+	ret = devm_request_irq(&pdev->dev, devapc_irq,
+			       ctx->data->nr_instances > 1 ?
+			       mt6589_violation_irq : devapc_violation_irq,
 			       IRQF_TRIGGER_NONE, "devapc", ctx);
 	if (ret)
-		goto err;
+		goto err_unmap_inst;
 
 	platform_set_drvdata(pdev, ctx);
 
@@ -295,8 +582,9 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 
 	return 0;
 
-err:
-	iounmap(ctx->infra_base);
+err_unmap_inst:
+	if (ctx->data->nr_instances <= 1 && ctx->infra_base)
+		iounmap(ctx->infra_base);
 	return ret;
 }
 
@@ -305,7 +593,6 @@ static void mtk_devapc_remove(struct platform_device *pdev)
 	struct mtk_devapc_context *ctx = platform_get_drvdata(pdev);
 
 	stop_devapc(ctx);
-	iounmap(ctx->infra_base);
 }
 
 static struct platform_driver mtk_devapc_driver = {

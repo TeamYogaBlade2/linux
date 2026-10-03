@@ -301,7 +301,7 @@
 		};
 	};
 
-	soc {
+	soc: soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "simple-bus";
@@ -1336,6 +1336,28 @@
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
+		devapc: devapc@10010000 {
+			compatible = "mediatek,mt6589-devapc";
+			/*
+			 * Five DEVAPC instances, each an always-on (permission) window
+			 * followed by a power-down (violation) window, 0x100 apart.
+			 * Instance n uses reg entries 2n and 2n+1.
+			 */
+			reg = <0x10010000 0x100>,  /* DEVAPC0 AO */
+			      <0x10207000 0x100>,  /* DEVAPC0 PD */
+			      <0x10010100 0x100>,  /* DEVAPC1 AO */
+			      <0x10207100 0x100>,  /* DEVAPC1 PD */
+			      <0x10010200 0x100>,  /* DEVAPC2 AO */
+			      <0x10207200 0x100>,  /* DEVAPC2 PD */
+			      <0x10010300 0x100>,  /* DEVAPC3 AO */
+			      <0x10207300 0x100>,  /* DEVAPC3 PD */
+			      <0x10010400 0x100>,  /* DEVAPC4 AO */
+			      <0x10207400 0x100>;  /* DEVAPC4 PD */
+			interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&infracfg CLK_INFRA_DEVAPC>;
+			clock-names = "devapc-infra-clock";
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
 		mutex: mutex@14011000 {
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;
