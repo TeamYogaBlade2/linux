@@ -20,9 +20,10 @@ struct mtk_plane_pending_state {
 	bool				enable;
 	dma_addr_t			addr;
 	dma_addr_t			hdr_addr;
-	unsigned int			pitch;
+	unsigned int			pitch;		/* bytes per line */
 	unsigned int			hdr_pitch;
 	unsigned int			format;
+	unsigned int			cpp;		/* bytes per pixel */
 	unsigned long long		modifier;
 	unsigned int			x;
 	unsigned int			y;

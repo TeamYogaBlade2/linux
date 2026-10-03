@@ -179,6 +179,12 @@ static void mtk_plane_update_new_state(struct drm_plane_state *new_state,
 
 	mtk_plane_state->pending.enable = true;
 	mtk_plane_state->pending.pitch = pitch;
+	/*
+	 * The OVL and RDMA pitch registers count pixels per line.  Carry the
+	 * bytes-per-pixel so each engine can convert without having to look
+	 * the format up again.
+	 */
+	mtk_plane_state->pending.cpp = fb->format->cpp[0];
 	mtk_plane_state->pending.hdr_pitch = hdr_pitch;
 	mtk_plane_state->pending.format = format;
 	mtk_plane_state->pending.modifier = modifier;

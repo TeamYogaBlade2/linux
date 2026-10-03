@@ -708,6 +708,18 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &ovl->cmdq_reg, ovl->regs,
 			      DISP_REG_OVL_CON(idx));
+	/*
+	 * OVL_PITCH counts pixels per line, not bytes.  The stock driver
+	 * computes the layer address as
+	 *
+	 *	addr + src_x * bpp + src_y * src_pitch
+	 *
+	 * scaling src_pitch by a line index while src_x is scaled by
+	 * bytes-per-pixel, so the pitch can only be in pixels.  The value
+	 * handed to us is drm's fb->pitches[0], which is in bytes.
+	 */
+	pitch_lsb = (pending->pitch / pending->cpp) & GENMASK(15, 0);
+
 	mtk_ddp_write_relaxed(cmdq_pkt, pitch_lsb | ignore_pixel_alpha,
 			      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_PITCH(idx));
 	mtk_ddp_write_relaxed(cmdq_pkt, src_size, &ovl->cmdq_reg, ovl->regs,

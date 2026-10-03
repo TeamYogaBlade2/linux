@@ -373,7 +373,15 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	struct mtk_plane_pending_state *pending = &state->pending;
 	unsigned int addr = pending->addr;
-	unsigned int pitch = pending->pitch & 0xffff;
+	/*
+	 * MEM_MODE_SRC_PITCH counts pixels per line: the data sheet says to
+	 * set it to the width of the source frame, and the stock driver
+	 * scales it by a line index when computing the layer address
+	 * (addr + src_x * bpp + src_y * src_pitch).  pending->pitch is drm's
+	 * fb->pitches[0], in bytes, so convert before masking to 16 bits -
+	 * a byte pitch of 3840 would otherwise not even fit.
+	 */
+	unsigned int pitch = (pending->pitch / pending->cpp) & 0xffff;
 	unsigned int fmt = pending->format;
 	unsigned int con;
 
