@@ -30,7 +30,6 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 #include <linux/uaccess.h>
 
 #include "mtk-g2d.h"
@@ -398,6 +397,37 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int mtk_g2d_suspend(struct platform_device *pdev,
+			   pm_message_t state)
+{
+	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+
+	clk_disable_unprepare(g2d->clk_smi);
+	clk_disable_unprepare(g2d->clk_engine);
+
+	return 0;
+}
+
+static int mtk_g2d_resume(struct platform_device *pdev)
+{
+	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+	int ret;
+
+	ret = clk_prepare_enable(g2d->clk_engine);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(g2d->clk_smi);
+	if (ret) {
+		clk_disable_unprepare(g2d->clk_engine);
+		return ret;
+	}
+
+	return 0;
+}
+#endif
+
 static const struct of_device_id mtk_g2d_of_match[] = {
 	{ .compatible = "mediatek,mt6589-g2d" },
 	{ }
@@ -410,6 +440,10 @@ static struct platform_driver mtk_g2d_driver = {
 		.name		= "mtk-g2d",
 		.of_match_table	= mtk_g2d_of_match,
 	},
+#ifdef CONFIG_PM_SLEEP
+	.suspend	= mtk_g2d_suspend,
+	.resume		= mtk_g2d_resume,
+#endif
 };
 module_platform_driver(mtk_g2d_driver);
 
