@@ -32,9 +32,6 @@
 #define RDMA_ENGINE_EN					BIT(0)
 #define RDMA_MODE_MEMORY				BIT(1)
 #define DISP_REG_RDMA_SIZE_CON_0		0x0014
-#define RDMA_MATRIX_ENABLE				BIT(17)
-#define RDMA_MATRIX_INT_MTX_SEL				GENMASK(23, 20)
-#define RDMA_MATRIX_INT_MTX_BT601_to_RGB		(6 << 20)
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
 #define DISP_RDMA_MEM_CON			0x0024
@@ -388,18 +385,15 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	con = rdma->data->fmt_convert(fmt);
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
 
-	if (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV) {
-		mtk_ddp_write_mask(cmdq_pkt, RDMA_MATRIX_ENABLE, &rdma->cmdq_reg, rdma->regs,
-				   DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_ENABLE);
-		mtk_ddp_write_mask(cmdq_pkt, RDMA_MATRIX_INT_MTX_BT601_to_RGB,
-				   &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_INT_MTX_SEL);
-	} else {
-		mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-				   DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_ENABLE);
-	}
+	/*
+	 * No YUV matrix is programmed here.  MT6589's DISP_RDMA_SIZE_CON_0 has
+	 * only OUTPUT_FORMAT in bit 29 and OUTPUT_FRAME_WIDTH in bits [11:0]
+	 * - there is no matrix enable or matrix select field, so those bits
+	 * are not where they are on MT8192.  Writing them set bit 17 of the
+	 * frame width and smeared BT601 coefficients across bits [23:20],
+	 * corrupting the width for every UYVY or YUYV frame.  The stock
+	 * driver converts YUV in the OVL instead.
+	 */
 	mtk_ddp_write_relaxed(cmdq_pkt, addr, &rdma->cmdq_reg, rdma->regs,
 			      rdma->data->mem_start_addr_reg);
 	mtk_ddp_write_relaxed(cmdq_pkt, pitch, &rdma->cmdq_reg, rdma->regs,
