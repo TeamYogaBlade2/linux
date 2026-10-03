@@ -268,13 +268,10 @@ static void mt6589_write_perm(struct mtk_devapc_instance *in,
  *    the status bit), or left at L0 and unmasked.
  *
  * By default we unmask everything so bring-up logs violations on any slave.
- * Set "mediatek,vio-irq-mask" in DT to a non-zero value to mask all
- * interrupts instead (permissions still apply; violations are still latched
- * in D<d>_VIO_STA but no interrupt is raised).
+ * Set "mediatek,vio-mask-interrupts" in DT to mask all interrupts instead
+ * (permissions still apply; violations are still latched in D<d>_VIO_STA but
+ * no interrupt is raised).
  */
-
-/* Default interrupt-monitoring policy: 0 = unmask all violation interrupts. */
-#define MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT	0
 
 /*
  * mt6589_prepare_inst - clear stale violation status and apply the
@@ -490,21 +487,23 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 static void mt6589_start(struct mtk_devapc_context *ctx)
 {
 	unsigned int i;
-	u32 mask = MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT;
+	bool mask_irqs;
 
 	/*
-	 * Interrupt-monitoring policy, read from DT.  Absent (the default),
-	 * all violation interrupts are unmasked so bring-up logs everything.
+	 * Interrupt-monitoring policy, read from DT.  This is a boolean, not a
+	 * bitmask: VIO_MASK is per-slave and per-domain, so a scalar would
+	 * imply a precision this driver does not have.  Absent (the default)
+	 * interrupts stay unmasked so bring-up logs every violation.
 	 */
-	if (of_property_read_u32(ctx->dev->of_node,
-				 "mediatek,vio-irq-mask", &mask))
-		mask = MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT;
+	mask_irqs = of_property_read_bool(ctx->dev->of_node,
+					  "mediatek,vio-mask-interrupts");
 
 	dev_info(ctx->dev, "violation interrupts %s\n",
-		 mask ? "masked" : "unmasked for all slaves");
+		 mask_irqs ? "masked for all slaves" :
+			     "unmasked for all slaves");
 
 	for (i = 0; i < ctx->data->nr_instances; i++)
-		mt6589_prepare_inst(&ctx->inst[i], !!mask);
+		mt6589_prepare_inst(&ctx->inst[i], mask_irqs);
 
 	mt6589_apply_forbid(ctx);
 }

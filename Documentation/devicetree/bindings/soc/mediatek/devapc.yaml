@@ -56,8 +56,8 @@ properties:
       3 (L3) forbids the access and raises a violation.  Slaves not listed
       stay at L0.
 
-      This is entirely independent of mediatek,vio-irq-mask: a slave can be
-      locked to L3 yet raise no interrupt.
+      This is entirely independent of mediatek,vio-mask-interrupts: a slave
+      can be locked to L3 yet raise no interrupt.
     items:
       - description: DEVAPC instance index (0..4)
         maximum: 4
@@ -71,20 +71,28 @@ properties:
     minItems: 4
     maxItems: 256
 
-  mediatek,vio-irq-mask:
+  mediatek,vio-mask-interrupts:
+    type: boolean
     description: |
       Interrupt-monitoring policy, independent of the permission policy.
 
-      A non-zero value masks violation interrupts for every slave, so no
-      DEVAPC interrupt is raised.  Violations are still latched in the
-      D<d>_VIO_STA status registers and permissions still apply; only the
-      notification is suppressed.
+      When this property is present, violation interrupts are masked for
+      every slave of every instance, so the device raises no interrupt at
+      all.  Violations are still latched in the D<d>_VIO_STA status
+      registers and the permissions from mediatek,devapc-forbid-slaves
+      still apply; only the notification is suppressed.  This is useful
+      once the permission policy has been settled, to keep a denied access
+      from generating interrupt traffic while leaving the status readable.
 
-      A zero value (the default when this property is absent) unmasks
-      violation interrupts for all slaves, so any violation is logged.
+      When this property is absent (the default), violation interrupts are
+      unmasked for all slaves so that every violation is reported, which
+      is what bring-up wants.
 
-      Defaults to 0 (unmasked) when omitted.
-    enum: [0, 1]
+      Note that this is deliberately a boolean rather than a bitmask.  The
+      D<d>_VIO_MASK registers are per-slave and per-domain, so a real mask
+      would need to be a nested matrix; exposing a scalar that only ever
+      tested for non-zero would imply precision the driver does not have.
+      A boolean states exactly what is implemented.
 
 required:
   - compatible
@@ -128,5 +136,4 @@ examples:
                                       <0 2 0x6 0x3>;
 
       /* Default: leave violation interrupts unmasked. */
-      mediatek,vio-irq-mask = <0>;
     };
