@@ -223,6 +223,21 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 			return ret;
 
 		usleep_range(900, 1100);
+
+		/*
+		 * Unmute.  AFUNC_AUD_CON2 bit 7 is a mute, not an enable: the
+		 * stock driver asserts it while it configures a path and
+		 * clears it once the configuration is done
+		 * (AudioMachineDevice: SetAnalogReg(AFUNC_AUD_CON2, mute << 7),
+		 * set to 0x0080 on open and 0x0000 once configured). Leaving
+		 * it set keeps the output muted for as long as the path is
+		 * powered, i.e. for as long as it is playing.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 BIT(7), 0);
+		if (ret)
+			return ret;
+
 		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
