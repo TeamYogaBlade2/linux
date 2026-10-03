@@ -25,6 +25,15 @@
  * byte addresses with an 8-byte alignment requirement, and its BASE_ADDR field
  * is 32 bits wide rather than 28.  Do not carry the DIV16 convention across.
  *
+ * Resulting addressable span.  A 28-bit DIV16 field encodes
+ * 2^28 * 16 == 2^32 bytes, i.e. the whole 4 GiB 32-bit address space -- which is
+ * to say a 28-bit DIV16 field is exactly as wide as a 32-bit byte address and
+ * nothing is actually lost.  (An earlier revision of the .c file's header claimed
+ * 2^28 bytes / "256 MiB" for this field, which contradicts the arithmetic the
+ * same file performs; the code's arithmetic was right and the comment was
+ * wrong.)  The MPEG-4 datapath's 32-bit plain byte address also spans 4 GiB, so
+ * both encoders cover the full 32-bit IOVA space.
+ *
  * VENC (base 0x17002000, 4 KiB)
  */
 #ifndef _MTK_VCODEC_MT6589_REG_H
@@ -39,7 +48,49 @@
 /* Chapter 60 documents VENC_IRQ_ACK here; matches the vendor driver. */
 #define VENC_IRQ_ACK			0x060
 
+/*
+ * Start-of-encode triggers.  VENC_CODEC_CTRL is a one-shot command register: the
+ * data sheet gives every bit the same "0: No operation / 1: Start to encode"
+ * wording (ch.60, draft/ds/venc.txt:4330-4375), so a set bit starts the
+ * corresponding unit and the hardware consumes it.  Writing 0 does nothing at
+ * all -- it is NOT a way to clear the bit, which is why this driver never
+ * pre-clears CODEC_CTRL before starting a frame.
+ */
 #define VENC_CODEC_CTRL			0x058	/* VIDEO_CODEC_CONTROL */
+#define VENC_CODEC_CTRL_RELEASE_PAUSE_FRM	BIT(4)	/* resume unfinished frame */
+#define VENC_CODEC_CTRL_RELEASE_BS_DRAM	BIT(3)	/* restart, new bitstream base */
+#define VENC_CODEC_CTRL_ENC_FRM		BIT(2)	/* start one frame */
+#define VENC_CODEC_CTRL_ENC_PPS		BIT(1)	/* start PPS */
+#define VENC_CODEC_CTRL_ENC_SPS		BIT(0)	/* start SPS */
+
+/*
+ * VENC_CE, the video encoder "codec enable" at 0x0EC.
+ *
+ * SOURCING IS WEAK AND DELIBERATELY LABELLED AS SUCH: this register has no
+ * bit-field section anywhere in the data sheet.  It appears exactly once, as a
+ * bare name "VENC_CE / VIDEO_CE" in the ch.60 summary register table
+ * (draft/ds/venc.txt:2176).  Its field width, its bit position and therefore
+ * the exact value that means "enabled" are NOT documented; 1 below is inferred
+ * from the vendor driver, not read out of a table.
+ *
+ * The behavioural evidence, however, is real and consistent.  The vendor clock
+ * management code writes VENC_CE = 0x1 as a hard prerequisite before touching
+ * any other VENC internal register -- in both the DCM-enable path
+ * (kernel/core/mt_dcm.c:299) and the DCM-disable path (mt_dcm.c:396) it is the
+ * very first VENC write, immediately before VENC_CLK_DCM_CTRL,
+ * VENC_CLK_CG_CTRL and VENC_MP4_DCM_CTRL, and the DCM register-dump path
+ * (mt_dcm.c:186) writes it for the same reason before reading those registers.
+ * The offset agrees with the data sheet exactly: mt_dcm.h:102 defines it as
+ * 0xF70020EC, which is 0x170020EC after the +0xE0000000 remap.  It is never
+ * written 0 anywhere in the vendor tree.
+ *
+ * So: the offset is solid, the "write 1 to enable" semantics is solid, and only
+ * the field's width and bit position are unknown.  This driver writes the
+ * whole word as 1, which enables whatever bit(s) exist without depending on a
+ * position that is not documented.
+ */
+#define VENC_CE				0x0ec
+
 #define VENC_STUFFING_REPORT		0x0a0	/* bitstream stuffing report */
 #define VENC_IRQ_MODE_SEL		0x0a4	/* irq vs dma completion mode */
 #define VENC_SW_HRST_N			0x0a8	/* 1 = encoder out of soft reset */
@@ -75,14 +126,96 @@
 #define VENC_VP8_HDR_BUF_ADDR		0x0e0
 #define VENC_VP8_HDR_BUF_SIZE		0x0e4
 
-/* Rate control scratch memory and per-codec encoder info blocks. */
-#define VENC_RC_CODE_DRAM_ADDR		0x08c
-#define VENC_RC_INFO_DRAM_ADDR		0x090
-#define VENC_H264_ENC_INFO_0		0x030
-#define VENC_H264_ENC_INFO_1		0x034
+/*
+ * Quantiser fields.  These are the registers the data sheet's bit tables actually
+ * define, and they are NOT the ones their own summary table's names suggest:
+ * QP_I_FRM lives in VENC_ENCODER_INFO_0 at +0x004 (bits 31:26) and QP_P_FRM /
+ * QP_B_FRM in VENC_ENCODER_INFO_1 at +0x008 (bits 15:10 and 31:26)
+ * (draft/ds/venc.txt:2802-2804, 2893-2901, 2945-2947).
+ *
+ * Confusingly, VENC_H264_ENC_INFO_0 at +0x030 has nothing to do with QP: its bit
+ * table is CABAC / MBAFF / PROFILE / H264_LEVEL (draft/ds/venc.txt:3655ff), and
+ * VENC_H264_ENC_INFO_1 at +0x034 is "rev", i.e. wholly reserved
+ * (draft/ds/venc.txt:3774ff).  Writing a QP there would write into CABAC and
+ * level fields, so this driver does not.
+ */
+#define VENC_ENCODER_INFO_0		0x004
+#define VENC_ENCODER_INFO_1		0x008
+#define VENC_QP_I_FRM_SHIFT		26
+#define VENC_QP_I_FRM_MASK		GENMASK(31, 26)
+#define VENC_QP_P_FRM_SHIFT		10
+#define VENC_QP_P_FRM_MASK		GENMASK(15, 10)
+#define VENC_QP_B_FRM_SHIFT		26
+#define VENC_QP_B_FRM_MASK		GENMASK(31, 26)
+
+/*
+ * The data sheet states the H.264 quantiser range explicitly as "[0, 51] for
+ * H.264" for all three of QP_I_FRM, QP_P_FRM and QP_B_FRM
+ * (draft/ds/venc.txt:2803, 2894-2895, 2946).  The neighbouring rows give VP8
+ * as [1, 63] and MPEG-4 as [1, 31]; this driver only drives the H.264 path, so
+ * 0..51 is the range it validates against.  Note that 0 is a legal H.264 QP --
+ * an earlier revision of this driver clamped 1..31 and rejected valid requests.
+ */
+#define VENC_H264_QP_MIN			0
+#define VENC_H264_QP_MAX			51
+
+/* Per-codec encoder info blocks; recorded, deliberately not programmed. */
+#define VENC_H264_ENC_INFO_0		0x030	/* CABAC / MBAFF / profile / level */
+#define VENC_H264_ENC_INFO_1		0x034	/* wholly reserved */
 #define VENC_VP8_ENC_INFO_0		0x040
 #define VENC_VP8_ENC_INFO_1		0x044
-#define VENC_RATECONTROL_INFO(n)		(0x048 + 0x4 * (n))
+
+/*
+ * Rate control.  RATECONTROL_INFO_0 and _1 are the only two of the four that
+ * carry any defined field; _2 and _3 are "rev" top to bottom
+ * (draft/ds/venc.txt:4206-4260) and an earlier revision of this driver wrote the
+ * QP triple and a bitrate limit into them, which programmed nothing but garbage.
+ *
+ *   INFO_0 (draft/ds/venc.txt:4025-4087)
+ *     18      RC_CBR               constant vs variable bit rate
+ *     17      RC_INI_QP            use the QP_I/P/B_FRM values as the initial QP
+ *     16:0    RC_TARGET_BIT_RATE   target bit rate
+ *
+ *   INFO_1 (draft/ds/venc.txt:4088-4205)
+ *     31      ENABLE_EIS           rate control reads the EIS MMR
+ *     30      ENABLE_ROI           rate control reads the ROI MMR
+ *     27      AIFI                 insert adaptive I-frames
+ *     26      SKYPE_MODE           skype mode rate control algorithm
+ *     25      AFPS                 adaptively change fps
+ *     24      ATBR                 adaptively change target bit rate
+ *     23:16   RC_FPS               rate control fps, 0 = default 30
+ *     15:8    BfrmQLimter          B frame QP adjust limiter, "Suggested: 5"
+ *     7:0     PfrmQLimter          P frame QP adjust limiter, "Suggested: 3"
+ */
+#define VENC_RATECONTROL_INFO_0		0x048
+#define VENC_RATECONTROL_INFO_1		0x04c
+#define VENC_RATECONTROL_INFO_2		0x050	/* entirely reserved, do not write */
+#define VENC_RATECONTROL_INFO_3		0x054	/* entirely reserved, do not write */
+
+#define VENC_RC_TARGET_BIT_RATE_MASK	GENMASK(16, 0)
+#define VENC_RC_CBR			BIT(18)
+#define VENC_RC_INI_QP			BIT(17)
+#define VENC_RC_FPS_SHIFT		16
+#define VENC_RC_FPS_MASK			GENMASK(23, 16)
+#define VENC_RC_PFRM_Q_LIM_MASK		GENMASK(7, 0)
+#define VENC_RC_BFRM_Q_LIM_MASK		GENMASK(15, 8)
+
+/*
+ * Rate control scratch memory.  Both of these are DRAM ADDRESS registers, not
+ * parameter registers: RC_INFO_DRAM_ADDR_DIV16[27:0] is "Initial DRAM byte
+ * address of RC info. for loading and saving divided by 16"
+ * (draft/ds/venc.txt:5134-5140) and RC_CODE_DRAM_ADDR_DIV16[27:0] is "Initial
+ * DRAM byte address of RC code divided by 16" (draft/ds/venc.txt:5068-5075).
+ * Both are DIV16 and 28 bits wide.
+ *
+ * An earlier revision of this driver wrote the intra-VOP rate, a bare small
+ * integer, into VENC_RC_INFO_DRAM_ADDR.  That is not a rate control setting at
+ * all -- it pointed the rate control scratch pointer at DRAM address
+ * intra_vop_rate * 16 and would have had the hardware load its state from
+ * whatever happened to live there.
+ */
+#define VENC_RC_CODE_DRAM_ADDR		0x08c	/* DIV16 address */
+#define VENC_RC_INFO_DRAM_ADDR		0x090	/* DIV16 address */
 
 /*
  * Bitstream length.  This is the authoritative "bytes used" for an H.264
@@ -98,7 +231,25 @@
 #define VENC_PIC_BITSTREAM_BYTE_CNT	0x098
 #define VENC_PIC_BITSTREAM_BYTE_CNT1	0x0e8
 
-/* Interrupt bits, as used by the vendor driver (videocodec_kernel_driver.c:129). */
+/*
+ * Interrupt bits.  VENC_IRQ_STATUS at +0x05C and VENC_IRQ_ACK at +0x060 carry
+ * the same six bit positions with the same names (ENC_SPS/SPS_ACK 0,
+ * ENC_PPS/PPS_ACK 1, ENC_FRM/FRM_ACK 2, BS_DRAM_FULL 3, PAUSE_FRM 4,
+ * VP8_HEADER_BS_DRAM_FULL 5); see draft/ds/venc.txt:4440-4538.  Both are
+ * WO/write-1-to-clear style: the ack register takes "Set to 1 to clear the
+ * current bit".
+ *
+ * VENC_IRQ_MASK_ALL is 0x3f, which is exactly bits 0..5 -- the complete set of
+ * defined sources in the pair, and nothing beyond it.  There is no second
+ * IRQ_STATUS1/ACK1 pair in chapter 60: "IRQ_STATUS1" appears nowhere in the
+ * extract, and VENC_PIC_BITSTREAM_BYTE_CNT1 at +0x0E8 is a byte counter, not an
+ * interrupt register.
+ *
+ * These bit values are independently corroborated by the vendor driver
+ * (videocodec_kernel_driver.c:129-134), which defines SPS 0x1, PPS 0x2,
+ * FRM 0x4, DRAM 0x8, PAUSE 0x10, DRAM_VP8 0x20 and acks FRM as 0x4
+ * (videocodec_kernel_driver.c:412, 440-442).
+ */
 #define VENC_IRQ_STATUS_SPS		BIT(0)
 #define VENC_IRQ_STATUS_PPS		BIT(1)
 #define VENC_IRQ_STATUS_FRM		BIT(2)
@@ -120,7 +271,13 @@
  * 8-byte aligned") in a full 32-bit BASE_ADDR field.  No DIV16 here.
  */
 
-/* Frame start trigger: encode from the frame's first MB. */
+/*
+ * Frame start trigger: encode from the frame's first MB.  Bit 0 is TRIGGER, a
+ * write-only "Writing 1 to it will trigger hardware initialization process and
+ * encoding from the frame's first MB.  Writing 0 to it has no effect"
+ * (draft/ds/mp4.txt:6408-6410).  So this is a self-consuming one-shot: write 1
+ * and nothing else -- a preceding write of 0 is a no-op, not a clear.
+ */
 #define VENC_MP4_FRAME_START		0x600
 /* Slice resume trigger: encode from the last stopped MB position. */
 #define VENC_MP4_SLICE_START		0x604

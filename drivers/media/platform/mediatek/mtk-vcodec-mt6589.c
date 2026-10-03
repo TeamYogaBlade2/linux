@@ -26,8 +26,8 @@
  *     clocks through runtime PM;
  *   - programs the H.264 and MPEG-4 bitstream and frame address registers,
  *     including the reconstructed-frame pair, from DMA addresses it is handed;
- *   - programs the H.264 rate-control quantiser triple, rejecting anything
- *     outside the hardware's 1..31 range;
+ *   - programs the H.264 rate control into the fields the registers really
+ *     have, rejecting quantisers outside the hardware's documented 0..51 range;
  *   - acknowledges and dispatches the encoder frame-done interrupt for both
  *     datapaths, reporting the true coded-bitstream length.
  *
@@ -54,9 +54,11 @@
  *   - Slice control.  A frame larger than one MB row has to be driven as
  *     several slices, restarting VENC_MP4_SLICE_START with a moving MBX/MBY
  *     stop position.  Nothing does that.
- *   - Rate control.  The three registers written here are the quantiser clamp;
- *     the actual bitrate algorithm lives in the vendor's closed-source
- *     userspace library.
+ *   - Rate control.  What is programmed here is the quantiser triple, the
+ *     target bit rate, the CBR/initial-QP mode bits, the rate control fps and
+ *     the P/B frame QP adjust limiters.  The actual bitrate algorithm, and the
+ *     RC scratch memory at RC_CODE/RC_INFO_DRAM_ADDR that it loads and saves
+ *     its state through, live in the vendor's closed-source userspace library.
  *   - Entropy coding, motion estimation and the coefficient buffer.  These
  *     exist only in the vendor's closed libraries (encrypted for H.264/HEVC),
  *     so no amount of kernel work produces a conformant bitstream here.
@@ -110,9 +112,11 @@
  * The MPEG-4 datapath uses neither: its BASE_ADDR fields are plain byte
  * addresses needing only 8-byte alignment.
  *
- * Both families are 28-bit for chapter 60 and 32-bit for chapter 61, so the
- * address must fit in 2^28 bytes (256 MiB) / 4 GiB respectively or the write
- * below silently truncates it.
+ * Chapter 60's address fields are 28-bit DIV16, which encodes 2^28 * 16 == 4
+ * GiB of byte address -- exactly the full 32-bit address space, so nothing is
+ * actually lost.  Chapter 61's are plain 32-bit byte addresses, also 4 GiB.
+ * Both therefore cover the whole 32-bit IOVA space, and the checks below are
+ * alignment checks plus belt-and-braces range checks on the shifted value.
  */
 #define VENC_ADDR_SHIFT			4
 #define VENC_ADDR_MASK			GENMASK(27, 0)
@@ -136,6 +140,19 @@ struct mtk_vcodec_dev {
 	atomic_t dec_users;
 
 	/*
+	 * Serialises the encoder frame-in-flight bookkeeping -- frame_pending,
+	 * bs_bytes, bs_addr/bs_size -- between the submit path (which takes the
+	 * runtime-PM reference and starts a frame) and the interrupt handler
+	 * (which retires it and drops the reference).  A spinlock, not a mutex,
+	 * because the interrupt handler has to take it; enc_lock is a sleeping
+	 * mutex and cannot be taken from interrupt context.  Only this short
+	 * critical section runs with interrupts disabled; all register accesses
+	 * stay outside it.
+	 */
+	spinlock_t enc_state_lock;
+	bool enc_pm_held;
+
+	/*
 	 * The device this driver instance belongs to.  Encoder and decoder are one
 	 * probe of one DT node, so there is a single platform device, and the
 	 * runtime-PM and IRQ paths all refer to this one.  It is assigned in
@@ -143,7 +160,15 @@ struct mtk_vcodec_dev {
 	 */
 	struct platform_device *pdev;
 
-	/* Encoder frame in flight, completed by the ISR.  NULL when idle. */
+	/*
+	 * Encoder frame in flight, completed by the ISR.  Guarded by
+	 * enc_state_lock, since both the submit path and the interrupt handler
+	 * touch them.  bs_addr and bs_size are currently informational only --
+	 * nothing branches on them, they record which buffer the frame owns so that
+	 * whoever adds a buffer queue knows what to hand back -- but they are
+	 * published and cleared under the same lock as the flags that the ISR
+	 * actually acts on, so they cannot describe a frame that has been retired.
+	 */
 	dma_addr_t bs_addr;
 	dma_addr_t bs_size;
 	u32 bs_bytes;
@@ -164,16 +189,15 @@ struct mtk_vcodec_dev {
 struct mtk_vcodec_enc_parm {
 	__u32 width;
 	__u32 height;
-	__u32 gop;		/* I-frame interval, in frames */
+	__u32 gop;		/* I-frame interval, in frames (PERIOD_I_FRM) */
 	__u32 bitrate;		/* bits per second */
 	__u32 framerate;	/* frames per second, x100 for 29.97 */
-	__u32 qp_max;		/* 1..31 */
-	__u32 qp_min;		/* 1..31, with min <= init <= max <= 31 */
-	__u32 qp_init;
-	__u32 intra_vop_rate;	/* 1..31, I-frame interval in VOPs */
-	__u32 bitrate_hard_limit;
-	__u32 rate_balance;
+	__u32 qp_init;		/* 0..51, H.264 */
+	__u32 rc_fps;		/* 0 = hardware default of 30 */
+	__u32 p_frm_q_limiter;	/* 0..255, data sheet suggests 3 */
+	__u32 b_frm_q_limiter;	/* 0..255, data sheet suggests 5 */
 	__u32 rc_algorithm;	/* vendor defined; see NOTES.md */
+	bool cbr;		/* constant rather than variable bit rate */
 };
 
 static inline void mtk_venc_write(struct mtk_vcodec_dev *vcodec, u32 off, u32 val)
@@ -228,6 +252,23 @@ static int mtk_venc_power_on(struct mtk_vcodec_dev *vcodec)
 
 	if (ret)
 		return ret;
+
+	/*
+	 * Unlock the encoder's internal registers.
+	 *
+	 * VENC_CE is the video encoder's codec-enable at +0x0EC.  It has no
+	 * bit-field section in the data sheet -- only a bare name in the ch.60
+	 * summary table -- so what it means exactly is not documented here, but
+	 * the vendor code makes the requirement unambiguous: kernel/core/mt_dcm.c
+	 * writes VENC_CE = 0x1 as the first thing it does in both the DCM-enable
+	 * (:299) and the DCM-disable (:396) paths, ahead of every other VENC
+	 * register it then programs, and the same again before reading the
+	 * registers for its DCM dump (:186).  mt_dcm.h:102 puts it at 0xF70020EC,
+	 * which is this +0x0EC after the +0xE0000000 remap.  So: enable it before
+	 * touching anything else in the block, and write the whole word as 1 so
+	 * the driver does not depend on a bit position nothing documents.
+	 */
+	mtk_venc_write(vcodec, VENC_CE, 0x1);
 
 	/*
 	 * Enable both interrupt sources.  The shared pair at +0x05c/+0x060 is
@@ -315,28 +356,44 @@ static u32 mtk_venc_bitstream_size(struct mtk_vcodec_dev *vcodec, bool mpeg4)
  * The line is level triggered, so an interrupt that arrives while we are
  * acknowledging is still pending afterwards: re-read the status and acknowledge
  * again, otherwise the line never falls.
+ *
+ * No runtime-PM reference is taken here.  pm_runtime_resume_and_get() may sleep
+ * and may run the resume callback, which cannot be done from interrupt context
+ * unless the device is marked pm_runtime_irq_safe() -- this one is not, and
+ * marking it so would be a lie: the resume path enables clocks and writes
+ * registers.  It is also unnecessary: a frame-done interrupt can only arrive
+ * while the engine is running, which means the submit path already holds the
+ * reference (see mtk_venc_submit_frame()).  That reference is dropped here,
+ * once, and only when the frame that took it has actually completed.
  */
 static irqreturn_t mtk_venc_isr(int irq, void *data)
 {
 	struct platform_device *pdev = data;
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(&pdev->dev);
-	u32 status, mp4_status;
-	int ret;
-
-	/*
-	 * pm_runtime_resume_and_get() returns 0 on a successful resume and < 0 on
-	 * failure.  Testing the old "if (!pm_runtime_get_sync(...))" inverted
-	 * that: a normal resume read as a failure and the ISR returned IRQ_NONE
-	 * without acking, so the level-held line never dropped.
-	 */
-	ret = pm_runtime_resume_and_get(&pdev->dev);
-	if (ret < 0)
-		return IRQ_NONE;
+	unsigned long flags;
+	u32 status, mp4_status, bs_bytes = 0;
+	bool frm_done = false, mp4_done = false, retire_pm = false;
 
 	status = mtk_venc_read(vcodec, VENC_IRQ_STATUS);
 	if (status & VENC_IRQ_MASK_ALL) {
 		vcodec->venc_irq_count++;
 		mtk_venc_write(vcodec, VENC_IRQ_ACK, status & VENC_IRQ_MASK_ALL);
+
+		/*
+		 * ENC_FRM_INT (bit 2) is the H.264/VP8 frame-completion interrupt:
+		 * ch.60 calls it "Frame encoding finished interrupt"
+		 * (draft/ds/venc.txt:4461-4466), and the vendor ISR treats it as
+		 * the end of the encode and acks exactly bit 2
+		 * (videocodec_kernel_driver.c:440-442).
+		 *
+		 * An earlier revision only acked this and left frame_pending set,
+		 * so an H.264 frame never completed: the state machine stayed
+		 * stuck believing a frame was still in flight forever, and the
+		 * bitstream length was never recorded.  Complete the frame here,
+		 * exactly as the MPEG-4 path below does, and take the coded length
+		 * from the same place.
+		 */
+		frm_done = !!(status & VENC_IRQ_STATUS_FRM);
 	}
 
 	/*
@@ -358,11 +415,13 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 		 * than in a submit path is the whole point: there is no V4L2 buffer
 		 * to hand it back to, so it is kept for whoever owns the bitstream
 		 * buffer and reads it after the interrupt.
+		 *
+		 * Note the "true": this reads the MPEG-4 datapath's own byte
+		 * count.  An earlier revision passed "false" here and so read the
+		 * H.264 counter for an MPEG-4 frame, which is a different block's
+		 * register and a meaningless value.
 		 */
-		if (vcodec->frame_pending)
-			vcodec->bs_bytes =
-				mtk_venc_bitstream_size(vcodec, false);
-		vcodec->frame_pending = false;
+		mp4_done = true;
 		mtk_venc_write(vcodec, VENC_MP4_IRQ_ACK, VENC_MP4_IRQ_ACK_DONE);
 	} else if (mp4_status & VENC_MP4_IRQ_STATUS_SLICE) {
 		/*
@@ -377,7 +436,48 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	if (status & VENC_IRQ_MASK_ALL)
 		mtk_venc_write(vcodec, VENC_IRQ_ACK, status & VENC_IRQ_MASK_ALL);
 
-	pm_runtime_put_autosuspend(&pdev->dev);
+	/*
+	 * Retire the frame, if any, and drop the runtime-PM reference the submit
+	 * path took for it.
+	 *
+	 * The byte count is read outside the lock -- it is a register read, and
+	 * this driver does not take a spinlock across register accesses -- and is
+	 * only kept if there was a frame to attach it to.
+	 *
+	 * enc_pm_held is the authoritative record of whether a reference is
+	 * outstanding, and it is cleared in the same critical section that clears
+	 * frame_pending.  That is what makes the pairing exact: the reference is
+	 * taken once per started frame and released once, only by the completion
+	 * that retires that frame.  An extra or spurious interrupt -- an SPS or
+	 * PPS interrupt, a DRAM-full, or a second frame-done with nothing in
+	 * flight -- finds frame_pending already clear, so it neither records a
+	 * bogus length nor decrements the usage count a second time.  The
+	 * reference therefore can be neither released twice, which would underflow
+	 * the runtime-PM count and power the clocks off underneath a live frame,
+	 * nor leaked, since every successful submit has exactly one frame
+	 * completion to retire it.
+	 */
+	if (frm_done)
+		bs_bytes = mtk_venc_bitstream_size(vcodec, false);
+	else if (mp4_done)
+		bs_bytes = mtk_venc_bitstream_size(vcodec, true);
+
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	if ((frm_done || mp4_done) && vcodec->frame_pending) {
+		vcodec->bs_bytes = bs_bytes;
+		vcodec->frame_pending = false;
+		vcodec->bs_addr = 0;
+		vcodec->bs_size = 0;
+	}
+	if ((frm_done || mp4_done) && vcodec->enc_pm_held) {
+		vcodec->enc_pm_held = false;
+		retire_pm = true;
+	}
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	if (retire_pm)
+		pm_runtime_put_autosuspend(&pdev->dev);
+
 	return IRQ_HANDLED;
 }
 
@@ -396,12 +496,21 @@ static irqreturn_t mtk_vdec_isr(int irq, void *data)
 	struct platform_device *pdev = data;
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(&pdev->dev);
 	u32 val;
-	int ret;
 
-	ret = pm_runtime_resume_and_get(&pdev->dev);
-	if (ret < 0)
-		return IRQ_NONE;
-
+	/*
+	 * Deliberately no runtime-PM reference here, and deliberately no put
+	 * either.  Unlike the encoder there is no decoder submit path in this
+	 * driver to take a matching reference -- see the file header, the decoder
+	 * datapath is not programmed at all -- so there is nothing to balance
+	 * against and a put here would decrement a count this ISR never
+	 * incremented.  Taking a reference is not an option either: the resume
+	 * path enables clocks and writes registers, which is not permitted from
+	 * interrupt context without pm_runtime_irq_safe(), and this device is
+	 * not so marked because doing so would not be true of its resume path.
+	 *
+	 * The access is safe anyway: an interrupt from the block means its clock
+	 * is already running.
+	 */
 	val = mtk_vdec_read(vcodec, VDEC_MISC_FRAME_END);
 	if (val & VDEC_FRAME_END_BIT) {
 		mtk_vdec_write(vcodec, VDEC_MISC_FRAME_END, val |
@@ -410,7 +519,6 @@ static irqreturn_t mtk_vdec_isr(int irq, void *data)
 		vcodec->irq_count++;
 	}
 
-	pm_runtime_put_autosuspend(&pdev->dev);
 	return IRQ_HANDLED;
 }
 
@@ -565,29 +673,171 @@ static int mtk_venc_set_mp4_frame_addr(struct mtk_vcodec_dev *vcodec,
 }
 
 /*
- * Rate control.  VENC_RATECONTROL_INFO_n is a four-register block in chapter 60;
- * the hardware applies the quantiser limits from it.  The bounds here are not
- * arbitrary: the vendor codec library clamps exactly these three values to
- * 1..31 with min <= init <= max, which is the H.264 quantiser range (see
- * RECOVERED-ABI.md for the disassembly).
+ * Rate control.
+ *
+ * This used to be a four-register QP triple: qp_min/qp_init/qp_max into
+ * RATECONTROL_INFO_0/1/2, a bitrate limit into _3, and the intra-VOP rate into
+ * VENC_RC_INFO_DRAM_ADDR.  None of that maps onto the hardware:
+ *
+ *   - RATECONTROL_INFO_2 and _3 are "rev" from bit 31 down to bit 0, i.e. wholly
+ *     reserved (draft/ds/venc.txt:4206-4260).  Writing them programmed nothing.
+ *   - RATECONTROL_INFO_0 is a bundle: bit 18 RC_CBR, bit 17 RC_INI_QP and
+ *     bits 16:0 RC_TARGET_BIT_RATE (draft/ds/venc.txt:4072-4087).  Writing a QP
+ *     there put a value of 1..31 into the low bit of the target bit rate.
+ *   - RATECONTROL_INFO_1 is fps and QP adjust limiters: 23:16 RC_FPS, 15:8
+ *     BfrmQLimter, 7:0 PfrmQLimter (draft/ds/venc.txt:4187-4205).
+ *   - VENC_RC_INFO_DRAM_ADDR is a 28-bit DIV16 DRAM *address* for the rate
+ *     control's scratch state, "Initial DRAM byte address of RC info. for
+ *     loading and saving divided by 16" (draft/ds/venc.txt:5134-5140).  Writing
+ *     a bare integer there pointed the scratch pointer at DRAM address
+ *     intra_vop_rate * 16 -- and since the driver allocates nothing, at
+ *     whatever the integrator happened to have mapped low in memory.
+ *
+ * And the quantisers were not even in the right registers.  They are in
+ * VENC_ENCODER_INFO_0/1: QP_I_FRM at bits 31:26 of +0x004, QP_P_FRM at bits
+ * 15:10 and QP_B_FRM at bits 31:26 of +0x008 (draft/ds/venc.txt:2802-2804,
+ * 2893-2901, 2945-2947).  The tempting candidates VENC_H264_ENC_INFO_0/1 at
+ * +0x030/+0x034 are CABAC/profile/level and wholly reserved respectively, so
+ * writing QPs there would have corrupted the CABAC and level fields.
+ *
+ * The range is [0, 51] for H.264, stated explicitly by the data sheet for all
+ * three QP fields; the same rows give [1, 63] for VP8 and [1, 31] for MPEG-4.
+ * This driver only drives H.264, so 0..51 is what it validates -- note 0 is
+ * legal, and an earlier revision rejected it along with anything above 31.
+ *
+ * What is still missing is the rate control scratch memory itself: the hardware
+ * loads and saves its state through RC_CODE_DRAM_ADDR and RC_INFO_DRAM_ADDR,
+ * both DIV16 address registers, and this driver owns no buffer for either.  They
+ * are validated rather than programmed -- see mtk_venc_set_rc_scratch_addr() --
+ * so a caller cannot point them somewhere out of range.
+ *
+ * Return: 0 on success, -EINVAL if a value does not fit its documented field or
+ *	   range.
  */
 static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
 				     const struct mtk_vcodec_enc_parm *p)
 {
-	if (p->qp_min < 1 || p->qp_min > 31)
-		return -EINVAL;
-	if (p->qp_max < 1 || p->qp_max > 31)
-		return -EINVAL;
-	if (p->qp_init < p->qp_min || p->qp_init > p->qp_max)
-		return -EINVAL;
-	if (!p->intra_vop_rate || p->intra_vop_rate > 31)
+	u32 rc_info_0, rc_info_1, enc_info_0, enc_info_1;
+
+	/* QP for I-frame, QP for P-frame and QP for B-frame: all 0..51, H.264. */
+	if (p->qp_init > VENC_H264_QP_MAX)
 		return -EINVAL;
 
-	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO(0), p->qp_min);
-	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO(1), p->qp_init);
-	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO(2), p->qp_max);
-	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO(3), p->bitrate_hard_limit);
-	mtk_venc_write(vcodec, VENC_RC_INFO_DRAM_ADDR, p->intra_vop_rate);
+	/*
+	 * RC_TARGET_BIT_RATE is 17 bits wide (draft/ds/venc.txt:4078-4087), so
+	 * reject a bit rate that does not fit instead of truncating it into a
+	 * silently wrong encode rate.
+	 */
+	if (p->bitrate > VENC_RC_TARGET_BIT_RATE_MASK)
+		return -EINVAL;
+
+	/* RC_FPS is 8 bits at 23:16 of RATECONTROL_INFO_1. */
+	if (p->rc_fps > GENMASK(7, 0))
+		return -EINVAL;
+
+	/* The P and B frame QP adjust limiters are 8 bits each. */
+	if (p->p_frm_q_limiter > GENMASK(7, 0))
+		return -EINVAL;
+	if (p->b_frm_q_limiter > GENMASK(7, 0))
+		return -EINVAL;
+
+	/*
+	 * RATECONTROL_INFO_0: constant-vs-variable bit rate, whether the QP
+	 * triple below is used as the initial QP, and the target bit rate.
+	 *
+	 * RC_INI_QP is set whenever we are programming the QP fields at all, so
+	 * that the encoder actually uses qp_init rather than silently ignoring it
+	 * in favour of the rate control algorithm's own default.
+	 */
+	rc_info_0 = p->bitrate & VENC_RC_TARGET_BIT_RATE_MASK;
+	rc_info_0 |= VENC_RC_INI_QP;
+	if (p->cbr)
+		rc_info_0 |= VENC_RC_CBR;
+
+	/*
+	 * RATECONTROL_INFO_1: rate control fps, and the P and B frame QP adjust
+	 * limiters.  The data sheet suggests 3 for P and 5 for B, so those are
+	 * the defaults if the caller expresses no preference.
+	 */
+	rc_info_1 = (p->rc_fps << VENC_RC_FPS_SHIFT) & VENC_RC_FPS_MASK;
+	rc_info_1 |= (p->p_frm_q_limiter ? p->p_frm_q_limiter : 3) &
+		     VENC_RC_PFRM_Q_LIM_MASK;
+	rc_info_1 |= (p->b_frm_q_limiter ? p->b_frm_q_limiter : 5) &
+		     VENC_RC_BFRM_Q_LIM_MASK;
+
+	/*
+	 * The QP fields themselves, in the encoder info registers.
+	 *
+	 * Read-modify-write, deliberately: these registers have meaningful
+	 * non-zero reset defaults in their other fields.  VENC_ENCODER_INFO_1
+	 * resets to 0x01200120 (draft/ds/venc.txt:2854-2875), which carries
+	 * B_SEARCH_V=1, B_SEARCH_H=1, P_SEARCH_V=1, P_SEARCH_H=1 and the
+	 * 16x16/16x08/08x16/08x08 block-mode enables.  Writing the whole register
+	 * as the QP alone would zero all of them -- switching off every block
+	 * partition mode and collapsing the motion search ranges -- which is not a
+	 * valid encoder configuration.  So only the QP field is replaced and
+	 * everything else is left as the hardware reset it.
+	 *
+	 * QP_I_FRM is bits 31:26 of ENCODER_INFO_0; QP_P_FRM is bits 15:10 of
+	 * ENCODER_INFO_1 (draft/ds/venc.txt:2802-2804, 2945-2947).  The B frame QP
+	 * is left alone: this driver does not program NUM_B_FRM, so no B frames are
+	 * generated and there is no B frame QP to set.
+	 */
+	enc_info_0 = mtk_venc_read(vcodec, VENC_ENCODER_INFO_0);
+	enc_info_0 &= ~VENC_QP_I_FRM_MASK;
+	enc_info_0 |= (p->qp_init << VENC_QP_I_FRM_SHIFT) & VENC_QP_I_FRM_MASK;
+
+	enc_info_1 = mtk_venc_read(vcodec, VENC_ENCODER_INFO_1);
+	enc_info_1 &= ~VENC_QP_P_FRM_MASK;
+	enc_info_1 |= (p->qp_init << VENC_QP_P_FRM_SHIFT) & VENC_QP_P_FRM_MASK;
+
+	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO_0, rc_info_0);
+	mtk_venc_write(vcodec, VENC_RATECONTROL_INFO_1, rc_info_1);
+	mtk_venc_write(vcodec, VENC_ENCODER_INFO_0, enc_info_0);
+	mtk_venc_write(vcodec, VENC_ENCODER_INFO_1, enc_info_1);
+
+	return 0;
+}
+
+/**
+ * mtk_venc_set_rc_scratch_addr - validate the rate control scratch buffers.
+ * @vcodec: driver instance
+ * @rc_code_addr: RC code buffer, byte address, 16-byte aligned
+ * @rc_info_addr: RC info buffer, byte address, 16-byte aligned
+ *
+ * The rate control loads and saves its state through these two buffers.  The
+ * driver allocates neither, so this validates them rather than programming
+ * them -- but it does validate them, because both are DIV16 DRAM *address*
+ * registers and an address that does not fit would be silently truncated into
+ * pointing the hardware at a different buffer.
+ *
+ * Both need 16-byte alignment and both are 28-bit DIV16 fields, which encode the
+ * full 32-bit address space.
+ *
+ * Return: 0 on success, -EINVAL if either address is misaligned or unencodable.
+ *
+ * No caller yet, for the same reason as the buffer programming helpers above.
+ */
+__maybe_unused
+static int mtk_venc_set_rc_scratch_addr(struct mtk_vcodec_dev *vcodec,
+					dma_addr_t rc_code_addr,
+					dma_addr_t rc_info_addr)
+{
+	if (!rc_code_addr || !rc_info_addr)
+		return -EINVAL;
+	if (rc_code_addr & ((1 << VENC_ADDR_SHIFT) - 1))
+		return -EINVAL;
+	if (rc_info_addr & ((1 << VENC_ADDR_SHIFT) - 1))
+		return -EINVAL;
+	if (lower_32_bits(rc_code_addr >> VENC_ADDR_SHIFT) & ~VENC_ADDR_MASK)
+		return -EINVAL;
+	if (lower_32_bits(rc_info_addr >> VENC_ADDR_SHIFT) & ~VENC_ADDR_MASK)
+		return -EINVAL;
+
+	mtk_venc_write(vcodec, VENC_RC_CODE_DRAM_ADDR,
+		       lower_32_bits(rc_code_addr >> VENC_ADDR_SHIFT));
+	mtk_venc_write(vcodec, VENC_RC_INFO_DRAM_ADDR,
+		       lower_32_bits(rc_info_addr >> VENC_ADDR_SHIFT));
 
 	return 0;
 }
@@ -595,18 +845,41 @@ static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
 /*
  * Start one picture.
  *
- * The engine is edge sensitive on VENC_MP4_FRAME_START for the MPEG-4 path and
- * level driven through the shared front end for H.264/VP8, so clear the start
- * first and set it last.
+ * The two datapaths have genuinely separate start triggers and neither is edge
+ * sensitive:
+ *
+ *   H.264/VP8  VENC_CODEC_CTRL bit 2 is ENC_FRM, "Starts to encode one frame",
+ *              0: No operation / 1: Start to encode (draft/ds/venc.txt:4352-4356).
+ *              The register is a one-shot command register, so writing 0 to it
+ *              does not clear anything -- it is documented as no operation.
+ *              This is what an H.264 frame start writes.
+ *
+ *   MPEG-4     VENC_MP4_FRAME_START bit 0 is TRIGGER, "Writing 1 to it will
+ *              trigger hardware initialization process and encoding from the
+ *              frame's first MB.  Writing 0 to it has no effect"
+ *              (draft/ds/mp4.txt:6408-6410).
+ *
+ * An earlier revision wrote "mpeg4 ? 1 : 0" here, on a comment claiming the H.264
+ * path was "level driven through the shared front end".  That comment described
+ * a hardware behaviour the register map does not have, and the code behind it
+ * was wrong in both directions: 0 started nothing at all for H.264, and 1 -- bit
+ * 0, ENC_SPS -- started a parameter set rather than a frame.
+ *
+ * SPS and PPS are not programmed here.  They are separate ENC_SPS / ENC_PPS
+ * bits of the same register and they are one-shot commands in their own right,
+ * issued when the caller wants a parameter set written rather than on every
+ * frame; the driver has no parameter-set buffer to point them at, so starting
+ * one per frame would produce a bitstream nothing can decode.
  */
 static void mtk_venc_start_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4)
 {
-	mtk_venc_write(vcodec, VENC_CODEC_CTRL, mpeg4 ? 1 : 0);
-
 	if (mpeg4) {
-		mtk_venc_write(vcodec, VENC_MP4_FRAME_START, 0);
-		mtk_venc_write(vcodec, VENC_MP4_FRAME_START, 1);
+		/* One-shot trigger, self-clearing: a preceding write of 0 is a no-op. */
+		mtk_venc_write(vcodec, VENC_MP4_FRAME_START, 0x1);
+		return;
 	}
+
+	mtk_venc_write(vcodec, VENC_CODEC_CTRL, VENC_CODEC_CTRL_ENC_FRM);
 }
 
 /*
@@ -618,8 +891,18 @@ static void mtk_venc_start_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4)
  * clears it, so a caller without a V4L2 buffer queue still has something to
  * wait on; vcodec->bs_bytes holds the coded length afterwards.
  *
+ * Runtime PM.  This function, not the interrupt handler, is where the runtime-PM
+ * reference for an encode is taken, and it is held until the frame-done
+ * interrupt releases it (see mtk_venc_isr()).  That pairing is exact: the
+ * reference is taken on the path that programs the hardware and is released only
+ * by the completion of the frame that took it, so the encoder clocks stay on for
+ * exactly as long as a frame is in flight and no longer.  It cannot be taken
+ * twice, because a second submit is rejected while frame_pending is set, and it
+ * cannot leak, because the only release site is guarded by frame_pending.
+ *
  * Return: 0 on success, -EINVAL for a zero or misaligned buffer address or a
- *	   bad quantiser setting, -ENODEV for the MPEG-4 datapath.
+ *	   bad quantiser setting, -EBUSY if a frame is already in flight,
+ *	   -ENODEV for the MPEG-4 datapath.
  */
 __maybe_unused
 static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
@@ -630,6 +913,7 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 				 dma_addr_t rec_y, dma_addr_t rec_uv)
 {
 	dma_addr_t frames[] = { src_y, src_uv, ref_y, ref_uv, rec_y, rec_uv };
+	unsigned long flags;
 	unsigned int i;
 	int ret;
 
@@ -655,23 +939,98 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 	if (mpeg4)
 		return -ENODEV;
 
+	/*
+	 * One frame in flight at a time.  This is what makes the runtime-PM
+	 * reference below exact: rejecting a concurrent submit means there is never
+	 * more than one outstanding frame_pending, so never more than one
+	 * outstanding reference for the one completion that will retire it.
+	 *
+	 * Checked under enc_state_lock rather than enc_lock, because the interrupt
+	 * handler that clears frame_pending runs under enc_state_lock; taking only
+	 * enc_lock here would leave the flag genuinely racy.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	if (vcodec->frame_pending) {
+		spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+		return -EBUSY;
+	}
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
 	mutex_lock(&vcodec->enc_lock);
+
+	/*
+	 * Re-check under the lock that serialises the register programming: the
+	 * previous frame may have completed between the two checks.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	if (vcodec->frame_pending) {
+		spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	/*
+	 * Take the runtime-PM reference for the duration of the encode.  This is a
+	 * sleeping path, so pm_runtime_resume_and_get() is legal here; the
+	 * matching put is in mtk_venc_isr(), which neither sleeps nor resumes.
+	 * If the resume fails, pm_runtime_resume_and_get() has NOT taken a
+	 * reference, so there is nothing to undo.
+	 */
+	ret = pm_runtime_resume_and_get(&vcodec->pdev->dev);
+	if (ret < 0)
+		goto out_unlock;
 
 	ret = mtk_venc_set_frame_addr(vcodec, bs_addr, bs_size,
 				      src_y, src_uv, ref_y, ref_uv,
 				      rec_y, rec_uv);
 	if (!ret)
 		ret = mtk_venc_set_rate_control(vcodec, parm);
-	if (!ret)
-		mtk_venc_start_frame(vcodec, false);
 
-	if (!ret) {
-		vcodec->bs_addr = bs_addr;
-		vcodec->bs_size = bs_size;
-		vcodec->bs_bytes = 0;
-		vcodec->frame_pending = true;
+	if (ret) {
+		/*
+		 * Nothing was started, so no interrupt will arrive to release the
+		 * reference just taken.  Drop it here, and do not set enc_pm_held,
+		 * because nothing is outstanding.
+		 */
+		pm_runtime_put_autosuspend(&vcodec->pdev->dev);
+		goto out_unlock;
 	}
 
+	/*
+	 * Publish the frame before starting it, and the ordering matters.
+	 *
+	 * Starting first and publishing afterwards would be a lost-wakeup race: the
+	 * encoder can raise ENC_FRM_INT and the interrupt handler can run before we
+	 * get here to set frame_pending, because the ISR is not excluded by
+	 * enc_state_lock -- it simply has not taken it yet.  It would find no frame
+	 * in flight, retire nothing, and the runtime-PM reference taken above would
+	 * then never be released.
+	 *
+	 * Publishing first is safe for the opposite reason, and it depends on the
+	 * -EBUSY checks above: those only pass when frame_pending is already clear,
+	 * and frame_pending clear means the previous frame was retired and its
+	 * interrupt acknowledged.  So there is no stale ENC_FRM_INT left level-held
+	 * for the ISR to consume here -- anything the ISR sees between this
+	 * critical section and the start write belongs to no frame, and it retires
+	 * nothing because frame_pending is set but no completion has occurred.
+	 *
+	 * frame_pending and enc_pm_held are set together, under the same lock the
+	 * ISR uses, so the ISR can never observe a started frame whose reference it
+	 * is not going to release.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	vcodec->bs_addr = bs_addr;
+	vcodec->bs_size = bs_size;
+	vcodec->bs_bytes = 0;
+	vcodec->frame_pending = true;
+	vcodec->enc_pm_held = true;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	mtk_venc_start_frame(vcodec, false);
+	ret = 0;
+
+out_unlock:
 	mutex_unlock(&vcodec->enc_lock);
 
 	return ret;
@@ -763,6 +1122,8 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	mutex_init(&vcodec->lock);
 	mutex_init(&vcodec->enc_lock);
 	mutex_init(&vcodec->dec_lock);
+	spin_lock_init(&vcodec->enc_state_lock);
+	vcodec->enc_pm_held = false;
 	atomic_set(&vcodec->enc_users, 0);
 	atomic_set(&vcodec->dec_users, 0);
 
