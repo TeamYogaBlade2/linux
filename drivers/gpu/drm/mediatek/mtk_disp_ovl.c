@@ -249,13 +249,11 @@ struct mtk_disp_ovl_data {
 	 * frame was actually produced, and therefore the only one
 	 * allowed to fire vblank_cb.
 	 *
-	 * Both are OPTIONAL and a zero value selects the legacy behaviour
-	 * instead of an empty mask - see mtk_ovl_int_all_mask() and
-	 * mtk_ovl_fme_cpl_bit().  Only MT6589 has a documented
-	 * OVL_INTEN/OVL_INTSTA bit map, so the other SoCs must not be
-	 * given invented values here; leaving them zero keeps those SoCs
-	 * acknowledging exactly what their own fault-bit fields name,
-	 * which is what this driver has always done for them.
+	 * Both are required and every SoC below states both explicitly.
+	 * A zero is a real, deliberate value, not "unset" - it says this
+	 * block raises no status bit that this driver can acknowledge,
+	 * which is true of the eight SoCs that never write a non-zero
+	 * value to OVL_INTEN (see mtk_disp_ovl_check_data()).
 	 */
 	unsigned int int_all_mask;
 	unsigned int fme_cpl_bit;
@@ -270,6 +268,18 @@ struct mtk_disp_ovl_data {
 	size_t num_formats;
 	bool supports_clrfmt_ext;
 };
+
+/*
+ * The vblank trigger for a SoC whose OVL_INTSTA bit map this driver does
+ * not describe.  Such a SoC cannot say which bit means "a frame was
+ * produced", so every status bit the block latches counts as a frame
+ * boundary - the behaviour this driver has always had for them, and the
+ * only choice that cannot silently stop a display that is working today.
+ *
+ * This is spelled out per SoC rather than defaulted at run time so that
+ * the value in the data is the value the ISR uses.
+ */
+#define OVL_FME_CPL_ANY		GENMASK(31, 0)
 
 /*
  * struct mtk_disp_ovl - DISP_OVL driver structure
@@ -288,81 +298,35 @@ struct mtk_disp_ovl {
 	void				*vblank_cb_data;
 };
 
-/*
-	 * Status bits this driver acknowledges, with a fallback for the SoCs that
-	 * predate int_all_mask.
- *
-	 * Only MT6589 has a verified OVL_INTEN/OVL_INTSTA bit map, so only MT6589
-	 * populates data->int_all_mask.  The other eight SoCs leave it 0, and a
-	 * literal 0 would mean "this block can raise nothing": the ISR would return
-	 * IRQ_NONE on every invocation, clear nothing and never fire vblank - a
-	 * regression introduced when int_all_mask was added, because those eight SoCs
-	 * silently inherited a zero-initialised field they were never asked to fill
-	 * in.
- *
-	 * The fallback is therefore exactly the set the ISR acknowledged before
-	 * int_all_mask existed, spelled out from the same per-SoC fields it used then.
-	 * Those fields are 0 on every one of those SoCs too, so the mask degrades to
-	 * 0 and they acknowledge exactly as much (that is, as little) as they always
-	 * have - and, crucially, the ISR no longer bails out before reaching the
-	 * clear and the vblank callback.  This reconstructs committed behaviour; it
-	 * is not a guess at any SoC's interrupt map.
- */
-static u32 mtk_ovl_int_all_mask(const struct mtk_disp_ovl *ovl)
-{
-	if (ovl->data->int_all_mask)
-		return ovl->data->int_all_mask;
-
-	return ovl->data->fme_und_bit | ovl->data->rdma0_eof_abn_bit |
-	       ovl->data->rdma1_eof_abn_bit | ovl->data->rdma0_fifo_und_bit |
-	       ovl->data->rdma1_fifo_und_bit;
-}
-
-/*
-	 * The status bit that is allowed to fire vblank_cb.
- *
-	 * A non-zero data->fme_cpl_bit (MT6589) gates vblank on a frame actually
-	 * having completed.  A zero value means this SoC's map does not identify
-	 * that bit, so vblank keeps the old "some event arrived" behaviour - it must
-	 * not be read as "vblank never fires", which would silently stop every frame
-	 * for every SoC that has not been characterised yet.
- */
-static u32 mtk_ovl_fme_cpl_bit(const struct mtk_disp_ovl *ovl)
-{
-	if (ovl->data->fme_cpl_bit)
-		return ovl->data->fme_cpl_bit;
-
-	/*
-	 * No frame-complete bit known for this SoC: every status bit this
-	 * driver recognises counts as a frame boundary, as it did before
-	 * fme_cpl_bit was introduced.
-	 */
-	return ~0U;
-}
-
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
-	u32 int_all_mask = mtk_ovl_int_all_mask(priv);
 	u32 handled;
 
 	/*
-	 * Reject the line as "not ours" only when this SoC's status map is
-	 * actually known and none of its bits is asserted.  That keeps the
-	 * check honest - we never acknowledge a status bit we do not own -
-	 * while leaving the SoCs with no recorded map to run the handler to
-	 * completion, exactly as they did before int_all_mask existed.
+	 * A SoC that owns at least one status bit (int_all_mask non-zero)
+	 * must show one of them asserted for the line to be ours.  Only
+	 * then can we return IRQ_NONE without having acknowledged anything,
+	 * because there is nothing of ours in reg to clear.
 	 *
-	 * The guard has to be on data->int_all_mask rather than on the
-	 * resolved mask: where int_all_mask is 0 the resolved mask is the
-	 * legacy clear list, which is 0 as well for every SoC that has not
-	 * described its map.  Testing the resolved mask alone would send all
-	 * of them straight out of the handler before the clear and before
-	 * the vblank callback, which is the regression this guard was
-	 * originally introduced with.
+	 * int_all_mask == 0 is not a sentinel for "map unknown" - it is the
+	 * explicit statement that this block raises nothing this driver can
+	 * acknowledge, and so there is nothing to reject it on.  Testing the
+	 * mask alone, as "if (!(reg & int_all_mask))", would read that as
+	 * "no bit matches" and eject every such SoC from the handler on
+	 * every invocation - the regression that came with int_all_mask in
+	 * the first place, since it stopped those SoCs clearing their
+	 * status and stopped their vblank callback from ever running.  Hence
+	 * the mask has to be known non-zero before the intersection is
+	 * allowed to veto.
+	 *
+	 * The invariant that lets this be written this way is checked at
+	 * probe: int_all_mask covers every bit vblank_en_mask can enable,
+	 * so a zero mask implies a zero enable mask, so those SoCs never
+	 * raise an OVL interrupt through this driver at all.
 	 */
-	if (priv->data->int_all_mask && !(reg & int_all_mask))
+	if (priv->data->int_all_mask && !(reg & priv->data->int_all_mask))
 		return IRQ_NONE;
 
 	/*
@@ -415,20 +379,21 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
  * goes out as 1 and a condition arriving after the readl above is
  * left alone rather than wiped.
 	 */
-	handled = reg & int_all_mask;
+	handled = reg & priv->data->int_all_mask;
 	writel(~handled, priv->regs + DISP_REG_OVL_INTSTA);
 
 	/*
-	 * On a SoC whose interrupt map is known (MT6589) only a completed
-	 * frame is a vblank: underflow and the RDMA faults are errors,
-	 * already reported above, and firing the vblank callback for them
-	 * would hand the CRTC a frame that never arrived.  Everywhere else
-	 * mtk_ovl_fme_cpl_bit() returns "any recognised bit", which is the
-	 * behaviour those SoCs have always had.  Either way a frame
-	 * complete with no callback registered is still acknowledged by the
-	 * clear above and cannot re-trigger.
+	 * On a SoC whose interrupt map is known (MT6589) fme_cpl_bit names
+	 * one bit and only a completed frame is a vblank: underflow and the
+	 * RDMA faults are errors, already reported above, and firing the
+	 * vblank callback for them would hand the CRTC a frame that never
+	 * arrived.  The eight SoCs whose map this driver does not describe
+	 * state OVL_FME_CPL_ANY, which counts every status bit as a frame
+	 * boundary - the behaviour they have always had.  Either way a
+	 * frame complete with no callback registered is still acknowledged
+	 * by the clear above and cannot re-trigger.
 	 */
-	if (priv->vblank_cb && (reg & mtk_ovl_fme_cpl_bit(priv)))
+	if (priv->vblank_cb && (reg & priv->data->fme_cpl_bit))
 		priv->vblank_cb(priv->vblank_cb_data);
 
 	/*
@@ -1027,6 +992,43 @@ static const struct component_ops mtk_disp_ovl_component_ops = {
 	.unbind = mtk_disp_ovl_unbind,
 };
 
+/*
+ * Reject SoC data that would leave the interrupt path self-inconsistent.
+ *
+ * int_all_mask exists for one reason: whatever mtk_ovl_enable_vblank()
+ * switches on in OVL_INTEN has to be acknowledged again by the ISR, or a
+ * level-triggered line stays asserted and re-enters the handler forever.
+ * So the enable mask must be a subset of the acknowledge mask.  Checking
+ * it here is what lets the ISR treat a zero int_all_mask as a deliberate
+ * value instead of "unknown": the check proves that a zero acknowledge mask
+ * can only be paired with a zero enable mask, i.e. a SoC that never raises
+ * an OVL interrupt through this driver at all.
+ *
+ * The second condition keeps a status bit that could fire vblank_cb out of
+ * a SoC with no enable mask: nothing would ever enable it, so gating
+ * vblank on it would be a lie, while claiming it does fire means "any
+ * status bit counts", which cannot be true if there are no status bits.
+ */
+static int mtk_disp_ovl_check_data(struct device *dev,
+				   const struct mtk_disp_ovl_data *data)
+{
+	if (data->vblank_en_mask & ~data->int_all_mask) {
+		dev_err(dev,
+			"OVL_INTEN bits %#x are not acknowledged by int_all_mask %#x\n",
+			data->vblank_en_mask, data->int_all_mask);
+		return -EINVAL;
+	}
+
+	if (!data->int_all_mask && data->fme_cpl_bit) {
+		dev_err(dev,
+			"fme_cpl_bit %#x cannot fire vblank with int_all_mask 0\n",
+			data->fme_cpl_bit);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int mtk_disp_ovl_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1107,6 +1109,11 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 #endif
 
 	priv->data = of_device_get_match_data(dev);
+
+	ret = mtk_disp_ovl_check_data(dev, priv->data);
+	if (ret)
+		return ret;
+
 	platform_set_drvdata(pdev, priv);
 
 	ret = devm_request_irq(dev, irq, mtk_disp_ovl_irq_handler,
@@ -1136,6 +1143,8 @@ static const struct mtk_disp_ovl_data mt2701_ovl_driver_data = {
 	.gmc_bits = 8,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1146,6 +1155,8 @@ static const struct mtk_disp_ovl_data mt8167_ovl_driver_data = {
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
 	.smi_id_en = true,
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1162,8 +1173,10 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.set_layer_src = true,
 	.vblank_en_mask = 0xF, /* Reg update, frame done, underflow, sw reset done */
 	/*
- * Bits 0, 1, 2 and 3 are enabled above, so all of them - and the
- * whole documented status map - must be acknowledged in the ISR.
+	 * This is the only SoC here with a documented OVL_INTEN/OVL_INTSTA
+	 * bit map, so it is the only one that can name its status bits.
+	 * Bits 0, 1, 2 and 3 are enabled above, so all of them - and the
+	 * whole documented map - must be acknowledged in the ISR.
 	 */
 	.int_all_mask = OVL_INT_ALL,
 	.fme_cpl_bit = OVL_FME_CPL_INT,
@@ -1182,6 +1195,8 @@ static const struct mtk_disp_ovl_data mt8173_ovl_driver_data = {
 	.gmc_bits = 8,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1191,6 +1206,8 @@ static const struct mtk_disp_ovl_data mt8183_ovl_driver_data = {
 	.gmc_bits = 10,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1200,6 +1217,8 @@ static const struct mtk_disp_ovl_data mt8183_ovl_2l_driver_data = {
 	.gmc_bits = 10,
 	.layer_nr = 2,
 	.fmt_rgb565_is_0 = true,
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1213,6 +1232,8 @@ static const struct mtk_disp_ovl_data mt8192_ovl_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1226,6 +1247,8 @@ static const struct mtk_disp_ovl_data mt8192_ovl_2l_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
 };
@@ -1240,11 +1263,42 @@ static const struct mtk_disp_ovl_data mt8195_ovl_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.int_all_mask = 0,	/* see the note above the match table */
+	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8195_formats,
 	.num_formats = ARRAY_SIZE(mt8195_formats),
 	.supports_clrfmt_ext = true,
 };
 
+/*
+ * The eight SoCs other than MT6589 enable no OVL interrupt at all.
+ *
+ * Nothing this driver does gives them one.  Every write to OVL_INTEN is
+ * either data->vblank_en_mask, which is 0 for all eight and so programs
+ * an empty enable mask, or a literal 0 (mtk_ovl_stop(), and the leftover
+ * bootloader scrub in mtk_disp_ovl_probe()).  Their DT nodes wire the
+ * OVL interrupt as a dedicated GIC line - MT8173 SPI 180, MT8183 SPI 225,
+ * MT8192 SPI 254, MT8195 SPI 636 - not a shared disp_ovl interrupt, so
+ * nothing else in the display stack raises it either.  The status
+ * register may therefore latch bits, but nothing can raise the line and
+ * the handler below is unreachable from this driver.
+ *
+ * That is why their values are int_all_mask 0 and fme_cpl_bit
+ * OVL_FME_CPL_ANY, stated rather than defaulted:
+ *
+ *   - int_all_mask 0 says "there is no status bit for this driver to
+ *     acknowledge", which is true, and makes the acknowledge write
+ *     leave the status register untouched - which is what these SoCs
+ *     have always done, and is the only behaviour their unused status
+ *     bits permit.
+ *   - fme_cpl_bit OVL_FME_CPL_ANY keeps the vblank gate at "some status
+ *     bit was latched" rather than "never".  Were it 0 no interrupt
+ *     could ever fire a vblank on these SoCs, which would silently stop
+ *     any pipeline that does reach the handler for some other reason.
+ *
+ * Neither value is a guess about undocumented hardware: both are the
+ * values that keep these SoCs doing exactly what they do today.
+ */
 static const struct of_device_id mtk_disp_ovl_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-ovl",
 	  .data = &mt2701_ovl_driver_data},
