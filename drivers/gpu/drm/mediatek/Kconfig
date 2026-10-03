@@ -64,5 +64,6 @@ config MTK_G2D
 	depends on HAS_IOMEM
 	help
 	  The G2D block in the display subsystem does 2D copies: bitblt
-	  between surfaces, constant-colour fill, with flips and alpha
-	  blending.  Say Y to enable its driver.
+	  between surfaces, and constant-colour fill.  The hardware also
+	  offers flips, alpha blending and dithering, which this driver does
+	  not yet use.  Say Y to enable its driver.

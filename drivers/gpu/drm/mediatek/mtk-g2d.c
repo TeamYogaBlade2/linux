@@ -80,6 +80,9 @@
 /* G2D_STATUS - reads 0 once the engine is idle. */
 #define G2D_STATUS_BUSY		BIT(0)
 
+/* G2D_IRQ */
+#define G2D_IRQ_ENABLE		BIT(0)
+
 /* *_CON format and attribute fields, shared by SRC_CON and DST_CON. */
 #define G2D_CON_DI_ALP_MUL		BIT(13)
 #define G2D_CON_DITHER_EN		BIT(12)
@@ -91,9 +94,6 @@
 
 /* G2D_ALP_CON */
 #define G2D_ALP_CON_MODE		GENMASK(1, 0)
-
-/* W2M_CON */
-#define G2D_W2M_CON_SRC_SEL		BIT(0)
 
 #define G2D_TIMEOUT_US			100000
 
@@ -248,6 +248,11 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	 * x/y are byte offsets into the two surfaces: src_pitch counts bytes
 	 * per line, so a row is a pitch, and a column is bytes-per-pixel.
 	 */
+	/*
+	 * The address registers are 32 bits wide, which is also the width of
+	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
+	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
+	 */
 	writel((u32)(src + y * src_pitch + x * src_bpp),
 	       g2d->regs + G2D_SRC_ADDR);
 	writel(src_pitch & 0x3fff, g2d->regs + G2D_SRC_PITCH);
@@ -261,6 +266,13 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	 * bitblt is - the bit is 0 and the driver then does not need to set
 	 * G2D_DST_CON, G2D_DST_ADDR or G2D_DST_PITCH at all.  DST_NEQ is 0
 	 * out of reset, so only the W2M side is programmed here.
+	 */
+	/*
+	 * W2M_SIZE is the width/height of the destination *scan window*, so
+	 * x/y position the window in the destination and the source origin
+	 * follows from it.  Offsetting both surfaces independently would make
+	 * only the x=0,y=0 case behave.  So: window origin in the
+	 * destination, matching source offset in the source.
 	 */
 	writel((u32)(dst + y * dst_pitch + x * dst_bpp),
 	       g2d->regs + G2D_W2M_ADDR);
@@ -285,7 +297,7 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 
 int mtk_g2d_fill(struct mtk_g2d *g2d,
 		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
-		u32 width, u32 height, u32 color)
+		u32 x, u32 y, u32 width, u32 height, u32 color)
 {
 	u32 con;
 	u32 bpp;
@@ -309,7 +321,8 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 	 * engine, and COLOR_EN (bit 9, named DST_COLOR_EN on both control
 	 * registers) selects the constant colour instead of a buffer.
 	 */
-	writel((u32)dst, g2d->regs + G2D_W2M_ADDR);
+	writel((u32)(dst + y * dst_pitch + x * bpp),
+	       g2d->regs + G2D_W2M_ADDR);
 	writel(dst_pitch & 0x3fff, g2d->regs + G2D_W2M_PITCH);
 
 	con = g2d_formats[dst_fmt].clrfmt | G2D_CON_COLOR_EN;
@@ -376,6 +389,9 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 
 	mutex_init(&g2d->lock);
 	spin_lock_init(&g2d->busy_lock);
+
+	/* ENABLE in G2D_IRQ, bit 0: enables the 2D engine interrupt. */
+	writel(G2D_IRQ_ENABLE, g2d->regs + G2D_IRQ);
 
 	platform_set_drvdata(pdev, g2d);
 

@@ -1293,8 +1293,9 @@
 
 		/*
 		 * G2D: a 2D blitter in the display subsystem.  RGB565/888,
-		 * ARGB8888, constant-colour fill, bitblt with flips and alpha
-		 * blending, plus 4x4 dithering.
+		 * ARGB8888, constant-colour fill and bitblt.  The hardware also
+		 * has flips, alpha blending and dithering, which the driver
+		 * does not yet use.
 		 *
 		 * The data sheet gives the base as 0x14013000, the interrupt
 		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE

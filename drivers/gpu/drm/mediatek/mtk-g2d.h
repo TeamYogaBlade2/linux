@@ -31,6 +31,6 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 		u32 x, u32 y, u32 width, u32 height);
 int mtk_g2d_fill(struct mtk_g2d *g2d,
 		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
-		u32 width, u32 height, u32 color);
+		u32 x, u32 y, u32 width, u32 height, u32 color);
 
 #endif /* _MTK_G2D_H_ */
