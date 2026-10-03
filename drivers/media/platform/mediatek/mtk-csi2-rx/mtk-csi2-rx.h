@@ -30,6 +30,32 @@
 /* Port index inside a register name, e.g. SENINF1_CSI2_CTRL is port 0. */
 #define SENINF_PORT(id)				((id) - 1)
 
+/*
+ * Media pad ids for the receiver subdev.
+ *
+ * The order is load-bearing in two places at once, so it is fixed here and
+ * not re-derived anywhere:
+ *
+ *   - the DT, whose receiver source port is port@1 (seninf_out, which
+ *     points at SCAM's sink).  A port's index is its pad index, resolved by
+ *     the core's default v4l2_subdev_get_fwnode_pad_1_to_1();
+ *   - mtk_csi2_rx->pads, because media_entity_pads_init() gives each pad the
+ *     index it has in that array, and every pad_ops handler in mtk-csi2-rx.c
+ *     then indexes by pad number.
+ *
+ * The sink pad exists in the driver because the block does receive from a
+ * sensor, but there is no sensor or D-PHY node in the DT for it to point at
+ * yet, so it has no peer in the graph.  That is the same honest gap as the
+ * missing "phys" property: the pad describes what the hardware does, the DT
+ * does not yet describe a peer for it.  When the D-PHY node comes back, add
+ * a receiver port@0 whose endpoint points at the PHY's source endpoint.
+ */
+enum {
+	CSI2_PAD_SINK = 0,	/* from the sensor, via the D-PHY */
+	CSI2_PAD_SRC,		/* to the SCAM adaptor */
+	CSI2_PAD_NUM,
+};
+
 /* ---------------------------------------------------------------------
  * seninf_top: 0x1500_8000
  * ------------------------------------------------------------------ */

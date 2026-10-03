@@ -28,20 +28,25 @@
  * Specifically, be clear about what probing this driver does and does not
  * mean:
  *
- *   - This subdev has NO PADS.  It registers without an internal_ops or any
- *     pad configuration, so it is not a real entity in the media graph: it
- *     cannot be the endpoint of sensor -> CSI-2 -> SCAM -> CAM -> video.
- *     The DT links scam_out_ep at cam_in_ep, but nothing in the CAM driver
- *     consumes that, and the graph does not resolve through it.
+ *   - This subdev has ONE PAD, a sink, so it IS the downstream endpoint of
+ *     the media graph: csi2-rx -> scam -> cam resolves end to end, and
+ *     media-ctl can list the chain and the pads on it.
  *   - There is NO DMA and NO video node.  Nothing allocates buffers, so no
- *     frame is ever delivered to userspace.
+ *     frame is ever delivered to userspace, and the stream that arrives on
+ *     the sink pad goes nowhere.  The pad describes what the block is wired
+ *     to, not what it does with the picture.
+ *   - There are NO pad operations (no get_fmt/set_fmt/enum_framesizes) and no
+ *     internal_ops.  CAM does not negotiate or expose a format, so a graph
+ *     walk that asks it for one gets -ENOIOCTLCMD.  That is expected for a
+ *     block with no pipeline behind it; when the CPIPE stages exist, the
+ *     format handling has to be written to go with them.
  *   - Only the CAM block enable is set; none of the CPIPE stage enables are
  *     programmed, because the pipeline that would use them is absent.
  *
  * So "the CAM driver probed" means only that a register window mapped and
- * reset cleanly.  It does NOT mean the camera pipeline works.  The register
- * map is the recoverable part and is recorded here for whoever writes the
- * rest.
+ * reset cleanly, and that the graph endpoint exists.  It does NOT mean the
+ * camera pipeline works.  The register map is the recoverable part and is
+ * recorded here for whoever writes the rest.
  *
  * Treat this as documentation that happens to compile.  Loading it will not
  * produce a picture.
@@ -54,6 +59,7 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <media/media-entity.h>
 #include <media/v4l2-subdev.h>
 
 #include "mtk-cam.h"
@@ -259,6 +265,35 @@ static int mtk_cam_probe(struct platform_device *pdev)
 
 	cam->sd.state_lock = &cam->lock;
 	cam->sd.ops = &mtk_cam_subdev_ops;
+	cam->sd.entity.name = dev_name(dev);
+	cam->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+	/*
+	 * CAM is the ISP: it is where the sensor's frames are meant to be
+	 * processed, so MEDIA_ENT_F_PROC_VIDEO_ISP is the honest description,
+	 * and it is the same value the other in-tree ISP subdevs use
+	 * (mali-c55-isp.c:584).
+	 */
+	cam->sd.entity.function = MEDIA_ENT_F_PROC_VIDEO_ISP;
+
+	/*
+	 * Create the sink pad.  The DT's cam_in is port@0, which resolves to
+	 * pad index 0, so this single pad is the one SCAM's source endpoint
+	 * links to.
+	 *
+	 * There is deliberately no source pad and no pad_ops: this block has
+	 * no DMA and no video node, so it consumes nothing and produces
+	 * nothing.  A source pad here would advertise a link out of CAM to
+	 * something that does not exist.  See the header note.
+	 */
+	cam->pads[CAM_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
+
+	ret = media_entity_pads_init(&cam->sd.entity, CAM_PAD_NUM, cam->pads);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to init entity pads\n");
+
+	ret = v4l2_subdev_init_finalize(&cam->sd);
+	if (ret)
+		return dev_err_probe(dev, ret, "subdev init error\n");
 
 	/*
 	 * CAM_CTL_START resets to 0.  Checking it catches a wrong reg
@@ -272,12 +307,21 @@ static int mtk_cam_probe(struct platform_device *pdev)
 
 	ret = v4l2_async_register_subdev(&cam->sd);
 	if (ret)
-		return ret;
+		goto err_subdev_cleanup;
 
 	dev_warn(dev,
 		 "registering a survey-level CAM/ISP scaffold; no image pipeline is implemented\n");
 
 	return 0;
+
+err_subdev_cleanup:
+	/*
+	 * Release the active state allocated by v4l2_subdev_init_finalize().
+	 * The pads live in the devm allocation and go with it.  Every error
+	 * return above the pads_init() call can return directly.
+	 */
+	v4l2_subdev_cleanup(&cam->sd);
+	return ret;
 }
 
 static const struct of_device_id mtk_cam_of_match[] = {

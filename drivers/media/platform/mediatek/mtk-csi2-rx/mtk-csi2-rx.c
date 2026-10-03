@@ -59,9 +59,17 @@ struct mtk_csi2_rx {
 	struct clk *seninf_tg_clk;
 	struct reset_control *seninf_rst;
 
-	struct v4l2_subdev sd;
-	struct media_entity entity;
-	struct mutex lock;
+struct v4l2_subdev sd;
+struct mutex lock;
+
+	/*
+	 * The media pads, indexed as CSI2_PAD_SINK / CSI2_PAD_SRC below.  The
+	 * receiver is a pure bridge: one sink for the sensor's MIPI stream and
+	 * one source towards SCAM.  Flags are filled in in probe, before
+	 * media_entity_pads_init() assigns each pad its index from its
+	 * position in this array.
+	 */
+	struct media_pad pads[CSI2_PAD_NUM];
 
 	/*
 	 * The format last accepted through set_fmt().  s_stream() runs with
@@ -119,10 +127,10 @@ static inline void csi2_update_bits(struct mtk_csi2_rx *priv, u32 reg,
  * payload, so MEDIA_BUS_FMT_FIXED would be a lie: it would make the sensor's
  * SBGGR10 look like it had become something opaque.
  */
-enum {
-	CSI2_PAD_SINK = 0,	/* from the sensor, via the D-PHY */
-	CSI2_PAD_SRC,		/* to the SCAM adaptor */
-};
+/*
+ * The pad ids (CSI2_PAD_SINK / CSI2_PAD_SRC) live in mtk-csi2-rx.h, because
+ * the pads[] array in struct mtk_csi2_rx is sized with CSI2_PAD_NUM.
+ */
 
 /* ------------------------------------------------------------------ */
 /* Data format handling                                               */
@@ -171,10 +179,16 @@ static int mtk_csi2_rx_init_state(struct v4l2_subdev *sd,
 
 	/*
 	 * Seed both pads.  The core has already allocated state->pads (it
-	 * zeroes them for non-stream-aware subdevs), and the two ends of a
-	 * bridge always agree, so one seed and a copy is enough.
+	 * does that in __v4l2_subdev_state_alloc() because media_entity_pads_init()
+	 * left entity.num_pads non-zero, and it zeroes the array), and the two
+	 * ends of a bridge always agree, so one seed and a copy is enough.
+	 *
+	 * The bound is CSI2_PAD_NUM rather than a literal 2 so that adding a pad
+	 * to the array cannot silently leave this loop short of it, and
+	 * v4l2_subdev_state_get_format() bounds-checks the index anyway, so an
+	 * over-long loop fails here rather than reading past the array.
 	 */
-	for (pad = 0; pad < 2; pad++) {
+	for (pad = 0; pad < CSI2_PAD_NUM; pad++) {
 		fmt = v4l2_subdev_state_get_format(state, pad);
 		if (!fmt)
 			return -EINVAL;
@@ -402,18 +416,19 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 		goto err_tg_clk;
 
 	/*
-	 * The D-PHY must be initialised before the receiver is configured:
-	 * it is what puts the sensor's lanes into a state the receiver can
-	 * lock onto.  Returns NULL when the node has no "phys", so a board
-	 * that wires the PHY some other way still works.
+	 * Power the D-PHY up.  It has to be on before the receiver is
+	 * configured: it is what puts the sensor's lanes into a state the
+	 * receiver can lock onto.
+	 *
+	 * Note this is only the *power* half of the PHY lifecycle.  phy_init()
+	 * is deliberately NOT here: it is a lifetime operation, paired with
+	 * phy_exit() at remove, and this function runs again on every resume.
+	 * See the note on the phy_init() call in probe.
+	 *
+	 * priv->phy is NULL when the node has no "phys", so a board that wires
+	 * the PHY some other way still works.
 	 */
 	if (priv->phy) {
-		ret = phy_init(priv->phy);
-		if (ret) {
-			dev_err(priv->dev, "failed to init D-PHY: %d\n", ret);
-			goto err_rst;
-		}
-
 		ret = phy_power_on(priv->phy);
 		if (ret) {
 			dev_err(priv->dev, "failed to power on D-PHY: %d\n",
@@ -648,20 +663,87 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 		priv->phy = NULL;
 	}
 
+	/*
+	 * Initialise the PHY once, here, and release it once in .remove.
+	 *
+	 * phy_init()/phy_exit() are a *lifetime* bracket, not a power
+	 * cycle: every in-tree CSI-2 receiver pairs them that way
+	 * (dw-mipi-csi2rx.c, rkisp1-csi.c, sun6i-mipi-csi2.c all call
+	 * phy_init() from probe/setup and phy_exit() from remove/cleanup).
+	 * This used to call phy_init() from mtk_csi2_rx_power_on(), which
+	 * runs again on every resume and again on every stream start, and
+	 * which had no matching phy_exit() at all.  Each of those calls
+	 * re-initialised the PHY without ever releasing it, so the init/exit
+	 * lifecycle was unbalanced from the first suspend/resume onwards.
+	 * Per-resume power is phy_power_on()/phy_power_off(), which is what
+	 * power_on()/power_off() already do correctly.
+	 *
+	 * Note the PHY is currently absent -- there is no "phys" and no D-PHY
+	 * node in the DT, and no in-tree provider for it -- so this is
+	 * scaffolding: today every call below is guarded by priv->phy being
+	 * non-NULL and does not execute.  It is written so that it is correct
+	 * the moment a real PHY provider and DT node exist, rather than leaving
+	 * the unbalanced init to be discovered on hardware.
+	 */
+	if (priv->phy) {
+		ret = phy_init(priv->phy);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to init D-PHY\n");
+	}
+
 	priv->seninf_rst = devm_reset_control_get(dev, NULL);
-	if (IS_ERR(priv->seninf_rst))
-		return dev_err_probe(dev, PTR_ERR(priv->seninf_rst),
-				     "Failed to get reset control\n");
+	if (IS_ERR(priv->seninf_rst)) {
+		ret = dev_err_probe(dev, PTR_ERR(priv->seninf_rst),
+				    "Failed to get reset control\n");
+		goto err_phy_exit;
+	}
 
 	priv->sd.state_lock = &priv->lock;
 	priv->sd.ops = &mtk_csi2_rx_subdev_ops;
 	priv->sd.internal_ops = &mtk_csi2_rx_internal_ops;
 	priv->sd.entity.name = dev_name(dev);
 	priv->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+	/*
+	 * The receiver unpacks packets and repasses them unchanged, so in the
+	 * media graph it is an interface bridge, not an ISP or a sensor.  Every
+	 * in-tree CSI-2 receiver for the same reason uses this function:
+	 * cdns-csi2rx.c, rkisp1-csi.c, dw-mipi-csi2rx.c and sun6i-mipi-csi2.c
+	 * all set MEDIA_ENT_F_VID_IF_BRIDGE.
+	 */
+	priv->sd.entity.function = MEDIA_ENT_F_VID_IF_BRIDGE;
+
+	/*
+	 * Create the pads before v4l2_subdev_init_finalize() below, which is
+	 * what allocates the active state: __v4l2_subdev_state_alloc() only
+	 * allocates the legacy state->pads array when entity.num_pads is
+	 * non-zero, so without these two calls init_state() below would have had
+	 * nothing to seed and every v4l2_subdev_state_get_format() in the pad
+	 * ops would have returned NULL.
+	 *
+	 * The array order is the pad index; the DT's seninf_out is port@1,
+	 * which matches CSI2_PAD_SRC.
+	 */
+	priv->pads[CSI2_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
+	priv->pads[CSI2_PAD_SRC].flags = MEDIA_PAD_FL_SOURCE;
+
+	ret = media_entity_pads_init(&priv->sd.entity, CSI2_PAD_NUM,
+				     priv->pads);
+	if (ret) {
+		ret = dev_err_probe(dev, ret,
+				    "failed to init entity pads\n");
+		goto err_phy_exit;
+	}
+
+	ret = v4l2_subdev_init_finalize(&priv->sd);
+	if (ret) {
+		ret = dev_err_probe(dev, ret, "subdev init error\n");
+		goto err_phy_exit;
+	}
 
 	ret = v4l2_async_register_subdev(&priv->sd);
 	if (ret)
-		return ret;
+		goto err_subdev_cleanup;
 
 	pm_runtime_set_active(dev);
 
@@ -742,8 +824,52 @@ error_pm:
 	pm_runtime_disable(dev);
 	pm_runtime_put(dev);
 	v4l2_async_unregister_subdev(&priv->sd);
+	v4l2_subdev_cleanup(&priv->sd);
+	goto err_phy_exit;
+
+err_subdev_cleanup:
+	/*
+	 * Registration failed before any runtime-PM state existed, so there is
+	 * no PM reference to drop and no pm_runtime_disable() to undo -- that
+	 * machinery is only set up further down.  The active state allocated by
+	 * v4l2_subdev_init_finalize() does have to go, and the pads are in the
+	 * devm allocation and go with it.
+	 */
+	v4l2_subdev_cleanup(&priv->sd);
+
+err_phy_exit:
+	/*
+	 * Close the PHY lifetime opened by the phy_init() above.  Every probe
+	 * failure from that point on lands here, so the init/exit pair stays
+	 * balanced whether probe fails early (reset control, pads,
+	 * init_finalize) or late (async registration, power_on).
+	 */
+	if (priv->phy)
+		phy_exit(priv->phy);
 
 	return ret;
+}
+
+static void mtk_csi2_rx_remove(struct platform_device *pdev)
+{
+	struct mtk_csi2_rx *priv = dev_get_drvdata(&pdev->dev);
+
+	/*
+	 * Close the PHY lifetime that probe opened with phy_init().  Without
+	 * this the PHY was initialised at probe and never released; see the
+	 * long note on the phy_init() call above.
+	 *
+	 * The receiver must not be streaming at this point, so there is no
+	 * power_off() to do here: runtime PM owns the power state, and remove
+	 * only runs once the device has been unbound and the last reference
+	 * dropped.  The subdev state allocated by v4l2_subdev_init_finalize()
+	 * is released here too, since it is not a devm allocation.
+	 */
+	if (priv->phy)
+		phy_exit(priv->phy);
+
+	v4l2_async_unregister_subdev(&priv->sd);
+	v4l2_subdev_cleanup(&priv->sd);
 }
 
 static const struct of_device_id mtk_csi2_rx_of_match[] = {
@@ -754,6 +880,7 @@ MODULE_DEVICE_TABLE(of, mtk_csi2_rx_of_match);
 
 static struct platform_driver mtk_csi2_rx_driver = {
 	.probe = mtk_csi2_rx_probe,
+	.remove = mtk_csi2_rx_remove,
 	.driver = {
 		.name = "mtk-csi2-rx",
 		.of_match_table = mtk_csi2_rx_of_match,

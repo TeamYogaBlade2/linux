@@ -102,12 +102,32 @@
 #define CAM_SW_CTL_SW_RST_ST			BIT(1)
 #define CAM_SW_CTL_SW_RST_TRIG		BIT(0)
 
+/*
+ * Media pad ids for the CAM/ISP subdev.
+ *
+ * CAM is the end of this graph: the SCAM adaptor's output arrives on its
+ * sink and nothing is taken off it yet, because there is no video node and
+ * no DMA behind it.  So there is exactly one pad, and the order cannot
+ * drift out of step with the DT, whose cam_in is port@0 and therefore pad
+ * index 0 through the core's default v4l2_subdev_get_fwnode_pad_1_to_1().
+ */
+enum {
+	CAM_PAD_SINK = 0,	/* from the SCAM adaptor */
+	CAM_PAD_NUM,
+};
+
 struct mtk_cam {
 	struct device *dev;
 	void __iomem *regs;
 
 	struct v4l2_subdev sd;
 	struct mutex lock;
+
+	/*
+	 * The one media pad, indexed as CAM_PAD_SINK above.  Flags are filled
+	 * in in probe, before media_entity_pads_init() gives it its index.
+	 */
+	struct media_pad pads[CAM_PAD_NUM];
 
 	bool streaming;
 };

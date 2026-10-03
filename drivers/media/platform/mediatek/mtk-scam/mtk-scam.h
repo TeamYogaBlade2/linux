@@ -14,10 +14,28 @@
 /* Two SCAM instances exist, one per camera port. */
 #define SCAM_MAX_PORTS	2
 
-/* Pad ids; the DT declares one sink and one source port on this node. */
+/*
+ * Pad ids; the DT declares one sink and one source port on this node.
+ *
+ * The order is load-bearing in three places at once, so it is fixed here and
+ * not re-derived anywhere:
+ *
+ *   - the DT, whose scam_in is port@0 and scam_out is port@1.  A port's
+ *     reg-names index is its pad index, resolved by the core's default
+ *     v4l2_subdev_get_fwnode_pad_1_to_1();
+ *   - pads[] below, which must be in the same order, because
+ *     media_entity_pads_init() assigns each pad the index it has in that
+ *     array and every pad_ops handler in mtk-scam.c indexes by pad number;
+ *   - the pad_ops themselves, which walk SCAM_PAD_SINK..SCAM_PAD_SRC
+ *     inclusively to keep the two ends of the bridge in step.
+ *
+ * SCAM_PAD_NUM exists so those loops and the pads_init() call cannot disagree
+ * about how many pads there are.
+ */
 enum {
 	SCAM_PAD_SINK = 0,	/* from the CSI-2 receiver */
 	SCAM_PAD_SRC,		/* to the CAM/ISP */
+	SCAM_PAD_NUM,
 };
 
 /*
@@ -49,6 +67,15 @@ struct mtk_scam {
 
 	struct v4l2_subdev sd;
 	struct mutex lock;
+
+	/*
+	 * The media pads, indexed exactly as the enum above.  SCAM is a
+	 * bridge, so it has one of each: the receiver's output arrives on the
+	 * sink and the bytes leave towards the CAM/ISP on the source.  The
+	 * flags are filled in in probe, before media_entity_pads_init() is
+	 * called, which is what gives each pad its index.
+	 */
+	struct media_pad pads[SCAM_PAD_NUM];
 
 	struct mtk_scam_frame_size size;
 

@@ -32,9 +32,13 @@
  *      all of CFG2 have documented bit positions but no known-good
  *      programming sequence.  (CFG and CON *are* fully documented and are
  *      used below; see the comments on those defines.)
- *   2. The media-controller graph glue (v4l2_subdev internal_ops, the
- *      notifier, and the ISP-facing endpoint) is not written, because the
- *      ISP side of the graph does not exist yet.  See README.md.
+ *   2. The media graph is wired as far as the blocks that exist: this
+ *      subdev has a real sink and source pad (see SCAM_PAD_* in mtk-scam.h)
+ *      and initialises them in probe, so the receiver -> SCAM -> CAM links
+ *      resolve.  What is still missing is the frame notifier and any
+ *      propagation of a format negotiated upstream; the CAM/ISP side
+ *      consumes the stream without doing anything with it yet.  See
+ *      README.md.
  *   3. This tree's media API is a reduced fork, so the usual
  *      v4l2_mbus_csi2_capability negotiation is unavailable; the frame
  *      format is taken from the sensor through set_pad() instead.  The
@@ -56,6 +60,7 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <media/media-entity.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mediabus.h>
 #include <media/v4l2-subdev.h>
@@ -635,7 +640,19 @@ static int mtk_scam_init_state(struct v4l2_subdev *sd,
 
 	lockdep_assert_held(&scam->lock);
 
-	for (pad = 0; pad <= SCAM_PAD_SRC; pad++) {
+	/*
+	 * Seed every pad in pads[], which is exactly SCAM_PAD_SINK..SCAM_PAD_SRC
+	 * inclusive.  The bound is written against the enum, not as a literal
+	 * count, so it cannot quietly stop covering the last pad if the pad
+	 * array grows.  v4l2_subdev_state_get_format() also range-checks the
+	 * index against entity.num_pads, so an over-long loop would fail here
+	 * rather than read past the array.
+	 *
+	 * This state exists at all because media_entity_pads_init() ran before
+	 * v4l2_subdev_init_finalize() in probe: __v4l2_subdev_state_alloc()
+	 * only allocates state->pads when entity.num_pads is non-zero.
+	 */
+	for (pad = 0; pad < SCAM_PAD_NUM; pad++) {
 		fmt = v4l2_subdev_state_get_format(state, pad);
 		if (!fmt)
 			return -EINVAL;
@@ -722,7 +739,18 @@ static int mtk_scam_get_selection(struct v4l2_subdev *sd,
 {
 	struct mtk_scam *scam = to_mtk_scam(sd);
 
-	if (sel->pad)
+	/*
+	 * The crop rectangle describes what SCAM is told to expect, which is
+	 * its input, i.e. the sink pad.  That is the in-tree convention for
+	 * selection targets too -- isppreview.c and ispresizer.c both reject
+	 * anything that is not their sink pad -- so this accepts SCAM_PAD_SINK
+	 * and nothing else.
+	 *
+	 * Written as the enum rather than as a bare "if (sel->pad)": the bare
+	 * form happens to be right only because the sink is pad 0, so it reads
+	 * as a test of pad zero when it is really a test of the sink.
+	 */
+	if (sel->pad != SCAM_PAD_SINK)
 		return -EINVAL;
 
 	lockdep_assert_held(&scam->lock);
@@ -884,6 +912,17 @@ static int mtk_scam_probe(struct platform_device *pdev)
 	scam->sd.state_lock = &scam->lock;
 	scam->sd.ops = &mtk_scam_subdev_ops;
 	scam->sd.internal_ops = &mtk_scam_internal_ops;
+	scam->sd.entity.name = dev_name(dev);
+	scam->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+	/*
+	 * SCAM sits between the receiver and the CAM/ISP and converts nothing,
+	 * so it is the video-interface bridge of this chain.  That is the same
+	 * function every in-tree CSI-2 receiver uses for the same reason --
+	 * cdns-csi2rx.c, rkisp1-csi.c and dw-mipi-csi2rx.c all set
+	 * MEDIA_ENT_F_VID_IF_BRIDGE -- and it is what tools walking the graph
+	 * (media-ctl, v4l2-ctl) key their pad-format bookkeeping off.
+	 */
+	scam->sd.entity.function = MEDIA_ENT_F_VID_IF_BRIDGE;
 
 	/*
 	 * Sanity check: SCAM_CFG is documented as resetting to 0x10000400, i.e.
@@ -912,14 +951,59 @@ static int mtk_scam_probe(struct platform_device *pdev)
 	 * not hardcode it here as well, or the two can drift apart.
 	 */
 
+	/*
+	 * Create the pads.  This has to happen before
+	 * v4l2_subdev_init_finalize() below, because that is what allocates the
+	 * active state, and __v4l2_subdev_state_alloc() only allocates the
+	 * legacy state->pads array when sd->entity.num_pads is non-zero:
+	 *
+	 *	if (!(sd->flags & V4L2_SUBDEV_FL_STREAMS) && sd->entity.num_pads)
+	 *		state->pads = ...
+	 *
+	 * With no pads registered, init_state() below would have had nothing
+	 * to seed, v4l2_subdev_state_get_format() would have returned NULL for
+	 * every pad, and both mtk_scam_get_pad() and mtk_scam_set_pad() would
+	 * have failed on that rather than on anything about the format.
+	 *
+	 * The order of the pads array is the pad index; the DT names scam_in as
+	 * port@0 and scam_out as port@1, which matches SCAM_PAD_SINK and
+	 * SCAM_PAD_SRC.
+	 */
+	scam->pads[SCAM_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
+	scam->pads[SCAM_PAD_SRC].flags = MEDIA_PAD_FL_SOURCE;
+
+	ret = media_entity_pads_init(&scam->sd.entity, SCAM_PAD_NUM,
+				     scam->pads);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to init entity pads\n");
+
+	ret = v4l2_subdev_init_finalize(&scam->sd);
+	if (ret)
+		return dev_err_probe(dev, ret, "subdev init error\n");
+
 	ret = v4l2_async_register_subdev(&scam->sd);
 	if (ret)
-		return ret;
+		goto err_subdev_cleanup;
 
 	dev_info(dev, "registered SCAM adaptor %u (partial, see source)\n",
 		 scam->port);
 
 	return 0;
+
+err_subdev_cleanup:
+	/*
+	 * Undo the two things the successful path added after the pads were
+	 * created: the active state allocated by v4l2_subdev_init_finalize()
+	 * and, transitively, nothing else -- the pads live in the devm
+	 * allocation, so they go away with it.
+	 *
+	 * v4l2_subdev_cleanup() is safe to call whether or not
+	 * v4l2_async_register_subdev() succeeded, and it is also the only
+	 * cleanup needed on any later probe failure, so every error return
+	 * above the pads_init() call can just return directly.
+	 */
+	v4l2_subdev_cleanup(&scam->sd);
+	return ret;
 }
 
 static const struct of_device_id mtk_scam_of_match[] = {

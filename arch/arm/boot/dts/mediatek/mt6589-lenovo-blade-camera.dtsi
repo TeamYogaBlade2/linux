@@ -13,8 +13,12 @@
  *   - The MIPI CSI-2 D-PHY is NOT modelled at all.  It previously had a
  *     placeholder node claiming an address that three other nodes also
  *     claimed; see the note on the receiver node below for the details.
- *   - The CAM/ISP node registers as a subdev but implements no pads, so it
- *     is not the endpoint of the graph and no video node exists.
+ *   - The CAM/ISP node registers as a subdev with a sink pad, so it is the
+ *     downstream endpoint of the graph, but there is no video node and no
+ *     DMA behind it: the link ends at a subdev that consumes nothing yet.
+ *   - The sensor step is absent.  There is no D-PHY node and no sensor node,
+ *     so the receiver's sink pad exists in the driver but has no peer in the
+ *     graph; the receiver -> SCAM -> CAM links do resolve.
  *
  * Address map of the sensor front end, from the data sheet:
  *
@@ -143,6 +147,42 @@
 		 * and programs the receiver, and the lanes simply stay idle.
 		 */
 
+		ports {
+			/*
+			 * Source: the receiver feeds the SCAM adaptor.
+			 *
+			 * This port used to sit alongside a seninf_in sink port
+			 * that pointed at the A5142's source endpoint.  That
+			 * sensor is gone (the driver oopsed at probe and never
+			 * answered), and removing the whole ports node took the
+			 * receiver's own source endpoint with it.
+			 *
+			 * It was then relocated *inside* scam's scam_in port, as a
+			 * nested "ports { port@1 }".  That cannot work and has
+			 * been moved back here, where it belongs, because it
+			 * describes the receiver, not SCAM:
+			 *
+			 *   of_fwnode_graph_get_port_parent() (drivers/of/
+			 *   property.c) resolves a port's owner by walking
+			 *   port -> parent -> (if that parent is named "ports")
+			 *   its own parent.  With the nested layout the owner
+			 *   of port@1 resolved to scam_in, i.e. to a *port*
+			 *   node rather than to a device node, and
+			 *   v4l2_subdev_get_fwnode_pad_1_to_1() then failed its
+			 *   device_match_fwnode() check with -ENXIO.  The
+			 *   receiver -> SCAM link was silently never created,
+			 *   even with the pads present.
+			 *
+			 * A port node's parent must be the device node that owns
+			 * the pads, so this endpoint lives on the receiver.
+			 */
+			seninf_out: port@1 {
+				seninf_out_ep: endpoint {
+					remote-endpoint = <&scam_in_ep>;
+				};
+			};
+		};
+
 	};
 
 	/*
@@ -187,16 +227,7 @@
 
 		ports {
 			scam_in: port@0 {
-				ports {
-			/* Source: the receiver feeds the SCAM adaptor. */
-			seninf_out: port@1 {
-				seninf_out_ep: endpoint {
-					remote-endpoint = <&scam_in_ep>;
-				};
-			};
-		};
-
-		scam_in_ep: endpoint {
+				scam_in_ep: endpoint {
 					remote-endpoint = <&seninf_out_ep>;
 				};
 			};
