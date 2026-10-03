@@ -73,6 +73,23 @@
  * There is no hardware to test against, so none of the above is claimed to
  * work end to end.  See NOTES.md and RECOVERED-ABI.md for which parts of the
  * vendor ABI are recoverable and which are not.
+ *
+ * Known limitation: no encode timeout
+ * -----------------------------------
+ * The submit path takes a runtime-PM reference for a frame and the interrupt
+ * handler drops it when the frame ends.  Every hardware way of ending a frame
+ * is handled: the H.264 frame-done interrupt, the MPEG-4 frame-done interrupt,
+ * and a bitstream-buffer overflow on either datapath.  What is NOT handled is
+ * the encoder never signalling completion at all -- a wedged engine or a lost
+ * interrupt.  In that case the reference is never dropped, the frame stays
+ * pending, and every later submit returns -EBUSY with the encoder clock held on.
+ *
+ * That is a deliberate gap rather than an oversight: recovering from a wedged
+ * encoder needs either a timeout or a hardware status poll, and this driver
+ * has neither the timer nor the buffer ownership that a timeout path would
+ * need.  It is recorded here because the alternative -- an ISR that
+ * unconditionally drops the reference -- would be worse: it could power the
+ * clocks off underneath an encode that is still running.
  */
 
 #include <linux/bitops.h>
@@ -136,6 +153,22 @@ struct mtk_vcodec_dev {
 	struct mutex lock;
 	struct mutex enc_lock;
 	struct mutex dec_lock;
+	/*
+	 * Encoder user count, reserved for the power-management refcount scheme
+	 * below.
+	 *
+	 * HONEST WARNING: nothing in this driver increments it.  There is no V4L2
+	 * queue and no encoder open/close, because nothing can reach this driver
+	 * from userspace today (see the file header), so it is permanently 0 and
+	 * every "enc_users == 0" test in the suspend/resume paths below is
+	 * unconditionally true.  It is kept because it is the hook a future
+	 * buffer-owning layer needs, and because removing it would mean rewriting
+	 * the power-management structure, which is not what this change is about.
+	 * But it does NOT currently hold off the suspend path: what actually keeps
+	 * the encoder clocks on across a frame in flight is the runtime-PM
+	 * reference the submit path holds and the interrupt handler drops, which
+	 * is independent of these counters.
+	 */
 	atomic_t enc_users;
 	atomic_t dec_users;
 
@@ -189,13 +222,13 @@ struct mtk_vcodec_dev {
 struct mtk_vcodec_enc_parm {
 	__u32 width;
 	__u32 height;
-	__u32 gop;		/* I-frame interval, in frames (PERIOD_I_FRM) */
-	__u32 bitrate;		/* bits per second */
+	__u32 gop;
+	__u32 bitrate;		/* bits per second; max 131071 (17-bit field) */
 	__u32 framerate;	/* frames per second, x100 for 29.97 */
 	__u32 qp_init;		/* 0..51, H.264 */
-	__u32 rc_fps;		/* 0 = hardware default of 30 */
-	__u32 p_frm_q_limiter;	/* 0..255, data sheet suggests 3 */
-	__u32 b_frm_q_limiter;	/* 0..255, data sheet suggests 5 */
+	__u32 rc_fps;		/* 0..255, 0 = hardware default of 30 */
+	__u32 p_frm_q_limiter;	/* 0..6, data sheet range 3..6, suggests 3 */
+	__u32 b_frm_q_limiter;	/* 0..8, data sheet range 5..8, suggests 5 */
 	__u32 rc_algorithm;	/* vendor defined; see NOTES.md */
 	bool cbr;		/* constant rather than variable bit rate */
 };
@@ -233,17 +266,32 @@ static void mtk_venc_reset(struct mtk_vcodec_dev *vcodec)
 {
 	mtk_venc_write(vcodec, VENC_SW_HRST_N, 0);
 
-	/* The engine needs its clock before it can acknowledge a reset. */
-	mtk_venc_write(vcodec, VENC_CODEC_CTRL, 0);
+	/*
+	 * The engine needs its clock before it can acknowledge a reset, and
+	 * clearing any interrupt left over from a previous run stops that stale
+	 * interrupt from being serviced as if it belonged to a frame just started.
+	 *
+	 * VENC_CODEC_CTRL is deliberately NOT written here.  Every bit of it is
+	 * documented as a one-shot "0: No operation / 1: Start to encode"
+	 * (draft/ds/venc.txt:4330-4375), so writing 0 to it clears nothing and
+	 * would only be mistaken for a reset of the command register.
+	 */
 	mtk_venc_write(vcodec, VENC_IRQ_ACK, VENC_IRQ_MASK_ALL);
 	mtk_venc_write(vcodec, VENC_SW_HRST_N, 1);
 
 	/*
-	 * Chapter 60 documents a VENC_HW_MODE_SEL at +0x0000 in the first table;
-	 * it is the hardware mode of the shared encoder core.  Reading it also
-	 * flushes any stale command left over from a previous run.
+	 * Read back the hardware mode of the shared encoder core.  VENC_HW_MODE_SEL
+	 * is documented at +0x0000 by both the ch.60 summary table and its own
+	 * bit-field section (draft/ds/venc.txt:1910, 2579; reset 0x10000020).
+	 *
+	 * This is a readback for its side effect of completing the reset handshake.
+	 * It is NOT a command flush, and an earlier revision claimed it was:
+	 * nothing in the data sheet documents a read-flush of any command queue by
+	 * this register, whose bits 19:0 are a mix of RW configuration and RO
+	 * status (draft/ds/venc.txt:2606).  The value read is intentionally
+	 * unused, which is why this is a bare read and not an assignment.
 	 */
-	mtk_venc_read(vcodec, 0x000);
+	mtk_venc_read(vcodec, VENC_HW_MODE_SEL);
 }
 
 static int mtk_venc_power_on(struct mtk_vcodec_dev *vcodec)
@@ -372,7 +420,8 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(&pdev->dev);
 	unsigned long flags;
 	u32 status, mp4_status, bs_bytes = 0;
-	bool frm_done = false, mp4_done = false, retire_pm = false;
+	bool frm_done = false, mp4_done = false, overflow = false;
+	bool retire_pm = false, frame_failed = false;
 
 	status = mtk_venc_read(vcodec, VENC_IRQ_STATUS);
 	if (status & VENC_IRQ_MASK_ALL) {
@@ -394,6 +443,25 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 		 * from the same place.
 		 */
 		frm_done = !!(status & VENC_IRQ_STATUS_FRM);
+
+		/*
+		 * BS_DRAM_FULL_INT (bit 3) means "During SPS/PPS/frame encoding,
+		 * the generated bitstream byte count exceeds allocated bitstream
+		 * DRAM size" (draft/ds/venc.txt:4468-4470), and
+		 * VP8_HEADER_BS_DRAM_FULL_INT (bit 5) is the same condition for
+		 * the VP8 header partition.  The frame is lost, and -- the part
+		 * that matters for the runtime-PM reference -- no ENC_FRM_INT will
+		 * follow for it, because the encoder stopped early.
+		 *
+		 * An earlier revision acked this bit and nothing else.  The frame
+		 * then never completed: frame_pending and the runtime-PM reference
+		 * taken by the submit path stayed set forever, every later submit
+		 * returned -EBUSY, and venc_clk was pinned on permanently.  So the
+		 * overflow has to retire the frame too, reporting it by publishing
+		 * a zero length.
+		 */
+		overflow = !!(status & (VENC_IRQ_STATUS_DRAM |
+					 VENC_IRQ_STATUS_DRAM_VP8));
 	}
 
 	/*
@@ -405,6 +473,17 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	mp4_status = mtk_venc_read(vcodec, VENC_MP4_IRQ_STATUS);
 	if (mp4_status & VENC_MP4_IRQ_STATUS_FULL) {
 		vcodec->mp4_irq_count++;
+		/*
+		 * Same reasoning as BS_DRAM_FULL_INT above: BITSTREAM_IRQ (bit 4)
+		 * means the output buffer overflowed, the frame is unusable, and no
+		 * FRAME_IRQ will arrive for it -- so it has to be retired here or
+		 * it latches forever with the runtime-PM reference still held.
+		 *
+		 * This is deliberately separate from the FRAME/SLICE chain below:
+		 * an overflow is not a slice event, and the two are acked through
+		 * different bits.
+		 */
+		overflow = true;
 		mtk_venc_write(vcodec, VENC_MP4_IRQ_ACK, VENC_MP4_IRQ_ACK_FULL);
 	}
 
@@ -440,36 +519,56 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	 * Retire the frame, if any, and drop the runtime-PM reference the submit
 	 * path took for it.
 	 *
-	 * The byte count is read outside the lock -- it is a register read, and
-	 * this driver does not take a spinlock across register accesses -- and is
-	 * only kept if there was a frame to attach it to.
+	 * Three things end a frame, and all three must retire it or the runtime-PM
+	 * reference is stranded: a normal frame-done, the MPEG-4 frame-done, and a
+	 * bitstream-buffer overflow.  The byte count is read outside the lock -- it
+	 * is a register read, and this driver does not take a spinlock across
+	 * register accesses -- and is only kept if there was a frame to attach it
+	 * to.
+	 *
+	 * An overflow publishes a length of zero rather than whatever the counter
+	 * happens to hold.  The counter reflects bytes actually emitted before the
+	 * encoder gave up, which is not a complete frame, so reporting it would be
+	 * worse than reporting nothing: the caller would hand a truncated,
+	 * unparseable bitstream to userspace.  Zero is also what an empty capture
+	 * buffer means, so a caller needs no way to tell the two apart beyond the
+	 * length itself.
 	 *
 	 * enc_pm_held is the authoritative record of whether a reference is
 	 * outstanding, and it is cleared in the same critical section that clears
 	 * frame_pending.  That is what makes the pairing exact: the reference is
-	 * taken once per started frame and released once, only by the completion
-	 * that retires that frame.  An extra or spurious interrupt -- an SPS or
-	 * PPS interrupt, a DRAM-full, or a second frame-done with nothing in
-	 * flight -- finds frame_pending already clear, so it neither records a
-	 * bogus length nor decrements the usage count a second time.  The
-	 * reference therefore can be neither released twice, which would underflow
-	 * the runtime-PM count and power the clocks off underneath a live frame,
-	 * nor leaked, since every successful submit has exactly one frame
-	 * completion to retire it.
+	 * taken once per started frame and released once, by whichever completion
+	 * retires that frame.  An extra or spurious interrupt -- an SPS or PPS
+	 * interrupt, or a second frame-done with nothing in flight -- finds
+	 * frame_pending already clear, so it neither records a bogus length nor
+	 * decrements the usage count a second time.  The reference therefore can
+	 * be neither released twice, which would underflow the runtime-PM count and
+	 * power the clocks off underneath a live frame, nor leaked: every frame
+	 * that is started ends in exactly one of the three retiring events above.
+	 *
+	 * The one case that still strands a reference is the hardware never
+	 * signalling completion at all -- a wedged encoder, a lost interrupt.  That
+	 * is a hardware fault with no in-driver recovery, and it is called out in
+	 * the file header rather than papered over with a timeout that this driver
+	 * has no infrastructure to implement.
 	 */
+	frame_failed = overflow && !frm_done && !mp4_done;
+
 	if (frm_done)
 		bs_bytes = mtk_venc_bitstream_size(vcodec, false);
 	else if (mp4_done)
 		bs_bytes = mtk_venc_bitstream_size(vcodec, true);
+	else if (frame_failed)
+		bs_bytes = 0;
 
 	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
-	if ((frm_done || mp4_done) && vcodec->frame_pending) {
+	if ((frm_done || mp4_done || frame_failed) && vcodec->frame_pending) {
 		vcodec->bs_bytes = bs_bytes;
 		vcodec->frame_pending = false;
 		vcodec->bs_addr = 0;
 		vcodec->bs_size = 0;
 	}
-	if ((frm_done || mp4_done) && vcodec->enc_pm_held) {
+	if ((frm_done || mp4_done || frame_failed) && vcodec->enc_pm_held) {
 		vcodec->enc_pm_held = false;
 		retire_pm = true;
 	}
@@ -735,10 +834,18 @@ static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
 	if (p->rc_fps > GENMASK(7, 0))
 		return -EINVAL;
 
-	/* The P and B frame QP adjust limiters are 8 bits each. */
-	if (p->p_frm_q_limiter > GENMASK(7, 0))
+	/*
+	 * The QP adjust limiters have documented valid ranges, not just field
+	 * widths: BfrmQLimter is "Suggested: 5, Range: 5 ~ 8" and PfrmQLimter is
+	 * "Suggested: 3, Range: 3 ~ 6" (draft/ds/venc.txt:4186-4195).  Checking
+	 * only the 8-bit width would accept 0, 1, 2 and 7..255, all of which the
+	 * data sheet says are out of range -- the same class of mistake the QP
+	 * range check used to make.  Zero means "unspecified", so the documented
+	 * suggested values are substituted below rather than rejected.
+	 */
+	if (p->p_frm_q_limiter > VENC_RC_PFRM_Q_LIM_MAX)
 		return -EINVAL;
-	if (p->b_frm_q_limiter > GENMASK(7, 0))
+	if (p->b_frm_q_limiter > VENC_RC_BFRM_Q_LIM_MAX)
 		return -EINVAL;
 
 	/*
@@ -756,27 +863,35 @@ static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
 
 	/*
 	 * RATECONTROL_INFO_1: rate control fps, and the P and B frame QP adjust
-	 * limiters.  The data sheet suggests 3 for P and 5 for B, so those are
-	 * the defaults if the caller expresses no preference.
+	 * limiters.  The data sheet's suggested values (3 for P, 5 for B) stand in
+	 * when the caller expresses no preference.
 	 */
 	rc_info_1 = (p->rc_fps << VENC_RC_FPS_SHIFT) & VENC_RC_FPS_MASK;
-	rc_info_1 |= (p->p_frm_q_limiter ? p->p_frm_q_limiter : 3) &
-		     VENC_RC_PFRM_Q_LIM_MASK;
-	rc_info_1 |= (p->b_frm_q_limiter ? p->b_frm_q_limiter : 5) &
-		     VENC_RC_BFRM_Q_LIM_MASK;
+	rc_info_1 |= (p->p_frm_q_limiter ? p->p_frm_q_limiter :
+		      VENC_RC_PFRM_Q_LIM_SUGGESTED) & VENC_RC_PFRM_Q_LIM_MASK;
+	rc_info_1 |= (p->b_frm_q_limiter ? p->b_frm_q_limiter :
+		      VENC_RC_BFRM_Q_LIM_SUGGESTED) & VENC_RC_BFRM_Q_LIM_MASK;
 
 	/*
 	 * The QP fields themselves, in the encoder info registers.
 	 *
-	 * Read-modify-write, deliberately: these registers have meaningful
-	 * non-zero reset defaults in their other fields.  VENC_ENCODER_INFO_1
-	 * resets to 0x01200120 (draft/ds/venc.txt:2854-2875), which carries
-	 * B_SEARCH_V=1, B_SEARCH_H=1, P_SEARCH_V=1, P_SEARCH_H=1 and the
-	 * 16x16/16x08/08x16/08x08 block-mode enables.  Writing the whole register
-	 * as the QP alone would zero all of them -- switching off every block
-	 * partition mode and collapsing the motion search ranges -- which is not a
-	 * valid encoder configuration.  So only the QP field is replaced and
-	 * everything else is left as the hardware reset it.
+	 * Read-modify-write, deliberately.  VENC_ENCODER_INFO_1 resets to
+	 * 0x01200120 (draft/ds/venc.txt:2854-2875), and that reset value is not
+	 * all zeroes: bits 5, 8, 21 and 24 are set, which is P_SEARCH_H[7:5] = 2,
+	 * P_SEARCH_V[9:8] = 1, B_SEARCH_H[23:21] = 1 and B_SEARCH_V[25:24] = 1 --
+	 * the motion search range divisors.  Writing the register as the QP alone
+	 * would zero all four of them and collapse the search ranges, so only the
+	 * QP field is replaced.
+	 *
+	 * Worth being precise about what the reset value does and does not give,
+	 * because it is tempting to assume it is a usable default: the 16x16/16x08/
+	 * 08x16/08x08 block-mode enables in bits 19:16 and 4:0 are all ZERO in that
+	 * reset value (draft/ds/venc.txt:2873, 2884), i.e. every block partition
+	 * mode is off by default.  That is inherited hardware state, not something
+	 * this driver chose, and choosing otherwise would be a guess.  What the
+	 * read-modify-write guarantees is simply that programming a QP does not
+	 * silently change anything else -- including the block modes, whatever they
+	 * happen to be.
 	 *
 	 * QP_I_FRM is bits 31:26 of ENCODER_INFO_0; QP_P_FRM is bits 15:10 of
 	 * ENCODER_INFO_1 (draft/ds/venc.txt:2802-2804, 2945-2947).  The B frame QP
@@ -806,10 +921,11 @@ static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
  * @rc_info_addr: RC info buffer, byte address, 16-byte aligned
  *
  * The rate control loads and saves its state through these two buffers.  The
- * driver allocates neither, so this validates them rather than programming
- * them -- but it does validate them, because both are DIV16 DRAM *address*
- * registers and an address that does not fit would be silently truncated into
- * pointing the hardware at a different buffer.
+ * driver allocates neither, so there is no caller yet -- but the point of
+ * keeping this is that both are DIV16 DRAM *address* registers, and an address
+ * that does not fit would be silently truncated into pointing the hardware at a
+ * different buffer.  So the addresses are range-checked here rather than being
+ * written blindly wherever they came from.
  *
  * Both need 16-byte alignment and both are 28-bit DIV16 fields, which encode the
  * full 32-bit address space.
@@ -888,8 +1004,14 @@ static void mtk_venc_start_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4)
  * The caller owns the DMA buffers and must not release or reuse them until the
  * frame-done interrupt has arrived: the encoder is still reading the source
  * picture when this returns.  vcodec->frame_pending records that and the ISR
- * clears it, so a caller without a V4L2 buffer queue still has something to
- * wait on; vcodec->bs_bytes holds the coded length afterwards.
+ * clears it, and vcodec->bs_bytes holds the coded length afterwards.
+ *
+ * Note what frame_pending is and is not.  It is bookkeeping that keeps the
+ * driver from double-submitting and pairs the runtime-PM reference with its
+ * frame -- it is NOT a wait mechanism.  There is no wait_event, no poll and no
+ * completion callback, so a caller cannot currently block on it; a caller that
+ * wanted to would have to add the notifier or queue machinery, which is exactly
+ * the V4L2 layer the file header says does not exist yet.
  *
  * Runtime PM.  This function, not the interrupt handler, is where the runtime-PM
  * reference for an encode is taken, and it is held until the frame-done
@@ -940,19 +1062,45 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 		return -ENODEV;
 
 	/*
+	 * Take the runtime-PM reference for the duration of the encode, BEFORE
+	 * taking enc_lock, and that ordering is load-bearing.
+	 *
+	 * pm_runtime_resume_and_get() can invoke the resume callback, and this
+	 * driver's resume callback (mtk_vcodec_runtime_resume) takes enc_lock
+	 * itself, to power the encoder on and reset it.  Calling it while holding
+	 * enc_lock would deadlock against itself on the first submit after every
+	 * autosuspend -- which is the common case, since the ISR's put is a
+	 * put_autosuspend.  mutex_t is not recursive, so this would hang, not
+	 * merely be inefficient.
+	 *
+	 * Note also that the usage count is incremented by the PM core before it
+	 * calls the resume callback, and decremented again if the callback fails,
+	 * so a failed resume leaves the count where it found it and there is
+	 * nothing to undo here either way.
+	 *
+	 * From here on the reference is held across enc_lock, which is correct:
+	 * the device must stay powered for the whole programming window, and the
+	 * suspend path cannot run underneath it.
+	 */
+	ret = pm_runtime_resume_and_get(&vcodec->pdev->dev);
+	if (ret < 0)
+		return ret;
+
+	/*
 	 * One frame in flight at a time.  This is what makes the runtime-PM
-	 * reference below exact: rejecting a concurrent submit means there is never
+	 * reference above exact: rejecting a concurrent submit means there is never
 	 * more than one outstanding frame_pending, so never more than one
 	 * outstanding reference for the one completion that will retire it.
 	 *
-	 * Checked under enc_state_lock rather than enc_lock, because the interrupt
-	 * handler that clears frame_pending runs under enc_state_lock; taking only
-	 * enc_lock here would leave the flag genuinely racy.
+	 * Checked under enc_state_lock, because the interrupt handler that clears
+	 * frame_pending runs under enc_state_lock; checking under enc_lock alone
+	 * would leave the flag genuinely racy against the ISR.
 	 */
 	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
 	if (vcodec->frame_pending) {
 		spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto out_put;
 	}
 	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
 
@@ -970,32 +1118,20 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 	}
 	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
 
-	/*
-	 * Take the runtime-PM reference for the duration of the encode.  This is a
-	 * sleeping path, so pm_runtime_resume_and_get() is legal here; the
-	 * matching put is in mtk_venc_isr(), which neither sleeps nor resumes.
-	 * If the resume fails, pm_runtime_resume_and_get() has NOT taken a
-	 * reference, so there is nothing to undo.
-	 */
-	ret = pm_runtime_resume_and_get(&vcodec->pdev->dev);
-	if (ret < 0)
-		goto out_unlock;
-
 	ret = mtk_venc_set_frame_addr(vcodec, bs_addr, bs_size,
 				      src_y, src_uv, ref_y, ref_uv,
 				      rec_y, rec_uv);
 	if (!ret)
 		ret = mtk_venc_set_rate_control(vcodec, parm);
 
-	if (ret) {
-		/*
-		 * Nothing was started, so no interrupt will arrive to release the
-		 * reference just taken.  Drop it here, and do not set enc_pm_held,
-		 * because nothing is outstanding.
-		 */
-		pm_runtime_put_autosuspend(&vcodec->pdev->dev);
+	/*
+	 * If the programming failed, nothing was started, so no interrupt will
+	 * arrive to release the reference taken above.  Fall out through out_put,
+	 * which does the release.  enc_pm_held is deliberately not set on this
+	 * path, because nothing is outstanding.
+	 */
+	if (ret)
 		goto out_unlock;
-	}
 
 	/*
 	 * Publish the frame before starting it, and the ordering matters.
@@ -1007,13 +1143,19 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 	 * in flight, retire nothing, and the runtime-PM reference taken above would
 	 * then never be released.
 	 *
-	 * Publishing first is safe for the opposite reason, and it depends on the
-	 * -EBUSY checks above: those only pass when frame_pending is already clear,
-	 * and frame_pending clear means the previous frame was retired and its
-	 * interrupt acknowledged.  So there is no stale ENC_FRM_INT left level-held
-	 * for the ISR to consume here -- anything the ISR sees between this
-	 * critical section and the start write belongs to no frame, and it retires
-	 * nothing because frame_pending is set but no completion has occurred.
+	 * Publishing first is safe, and it leans on the -EBUSY checks above: those
+	 * only pass when frame_pending is already clear, and frame_pending clear
+	 * means the previous frame was retired and its interrupt acknowledged.  So
+	 * there is no stale frame-done left level-held for the ISR to steal here.
+	 *
+	 * What is NOT claimed is that the ISR can tell a completion belonging to
+	 * this frame from one belonging to the previous frame -- it cannot, it only
+	 * knows a frame is in flight.  What the ordering above buys is that no
+	 * completion can arrive *unmatched*: the frame is always published before
+	 * the encoder is told to start, so the ISR can never see a completion for a
+	 * frame it does not know about.  Combined with the overflow handling, every
+	 * frame that gets published is retired by exactly one of the ISR's three
+	 * terminal events.
 	 *
 	 * frame_pending and enc_pm_held are set together, under the same lock the
 	 * ISR uses, so the ISR can never observe a started frame whose reference it
@@ -1032,6 +1174,19 @@ static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 
 out_unlock:
 	mutex_unlock(&vcodec->enc_lock);
+	goto out_put;
+
+out_put:
+	/*
+	 * Reached only on paths that started nothing -- the -EBUSY re-check and
+	 * the register-programming failures above both jump straight here, and the
+	 * success path falls through out_unlock into it with the reference
+	 * deliberately still held for the interrupt to drop.  A frame that was
+	 * started owns its reference until its completion, so only an unstarted
+	 * one has anything to release here.
+	 */
+	if (ret)
+		pm_runtime_put_autosuspend(&vcodec->pdev->dev);
 
 	return ret;
 }

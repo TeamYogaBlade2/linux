@@ -43,6 +43,13 @@
 
 /* ---- chapter 60: H.264 / VP8 encoder, shared front end ---- */
 
+/* Hardware mode of the shared encoder core; documented by the ch.60 summary
+ * table (draft/ds/venc.txt:1910) and its own bit-field section (:2579, reset
+ * 0x10000020).  Bits 19:0 are a mix of RW configuration and RO status (:2606);
+ * nothing documents it as a command-queue flush.
+ */
+#define VENC_HW_MODE_SEL		0x000
+
 /* Chapter 60 documents VENC_IRQ_STATUS here; matches the vendor driver. */
 #define VENC_IRQ_STATUS			0x05c
 /* Chapter 60 documents VENC_IRQ_ACK here; matches the vendor driver. */
@@ -199,6 +206,20 @@
 #define VENC_RC_FPS_MASK			GENMASK(23, 16)
 #define VENC_RC_PFRM_Q_LIM_MASK		GENMASK(7, 0)
 #define VENC_RC_BFRM_Q_LIM_MASK		GENMASK(15, 8)
+
+/*
+ * The data sheet gives a suggested value AND a valid range for each limiter, not
+ * just a suggested one: "Suggested: 5, Range: 5 ~ 8" for BfrmQLimter and
+ * "Suggested: 3, Range: 3 ~ 6" for PfrmQLimter (draft/ds/venc.txt:4186-4195).
+ * Validating against the field width alone would accept 0, 1, 2 and everything
+ * above the range, so these are the ranges enforced instead.
+ */
+#define VENC_RC_BFRM_Q_LIM_MIN		5
+#define VENC_RC_BFRM_Q_LIM_MAX		8
+#define VENC_RC_PFRM_Q_LIM_MIN		3
+#define VENC_RC_PFRM_Q_LIM_MAX		6
+#define VENC_RC_BFRM_Q_LIM_SUGGESTED	5
+#define VENC_RC_PFRM_Q_LIM_SUGGESTED	3
 
 /*
  * Rate control scratch memory.  Both of these are DRAM ADDRESS registers, not
