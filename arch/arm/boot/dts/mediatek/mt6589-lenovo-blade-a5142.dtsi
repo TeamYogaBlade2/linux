@@ -88,9 +88,17 @@
 		vddaaf-supply = <&mt6320_ldo_vgp3>;
 
 		ports {
+			/*
+			 * The sensor's source endpoint points straight at the
+			 * CSI-2 receiver.  There is no D-PHY node in between:
+			 * see mt6589-lenovo-blade-camera.dtsi for why the PHY
+			 * is not modelled yet, and note that when it is added
+			 * this link has to be repointed at the PHY's sink
+			 * endpoint rather than at the receiver's.
+			 */
 			a5142_out: port@0 {
 				a5142_out_ep: endpoint {
-					remote-endpoint = <&csi2_phy0_in_ep>;
+					remote-endpoint = <&seninf_in_ep>;
 				};
 			};
 		};

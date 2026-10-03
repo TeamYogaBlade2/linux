@@ -26,16 +26,20 @@
  * interrupt path is implemented.  The parts that need to be finished are
  * called out explicitly below:
  *
- *   1. There is no vendor SCAM driver for this SoC in the reference tree
- *      and no way to test, so the data-type and pixel-format handling is
- *      not written: CFG.WARN_MASK, CFG.CSD_NUM, CFG.DBG_MD and CFG2 have
- *      documented bit positions but no known-good programming sequence.
+ *   1. There is no vendor SCAM driver for the MIPI camera path in the
+ *      reference tree and no way to test, so the data-type and pixel-format
+ *      handling is not written: CFG.WARN_MASK, CFG.CSD_NUM, CFG.DBG_MD and
+ *      all of CFG2 have documented bit positions but no known-good
+ *      programming sequence.  (CFG and CON *are* fully documented and are
+ *      used below; see the comments on those defines.)
  *   2. The media-controller graph glue (v4l2_subdev internal_ops, the
  *      notifier, and the ISP-facing endpoint) is not written, because the
  *      ISP side of the graph does not exist yet.  See README.md.
  *   3. This tree's media API is a reduced fork, so the usual
  *      v4l2_mbus_csi2_capability negotiation is unavailable; the frame
- *      format is taken from the sensor through set_pad() instead.
+ *      format is taken from the sensor through set_pad() instead.  The
+ *      CSI-2 receiver upstream (mtk-csi2-rx.c) negotiates the code and
+ *      passes the geometry down to here through this driver's own state.
  *
  * As with the D-PHY and the receiver, treat this as untested scaffolding:
  * it will probe and it will enable, and it will not yet produce frames.
@@ -66,10 +70,14 @@
 /* Stride between SCAM1 at 0x15008200 and SCAM2 at 0x15008280. */
 #define SCAM_PORT_STRIDE			0x80
 
-/* SCAM_CFG, reset value 0x10000400. */
+/*
+ * SCAM_CFG (0x15008200), reset value 0x10000400.  Field positions from the
+ * MT6589 data sheet page 2268.  Note the two gaps in the numbering: CSD_NUM
+ * is bits 25:24 (not 27:26) and DBG_MD is bit 23 (not 24).
+ */
 #define SCAM_CFG_WARN_MASK			BIT(28)
-#define SCAM_CFG_CSD_NUM			GENMASK(27, 26)
-#define SCAM_CFG_DBG_MD				BIT(24)
+#define SCAM_CFG_CSD_NUM			GENMASK(25, 24)
+#define SCAM_CFG_DBG_MD				BIT(23)
 #define SCAM_CFG_CONT				BIT(17)
 #define SCAM_CFG_CLK_INV			BIT(15)
 #define SCAM_CFG_CYC				BIT(9)
@@ -88,17 +96,52 @@
 						 SCAM_CFG_CYC)
 
 /*
- * SCAM_CON is documented only as "reset and enable"; its field layout is
- * not given in the extracted data sheet text.  These are placeholders and
- * must be confirmed against the vendor functional specification before
- * the block is trusted.
+ * SCAM_CON is documented as "reset and enable" (MT6589 data sheet page 2269,
+ * SCAM1_CON, reset value 0x00000000) and its two fields are:
+ *
+ *   16  RST  RW  Reset.  Writing "1" stops SCAM immediately and keeps it in
+ *               reset.  Write 0 to return to the normal state.  The
+ *               software reset does NOT reset all register settings.
+ *    0  ENA  RW  Enable.  Writing "1" starts SCAM.  The data sheet is
+ *               explicit about the order: "Be sure to trigger SCAM first
+ *               before triggering the image sensor and to clear RST before
+ *               setting ENA = 1."
+ *
+ * So the earlier assumption of SOFTRST at bit 0 and EN at bit 1 was wrong --
+ * EN is bit 0 and RST is bit 16.
  */
-#define SCAM_CON_SOFTRST			BIT(0)
-#define SCAM_CON_EN				BIT(1)
+#define SCAM_CON_RST				BIT(16)
+#define SCAM_CON_ENA				BIT(0)
 
-/* SCAM_SIZE: frame width and height in pixels. */
-#define SCAM_SIZE_HEIGHT			GENMASK(31, 16)
-#define SCAM_SIZE_WIDTH				GENMASK(15, 0)
+/*
+ * SCAM_SIZE (0x15008210 for port 0): frame width and height in pixels.
+ *
+ * The data sheet (page 2269, SCAM1_SIZE) gives the fields as 27:16 HEIGHT
+ * and 11:0 WIDTH -- 12 bits each, not a 16/16 split, with the two gaps at
+ * 31:28 and 15:12 unnamed.
+ *
+ * The vendor tree agrees and pins down the ordering: seninf_reg.h:907-917
+ * declares
+ *
+ *	FIELD WIDTH  : 12;
+ *	FIELD rsv_12 : 4;
+ *	FIELD HEIGHT : 12;
+ *	FIELD rsv_28 : 4;
+ *
+ * and seninf_drv.cpp:1354-1369 drives those fields via
+ * SENINF_WRITE_BITS(pSeninf, SCAM1_SIZE, WIDTH, width) followed by
+ * SENINF_WRITE_BITS(pSeninf, SCAM1_SIZE, HEIGHT, height), with the single
+ * call site sensor_hal.cpp:1144 passing (clk_inv, width, height, ...) as
+ * (..., 320, 240, ...) -- landscape, so width is the low field.
+ *
+ * (That vendor path is the analog-TV serial input, not the CSI-2 camera
+ * path, but SCAM1_SIZE is one register and both agree.)
+ *
+ * Both fields are 12 bits, so width and height are each limited to 0..4095.
+ */
+#define SCAM_SIZE_HEIGHT			GENMASK(27, 16)
+#define SCAM_SIZE_WIDTH				GENMASK(11, 0)
+#define SCAM_SIZE_MAX				4095
 
 /* SCAM_INT, per-port stride above.  Frame and line completion. */
 #define SCAM_INT_0				BIT(0)
@@ -127,15 +170,6 @@ static inline u32 scam_read(struct mtk_scam *scam, u32 reg)
 	return readl(scam->regs + scam_ofs(scam, reg));
 }
 
-static inline void scam_update_bits(struct mtk_scam *scam, u32 reg,
-				    u32 mask, u32 val)
-{
-	u32 tmp = scam_read(scam, reg);
-
-	writel((tmp & ~mask) | (val & mask),
-	       scam->regs + scam_ofs(scam, reg));
-}
-
 /* ------------------------------------------------------------------ */
 /* Format                                                             */
 /* ------------------------------------------------------------------ */
@@ -143,7 +177,17 @@ static inline void scam_update_bits(struct mtk_scam *scam, u32 reg,
 /*
  * SCAM does not convert pixel formats; it only carries the stream to the
  * ISP.  The format is therefore whatever the sensor negotiated, and this
- * driver simply reports the size it was given.
+ * driver simply programs the size it was given.
+ *
+ * This is the only place SCAM_SIZE is written.  It used to be
+ *
+ *	scam_write(scam, SCAM_SIZE, SCAM_SIZE_HEIGHT << 16 | SCAM_SIZE_WIDTH);
+ *
+ * which is doubly wrong: SCAM_SIZE_HEIGHT/.._WIDTH are *masks*, not shift
+ * amounts, so GENMASK(31, 16) << 16 is 0xFFFF0000 << 16 and truncates to
+ * exactly 0 in a 32-bit word, leaving SCAM_SIZE programmed as height 0 /
+ * width 65535 -- and the negotiated size was never used at all.  FIELD_PREP
+ * puts each value in its own documented field.
  */
 static int mtk_scam_set_pad(struct v4l2_subdev *sd,
 			    struct v4l2_subdev_state *state,
@@ -156,8 +200,19 @@ static int mtk_scam_set_pad(struct v4l2_subdev *sd,
 
 	size = &scam->size;
 
+	/*
+	 * Both SCAM_SIZE fields are 12 bits wide, so a size that does not fit
+	 * would be silently truncated into a wrong frame geometry.  Reject it
+	 * rather than program something the block will interpret as a
+	 * different picture.
+	 */
+	if (!size->width || !size->height ||
+	    size->width > SCAM_SIZE_MAX || size->height > SCAM_SIZE_MAX)
+		return -EINVAL;
+
 	scam_write(scam, SCAM_SIZE,
-		   SCAM_SIZE_HEIGHT << 16 | SCAM_SIZE_WIDTH);
+		   FIELD_PREP(SCAM_SIZE_HEIGHT, size->height) |
+		   FIELD_PREP(SCAM_SIZE_WIDTH, size->width));
 
 	format->format.width = size->width;
 	format->format.height = size->height;
@@ -204,8 +259,10 @@ static const struct v4l2_subdev_pad_ops mtk_scam_pad_ops = {
 
 /*
  * Bring the block out of reset, clear any latched interrupt, and start it.
- * The reset must complete before the size register is written, so this
- * polls the STA register rather than assuming a fixed delay.
+ *
+ * SCAM_CON.ENA must be set only after SCAM_CON.RST has been released (data
+ * sheet page 2269: "clear RST before setting ENA = 1"), and SCAM itself must
+ * be triggered before the image sensor is (same page).
  */
 static int mtk_scam_start_stream(struct mtk_scam *scam)
 {
@@ -214,10 +271,10 @@ static int mtk_scam_start_stream(struct mtk_scam *scam)
 	lockdep_assert_held(&scam->lock);
 
 	/* Reset, then release, leaving the block halted. */
-	scam_write(scam, SCAM_CON, SCAM_CON_SOFTRST);
+	scam_write(scam, SCAM_CON, SCAM_CON_RST);
 	scam_write(scam, SCAM_CON, 0);
 
-	/* Clear any stale status from a previous run. */
+	/* Clear any stale status from a previous run (INT* are write-1-clear). */
 	scam_write(scam, SCAM_INT, SCAM_INT_MASK);
 
 	/* Restore the documented reset configuration, keeping the enables. */
@@ -225,22 +282,26 @@ static int mtk_scam_start_stream(struct mtk_scam *scam)
 	scam_write(scam, SCAM_CFG, val);
 
 	/* Start the block. */
-	scam_update_bits(scam, SCAM_CON, SCAM_CON_EN, SCAM_CON_EN);
+	scam_write(scam, SCAM_CON, SCAM_CON_ENA);
 
 	scam->streaming = true;
 
 	return 0;
 }
 
-static int mtk_scam_stop_stream(struct mtk_scam *scam)
+static void mtk_scam_stop_stream(struct mtk_scam *scam)
 {
 	lockdep_assert_held(&scam->lock);
 
 	scam->streaming = false;
 
-	scam_update_bits(scam, SCAM_CON, SCAM_CON_EN, 0);
-
-	return 0;
+	/*
+	 * Hold the block in reset rather than just dropping ENA, so it stops
+	 * immediately instead of finishing the frame in flight.  SCAM_CON is
+	 * a plain RW register with a readable RST bit, so clear ENA and
+	 * assert RST in one write.
+	 */
+	scam_write(scam, SCAM_CON, SCAM_CON_RST);
 }
 
 static int mtk_scam_s_stream(struct v4l2_subdev *sd, int on)
@@ -256,7 +317,7 @@ static int mtk_scam_s_stream(struct v4l2_subdev *sd, int on)
 	if (on)
 		ret = mtk_scam_start_stream(scam);
 	else
-		ret = mtk_scam_stop_stream(scam);
+		mtk_scam_stop_stream(scam);
 
 out_unlock:
 	return ret;

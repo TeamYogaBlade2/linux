@@ -98,5 +98,3 @@ config PHY_MTK_DP
 	select GENERIC_PHY
 	help
 	  Support DisplayPort PHY for MediaTek SoCs.
-
-source "drivers/phy/mediatek/phy-mtk-mipi-dphy-mt6589/Kconfig"

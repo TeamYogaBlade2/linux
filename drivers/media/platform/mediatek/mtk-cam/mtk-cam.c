@@ -10,29 +10,45 @@
  * -----------
  * The MT6589 CAM block is the ISP.  Its control registers are at 0x15004000
  * and are documented in the data sheet; the ones this driver uses are
- * transcribed into mtk-cam.h.  What is implemented here is the start/stop
- * sequencing and the sub-module enable bits, because those are the parts
- * with documented field positions and a self-evident order.
+ * transcribed into mtk-cam.h.  What is implemented here is the software
+ * reset handshake, the CAM block enable, and the start/stop strobes, because
+ * those are the parts with documented field positions and a vendor
+ * reference sequence.
  *
  * What does not exist, and why
  * ----------------------------
  * The image processing itself - the CPIPE stages, the pixel-rate meters,
  * the memory sequencer, the interrupt controllers - is a large register
- * space with no vendor reference driver in the available tree and no way to
- * test.  There is no upstream MediaTek ISP driver to port from either: the
- * closest is the mt8167 ISP, which is a different architecture with
- * different register names.
+ * space with no upstream MediaTek ISP driver to port (the closest is the
+ * mt8167 ISP, a different architecture with different register names) and
+ * no way to test.  Writing a plausible-looking ISP that cannot be
+ * validated would be worse than writing none, so this driver deliberately
+ * stops at the control plane and says so.
  *
- * Writing a plausible-looking ISP that cannot be validated would be worse
- * than writing none, so this driver deliberately stops at the control
- * plane and says so.  The register map is the recoverable part and it is
- * recorded here for whoever writes the rest.
+ * Specifically, be clear about what probing this driver does and does not
+ * mean:
+ *
+ *   - This subdev has NO PADS.  It registers without an internal_ops or any
+ *     pad configuration, so it is not a real entity in the media graph: it
+ *     cannot be the endpoint of sensor -> CSI-2 -> SCAM -> CAM -> video.
+ *     The DT links scam_out_ep at cam_in_ep, but nothing in the CAM driver
+ *     consumes that, and the graph does not resolve through it.
+ *   - There is NO DMA and NO video node.  Nothing allocates buffers, so no
+ *     frame is ever delivered to userspace.
+ *   - Only the CAM block enable is set; none of the CPIPE stage enables are
+ *     programmed, because the pipeline that would use them is absent.
+ *
+ * So "the CAM driver probed" means only that a register window mapped and
+ * reset cleanly.  It does NOT mean the camera pipeline works.  The register
+ * map is the recoverable part and is recorded here for whoever writes the
+ * rest.
  *
  * Treat this as documentation that happens to compile.  Loading it will not
  * produce a picture.
  */
 
 #include <linux/bits.h>
+#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -53,42 +69,109 @@ static inline u32 cam_read(struct mtk_cam *cam, u32 reg)
 }
 
 /*
+ * Bounded wait for the software-reset status flag.
+ *
+ * SW_RST_ST is documented as "0: DMA is busy, 1: DMA is idle.  HW reset can
+ * be done", so after triggering we poll it until the block reports it is
+ * idle.  The register's reset value is 0x00000002, i.e. SW_RST_ST already
+ * reads 1 out of reset, so a plain blocking poll could in principle spin
+ * forever on a block that never asserts it.  Bound it.
+ */
+#define CAM_SW_RST_TIMEOUT_US	100000	/* 100 ms */
+#define CAM_SW_RST_POLL_US	10
+
+/*
+ * Perform the documented CAM software-reset handshake.
+ *
+ * This follows the vendor sequence, which the data sheet describes in prose
+ * and which two independent vendor implementations agree on:
+ *
+ *   camera_isp.c:1144-1161   1 -> poll bit1 -> 0x5 -> 0x4 -> 0
+ *   gdma_drv_6589_ctl.c:40   1 -> poll bit1 ->      0x4 -> 0
+ *   isp_function.h:131-139   [0]=1, wait [1]==1, [2]=1, delay, [0]=0, [2]=0
+ *
+ * 1. assert  SW_RST_Trig (write-only bit 0 = 1)
+ * 2. poll    SW_RST_ST (read-only bit 1) until it reads 1, bounded
+ * 3. assert  HW_RST (bit 2) alongside the still-asserted trigger, then
+ *    leave HW_RST asserted on its own
+ * 4. clear everything (0)
+ *
+ * Steps 3 and 4 are the "async HW reset.  Resets all CAM modules, except for
+ * register-setting modules" part of the sequence.  Never leaving the trigger
+ * asserted matters: it holds the block in reset.
+ *
+ * Note the vendor poll loop in camera_isp.c:1157 is itself buggy -- it reads
+ * "while ((!Reg) & ISP_REG_SW_CTL_SW_RST_STATUS)", which applies & before !
+ * and so always exits immediately.  The copy in gdma_drv_6589_ctl.c:53 is the
+ * correct one and is what the loop below follows, with the unbounded vendor
+ * spin replaced by a timeout.
+ *
+ * TODO(unverified): the handshake is the documented and vendor-confirmed one,
+ * but it has not been run against hardware.  The poll deadline is a guess.
+ */
+static int mtk_cam_sw_reset(struct mtk_cam *cam)
+{
+	unsigned int timeout;
+
+	lockdep_assert_held(&cam->lock);
+
+	cam_write(cam, CAM_CTL_SW_CTL, CAM_SW_CTL_SW_RST_TRIG);
+
+	for (timeout = 0; timeout < CAM_SW_RST_TIMEOUT_US;
+	     timeout += CAM_SW_RST_POLL_US) {
+		if (cam_read(cam, CAM_CTL_SW_CTL) & CAM_SW_CTL_SW_RST_ST)
+			break;
+
+		udelay(CAM_SW_RST_POLL_US);
+	}
+
+	cam_write(cam, CAM_CTL_SW_CTL,
+		  CAM_SW_CTL_SW_RST_TRIG | CAM_SW_CTL_HW_RST);
+	cam_write(cam, CAM_CTL_SW_CTL, CAM_SW_CTL_HW_RST);
+	cam_write(cam, CAM_CTL_SW_CTL, 0);
+
+	if (timeout == CAM_SW_RST_TIMEOUT_US) {
+		dev_warn(cam->dev,
+			 "CAM_SW_RST_ST did not read back after %u us; reset not confirmed\n",
+			 CAM_SW_RST_TIMEOUT_US);
+		return -ETIMEDOUT;
+	}
+
+	return 0;
+}
+
+/*
  * Bring the control plane up or down.
  *
- * The documented order is: assert the module resets, release them, enable
- * the sub-modules, then set the start bit.  On the way down the reverse.
- *
- * TODO(unverified): the data sheet gives the bit positions but no
- * programming sequence, so the ordering here is inferred from the register
- * names.  It has not been run against hardware.
+ * The documented order is: reset the block, enable the sub-modules, then
+ * set the start bit.  On the way down the reverse.
  */
 static int mtk_cam_start(struct mtk_cam *cam)
 {
+	int ret;
+
 	lockdep_assert_held(&cam->lock);
 
-	/*
-	 * Reset, then release.  CAM_SW_CTL_ALL writes every bit, which is
-	 * only correct if every bit is a reset; that has not been
-	 * confirmed, so the release half is what actually matters.
-	 */
-	cam_write(cam, CAM_CTL_SW_CTL, CAM_SW_CTL_ALL);
-	cam_write(cam, CAM_CTL_SW_CTL, 0);
+	ret = mtk_cam_sw_reset(cam);
+	if (ret)
+		return ret;
 
 	/*
-	 * Enable the sub-modules.  EN1/EN2 are write-only shadows with
-	 * separate set/clear registers, so they are driven that way and
-	 * never written directly.
+	 * Enable the CAM block itself.  EN1 is a read/write shadow, but the
+	 * data sheet drives it through write-one-to-set and
+	 * write-one-to-clear companion registers (all bits type WO), so the
+	 * shadow is never written directly.
 	 *
-	 * TODO: the individual sub-module bit positions are not yet
-	 * recovered from the data sheet; see the header.  Until they are,
-	 * nothing is enabled and the ISP cannot run, which is why this
-	 * driver does not claim to be functional.
+	 * The remaining EN1 bits are the individual CPIPE stages.  They are
+	 * deliberately left alone: turning them on without programming the
+	 * pipeline would run blocks against unconfigured registers, and the
+	 * pipeline is not implemented here anyway.
 	 */
-	// cam_write(cam, CAM_CTL_EN1_SET, CAM_CTL_EN1_MEM_IN);
+	cam_write(cam, CAM_CTL_EN1_SET, CAM_CTL_EN1_CAM_EN);
 
 	/* Start. */
 	cam_write(cam, CAM_CTL_START, CAM_CTL_START_PASS2B_START |
-		  CAM_CTL_START_PASS2_STARTC);
+		  CAM_CTL_START_PASS2_START);
 
 	cam->streaming = true;
 
@@ -102,8 +185,13 @@ static int mtk_cam_stop(struct mtk_cam *cam)
 	cam->streaming = false;
 
 	cam_write(cam, CAM_CTL_START, 0);
-	cam_write(cam, CAM_CTL_EN1_CLR, CAM_SW_CTL_ALL);
-	cam_write(cam, CAM_CTL_EN2_CLR, CAM_SW_CTL_ALL);
+
+	/*
+	 * Clear the enable.  These are write-one-to-clear registers (see the
+	 * header): the bit to clear is written as a 1, not a 0.
+	 */
+	cam_write(cam, CAM_CTL_EN1_CLR, CAM_CTL_EN1_CAM_EN);
+	cam_write(cam, CAM_CTL_EN2_CLR, 0);
 
 	return 0;
 }

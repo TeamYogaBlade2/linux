@@ -161,4 +161,19 @@
 #define CSI2_VS_VPOS				GENMASK(31, 16)
 #define CSI2_VS_HSYNC_CNT			GENMASK(15, 0)
 
+/* ---------------------------------------------------------------------
+ * SCAM: 0x1500_8200, per-port stride 0x80
+ * ------------------------------------------------------------------ */
+
+/*
+ * SCAM_SIZE carries the frame geometry in two 12-bit fields, HEIGHT at
+ * 27:16 and WIDTH at 11:0 (data sheet page 2269; matching the vendor
+ * REG_SCAM1_SIZE bitfield in seninf_reg.h:907-917).  The receiver sits
+ * directly upstream of that register, so this is the widest frame it can
+ * hand on.
+ */
+#define SCAM_SIZE_HEIGHT			GENMASK(27, 16)
+#define SCAM_SIZE_WIDTH				GENMASK(11, 0)
+#define SCAM_SIZE_MAX				4095
+
 #endif /* _MTK_CSI2_RX_H */

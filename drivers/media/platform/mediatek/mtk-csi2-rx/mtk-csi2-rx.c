@@ -62,6 +62,15 @@ struct mtk_csi2_rx {
 	struct v4l2_subdev sd;
 	struct media_entity entity;
 	struct mutex lock;
+
+	/*
+	 * The format last accepted through set_fmt().  s_stream() runs with
+	 * only the subdev, not the subdev state, so the negotiated geometry
+	 * is cached here for it to program from.
+	 */
+	u32 width;
+	u32 height;
+	u32 code;
 };
 
 static inline struct mtk_csi2_rx *sd_to_csi2rx(struct v4l2_subdev *sd)
@@ -94,24 +103,156 @@ static inline void csi2_update_bits(struct mtk_csi2_rx *priv, u32 reg,
 }
 
 /* ------------------------------------------------------------------ */
+/* Pads                                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The receiver is a pure bridge.  It unpacks MIPI packets, checks them and
+ * hands the bytes to SCAM, which hands them to the ISP; there is no pixel
+ * format conversion anywhere in this path, and the receiver has no way to
+ * retag one.  So the format on its source pad is always whatever the
+ * sensor negotiated on the sink pad.
+ *
+ * CSI2_CTRL.DATA_FLOW (bits 18:17) is a receive-side selector -- 0: data
+ * packet, 1: generic long packet, 2: all data packet (data sheet page 2261)
+ * -- and is not a pixel format.  Nothing in this block re-interprets the
+ * payload, so MEDIA_BUS_FMT_FIXED would be a lie: it would make the sensor's
+ * SBGGR10 look like it had become something opaque.
+ */
+enum {
+	CSI2_PAD_SINK = 0,	/* from the sensor, via the D-PHY */
+	CSI2_PAD_SRC,		/* to the SCAM adaptor */
+};
+
+/* ------------------------------------------------------------------ */
 /* Data format handling                                               */
 /* ------------------------------------------------------------------ */
 
 /*
- * The receiver is format agnostic: it unpacks MIPI packets and hands raw
- * bytes to SCAM.  So there is exactly one mbus format, RAW8, and the size
- * it reports back is the size the subdev's pad is.
+ * The mbus codes this receiver can carry.
+ *
+ * The A5142 in this tree drives MEDIA_BUS_FMT_SBGGR10_1X10 (a5142.c), and
+ * the MT6589 CSI-2 receiver is a packet-level block: CSI2_INTSTA carries
+ * "wrong data ID" / "wrong packet ID" faults rather than any format
+ * negotiation, and the data type in the incoming short packets is passed
+ * through untouched to SCAM and on to the ISP.  The receiver therefore
+ * transports whatever RAW Bayer order the sensor picks, and all of them are
+ * RAW10 here -- the ISP's RAW10 path.
+ *
+ * Corroboration: the only vendor code that programs this block does so for a
+ * MT6589 camera, seninf_drv.cpp:1354-1369, and the vendor HAL exposes no
+ * media-bus codes at all (there is no MEDIA_BUS_FMT table anywhere under
+ * mediatek/), so there is no vendor enumeration to contradict this.
+ *
+ * MEDIA_BUS_FMT_SBGGR10_1X10 must be present and first: it is what the
+ * in-tree A5142 advertises, and it is what mtk-scam.c defaults to.
  */
+static const u32 mtk_csi2_rx_codes[] = {
+	MEDIA_BUS_FMT_SBGGR10_1X10,
+	MEDIA_BUS_FMT_SGBRG10_1X10,
+	MEDIA_BUS_FMT_SGRBG10_1X10,
+	MEDIA_BUS_FMT_SRGGB10_1X10,
+};
+
 /*
- * The receiver does not itself pick a pixel format: the sensor decides it
- * and the SCAM block converts it.  Accepting every code lets the sensor
- * negotiate freely, and is what the other CSI-2 receivers in the tree do
- * when they have no format conversion of their own.
+ * Real default used only when the state has nothing better to offer.  It is
+ * the A5142's preview mode (a5142_modes[A5142_MODE_PREVIEW]), not an
+ * invented size.
  */
+#define CSI2_RX_DEFAULT_WIDTH	1280
+#define CSI2_RX_DEFAULT_HEIGHT	960
+
+static int mtk_csi2_rx_init_state(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *state)
+{
+	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
+	struct v4l2_mbus_framefmt *fmt;
+	unsigned int pad;
+
+	/*
+	 * Seed both pads.  The core has already allocated state->pads (it
+	 * zeroes them for non-stream-aware subdevs), and the two ends of a
+	 * bridge always agree, so one seed and a copy is enough.
+	 */
+	for (pad = 0; pad < 2; pad++) {
+		fmt = v4l2_subdev_state_get_format(state, pad);
+		if (!fmt)
+			return -EINVAL;
+
+		fmt->width = CSI2_RX_DEFAULT_WIDTH;
+		fmt->height = CSI2_RX_DEFAULT_HEIGHT;
+		fmt->code = mtk_csi2_rx_codes[0];
+		fmt->field = V4L2_FIELD_NONE;
+		fmt->colorspace = V4L2_COLORSPACE_SMPTE170M;
+		fmt->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
+		fmt->quantization = V4L2_QUANTIZATION_DEFAULT;
+		fmt->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+	}
+
+	/* Remember the negotiated size; s_stream() has no other source. */
+	priv->width = CSI2_RX_DEFAULT_WIDTH;
+	priv->height = CSI2_RX_DEFAULT_HEIGHT;
+
+	return 0;
+}
+
+/* Clamp a proposed format to something this receiver can actually carry. */
+static void mtk_csi2_rx_prepare_fmt(struct v4l2_mbus_framefmt *fmt)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_csi2_rx_codes); i++)
+		if (mtk_csi2_rx_codes[i] == fmt->code)
+			break;
+
+	if (i == ARRAY_SIZE(mtk_csi2_rx_codes))
+		fmt->code = mtk_csi2_rx_codes[0];
+
+	/* The 12-bit SCAM_SIZE fields downstream cap the geometry. */
+	if (!fmt->width || fmt->width > SCAM_SIZE_MAX)
+		fmt->width = CSI2_RX_DEFAULT_WIDTH;
+	if (!fmt->height || fmt->height > SCAM_SIZE_MAX)
+		fmt->height = CSI2_RX_DEFAULT_HEIGHT;
+
+	fmt->field = V4L2_FIELD_NONE;
+	fmt->colorspace = V4L2_COLORSPACE_SMPTE170M;
+	fmt->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
+	fmt->quantization = V4L2_QUANTIZATION_DEFAULT;
+	fmt->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+}
+
 static int mtk_csi2_rx_enum_mbus_code(struct v4l2_subdev *sd,
 				      struct v4l2_subdev_state *state,
 				      struct v4l2_subdev_mbus_code_enum *code)
 {
+	/*
+	 * The source pad is not an independent choice: it must be able to
+	 * pass through whatever the sink negotiated, so it reports the sink's
+	 * current code rather than the full table.
+	 */
+	if (code->pad == CSI2_PAD_SRC) {
+		struct v4l2_mbus_framefmt *sink;
+
+		if (code->index)
+			return -EINVAL;
+
+		sink = v4l2_subdev_state_get_format(state, CSI2_PAD_SINK);
+		if (!sink)
+			return -EINVAL;
+
+		code->code = sink->code;
+
+		return 0;
+	}
+
+	if (code->pad != CSI2_PAD_SINK)
+		return -EINVAL;
+
+	if (code->index >= ARRAY_SIZE(mtk_csi2_rx_codes))
+		return -EINVAL;
+
+	code->code = mtk_csi2_rx_codes[code->index];
+
 	return 0;
 }
 
@@ -119,10 +260,25 @@ static int mtk_csi2_rx_enum_frame_size(struct v4l2_subdev *sd,
 				       struct v4l2_subdev_state *state,
 				       struct v4l2_subdev_frame_size_enum *fse)
 {
-	fse->min_width = 1280;
-	fse->max_width = 3264;
-	fse->min_height = 800;
-	fse->max_height = 2448;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_csi2_rx_codes); i++)
+		if (mtk_csi2_rx_codes[i] == fse->code)
+			break;
+
+	if (i == ARRAY_SIZE(mtk_csi2_rx_codes))
+		return -EINVAL;
+
+	/*
+	 * This bridge passes the sensor's frame through untouched, so it must
+	 * not advertise a narrower window than the sensor can produce --
+	 * otherwise the sensor would be clamped to fit.  The upper bound is
+	 * the 12-bit SCAM_SIZE limit downstream, not a made-up figure.
+	 */
+	fse->min_width = 1;
+	fse->max_width = SCAM_SIZE_MAX;
+	fse->min_height = 1;
+	fse->max_height = SCAM_SIZE_MAX;
 
 	return 0;
 }
@@ -132,26 +288,80 @@ static int mtk_csi2_rx_get_fmt(struct v4l2_subdev *sd,
 			       struct v4l2_subdev_format *fmt)
 {
 	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
+	struct v4l2_mbus_framefmt *sink;
 
 	lockdep_assert_held(&priv->lock);
 
-	fmt->which = V4L2_SUBDEV_FORMAT_TRY;
-	fmt->format.width = 1280;
-	fmt->format.height = 800;
-	fmt->format.code = MEDIA_BUS_FMT_FIXED;
-	fmt->format.field = V4L2_FIELD_NONE;
-	fmt->format.colorspace = V4L2_COLORSPACE_DEFAULT;
-	fmt->format.ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
-	fmt->format.quantization = V4L2_QUANTIZATION_DEFAULT;
-	fmt->format.xfer_func = V4L2_XFER_FUNC_DEFAULT;
+	if (fmt->pad != CSI2_PAD_SINK && fmt->pad != CSI2_PAD_SRC)
+		return -EINVAL;
+
+	sink = v4l2_subdev_state_get_format(state, CSI2_PAD_SINK);
+	if (!sink)
+		return -EINVAL;
+
+	/*
+	 * Report the sink's format on both pads: the receiver does not change
+	 * it.  Note that fmt->which is left exactly as the caller set it --
+	 * V4L2_SUBDEV_FORMAT_ACTIVE and V4L2_SUBDEV_FORMAT_TRY mean different
+	 * things to the V4L2 core and this driver must not paper over that.
+	 * This used to hardcode 1280x800 / MEDIA_BUS_FMT_FIXED and force
+	 * which = TRY, which both lost the negotiated size and told the core
+	 * that ACTIVE queries were hypothetical.
+	 */
+	fmt->format = *sink;
 
 	return 0;
 }
+
+static int mtk_csi2_rx_set_fmt(struct v4l2_subdev *sd,
+			       struct v4l2_subdev_state *state,
+			       struct v4l2_subdev_format *fmt)
+{
+	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
+	struct v4l2_mbus_framefmt *sink, *src;
+
+	lockdep_assert_held(&priv->lock);
+
+	if (fmt->pad != CSI2_PAD_SINK && fmt->pad != CSI2_PAD_SRC)
+		return -EINVAL;
+
+	sink = v4l2_subdev_state_get_format(state, CSI2_PAD_SINK);
+	src = v4l2_subdev_state_get_format(state, CSI2_PAD_SRC);
+	if (!sink || !src)
+		return -EINVAL;
+
+	/*
+	 * The source pad always mirrors the sink; there is nothing to
+	 * negotiate separately.  Ask the state what the caller wanted rather
+	 * than writing the incoming struct through unchanged.
+	 */
+	mtk_csi2_rx_prepare_fmt(&fmt->format);
+
+	*sink = fmt->format;
+	*src = *sink;
+
+	/*
+	 * Cache it: s_stream() has no access to the subdev state, and the
+	 * block's own size registers are programmed from here.
+	 */
+	priv->width = sink->width;
+	priv->height = sink->height;
+	priv->code = sink->code;
+
+	fmt->format = *sink;
+
+	return 0;
+}
+
+static const struct v4l2_subdev_internal_ops mtk_csi2_rx_internal_ops = {
+	.init_state = mtk_csi2_rx_init_state,
+};
 
 static const struct v4l2_subdev_pad_ops mtk_csi2_rx_pad_ops = {
 	.enum_mbus_code = mtk_csi2_rx_enum_mbus_code,
 	.enum_frame_size = mtk_csi2_rx_enum_frame_size,
 	.get_fmt = mtk_csi2_rx_get_fmt,
+	.set_fmt = mtk_csi2_rx_set_fmt,
 };
 
 /* ------------------------------------------------------------------ */
@@ -237,14 +447,16 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 err_rst:
 	reset_control_assert(priv->seninf_rst);
 err_tg_clk:
-	clk_disable_unprepare(priv->seninf_tg_clk);
+	if (priv->seninf_tg_clk)
+		clk_disable_unprepare(priv->seninf_tg_clk);
 err_csi2_clk:
-	clk_disable_unprepare(priv->seninf_csi2_clk);
+	if (priv->seninf_csi2_clk)
+		clk_disable_unprepare(priv->seninf_csi2_clk);
 err_seninf_clk:
-	clk_disable_unprepare(priv->seninf_clk);
+	if (priv->seninf_clk)
+		clk_disable_unprepare(priv->seninf_clk);
 	return ret;
 }
-
 static void mtk_csi2_rx_power_off(struct mtk_csi2_rx *priv)
 {
 	/*
@@ -257,9 +469,12 @@ static void mtk_csi2_rx_power_off(struct mtk_csi2_rx *priv)
 		phy_power_off(priv->phy);
 
 	reset_control_assert(priv->seninf_rst);
-	clk_disable_unprepare(priv->seninf_tg_clk);
-	clk_disable_unprepare(priv->seninf_csi2_clk);
-	clk_disable_unprepare(priv->seninf_clk);
+	if (priv->seninf_tg_clk)
+		clk_disable_unprepare(priv->seninf_tg_clk);
+	if (priv->seninf_csi2_clk)
+		clk_disable_unprepare(priv->seninf_csi2_clk);
+	if (priv->seninf_clk)
+		clk_disable_unprepare(priv->seninf_clk);
 }
 
 static int mtk_csi2_rx_runtime_suspend(struct device *dev)
@@ -287,33 +502,63 @@ static const struct dev_pm_ops mtk_csi2_rx_pm_ops = {
 /* Stream / control                                                  */
 /* ------------------------------------------------------------------ */
 
-static int mtk_csi2_rx_s_stream(struct v4l2_subdev *sd, int enable)
+static int mtk_csi2_rx_start_stream(struct mtk_csi2_rx *priv)
 {
-	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
-	struct device *dev = priv->dev;
 	int ret;
 
 	lockdep_assert_held(&priv->lock);
 
+	/*
+	 * Take the runtime-PM reference FIRST.  Everything below touches
+	 * registers, and this block's registers only exist once
+	 * runtime_resume() has run (it enables the clocks, releases the
+	 * reset and initialises the D-PHY).  This used to write
+	 * SENINF_TOP_CTRL before pm_runtime_resume_and_get(), i.e. a write to
+	 * a powered-down block.
+	 */
+	ret = pm_runtime_resume_and_get(priv->dev);
+	if (ret)
+		return ret;
 
-	if (enable) {
-		/*
-		 * The parallel sensor clock must be running before the
-		 * receiver is released, otherwise the first frame is missed.
-		 */
-		writel(SENINF_PCLK_EN(priv->port),
-		       priv->regs + SENINF_TOP_CTRL);
+	/*
+	 * The parallel sensor clock must be running before the receiver is
+	 * released, otherwise the first frame is missed.  mtk_csi2_rx_power_on()
+	 * gated it off, so re-open it here.
+	 */
+	writel(SENINF_PCLK_EN(priv->port), priv->regs + SENINF_TOP_CTRL);
 
-		ret = pm_runtime_resume_and_get(dev);
-		if (ret < 0)
-			return ret;
+	/* Drain any pending error, then clear the status. */
+	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_ERR);
 
-		/* Drain any pending error, then clear the status. */
-		csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_ERR);
-	} else {
-		pm_runtime_put_autosuspend(dev);
-		writel(0, priv->regs + SENINF_TOP_CTRL);
-	}
+	return 0;
+}
+
+static void mtk_csi2_rx_stop_stream(struct mtk_csi2_rx *priv)
+{
+	lockdep_assert_held(&priv->lock);
+
+	/*
+	 * Tear the stream down while the block is still powered: gate the
+	 * parallel sensor clock, then release the PM reference.  runtime_suspend()
+	 * disables the receiver and asserts the reset, so doing it in this
+	 * order means the gate-off happens inside the resume window instead
+	 * of after the clocks have already gone away.
+	 */
+	writel(0, priv->regs + SENINF_TOP_CTRL);
+
+	pm_runtime_put_autosuspend(priv->dev);
+}
+
+static int mtk_csi2_rx_s_stream(struct v4l2_subdev *sd, int enable)
+{
+	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
+
+	lockdep_assert_held(&priv->lock);
+
+	if (enable)
+		return mtk_csi2_rx_start_stream(priv);
+
+	mtk_csi2_rx_stop_stream(priv);
 
 	return 0;
 }
@@ -410,6 +655,7 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 
 	priv->sd.state_lock = &priv->lock;
 	priv->sd.ops = &mtk_csi2_rx_subdev_ops;
+	priv->sd.internal_ops = &mtk_csi2_rx_internal_ops;
 	priv->sd.entity.name = dev_name(dev);
 	priv->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
 

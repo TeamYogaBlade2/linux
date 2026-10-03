@@ -256,9 +256,16 @@ static int a5142_write_exposure(struct a5142 *a5142, u32 exposure)
 	if (ret)
 		return ret;
 
-	regmap_write(a5142->regmap, A5142_REG_SHUTTER, lines);
+	ret = regmap_write(a5142->regmap, A5142_REG_SHUTTER, lines);
+	if (ret)
+		goto err_release_hold;
 
 	return regmap_write(a5142->regmap, A5142_REG_GRP_HOLD, 0);
+
+err_release_hold:
+	/* Never leave the group asserted: it would freeze the exposure. */
+	regmap_write(a5142->regmap, A5142_REG_GRP_HOLD, 0);
+	return ret;
 }
 
 static int a5142_write_frame_length(struct a5142 *a5142, u32 frame_length)
@@ -319,14 +326,23 @@ err_pm:
 static int a5142_stop_stream(struct a5142 *a5142)
 {
 	struct device *dev = &a5142->client->dev;
+	int ret;
 
 	a5142->streaming = false;
 
-	regmap_write(a5142->regmap, A5142_REG_STREAM, A5142_STREAM_STOP);
+	ret = regmap_write(a5142->regmap, A5142_REG_STREAM,
+			   A5142_STREAM_STOP);
 
+	/*
+	 * The runtime-PM reference taken by start_stream() is dropped
+	 * regardless of the write result.  The SCCB write needs the sensor
+	 * powered, so it has to happen before the put; but a failed write
+	 * must not leave the reference held (a leak) nor be swallowed
+	 * (which would report success for a stream that is still running).
+	 */
 	pm_runtime_put_sync(dev);
 
-	return 0;
+	return ret;
 }
 
 static int a5142_s_stream(struct v4l2_subdev *sd, int on)
@@ -449,12 +465,25 @@ static int a5142_check_sensor_id(struct a5142 *a5142)
 {
 	struct device *dev = &a5142->client->dev;
 	unsigned int id;
+	int ret;
 
-	regmap_read(a5142->regmap, A5142_REG_CHIP_ID_H, &id);
+	/*
+	 * Every regmap_read() must be checked before its value is used.  If
+	 * the SCCB read fails, "id" keeps whatever was there -- here the
+	 * previous read's value or uninitialised stack -- and branching on
+	 * that garbage can pass a probe for a completely absent sensor.
+	 */
+	ret = regmap_read(a5142->regmap, A5142_REG_CHIP_ID_H, &id);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to read chip id high byte\n");
+
 	if (id >> 8)
 		return -ENXIO;
 
-	regmap_read(a5142->regmap, A5142_REG_CHIP_ID_L, &id);
+	ret = regmap_read(a5142->regmap, A5142_REG_CHIP_ID_L, &id);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to read chip id low byte\n");
+
 	if ((id & 0xff) != (A5142_CHIP_ID & 0xff))
 		return -ENXIO;
 

@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /*
- * MIPI CSI-2 receiver and D-PHY nodes for the Lenovo YOGA Tablet 8/10
- * (MT6589).
+ * MIPI CSI-2 receiver, SCAM adaptor and CAM/ISP nodes for the Lenovo YOGA
+ * Tablet 8/10 (MT6589).
  *
- * DRAFT: not merged, and the receiver cannot probe yet.  See README.md for
- * what is verified and what is still missing.  The summary is:
+ * DRAFT: not merged, and the camera pipeline does not work end to end.  The
+ * summary is:
  *
- *   - The receiver register map is transcribed from the MT6589 data sheet.
- *   - The two clock gates it needs are drafted but their bit positions are
- *     unverified.
- *   - The D-PHY node below exists to get the media graph topology right,
- *     but the PHY driver's register offsets cannot be written yet because
- *     the MT6589 data sheet does not document the MIPI RX PHY at all.
+ *   - The receiver and SCAM register maps are transcribed from the MT6589
+ *     data sheet (and cross-checked against the vendor tree).
+ *   - The two clock gates the receiver wants are drafted but their bit
+ *     positions are unverified, so the driver takes them as optional.
+ *   - The MIPI CSI-2 D-PHY is NOT modelled at all.  It previously had a
+ *     placeholder node claiming an address that three other nodes also
+ *     claimed; see the note on the receiver node below for the details.
+ *   - The CAM/ISP node registers as a subdev but implements no pads, so it
+ *     is not the endpoint of the graph and no video node exists.
  *
  * Address map of the sensor front end, from the data sheet:
  *
@@ -30,10 +33,16 @@
  * 0x15000000/0x1000.  The sensor front end therefore needs its own node,
  * and it takes a multi-range reg in the same style as smi_common in
  * mt6589.dtsi rather than being nested under &imgsys.
+ *
+ * The wiring that does exist is therefore:
+ *
+ *   a5142 -> csi2-rx (seninf port 0) -> scam (port 0) -> cam
+ *
+ * with the D-PHY step deliberately absent between the sensor and the
+ * receiver.
  */
 
 #include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/phy/phy.h>
 
 / {
 	/*
@@ -84,18 +93,34 @@
 		// resets = <&topckgen MT6589_TOPRGU_IMG_RST>;
 
 		/*
-		 * The D-PHY this receiver sits on top of.  Named "dphy" to
-		 * match the MT6589 DSI, which uses phy-names = "dphy" for its
-		 * TX PHY.
+		 * The D-PHY this receiver sits on top of.
+		 *
+		 * NOT MODELLED.  There was previously a "mediatek,mt6589-mipi-csi-dphy"
+		 * node here, claiming reg = <0x15008000 0x900> -- the same window
+		 * already claimed by this receiver (0x15008000/0x900) and by SCAM
+		 * below -- with a comment admitting the address was not known to
+		 * be correct.  Three nodes claiming one register window is not a
+		 * graph, it is a guess that would make the mtk-csi2-rx driver map
+		 * the wrong registers and then DMA on top of them.
+		 *
+		 * So the node is gone rather than left to masquerade as a working
+		 * driver.  Do NOT reintroduce it with an invented address: the
+		 * MT6589 data sheet does not contain the MIPI RX PHY register map
+		 * at all (the PHY appears only as the word "mipi_rx" in the img_rst
+		 * reset description), so there is currently nothing to derive the
+		 * reg from.  When a real PHY binding and driver exist, add the
+		 * node, restore "phys" / "phy-names" below, and point
+		 * seninf_in_ep back at the PHY's source endpoint.
+		 *
+		 * mtk-csi2-rx takes a missing "phys" as non-fatal: it still probes
+		 * and programs the receiver, and the lanes simply stay idle.
 		 */
-		phys = <&mipi_csi_phy0>;
-		phy-names = "dphy";
 
 		ports {
-			/* Sink: the D-PHY feeds the receiver. */
+			/* Sink: the sensor's MIPI pins feed the receiver. */
 			seninf_in: port@0 {
 				seninf_in_ep: endpoint {
-					remote-endpoint = <&csi2_phy0_out_ep>;
+					remote-endpoint = <&a5142_out_ep>;
 				};
 			};
 
@@ -109,55 +134,10 @@
 	};
 
 	/*
-	 * The MIPI CSI-2 D-PHY below the receiver.
-	 *
-	 * This node exists so that the media graph is complete:
-	 * sensor -> D-PHY -> CSI-2 receiver -> SCAM -> ISP.  Without it the
-	 * receiver's source endpoint has nothing to point at and the
-	 * v4l2_async_notifier chain never completes, so mtk-csi2-rx never
-	 * registers.
-	 *
-	 * BLOCKED: the driver for this is a documented stub.  The MT6589
-	 * data sheet does not contain the MIPI RX PHY register map at all
-	 * (the PHY appears only as the word "mipi_rx" in the img_rst reset
-	 * description), and there is no vendor PHY driver for this SoC in
-	 * the reference tree to compare against.  The reg below is a
-	 * placeholder address and is NOT known to be correct.
+	 * The MIPI CSI-2 D-PHY that belongs between the A5142 and the receiver
+	 * is intentionally absent.  See the long note on the receiver node
+	 * above for why, and for what has to be added before it can come back.
 	 */
-	mipi_csi_phy0: mipi-csi-phy {
-		compatible = "mediatek,mt6589-mipi-csi-dphy";
-		reg = <0x0 0x15008000 0x0 0x900>;
-
-		/* CSI0, the 4-lane D-PHY on DVDD18_MIPIRX: the main camera. */
-		mediatek,mipi-csi-port = <0>;
-
-		/* The A5142 is a 2-lane sensor. */
-		num-lanes = <2>;
-
-		/*
-		 * MT6589 has no C-PHY, so the mode comes from phy-type rather
-		 * than from a PHY cell.  This mirrors the in-tree MT8365
-		 * SENINF PHY contract (mediatek,mt8365-csi-rx).
-		 */
-		phy-type = <PHY_TYPE_DPHY>;
-		#phy-cells = <0>;
-
-		ports {
-			/* Sink: the sensor's MIPI pins. */
-			csi2_phy0_in: port@0 {
-				csi2_phy0_in_ep: endpoint {
-					remote-endpoint = <&a5142_out_ep>;
-				};
-			};
-
-			/* Source: towards the CSI-2 receiver. */
-			csi2_phy0_out: port@1 {
-				csi2_phy0_out_ep: endpoint {
-					remote-endpoint = <&seninf_in_ep>;
-				};
-			};
-		};
-	};
 
 	/*
 	 * The SCAM adaptor for port 0, and the CAM/ISP it feeds.  Both are
