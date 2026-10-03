@@ -14,6 +14,20 @@
 /* Two SCAM instances exist, one per camera port. */
 #define SCAM_MAX_PORTS	2
 
+/* Pad ids; the DT declares one sink and one source port on this node. */
+enum {
+	SCAM_PAD_SINK = 0,	/* from the CSI-2 receiver */
+	SCAM_PAD_SRC,		/* to the CAM/ISP */
+};
+
+/*
+ * Geometry seeded into the subdev state before anything has been negotiated.
+ * It matches the CSI-2 receiver's own default and the A5142's preview mode,
+ * so the graph starts out consistent across the bridge.
+ */
+#define SCAM_DEFAULT_WIDTH	1280
+#define SCAM_DEFAULT_HEIGHT	960
+
 /*
  * The frame size SCAM was told to expect.  It is carried here because
  * SCAM_SIZE is programmed on format change, and the sensor's negotiated

@@ -665,6 +665,23 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 
 	pm_runtime_set_active(dev);
 
+	/*
+	 * Start the runtime-PM framework.  This is mandatory, not cosmetic:
+	 * mtk_csi2_rx_start_stream() takes its reference with
+	 * pm_runtime_resume_and_get(), and on a device whose PM state machine
+	 * was never enabled that call returns -EAGAIN because the framework is
+	 * disabled.  The whole receiver depends on that call to enable the
+	 * clocks, release the reset and initialise the D-PHY, so without this
+	 * the driver could never start a stream, and pm_runtime_get_noresume()
+	 * / pm_runtime_put() below would not balance either.
+	 *
+	 * pm_runtime_set_active() above only marks the device as already on;
+	 * pm_runtime_enable() is what makes the state machine live.  The order
+	 * matters: set_active() is meaningless once the device is enabled and
+	 * before it has been given an initial state.
+	 */
+	pm_runtime_enable(dev);
+
 	pm_runtime_set_autosuspend_delay(dev, 1000);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_mark_last_busy(dev);
@@ -687,6 +704,12 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 
 error_pm:
 	pm_runtime_put(dev);
+	/*
+	 * Undo pm_runtime_enable() from the probe success path.  Nothing will
+	 * put the reference back once the probe fails, so leaving the framework
+	 * enabled here would leak the enabled state with the device.
+	 */
+	pm_runtime_disable(dev);
 	v4l2_async_unregister_subdev(&priv->sd);
 
 	return ret;

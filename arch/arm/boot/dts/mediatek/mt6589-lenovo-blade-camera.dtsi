@@ -22,12 +22,18 @@
  *   0x15008010  seninf
  *   0x15008100  csi2 receiver 0  (main camera)
  *   0x15008180  csi2 receiver 1
- *   0x15008200  SCAM adaptor 0
+ *   0x15008200  SCAM adaptor 0   (0x44 bytes, own node)
+ *   0x15008280  SCAM adaptor 1   (0x44 bytes, own node)
+ *   0x15008380  seninf TG1/TG2
  *   0x15008400  seninf_ccir656
  *   0x15008500  N3D
  *   0x15009000  jpgdec
  *   0x1500A000  jpgenc
  *   0x15004000  CAM / ISP
+ *
+ * Every device below claims a disjoint slice of that map.  The two that used
+ * to overlap -- the receiver and the SCAM adaptor, both claiming
+ * 0x15008000/0x900 -- no longer do; see the notes on the two nodes.
  *
  * Note this window is NOT inside the imgsys syscon node, which only covers
  * 0x15000000/0x1000.  The sensor front end therefore needs its own node,
@@ -52,12 +58,32 @@
 	 *
 	 * The ranges are listed as separate entries rather than one span so
 	 * that the documented holes are not claimed as registers.
+	 *
+	 * Note what this node does NOT claim.  The first range below is
+	 * 0x200 bytes, ending at 0x150081FF, which is deliberately *short* of
+	 * the 0x900 it used to claim:
+	 *
+	 *   - this driver programs SENINF_TOP_CTRL (0x15008000) and the csi2
+	 *     registers (port 0 at 0x15008100, port 1 at 0x15008180, each 0x80
+	 *     long and ending at +0x3c), so nothing past 0x150081BC is ever
+	 *     touched;
+	 *   - SCAM1 at 0x15008200 is the scam device's, and claiming it here
+	 *     as well would make two platform devices reserve one aperture.
+	 *
+	 * The rest of the 0x900 span (seninf_ccir656 at 0x15008400, N3D, the TG
+	 * blocks at 0x15008380) is left unclaimed rather than reserved for a
+	 * driver that does not exist yet.
+	 *
+	 * This node also used to carry two more ranges, <0x15009000 0x400> and
+	 * <0x1500a000 0x400>.  Those are NOT the receiver's: mtk-csi2-rx.c never
+	 * touches an offset above +0x200, and both ranges sit inside registers
+	 * that mt6589.dtsi already gives to other drivers (jpgdec at
+	 * 0x15009000/0x1000 and jpgenc at 0x1500a000/0x1000), so claiming even
+	 * half of each was a second overlapping reservation.
 	 */
 	seninf: csi2-rx@15008000 {
 		compatible = "mediatek,mt6589-csi2-rx";
-		reg = <0x0 0x15008000 0x0 0x900>,
-		      <0x0 0x15009000 0x0 0x400>,
-		      <0x0 0x1500A000 0x0 0x400>;
+		reg = <0x0 0x15008000 0x0 0x200>;
 
 		/*
 		 * No "clocks" here on purpose.  The receiver wants seninf, csi2
@@ -97,11 +123,12 @@
 		 *
 		 * NOT MODELLED.  There was previously a "mediatek,mt6589-mipi-csi-dphy"
 		 * node here, claiming reg = <0x15008000 0x900> -- the same window
-		 * already claimed by this receiver (0x15008000/0x900) and by SCAM
-		 * below -- with a comment admitting the address was not known to
-		 * be correct.  Three nodes claiming one register window is not a
-		 * graph, it is a guess that would make the mtk-csi2-rx driver map
-		 * the wrong registers and then DMA on top of them.
+		 * already claimed by this receiver (0x15008000/0x900) and, at the
+		 * time, by SCAM below as well -- with a comment admitting the
+		 * address was not known to be correct.  Three nodes claiming one
+		 * register window is not a graph, it is a guess that would make
+		 * the mtk-csi2-rx driver map the wrong registers and then DMA on
+		 * top of them.
 		 *
 		 * So the node is gone rather than left to masquerade as a working
 		 * driver.  Do NOT reintroduce it with an invented address: the
@@ -143,10 +170,30 @@
 	 * The SCAM adaptor for port 0, and the CAM/ISP it feeds.  Both are
 	 * described so that the media graph closes out end to end; see
 	 * README.md for how much of each is actually implemented.
+	 *
+	 * The reg is THIS PORT'S BLOCK ONLY: SCAM1_CFG at 0x15008200 through
+	 * SCAM1_STA at 0x15008240 plus its 32 bits, so 0x44 bytes.  It used to
+	 * be
+	 *
+	 *	reg = <0x0 0x15008000 0x0 0x900>;
+	 *
+	 * which is byte-for-byte the same window the seninf node above claims.
+	 * Two platform devices cannot share one aperture: the second
+	 * devm_platform_ioremap_resource() either fails probe outright or, on a
+	 * kernel that allows it, hands out a second mapping over registers
+	 * another driver is already driving.
+	 *
+	 * Worse, the driver computed its own offsets assuming the window started
+	 * at SCAM1_CFG (0x15008200) while the DT pointed it at 0x15008000, so
+	 * every SCAM1_CFG access landed on SENINF_TOP_CTRL and the whole driver
+	 * was reading and writing the receiver's registers.
+	 *
+	 * SCAM2 would be a second node at 0x15008280/0x44, the same layout 0x80
+	 * further up; it is not drafted here because only port 0 is wired.
 	 */
 	scam: scam@15008200 {
 		compatible = "mediatek,mt6589-scam";
-		reg = <0x0 0x15008000 0x0 0x900>;
+		reg = <0x0 0x15008200 0x0 0x44>;
 
 		mediatek,scam-port = <0>;
 

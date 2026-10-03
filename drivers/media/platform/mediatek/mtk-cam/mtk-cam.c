@@ -100,6 +100,16 @@ static inline u32 cam_read(struct mtk_cam *cam, u32 reg)
  * register-setting modules" part of the sequence.  Never leaving the trigger
  * asserted matters: it holds the block in reset.
  *
+ * The order of steps 2 and 3 is the point of the timeout check.  SW_RST_ST is
+ * documented as "0: DMA is busy, 1: DMA is idle.  HW reset can be done", so
+ * if the poll expires the DMA is still running and the block says so.  The
+ * previous code performed the whole HW_RST sequence first and only inspected
+ * the timeout afterwards, i.e. it yanked a hardware reset out from under a
+ * DMA engine that had just reported itself busy, and then returned
+ * -ETIMEDOUT as if nothing had happened.  On timeout nothing is written at
+ * all: the trigger is left as it is and the caller is told the reset was not
+ * confirmed.
+ *
  * Note the vendor poll loop in camera_isp.c:1157 is itself buggy -- it reads
  * "while ((!Reg) & ISP_REG_SW_CTL_SW_RST_STATUS)", which applies & before !
  * and so always exits immediately.  The copy in gdma_drv_6589_ctl.c:53 is the
@@ -125,17 +135,23 @@ static int mtk_cam_sw_reset(struct mtk_cam *cam)
 		udelay(CAM_SW_RST_POLL_US);
 	}
 
+	/*
+	 * Decide before touching anything else.  Reaching here means the block
+	 * never reported itself idle, so the DMA may still be mid-transfer and
+	 * HW_RST would land in the middle of it.
+	 */
+	if (timeout == CAM_SW_RST_TIMEOUT_US) {
+		dev_warn(cam->dev,
+			 "CAM_SW_RST_ST still read 0 after %u us; not asserting HW_RST, reset not confirmed\n",
+			 CAM_SW_RST_TIMEOUT_US);
+		return -ETIMEDOUT;
+	}
+
+	/* DMA is idle: it is now safe to reset the block. */
 	cam_write(cam, CAM_CTL_SW_CTL,
 		  CAM_SW_CTL_SW_RST_TRIG | CAM_SW_CTL_HW_RST);
 	cam_write(cam, CAM_CTL_SW_CTL, CAM_SW_CTL_HW_RST);
 	cam_write(cam, CAM_CTL_SW_CTL, 0);
-
-	if (timeout == CAM_SW_RST_TIMEOUT_US) {
-		dev_warn(cam->dev,
-			 "CAM_SW_RST_ST did not read back after %u us; reset not confirmed\n",
-			 CAM_SW_RST_TIMEOUT_US);
-		return -ETIMEDOUT;
-	}
 
 	return 0;
 }

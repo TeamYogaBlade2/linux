@@ -278,9 +278,14 @@ static int a5142_write_frame_length(struct a5142 *a5142, u32 frame_length)
 
 	ret = regmap_write(a5142->regmap, A5142_REG_FRAME_LEN, frame_length);
 	if (ret)
-		return ret;
+		goto err_release_hold;
 
 	return regmap_write(a5142->regmap, A5142_REG_GRP_HOLD, 0);
+
+err_release_hold:
+	/* Never leave the group asserted: it would freeze the frame length. */
+	regmap_write(a5142->regmap, A5142_REG_GRP_HOLD, 0);
+	return ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -525,10 +530,20 @@ static int a5142_probe(struct i2c_client *client)
 	a5142->sd.ops = &a5142_subdev_ops;
 
 	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
 	pm_runtime_set_autosuspend_delay(dev, 1000);
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_mark_last_busy(dev);
 
+	/*
+	 * Take one reference and bring the sensor up so probe can verify the
+	 * chip ID on a powered sensor.  pm_runtime_enable() above is what makes
+	 * the runtime-PM state machine live at all: without it every
+	 * pm_runtime_get_sync()/put_sync() below is refused with -EAGAIN and
+	 * the sensor can never be powered back up after probe drops its
+	 * reference.  pm_runtime_set_active() alone only marks the device as
+	 * already-on; it does not start the framework.
+	 */
 	pm_runtime_get_noresume(dev);
 
 	ret = a5142_power_on(a5142);
@@ -562,6 +577,12 @@ error_power_off:
 	a5142_power_off(a5142);
 error_pm:
 	pm_runtime_put(dev);
+	/*
+	 * Undo pm_runtime_enable() from the probe success path.  Nothing will
+	 * put the reference back once the probe fails, so leaving the framework
+	 * enabled here would leak the enabled state with the device.
+	 */
+	pm_runtime_disable(dev);
 	v4l2_async_unregister_subdev(&a5142->sd);
 
 	return ret;
