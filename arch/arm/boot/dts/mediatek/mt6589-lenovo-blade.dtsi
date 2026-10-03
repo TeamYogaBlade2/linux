@@ -40,6 +40,34 @@
 		mediatek,platform = <&afe>;
 		aux-devs = <&mt6320_accdet>;
 	};
+
+	/*
+	 * Backlight.
+	 *
+	 * Declared here at root level rather than as a child of &bls: a child
+	 * node of a platform device needs a "reg" to be enumerated, and this
+	 * one has none.  Nested under the PWM node it was silently skipped,
+	 * so no backlight_device was ever created - see the reasoning on the
+	 * &bls override below.
+	 *
+	 * The BLS block is both the backlight PWM generator and a stage of the
+	 * display pipeline, and nothing consumed the PWM side of it: there was
+	 * no backlight device in this tree at all, so the panel would stay
+	 * dark even once the video pipeline worked.
+	 *
+	 * The period is nominal - the driver takes it from the consumer, and
+	 * PWM_H_DURATION/PWM_L_DURATION determine the real output frequency.
+	 */
+	backlight_lcd: backlight_lcd {
+		compatible = "pwm-backlight";
+		pwms = <&bls 2000 100000>;
+		brightness-levels = <
+			  0  16  32  48  64  80  96 112
+			128 144 160 176 192 208 224 240
+			255
+		>;
+		default-brightness-level = <13>;
+	};
 };
 
 &cpu0 {
@@ -539,15 +567,4 @@
  */
 &bls {
 	status = "okay";
-
-	backlight_lcd: backlight_lcd {
-		compatible = "pwm-backlight";
-		pwms = <&bls 2000 100000>;
-		brightness-levels = <
-			  0  16  32  48  64  80  96 112
-			128 144 160 176 192 208 224 240
-			255
-		>;
-		default-brightness-level = <13>;
-	};
 };
