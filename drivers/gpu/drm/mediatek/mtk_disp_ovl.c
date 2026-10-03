@@ -23,19 +23,58 @@
 
 #define DISP_REG_OVL_STA				0x0000
 #define DISP_REG_OVL_INTEN					0x0004
+/*
+ * OVL_INTEN (0x14003004) and OVL_INTSTA (0x14003008) share one bit map.
+ * The data sheet's "Bit 15..0" row for both registers names exactly
+ * these twelve mnemonics and leaves 12..31 unnamed, so nothing above
+ * BIT(11) may ever appear in a mask derived from it:
+ *
+ *   bit  0  OVL_REG_CMT_INT		shadow -> working register commit done
+ *   bit  1  OVL_FME_CPL_INT		frame complete
+ *   bit  2  OVL_FME_UND_INT		frame underflow
+ *   bit  3  OVL_FME_SWRST_DONE_INT	SW reset done
+ *   bit  4  OVL_RDMA0_EOF_ABNORMAL_INT
+ *   bit  5  OVL_RDMA1_EOF_ABNORMAL_INT
+ *   bit  6  OVL_RDMA2_EOF_ABNORMAL_INT
+ *   bit  7  OVL_RDMA3_EOF_ABNORMAL_INT
+ *   bit  8  OVL_RDMA0_FIFO_UND_INT
+ *   bit  9  OVL_RDMA1_FIFO_UND_INT
+ *   bit 10  OVL_RDMA2_FIFO_UND_INT
+ *   bit 11  OVL_RDMA3_FIFO_UND_INT
+ *
+ * Every status bit is write-0-to-clear ("Cleared by writing 0 to it;
+ * writing 1 is useless"), and INTEN mirrors INTSTA one-for-one, so a
+ * driver that enables a bit is obliged to acknowledge it again in the
+ * ISR.  OVL_INT_ALL below is the union of all twelve.
+*/
+#define OVL_REG_CMT_INT						BIT(0)
 #define OVL_FME_CPL_INT							BIT(1)
 #define OVL_FME_UND_INT							BIT(2)
+#define OVL_FME_SWRST_DONE_INT					BIT(3)
 #define OVL_RDMA0_EOF_ABNORMAL_INT	BIT(4)
 #define OVL_RDMA1_EOF_ABNORMAL_INT	BIT(5)
+#define OVL_RDMA2_EOF_ABNORMAL_INT	BIT(6)
+#define OVL_RDMA3_EOF_ABNORMAL_INT	BIT(7)
 #define OVL_RDMA0_FIFO_UND_INT			BIT(8)
 #define OVL_RDMA1_FIFO_UND_INT			BIT(9)
+#define OVL_RDMA2_FIFO_UND_INT			BIT(10)
+#define OVL_RDMA3_FIFO_UND_INT			BIT(11)
+
+/*
+ * Every OVL_INTSTA bit this block can raise.  The ISR acknowledges
+ * reg & int_all_mask so that whatever mtk_ovl_enable_vblank() switched
+ * on in OVL_INTEN is also deasserted again - see
+ * mtk_disp_ovl_irq_handler().
+*/
+#define OVL_INT_ALL \
+(OVL_REG_CMT_INT | OVL_FME_CPL_INT | OVL_FME_UND_INT | \
+OVL_FME_SWRST_DONE_INT | \
+OVL_RDMA0_EOF_ABNORMAL_INT | OVL_RDMA1_EOF_ABNORMAL_INT | \
+OVL_RDMA2_EOF_ABNORMAL_INT | OVL_RDMA3_EOF_ABNORMAL_INT | \
+OVL_RDMA0_FIFO_UND_INT | OVL_RDMA1_FIFO_UND_INT | \
+OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 
 #define DISP_REG_OVL_INTSTA			0x0008
-#define OVL_FME_UND							BIT(2)
-#define OVL_RDMA0_EOF_ABNORMAL	BIT(4)
-#define OVL_RDMA1_EOF_ABNORMAL	BIT(5)
-#define OVL_RDMA0_FIFO_UND			BIT(8)
-#define OVL_RDMA1_FIFO_UND			BIT(9)
 
 #define DISP_REG_OVL_EN				0x000c
 #define DISP_REG_OVL_RST			0x0014
@@ -201,6 +240,17 @@ struct mtk_disp_ovl_data {
 	bool has_const_blend;
 	bool set_layer_src;
 	unsigned int vblank_en_mask;
+	/*
+ * int_all_mask is the whole set of OVL_INTSTA bits this block can
+ * raise.  It is ANDed with the latched status to decide both what
+ * to acknowledge and whether the line is ours at all, so it must
+ * cover every bit vblank_en_mask is able to enable.  fme_cpl_bit
+ * is the frame complete status bit - the only one that means a
+ * frame was actually produced, and therefore the only one
+ * allowed to fire vblank_cb.
+	 */
+	unsigned int int_all_mask;
+	unsigned int fme_cpl_bit;
 	unsigned int fme_und_bit;
 	unsigned int rdma0_eof_abn_bit;
 	unsigned int rdma1_eof_abn_bit;
@@ -234,13 +284,23 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
+	u32 handled;
 
 	/*
-	 * Report OVL_STA alongside the interrupt status.  Bit 0 is OVL_RUN
-	 * and bit 1 is RDMA0_IDLE, so one line separates the possibilities:
-	 * run=0 with RDMA0 idle means the engine never started, run=1 with
-	 * RDMA0 not idle means RDMA stalled fetching, both idle means nothing
-	 * is triggering start-of-frame.
+ * None of the bits this block can raise is asserted, so the line
+ * is not ours.  Checked before touching the hardware so that this
+ * really is a clean "not mine", rather than a rejection after
+ * already having acknowledged status bits.
+	 */
+	if (!(reg & priv->data->int_all_mask))
+		return IRQ_NONE;
+
+	/*
+ * Report OVL_STA alongside the interrupt status.  Bit 0 is OVL_RUN
+ * and bit 1 is RDMA0_IDLE, so one line separates the possibilities:
+ * run=0 with RDMA0 idle means the engine never started, run=1 with
+ * RDMA0 not idle means RDMA stalled fetching, both idle means nothing
+ * is triggering start-of-frame.
 	 */
 	if (reg & (priv->data->fme_und_bit | priv->data->rdma0_eof_abn_bit)) {
 		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
@@ -261,31 +321,52 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		pr_err("OVL: RDMA1 FIFO underflow\n");
 
 	/*
-	 * Clear only the bits we handled.
-	 *
-	 * OVL_INTSTA is a write-0-to-clear register: the data sheet says
-	 * "cleared by writing 0 to it; writing 1 is useless". Writing the
-	 * value read back therefore cleared nothing at all, and because the
-	 * OVL interrupt is level triggered the same status stayed latched
-	 * and the handler re-entered forever, printing the identical
-	 * intsta=0x11 on every frame.
-	 *
-	 * Invert the bits we are about to acknowledge, and leave every other
-	 * bit written as 1 so that a condition arriving after the readl above
-	 * is not wiped by us.
+ * Acknowledge every status bit this block can raise, not merely the
+ * faults printed above.
+ *
+ * OVL_INTSTA is write-0-to-clear: the data sheet says "cleared by
+ * writing 0 to it; writing 1 is useless".  OVL_INTEN mirrors that
+ * bit map one-for-one, and mtk_ovl_enable_vblank() programs it
+ * with vblank_en_mask = 0xf, i.e. REG_CMT (bit 0), FME_CPL (bit
+ * 1), FME_UND (bit 2) and FME_SWRST_DONE (bit 3).  The old clear
+ * list held only bits 2, 4, 5, 8 and 9, so frame complete stayed
+ * latched from the first frame onwards: the line is level
+ * triggered (IRQF_TRIGGER_NONE, as wired up in DT) and the handler
+ * re-entered forever, printing the identical intsta every frame.
+ *
+ * Masking with int_all_mask rather than with an ad-hoc list of
+ * fault bits is what makes this hold structurally: "we enabled it,
+ * so we must acknowledge it" survives any future change to
+ * vblank_en_mask or to the individual fault-bit fields, because
+ * the acknowledged set is a superset of whatever the enable mask
+ * can select.
+ *
+ * The write is inverted, so every bit we are not acknowledging
+ * goes out as 1 and a condition arriving after the readl above is
+ * left alone rather than wiped.
 	 */
-	writel(~(reg & (priv->data->fme_und_bit |
-			 priv->data->rdma0_eof_abn_bit |
-			 priv->data->rdma1_eof_abn_bit |
-			 priv->data->rdma0_fifo_und_bit |
-			 priv->data->rdma1_fifo_und_bit)),
-	       priv->regs + DISP_REG_OVL_INTSTA);
+	handled = reg & priv->data->int_all_mask;
+	writel(~handled, priv->regs + DISP_REG_OVL_INTSTA);
 
-	if (!priv->vblank_cb)
-		return IRQ_NONE;
+	/*
+ * Only a completed frame is a vblank.  Underflow and the RDMA
+ * faults are errors, already reported above, and firing the vblank
+ * callback for them would hand the CRTC a frame that never
+ * arrived.  The callback is gated on the frame complete status
+ * bit alone, not on "some interrupt arrived", so it fires
+ * exactly once per frame.  A frame complete with no callback
+ * registered is still acknowledged by the clear above and cannot
+ * re-trigger.
+	 */
+	if (priv->vblank_cb && (reg & priv->data->fme_cpl_bit))
+		priv->vblank_cb(priv->vblank_cb_data);
 
-	priv->vblank_cb(priv->vblank_cb_data);
-
+	/*
+ * The line is ours and we have just deasserted its status bits, so
+ * returning IRQ_NONE here would wrongly hand an already
+ * acknowledged interrupt to another handler.  IRQ_HANDLED even
+ * with no callback registered - the clear is the handling.
+	 */
 	return IRQ_HANDLED;
 }
 
@@ -440,8 +521,8 @@ static void mt6589_ovl_write_yuv_matrix(struct mtk_disp_ovl *ovl,
 	mtk_ddp_write(cmdq_pkt, mt6589_yuv2rgb_coef[2][2] & 0x1FFF,
 		      &ovl->cmdq_reg, base, reg_base + Y2R_B1);
 	/*
-	 * Offset fields are 9-bit signed (sign + 8.0): the U/V offsets of
-	 * -128 must be programmed as 0x180 like the downstream kernel does.
+ * Offset fields are 9-bit signed (sign + 8.0): the U/V offsets of
+ * -128 must be programmed as 0x180 like the downstream kernel does.
 	 */
 	mtk_ddp_write(cmdq_pkt,
 		      (mt6589_yuv2rgb_coef[3][1] << 16) | mt6589_yuv2rgb_coef[3][0],
@@ -460,15 +541,15 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
 	/*
-	 * Soft reset first, wait for it to take effect, then release it, and
-	 * only then program the mode. The order matters: the reset clears the
-	 * engine's configuration, so writing OVL_ROI_SIZE and OVL_ROI_BGCLR
-	 * before asserting it left the block with no frame size at all, and
-	 * the stock driver has the same order - OVLReset() runs and only then
-	 * OVLConfig() writes OVL_ROI_SIZE (ddp_ovl.c).
-	 *
-	 * The data sheet requires polling the engine's run bit until it reads
-	 * 0 before the reset is released.
+ * Soft reset first, wait for it to take effect, then release it, and
+ * only then program the mode. The order matters: the reset clears the
+ * engine's configuration, so writing OVL_ROI_SIZE and OVL_ROI_BGCLR
+ * before asserting it left the block with no frame size at all, and
+ * the stock driver has the same order - OVLReset() runs and only then
+ * OVLConfig() writes OVL_ROI_SIZE (ddp_ovl.c).
+ *
+ * The data sheet requires polling the engine's run bit until it reads
+ * 0 before the reset is released.
 	 */
 	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RST);
 
@@ -477,11 +558,11 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 
 		for (i = 0; i < 10000; i++) {
 			/*
-			 * Wait for OVL_STA bit0 (OVL_RUN) to drop. This used
-			 * to poll OVL_INTSTA bit0, but that is OVL_REG_CMT -
-			 * a latched event, not the run state - so the loop
-			 * could exit while the engine was still running and
-			 * the reset had not taken effect.
+ * Wait for OVL_STA bit0 (OVL_RUN) to drop. This used
+ * to poll OVL_INTSTA bit0, but that is OVL_REG_CMT -
+ * a latched event, not the run state - so the loop
+ * could exit while the engine was still running and
+ * the reset had not taken effect.
 			 */
 			if (!(readl(ovl->regs + DISP_REG_OVL_STA) & BIT(0)))
 				break;
@@ -496,8 +577,8 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 				      DISP_REG_OVL_ROI_SIZE);
 
 	/*
-	 * The background color must be opaque black (ARGB),
-	 * otherwise the alpha blending will have no effect
+ * The background color must be opaque black (ARGB),
+ * otherwise the alpha blending will have no effect
 	 */
 	mtk_ddp_write_relaxed(cmdq_pkt, OVL_COLOR_ALPHA, &ovl->cmdq_reg,
 			      ovl->regs, DISP_REG_OVL_ROI_BGCLR);
@@ -526,10 +607,10 @@ int mtk_ovl_layer_check(struct device *dev, unsigned int idx,
 		return -EINVAL;
 
 	/*
-	 * TODO: Rotating/reflecting YUV buffers is not supported at this time.
-	 *	 Only RGB[AX] variants are supported.
-	 *	 Since DRM_MODE_ROTATE_0 means "no rotation", we should not
-	 *	 reject layers with this property.
+ * TODO: Rotating/reflecting YUV buffers is not supported at this time.
+ *	 Only RGB[AX] variants are supported.
+ *	 Since DRM_MODE_ROTATE_0 means "no rotation", we should not
+ *	 reject layers with this property.
 	 */
 	if (state->fb->format->is_yuv && (state->rotation & ~DRM_MODE_ROTATE_0))
 		return -EINVAL;
@@ -552,16 +633,16 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 	gmc_thrshd_h = GMC_THRESHOLD_HIGH >>
 		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
 	/*
-	 * OVL_RDMA0_MEM_GMC_SETTING holds RDMA0_EN_THRD in bits [9:0] and
-	 * RDMA0_DISEN_THRD in bits [25:16] - two 10-bit fields in units of
-	 * 16 bytes, and the data sheet requires EN_THRD to be *smaller*
-	 * than DISEN_THRD.
-	 *
-	 * Both branches above put the high threshold in both fields, so the
-	 * two were equal and the requirement was violated; and the 8-bit
-	 * branch packed four 8-bit values into 32 bits, which is a different
-	 * layout from this one. Set the two fields from the two thresholds,
-	 * masked to the field width.
+ * OVL_RDMA0_MEM_GMC_SETTING holds RDMA0_EN_THRD in bits [9:0] and
+ * RDMA0_DISEN_THRD in bits [25:16] - two 10-bit fields in units of
+ * 16 bytes, and the data sheet requires EN_THRD to be *smaller*
+ * than DISEN_THRD.
+ *
+ * Both branches above put the high threshold in both fields, so the
+ * two were equal and the requirement was violated; and the 8-bit
+ * branch packed four 8-bit values into 32 bits, which is a different
+ * layout from this one. Set the two fields from the two thresholds,
+ * masked to the field width.
 	 */
 	gmc_value = (gmc_thrshd_l & GENMASK(9, 0)) |
 		    ((gmc_thrshd_h & GENMASK(9, 0)) << 16);
@@ -594,16 +675,16 @@ static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl, struct mtk_pla
 	unsigned int blend_mode = DRM_MODE_BLEND_COVERAGE;
 
 	/*
-	 * For the platforms where OVL_CON_CLRFMT_MAN is defined in the hardware data sheet
-	 * and supports premultiplied color formats, such as OVL_CON_CLRFMT_PARGB8888.
-	 *
-	 * Check blend_modes in the driver data to see if premultiplied mode is supported.
-	 * If not, use coverage mode instead to set it to the supported color formats.
-	 *
-	 * Current DRM assumption is that alpha is default premultiplied, so the bitmask of
-	 * blend_modes must include BIT(DRM_MODE_BLEND_PREMULTI). Otherwise, mtk_plane_init()
-	 * will get an error return from drm_plane_create_blend_mode_property() and
-	 * state->base.pixel_blend_mode should not be used.
+ * For the platforms where OVL_CON_CLRFMT_MAN is defined in the hardware data sheet
+ * and supports premultiplied color formats, such as OVL_CON_CLRFMT_PARGB8888.
+ *
+ * Check blend_modes in the driver data to see if premultiplied mode is supported.
+ * If not, use coverage mode instead to set it to the supported color formats.
+ *
+ * Current DRM assumption is that alpha is default premultiplied, so the bitmask of
+ * blend_modes must include BIT(DRM_MODE_BLEND_PREMULTI). Otherwise, mtk_plane_init()
+ * will get an error return from drm_plane_create_blend_mode_property() and
+ * state->base.pixel_blend_mode should not be used.
 	 */
 	if (ovl->data->blend_modes & BIT(DRM_MODE_BLEND_PREMULTI))
 		blend_mode = state->base.pixel_blend_mode;
@@ -740,25 +821,25 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 		con |= state->base.alpha & OVL_CON_ALPHA;
 
 		/*
-		 * For blend_modes supported SoCs, always enable alpha blending.
-		 * For blend_modes unsupported SoCs, enable alpha blending when has_alpha is set.
+ * For blend_modes supported SoCs, always enable alpha blending.
+ * For blend_modes unsupported SoCs, enable alpha blending when has_alpha is set.
 		 */
 		if (blend_mode || state->base.fb->format->has_alpha)
 			con |= OVL_CON_AEN;
 
 		/*
-		 * Although the alpha channel can be ignored, CONST_BLD must be enabled
-		 * for XRGB format, otherwise OVL will still read the value from memory.
-		 * For RGB888 related formats, whether CONST_BLD is enabled or not won't
-		 * affect the result. Therefore we use !has_alpha as the condition.
+ * Although the alpha channel can be ignored, CONST_BLD must be enabled
+ * for XRGB format, otherwise OVL will still read the value from memory.
+ * For RGB888 related formats, whether CONST_BLD is enabled or not won't
+ * affect the result. Therefore we use !has_alpha as the condition.
 		 */
 		if (blend_mode == DRM_MODE_BLEND_PIXEL_NONE || !state->base.fb->format->has_alpha)
 			ignore_pixel_alpha = const_blend;
 	}
 
 	/*
-	 * Treat rotate 180 as flip x + flip y, and XOR the original rotation value
-	 * to flip x + flip y to support both in the same time.
+ * Treat rotate 180 as flip x + flip y, and XOR the original rotation value
+ * to flip x + flip y to support both in the same time.
 	 */
 	if (rotation & DRM_MODE_ROTATE_180)
 		rotation ^= DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y;
@@ -780,14 +861,14 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &ovl->cmdq_reg, ovl->regs,
 			      DISP_REG_OVL_CON(idx));
 	/*
-	 * OVL_PITCH counts pixels per line, not bytes.  The stock driver
-	 * computes the layer address as
-	 *
-	 *	addr + src_x * bpp + src_y * src_pitch
-	 *
-	 * scaling src_pitch by a line index while src_x is scaled by
-	 * bytes-per-pixel, so the pitch can only be in pixels.  The value
-	 * handed to us is drm's fb->pitches[0], which is in bytes.
+ * OVL_PITCH counts pixels per line, not bytes.  The stock driver
+ * computes the layer address as
+ *
+ *	addr + src_x * bpp + src_y * src_pitch
+ *
+ * scaling src_pitch by a line index while src_x is scaled by
+ * bytes-per-pixel, so the pitch can only be in pixels.  The value
+ * handed to us is drm's fb->pitches[0], which is in bytes.
 	 */
 	pitch_lsb = (pending->pitch / pending->cpp) & GENMASK(15, 0);
 
@@ -864,15 +945,15 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 		return irq;
 
 	/*
-	 * The node declares both the engine and the SMI clock.  Taking only
-	 * index 0 left SMI gated, and without it the GMC and M4U writes this
-	 * driver performs may not reach the hardware.
+ * The node declares both the engine and the SMI clock.  Taking only
+ * index 0 left SMI gated, and without it the GMC and M4U writes this
+ * driver performs may not reach the hardware.
 	 */
 	/*
-	 * Take every clock the node declares.  devm_clk_get() can only return
-	 * one of them: with no clock-names property it always resolves index
-	 * 0, so the SMI clock stayed gated.  This helper walks the whole
-	 * clocks property by index instead.
+ * Take every clock the node declares.  devm_clk_get() can only return
+ * one of them: with no clock-names property it always resolves index
+ * 0, so the SMI clock stayed gated.  This helper walks the whole
+ * clocks property by index instead.
 	 */
 	ret = devm_clk_bulk_get_all(dev, &priv->clks);
 	if (ret < 0)
@@ -885,22 +966,22 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 				     "failed to ioremap ovl\n");
 
 	/*
-	 * Reset the engine before touching it.  Writing the registers
-	 * directly needs the block's clock running, but the bootloader can
-	 * leave it in a state where the engine is still fetching, so assert
-	 * the reset first and release it with the clocks enabled.
+ * Reset the engine before touching it.  Writing the registers
+ * directly needs the block's clock running, but the bootloader can
+ * leave it in a state where the engine is still fetching, so assert
+ * the reset first and release it with the clocks enabled.
 	 */
 	ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to enable ovl clks\n");
 
 	/*
-	 * Look the reset up by index.  Passing a name would make the core
-	 * search the "reset-names" property first, and the display nodes
-	 * carry a bare "resets = <&dispsys MT6589_DISP_OVL_RST>" with no
-	 * reset-names, so a named lookup fails with -ENOENT before any reset
-	 * controller is ever consulted.  Every other MediaTek display driver
-	 * here looks its reset up this way for the same reason.
+ * Look the reset up by index.  Passing a name would make the core
+ * search the "reset-names" property first, and the display nodes
+ * carry a bare "resets = <&dispsys MT6589_DISP_OVL_RST>" with no
+ * reset-names, so a named lookup fails with -ENOENT before any reset
+ * controller is ever consulted.  Every other MediaTek display driver
+ * here looks its reset up this way for the same reason.
 	 */
 	priv->rstc = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(priv->rstc)) {
@@ -982,6 +1063,12 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.has_const_blend = false,
 	.set_layer_src = true,
 	.vblank_en_mask = 0xF, /* Reg update, frame done, underflow, sw reset done */
+	/*
+ * Bits 0, 1, 2 and 3 are enabled above, so all of them - and the
+ * whole documented status map - must be acknowledged in the ISR.
+	 */
+	.int_all_mask = OVL_INT_ALL,
+	.fme_cpl_bit = OVL_FME_CPL_INT,
 	.fme_und_bit = BIT(2),
 	.rdma0_eof_abn_bit = BIT(4),
 	.rdma1_eof_abn_bit = BIT(5),
