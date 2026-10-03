@@ -102,14 +102,6 @@
  */
 #define BLS_EN_DISPLAY			0x80010001
 
-/*
- * BLS data-path enable, as opposed to the PWM-only half BLS_EN covers.
- * The stock driver writes this when the display asks for ENUM_FUNC_BLS
- * (ddp_bls.c: disp_onConfig_bls() does regVal |= 0x11D00); bits [2:0]
- * are the gamma enable, which the same function leaves clear.
- */
-#define BLS_SETTING_DISPLAY		0x00011d00
-
 /* BLS_PWM_DUTY format */
 #define PWM_DUTY_MIN_LEVEL		BIT(19)			/* Lower bound (fixed to 1) */
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
@@ -451,18 +443,14 @@ void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
 	writel((h << 16) | w, bls->base + BLS_SRC_SIZE);
 
 	/*
-	 * Enable the BLS path itself.  Probe deliberately leaves this at 0
-	 * so the block is idle until the pipeline asks for it, and nothing
-	 * set it afterwards, so the block passed no pixels even though the
-	 * panel backlight worked - the backlight only needs the PWM half.
-	 *
-	 * 0x11d00 is the value the stock driver writes when ENUM_FUNC_BLS is
-	 * requested (ddp_bls.c: disp_onConfig_bls(), which does
-	 * regVal |= 0x11D00).  Bits [2:0] are the gamma enable and are
-	 * cleared, which is what the same function does when
-	 * ENUM_FUNC_GAMMA is not set.
+	 * BLS_SETTING stays 0 on this path, and that is correct: 0x11d00 is
+	 * written by disp_onConfig_bls(), which is only reached from the AAL
+	 * colour-enhancement path (ddp_aal.c), not from the display path.
+	 * disp_bls_init(), which is what the main path calls, leaves it at 0.
+	 * The block runs as a pass-through, gated by BLS_EN instead - see
+	 * mt6589_bls_ddp_start().
 	 */
-	writel(BLS_SETTING_DISPLAY, bls->base + BLS_BLS_SETTING);
+	writel(0, bls->base + BLS_BLS_SETTING);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
 
