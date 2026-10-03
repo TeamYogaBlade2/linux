@@ -261,12 +261,25 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		pr_err("OVL: RDMA1 FIFO underflow\n");
 
 	/*
-	 * Clear only the bits we handled.  The OVL interrupt is level
-	 * triggered, so writing 0 to the whole status register can wipe a
-	 * condition that arrived after the readl above - and an uncleared
-	 * status re-enters this handler forever with nothing ever changing.
+	 * Clear only the bits we handled.
+	 *
+	 * OVL_INTSTA is a write-0-to-clear register: the data sheet says
+	 * "cleared by writing 0 to it; writing 1 is useless". Writing the
+	 * value read back therefore cleared nothing at all, and because the
+	 * OVL interrupt is level triggered the same status stayed latched
+	 * and the handler re-entered forever, printing the identical
+	 * intsta=0x11 on every frame.
+	 *
+	 * Invert the bits we are about to acknowledge, and leave every other
+	 * bit written as 1 so that a condition arriving after the readl above
+	 * is not wiped by us.
 	 */
-	writel(reg, priv->regs + DISP_REG_OVL_INTSTA);
+	writel(~(reg & (priv->data->fme_und_bit |
+			 priv->data->rdma0_eof_abn_bit |
+			 priv->data->rdma1_eof_abn_bit |
+			 priv->data->rdma0_fifo_und_bit |
+			 priv->data->rdma1_fifo_und_bit)),
+	       priv->regs + DISP_REG_OVL_INTSTA);
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
@@ -472,7 +485,16 @@ void mtk_ovl_config(struct device *dev, unsigned int w,
 		unsigned int i;
 
 		for (i = 0; i < 10000; i++) {
-			if (!(readl(ovl->regs + DISP_REG_OVL_INTSTA) & 0x1))
+			/*
+			 * Wait for OVL_STA bit0 (OVL_RUN) to drop, which is
+			 * what the data sheet requires after a software
+			 * reset. This used to poll OVL_INTSTA bit0, but
+			 * that is OVL_REG_CMT - a latched event, not the
+			 * run state - so the loop could exit while the
+			 * engine was still running and the reset had not
+			 * taken effect.
+			 */
+			if (!(readl(ovl->regs + DISP_REG_OVL_STA) & BIT(0)))
 				break;
 			cpu_relax();
 		}
