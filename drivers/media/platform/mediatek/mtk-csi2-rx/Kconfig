@@ -1,0 +1,26 @@
+# MediaTek specific camera receiver support
+
+config VIDEO_MTK_CSI2_RX
+	tristate "MediaTek MT6589 CSI-2 receiver"
+	depends on COMMON_CLK && HAS_IOMEM && OF
+	select VIDEO_V4L2_SUBDEV_API
+	select RESET_CONTROLLER
+	select GENERIC_PHY
+	select V4L2_ASYNC
+	help
+	  Say Y here if you want to use the MediaTek MT6589 camera CSI-2
+	  receiver.
+
+	  The MT6589 image subsystem contains two independent MIPI CSI-2
+	  receivers (called seninf/csi2 in the vendor sources) behind one
+	  register window at 0x15008000, one per camera port.  Each receiver
+	  unpacks the MIPI packets and forwards the raw byte stream plus
+	  frame/line synchronisation to the sensor-CAM (SCAM) block that
+	  feeds the ISP.
+
+	  This driver only programs the receivers themselves and the
+	  top-level parallel sensor clock gating.  The D-PHY below them is
+	  a separate driver, and the SCAM block is not yet implemented.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mtk-csi2-rx.

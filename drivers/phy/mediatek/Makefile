@@ -23,3 +23,4 @@ phy-mtk-mipi-dsi-drv-y			+= phy-mtk-mipi-dsi-mt6589.o
 phy-mtk-mipi-dsi-drv-y			+= phy-mtk-mipi-dsi-mt8173.o
 phy-mtk-mipi-dsi-drv-y			+= phy-mtk-mipi-dsi-mt8183.o
 obj-$(CONFIG_PHY_MTK_MIPI_DSI)		+= phy-mtk-mipi-dsi-drv.o
+obj-y += phy-mtk-mipi-dphy-mt6589/

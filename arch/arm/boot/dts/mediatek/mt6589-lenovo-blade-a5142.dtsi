@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Camera sensor nodes for the Lenovo YOGA Tablet 8/10 (MT6589).
+ *
+ * DRAFT.  These nodes cannot be enabled as-is; see README.md and the notes
+ * inline below.  The register-level driver (a5142.c) compiles cleanly
+ * against this tree, but the plumbing around it is incomplete.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+/*
+ * Stand-in for the missing mt6589-pinfunc.h.  This does NOT set a pin
+ * function; it exists only so the draft is parseable and the placeholder
+ * GPIO numbers are obvious.  Replace with a real mt6589-pinfunc.h.
+ */
+#define MT6589_GPIO(n)		(0x10000 + (n))
+
+&pio {
+	camera_pins {
+		/*
+		 * TODO: assign real pins.  The vendor driver uses
+		 * GPIO_CAMERA_CMRST_PIN (211) and GPIO_CAMERA_CMPDN_PIN (212)
+		 * in mediatek/custom/mt6589/kernel/camera/camera/kd_camera_hw.h,
+		 * but those are the *reference design* defaults in a shared
+		 * header, not board-specific, and GPIO124 is already taken on
+		 * this board by the accelerometer EINT.  These two are
+		 * placeholders and must be confirmed against a schematic
+		 * before the sensor can be brought up.
+		 *
+		 * NOTE: this tree has no arch/arm/boot/dts/mediatek/mt6589-pinfunc.h
+		 * (only mt2701-pinfunc.h exists), so the usual
+		 * MT6589_GPIOxxx__FUNC_GPIOxxx constants are unavailable and
+		 * MT6589_GPIO() is used as a stand-in.  Both the GPIO numbers
+		 * and the pin function are unverified: the numbers are
+		 * reference-design defaults and MT6589_GPIO() does not set a
+		 * real pin function.  Replace with a proper mt6589-pinfunc.h
+		 * and confirmed pins before this board can bring a camera up.
+		 */
+		a5142_pwdn_pin: a5142-pwdn {
+			pinmux = <MT6589_GPIO(211)>;
+		};
+
+		a5142_reset_pin: a5142-reset {
+			pinmux = <MT6589_GPIO(212)>;
+		};
+	};
+};
+
+/*
+ * The A5142 needs three rails from the MT6320:
+ *   vcam_a  (AVDD, analog core)   -> vcama
+ *   vcam_d  (DVDD, digital core)  -> vgp1   (vendor calls this VCAMD)
+ *   vcam_af (VAF, analogue filter) -> vgp3
+ *
+ * All three already exist as regulators in arch/arm/boot/dts/mediatek/mt6320.dtsi
+ * (mt6320_ldo_vcama at line 179, mt6320_ldo_vgp1 at 249, mt6320_ldo_vgp3 at
+ * 263), so no PMIC driver change is needed.
+ */
+&i2c2 {
+	/*
+	 * The A5142 SCCB bus.  Which bus this really is is still unconfirmed:
+	 * the vendor driver picks it by a hard-coded channel index, and i2c1,
+	 * i2c2 and i2c5 are all enabled and otherwise empty on this board.
+	 * i2c2 is a placeholder.
+	 *
+	 * #address-cells / #size-cells are needed because the sensor is an
+	 * I2C child of this bus; the SoC i2c2 node does not define them.
+	 */
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	camera@6c {
+		compatible = "a5142,mipi";
+		reg = <0x6c>;
+
+		clocks = <&imgsys CLK_IMAGE_CAM_CAM>;
+		clock-frequency = <400000>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&a5142_pwdn_pin>;
+
+		pwdn-gpios = <&pio 211 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 212 GPIO_ACTIVE_HIGH>;
+
+		vdda-supply = <&mt6320_ldo_vcama>;
+		vddd-supply = <&mt6320_ldo_vgp1>;
+		vddaaf-supply = <&mt6320_ldo_vgp3>;
+
+		ports {
+			a5142_out: port@0 {
+				a5142_out_ep: endpoint {
+					remote-endpoint = <&csi2_phy0_in_ep>;
+				};
+			};
+		};
+	};
+};

@@ -1,0 +1,23 @@
+# Camera sensor drivers
+#
+# These are MediaTek/OmniVision sensors used on MT6589 platforms.  They are
+# independent of the SoC: a sensor is a plain I2C device that produces a
+# MIPI CSI-2 stream, so these drivers build for any SoC that has a CSI-2
+# receiver (see CONFIG_VIDEO_MTK_CSI2_RX).
+
+config VIDEO_A5142
+	tristate "A5142 camera sensor"
+	depends on VIDEO_DEV && I2C
+	select REGMAP
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_ASYNC
+	help
+	  Say Y here if you have an A5142 5 megapixel RAW camera sensor.
+
+	  The A5142 is a 5 megapixel RAW CMOS sensor with a 2-lane MIPI
+	  CSI-2 output and a separate SCCB (I2C-like) control bus.  It is
+	  the main (rear) camera of the Lenovo YOGA Tablet 8/10, which
+	  uses the MediaTek MT6589 SoC.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called a5142.

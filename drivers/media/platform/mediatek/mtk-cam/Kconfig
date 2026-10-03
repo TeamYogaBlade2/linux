@@ -1,0 +1,23 @@
+config VIDEO_MTK_CAM
+	tristate "MediaTek MT6589 CAM/ISP control plane (scaffold)"
+	depends on HAS_IOMEM && OF
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_ASYNC
+	help
+	  Say Y here if you want to use the MediaTek MT6589 CAM/ISP control
+	  plane.
+
+	  This is a survey-level scaffold, not a working ISP.  It maps the
+	  CAM control registers at 0x15004000 and implements the documented
+	  start/stop strobes, but the image pipeline itself - the CPIPE
+	  stages, the memory sequencer and the interrupt controllers - is
+	  not written, and the sub-module enable bit positions have not
+	  been recovered from the data sheet.
+
+	  Loading it will not produce a picture.  It exists so the CAM
+	  register map is recorded, and so the media graph can be closed
+	  out to an ISP node.  See the file header and README.md.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mtk-cam.

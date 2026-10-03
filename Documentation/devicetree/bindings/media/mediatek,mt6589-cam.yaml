@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-cam.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 CAM/ISP control plane
+
+maintainers:
+  - Lenovo Linux Team
+
+description: >
+  The CAM block on the MT6589 is the image signal processor.  Its control
+  registers are at 0x15004000; the image processing itself runs in the
+  CPIPE stages and the memory sequencer that follow.
+
+  WARNING: the driver behind this binding is a survey-level scaffold.  It
+  maps the control registers and implements the documented start/stop
+  strobes, but the image pipeline is not written and the sub-module enable
+  bit positions have not been recovered from the data sheet.  Loading it
+  will not produce a picture.  See the driver source and README.md.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-cam
+
+  reg:
+    description: |
+      Register window of the CAM block.  The control registers occupy
+      0x0000-0x00ff; the rest of the block is the pipeline itself.
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    maxItems: 1
+
+  resets:
+    maxItems: 1
+
+  reset-names:
+    const: cam
+
+  power-domains:
+    maxItems: 1
+
+  # One sink pad, fed by the SCAM adaptor that follows the CSI-2 receiver.
+  ports:
+    $ref: /schemas/graph/ports.yaml#
+
+required:
+  - compatible
+  - reg
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    cam: cam@15004000 {
+        compatible = "mediatek,mt6589-cam";
+        reg = <0x0 0x15004000 0x0 0x400>;
+
+        ports {
+            cam_in: port@0 {
+                cam_in_ep: endpoint {
+                    remote-endpoint = <&scam_out_ep>;
+                };
+            };
+        };
+    };
+
+...
