@@ -42,7 +42,7 @@
  *
  * The wiring that does exist is therefore:
  *
- *   a5142 -> csi2-rx (seninf port 0) -> scam (port 0) -> cam
+ *   csi2-rx (seninf port 0) -> scam (port 0) -> cam
  *
  * with the D-PHY step deliberately absent between the sensor and the
  * receiver.
@@ -143,21 +143,6 @@
 		 * and programs the receiver, and the lanes simply stay idle.
 		 */
 
-		ports {
-			/* Sink: the sensor's MIPI pins feed the receiver. */
-			seninf_in: port@0 {
-				seninf_in_ep: endpoint {
-					remote-endpoint = <&a5142_out_ep>;
-				};
-			};
-
-			/* Source: the receiver feeds the SCAM adaptor. */
-			seninf_out: port@1 {
-				seninf_out_ep: endpoint {
-					remote-endpoint = <&scam_in_ep>;
-				};
-			};
-		};
 	};
 
 	/*
@@ -202,7 +187,16 @@
 
 		ports {
 			scam_in: port@0 {
-				scam_in_ep: endpoint {
+				ports {
+			/* Source: the receiver feeds the SCAM adaptor. */
+			seninf_out: port@1 {
+				seninf_out_ep: endpoint {
+					remote-endpoint = <&scam_in_ep>;
+				};
+			};
+		};
+
+		scam_in_ep: endpoint {
 					remote-endpoint = <&seninf_out_ep>;
 				};
 			};

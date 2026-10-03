@@ -11,7 +11,6 @@
 #include "mt6320.dtsi"
 #include "mt6589-vcodec.dtsi"
 #include "mt6589-lenovo-blade-camera.dtsi"
-#include "mt6589-lenovo-blade-a5142.dtsi"
 
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 

@@ -1792,4 +1792,3 @@ endmenu
 
 endif # VIDEO_DEV
 
-source "drivers/media/i2c/a5142/Kconfig"
