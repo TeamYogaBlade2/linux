@@ -21,10 +21,16 @@ properties:
     enum:
       - mediatek,mt6779-devapc
       - mediatek,mt8186-devapc
+      - mediatek,mt6589-devapc
 
   reg:
-    description: The base address of devapc register bank
-    maxItems: 1
+    description: |
+      The base address of devapc register bank.
+
+      MT6589 describes five independent instances, each as a pair of reg
+      entries (an always-on permission window followed by a power-down
+      violation window), so instance n uses reg entries 2n and 2n+1.
+    maxItems: 10
 
   interrupts:
     description: A single interrupt specifier
@@ -37,6 +43,48 @@ properties:
   clock-names:
     description: Names of the clocks list in clocks property
     maxItems: 1
+
+  mediatek,devapc-forbid-slaves:
+    description: |
+      Permission policy: a flat list of 4-tuples that programs each named
+      slave's access permission from the always-on window.
+
+        <instance> <module> <domain-mask> <perm>
+
+      domain-mask is a bitmask of the domain indices (1 = AP, 2 = MD1,
+      4 = MD2, 8 = MM) and perm is 0..3, where 0 (L0) is no protection and
+      3 (L3) forbids the access and raises a violation.  Slaves not listed
+      stay at L0.
+
+      This is entirely independent of mediatek,vio-irq-mask: a slave can be
+      locked to L3 yet raise no interrupt.
+    items:
+      - description: DEVAPC instance index (0..4)
+        maximum: 4
+      - description: Slave module index within the instance
+        maximum: 31
+      - description: Bitmask of the domain masters to program
+        minimum: 1
+        maximum: 15
+      - description: Permission level, 0 (L0) to 3 (L3)
+        maximum: 3
+    minItems: 4
+    maxItems: 256
+
+  mediatek,vio-irq-mask:
+    description: |
+      Interrupt-monitoring policy, independent of the permission policy.
+
+      A non-zero value masks violation interrupts for every slave, so no
+      DEVAPC interrupt is raised.  Violations are still latched in the
+      D<d>_VIO_STA status registers and permissions still apply; only the
+      notification is suppressed.
+
+      A zero value (the default when this property is absent) unmasks
+      violation interrupts for all slaves, so any violation is logged.
+
+      Defaults to 0 (unmasked) when omitted.
+    enum: [0, 1]
 
 required:
   - compatible
@@ -58,4 +106,27 @@ examples:
       interrupts = <GIC_SPI 168 IRQ_TYPE_LEVEL_LOW>;
       clocks = <&infracfg_ao CLK_INFRA_DEVICE_APC>;
       clock-names = "devapc-infra-clock";
+    };
+
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/clock/mt6589-clk.h>
+
+    devapc: devapc@10010000 {
+      compatible = "mediatek,mt6589-devapc";
+      reg = <0x10010000 0x100>, <0x10207000 0x100>,
+            <0x10010100 0x100>, <0x10207100 0x100>,
+            <0x10010200 0x100>, <0x10207200 0x100>,
+            <0x10010300 0x100>, <0x10207300 0x100>,
+            <0x10010400 0x100>, <0x10207400 0x100>;
+      interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
+      clocks = <&infracfg CLK_INFRA_DEVAPC>;
+      clock-names = "devapc-infra-clock";
+
+      /* Lock modules 1 and 2 of instance 0 to L3 for the MD domains. */
+      mediatek,devapc-forbid-slaves = <0 1 0x6 0x3>,
+                                      <0 2 0x6 0x3>;
+
+      /* Default: leave violation interrupts unmasked. */
+      mediatek,vio-irq-mask = <0>;
     };

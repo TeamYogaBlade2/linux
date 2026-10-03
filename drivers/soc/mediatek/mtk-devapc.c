@@ -254,17 +254,51 @@ static void mt6589_write_perm(struct mtk_devapc_instance *in,
 }
 
 /*
- * mt6589_prepare_inst - clear stale violation status and unmask the module
- *			 interrupts for one instance.
+ * MT6589 has two independent policies that must not be conflated:
+ *
+ *  - Permission policy: which masters may touch which slave, and at what
+ *    level (L0..L3).  That is programmed into the per-domain APC registers
+ *    from the DT "mediatek,devapc-forbid-slaves" table by
+ *    mt6589_apply_forbid().
+ *
+ *  - Interrupt-monitoring policy: which slaves, if any, raise an interrupt
+ *    when a violation occurs.  That is the D<d>_VIO_MASK register, and it is
+ *    completely independent of the permission level - a slave can be locked
+ *    to L3 and still be masked out (no interrupt, violation still logged in
+ *    the status bit), or left at L0 and unmasked.
+ *
+ * By default we unmask everything so bring-up logs violations on any slave.
+ * Set "mediatek,vio-irq-mask" in DT to a non-zero value to mask all
+ * interrupts instead (permissions still apply; violations are still latched
+ * in D<d>_VIO_STA but no interrupt is raised).
  */
-static void mt6589_prepare_inst(struct mtk_devapc_instance *in)
+
+/* Default interrupt-monitoring policy: 0 = unmask all violation interrupts. */
+#define MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT	0
+
+/*
+ * mt6589_prepare_inst - clear stale violation status and apply the
+ *			 interrupt-monitoring policy for one instance.
+ *
+ * Clearing D<d>_VIO_STA is unconditional and is a status-register write, not
+ * a permission change: it just drops violations latched before this driver
+ * took over.  The VIO_MASK write below is the *only* thing that decides
+ * whether violations generate interrupts, and it is driven by the DT policy
+ * rather than being hardcoded.
+ */
+static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
+				bool vio_irq_mask)
 {
 	enum mt6589_devapc_domain dom;
-	u32 mask = GENMASK(in->nr_modules - 1, 0);
+	u32 sta_clr = GENMASK(in->nr_modules - 1, 0);
+	u32 irq_mask = vio_irq_mask ? GENMASK(in->nr_modules - 1, 0) : 0;
 
 	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
-		writel(mask, in->pd_base + MT6589_DEVPAPC_VIO_STA_REG(dom));
-		writel(0, in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom));
+		/* Drop stale latched violations (status, not permission). */
+		writel(sta_clr, in->pd_base + MT6589_DEVPAPC_VIO_STA_REG(dom));
+
+		/* Interrupt-monitoring policy, independent of permission. */
+		writel(irq_mask, in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom));
 	}
 
 	/*
@@ -281,26 +315,66 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in)
 }
 
 /*
- * mt6589_extract_vio_dbg - decode VIO_DBG0/VIO_DBG1 from one instance.  The
- *			   field layout matches the shared struct; only the base
- *			   pointer differs from the single-instance case.
+ * mt6589_vio_dbg - decoded VIO_DBG0/VIO_DBG1 pair from one instance.
+ *
+ * The values are captured into this struct so they can be reported before
+ * the caller clears the debug latch; see MT6589_DEVPAPC_VIO_DBG0_CLR.
+ */
+struct mtk_devapc_vio_dbg {
+	u32 master_id;
+	u32 domain_id;
+	u32 addr;
+	bool is_write;
+};
+
+/*
+ * mt6589_read_vio_dbg - latch and decode the violation debug registers.
+ *
+ * VIO_DBG0 is read only - it is NOT cleared by a read, so this is safe to
+ * call before the clear.  Decode first, clear later: writing bit31 releases
+ * the latch and the information cannot be recovered afterwards.
+ */
+static void mt6589_read_vio_dbg(struct mtk_devapc_instance *in,
+				struct mtk_devapc_vio_dbg *vio)
+{
+	u32 dbg0;
+
+	dbg0 = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
+
+	vio->master_id = (dbg0 & MT6589_DEVPAPC_VIO_DBG0_MSTID) >>
+			       __bf_shf(MT6589_DEVPAPC_VIO_DBG0_MSTID);
+	vio->domain_id = (dbg0 & MT6589_DEVPAPC_VIO_DBG0_DMNID) >>
+			       __bf_shf(MT6589_DEVPAPC_VIO_DBG0_DMNID);
+	vio->is_write = !!(dbg0 & MT6589_DEVPAPC_VIO_DBG0_VIO_W);
+	vio->addr = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG1);
+}
+
+/*
+ * mt6589_report_vio_dbg - hand a decoded violation to the log.
+ */
+static void mt6589_report_vio_dbg(struct mtk_devapc_context *ctx,
+				  unsigned int idx,
+				  const struct mtk_devapc_vio_dbg *vio)
+{
+	dev_info(ctx->dev,
+		 "DEVAPC%u violation: %s addr 0x%08x, master ID 0x%03x, domain ID 0x%x\n",
+		 idx, vio->is_write ? "W" : "R", vio->addr,
+		 vio->master_id, vio->domain_id);
+}
+
+/*
+ * mt6589_extract_vio_dbg - decode VIO_DBG0/VIO_DBG1 from one instance and
+ *			   report it.  Everything is reported here, before the
+ *			   caller clears the latch.
  */
 static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
-				   struct mtk_devapc_instance *in)
+				   struct mtk_devapc_instance *in,
+				   unsigned int idx)
 {
-	struct mtk_devapc_vio_dbgs vio;
+	struct mtk_devapc_vio_dbg vio;
 
-	vio.vio_dbg0 = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
-	vio.vio_dbg1 = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG1);
-
-	if (vio.dbg0_bits.vio_w)
-		dev_info(ctx->dev, "write violation\n");
-	else if (vio.dbg0_bits.vio_r)
-		dev_info(ctx->dev, "read violation\n");
-
-	dev_info(ctx->dev, "Bus ID:0x%x, Dom ID:0x%x, Vio Addr:0x%x\n",
-		 vio.dbg0_bits.mstid, vio.dbg0_bits.dmnid,
-		 (u32)((vio.dbg0_bits.addr_h << 24) | vio.vio_dbg1));
+	mt6589_read_vio_dbg(in, &vio);
+	mt6589_report_vio_dbg(ctx, idx, &vio);
 }
 
 /*
@@ -309,6 +383,11 @@ static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
  *			 VIO_DBG0 clears them.  The MT6779 shift handshake would
  *			 read an unrelated register and time out here, so walk the
  *			 instances directly instead.
+ *
+ * Order matters and must not be rearranged: read the latch, decode and
+ * report it, and only then clear the latch and acknowledge the instance
+ * status.  Clearing first destroys the evidence the diagnostic exists to
+ * provide, so a violation would be reported as all zeroes.
  */
 static irqreturn_t mt6589_violation_irq(int irq, void *data)
 {
@@ -323,12 +402,14 @@ static irqreturn_t mt6589_violation_irq(int irq, void *data)
 		      in->dxs_vio_sta_bit))
 			continue;
 
-		/* Write-1-to-clear releases the debug latch, then decode it. */
+		/* 1. Read and decode, 2. report, in that order. */
+		mt6589_extract_vio_dbg(ctx, in, i);
+
+		/* 3. Only now release the debug latch (write-1-to-clear). */
 		writel(MT6589_DEVPAPC_VIO_DBG0_CLR,
 		       in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
-		mt6589_extract_vio_dbg(ctx, in);
 
-		/* Acknowledge the instance-level status. */
+		/* 4. Acknowledge the instance-level status. */
 		writel(in->dxs_vio_sta_bit,
 		       in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA);
 	}
@@ -409,9 +490,21 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 static void mt6589_start(struct mtk_devapc_context *ctx)
 {
 	unsigned int i;
+	u32 mask = MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT;
+
+	/*
+	 * Interrupt-monitoring policy, read from DT.  Absent (the default),
+	 * all violation interrupts are unmasked so bring-up logs everything.
+	 */
+	if (of_property_read_u32(ctx->dev->of_node,
+				 "mediatek,vio-irq-mask", &mask))
+		mask = MT6589_DEVPAPC_VIO_IRQ_MASK_DEFAULT;
+
+	dev_info(ctx->dev, "violation interrupts %s\n",
+		 mask ? "masked" : "unmasked for all slaves");
 
 	for (i = 0; i < ctx->data->nr_instances; i++)
-		mt6589_prepare_inst(&ctx->inst[i]);
+		mt6589_prepare_inst(&ctx->inst[i], !!mask);
 
 	mt6589_apply_forbid(ctx);
 }
@@ -504,6 +597,8 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
 	struct mtk_devapc_context *ctx;
+	struct of_phandle_args oirq;
+	unsigned long devapc_irq_flags;
 	u32 devapc_irq;
 	unsigned int i;
 	int ret;
@@ -569,10 +664,40 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 		goto err_unmap_inst;
 	}
 
+	/*
+	 * The violation interrupt is level sensitive: the MT6589 DTS declares
+	 * IRQ_TYPE_LEVEL_LOW, and the downstream driver requests it with
+	 * IRQF_TRIGGER_LOW | IRQF_SHARED.  Derive the trigger from the DT
+	 * specifier rather than hardcoding one, so a board that wires it
+	 * edge triggered still works.
+	 *
+	 * IRQF_SHARED is deliberately NOT set.  The vendor shares the line
+	 * because its driver is paired with a userspace cdev control
+	 * interface that also claims it; in mainline nothing else claims
+	 * GIC SPI 94 on this platform, and claiming it shared would require
+	 * every other owner to be equally correct.
+	 */
+	ret = of_irq_parse_one(node, 0, &oirq);
+	if (!ret && oirq.args_count > 1)
+		switch (oirq.args[1]) {
+		case IRQ_TYPE_EDGE_FALLING:
+			devapc_irq_flags = IRQF_TRIGGER_FALLING;
+			break;
+		case IRQ_TYPE_EDGE_RISING:
+			devapc_irq_flags = IRQF_TRIGGER_RISING;
+			break;
+		default:
+			/* Level sensitive, the MT6589 default. */
+			devapc_irq_flags = IRQF_TRIGGER_LOW;
+			break;
+		}
+	else
+		devapc_irq_flags = IRQF_TRIGGER_LOW;
+
 	ret = devm_request_irq(&pdev->dev, devapc_irq,
 			       ctx->data->nr_instances > 1 ?
 			       mt6589_violation_irq : devapc_violation_irq,
-			       IRQF_TRIGGER_NONE, "devapc", ctx);
+			       devapc_irq_flags, "devapc", ctx);
 	if (ret)
 		goto err_unmap_inst;
 

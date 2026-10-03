@@ -95,25 +95,52 @@ enum mt6589_devapc_perm {
 /* APC_CON bit2 must be cleared for an instance to report violations. */
 #define MT6589_DEVPAPC_APC_CON_STOP	BIT(2)
 
-/* VIO_DBG0 bit31 is write-1-to-clear; read back to decode the latch. */
-#define MT6589_DEVPAPC_VIO_DBG0_CLR	BIT(31)
-
 /*
- * VIO_DBG0 bit layout, shared with the other MediaTek DEVAPC blocks:
-
- *   [15:0]  master id   - which domain master attempted the access
- *   [21:16] domain id
- *   [22]    violation was a write
- *   [23]    violation was a read
- *   [27:24] faulting address [27:24]
+ * VIO_DBG0 - latched violation descriptor (per DEVAPC instance, PD window).
  *
- * and VIO_DBG1 holds faulting address [23:0].
+ * NOTE: this layout is NOT the MT6779/MT8186 one.  The upstream in-tree
+ * comment claiming it was "shared with the other MediaTek DEVAPC blocks"
+ * was wrong; the fields below are what MT6589 hardware actually decodes.
+ *
+ *   Bit(s)   Field       Description
+ *   ------   ----------  ----------------------------------------------
+ *   10:0     MASTER_ID   Violation master ID {AXI ID:8, Port ID:3}.
+ *                       Identifies which domain master attempted the
+ *                       access that was refused.
+ *   13:12    DOMAIN_ID   Violation domain ID (2 bits): which of the four
+ *                       domain masters (AP/MD1/MD2/MM) was the master.
+ *   28       W_VIO       Set if the abort was caused by a WRITE.
+ *   29       R_VIO       Set if the abort was caused by a READ.
+ *   31       CLR         Write-1-to-clear; SW clears the whole debug latch.
+ *                       (Reading this register does NOT clear it - decode
+ *                       before clearing or the information is lost forever.)
+ *
+ * Bits 30, 27:14 are reserved/unused.
+ *
+ * VIO_DBG1 is the full 32-bit faulting address (the vendor prints it
+ * directly; no split address field exists in VIO_DBG0 on this block).
+ *
+ * Evidence for every field:
+ *   - aquaris-5 mediatek/platform/mt6589/kernel/drivers/devapc/devapc.c
+ *       master_ID    = dbg0 & 0x000007FF            -> [10:0]
+ *       domain_ID    = (dbg0 >> 12) & 0x3           -> [13:12]
+ *       r_w_violation= (dbg0 >> 28) & 0x3           -> [29:28]  (1=W, else R)
+ *       writes 0x80000000 to VIO_DBG0 to clear      -> bit31 CLR
+ *   - MT6589 datasheet, EMI MPU EMI_MPUQ/S/T VIO_DBG0 (same block family
+ *     and same latch semantics, section 18.x / EMI MPUS ~p.622):
+ *       "13:12 DOMAIN_ID  Violation domain ID"
+ *       "10:0  MASTER_ID  Records the violation master ID {AXI ID, Port ID}"
+ *       "29    R_VID      Read violation"
+ *       "28    W_VID      Write violation"
+ *       "31    CLR        SW write CLR to 1 will clear ... to be 0"
  */
-#define MT6589_DEVPAPC_VIO_DBG0_MSTID	GENMASK(15, 0)
-#define MT6589_DEVPAPC_VIO_DBG0_DMNID	GENMASK(21, 16)
-#define MT6589_DEVPAPC_VIO_DBG0_VIO_W	BIT(22)
-#define MT6589_DEVPAPC_VIO_DBG0_VIO_R	BIT(23)
-#define MT6589_DEVPAPC_VIO_DBG0_ADDR_H	GENMASK(27, 24)
+#define MT6589_DEVPAPC_VIO_DBG0_MSTID	GENMASK(10, 0)
+#define MT6589_DEVPAPC_VIO_DBG0_DMNID	GENMASK(13, 12)
+#define MT6589_DEVPAPC_VIO_DBG0_VIO_W	BIT(28)
+#define MT6589_DEVPAPC_VIO_DBG0_VIO_R	BIT(29)
+
+/* VIO_DBG0 bit31 is write-1-to-clear; it releases the debug latch. */
+#define MT6589_DEVPAPC_VIO_DBG0_CLR	BIT(31)
 
 /* Each slave gets a 2-bit field; 16 slaves per APC register. */
 #define MT6589_DEVPAPC_PERM_SHIFT(m)	(2 * ((m) % 16))
