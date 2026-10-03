@@ -1291,6 +1291,26 @@
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
+		/*
+		 * G2D: a 2D blitter in the display subsystem.  RGB565/888,
+		 * ARGB8888, constant-colour fill, bitblt with flips and alpha
+		 * blending, plus 4x4 dithering.
+		 *
+		 * The data sheet gives the base as 0x14013000, the interrupt
+		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE
+		 * and CLK_DISP0_G2D_SMI.  The M4U port is on LARB2.
+		 */
+		g2d: g2d@14013000 {
+			compatible = "mediatek,mt6589-g2d";
+			reg = <0x14013000 0x1000>;
+			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_G2D_ENGINE>,
+				 <&dispsys CLK_DISP0_G2D_SMI>;
+			clock-names = "g2d-engine", "g2d-smi";
+			iommus = <&iommu MT6589_M4U_PORT_G2D>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
 		rdma0: rdma@14006000 {
 			compatible = "mediatek,mt6589-disp-rdma";
 			reg = <0x14006000 0x1000>;

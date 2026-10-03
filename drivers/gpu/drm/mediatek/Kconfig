@@ -57,3 +57,12 @@ config DRM_MEDIATEK_HDMI_V2
 	  This driver can also be built as a module. If so, the HDMIv2
 	  module will be called "mtk_hdmi_v2", and the DDCv2 module
 	  will be called "mtk_hdmi_ddc_v2".
+
+config MTK_G2D
+	bool "MediaTek G2D 2D blitter"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  The G2D block in the display subsystem does 2D copies: bitblt
+	  between surfaces, constant-colour fill, with flips and alpha
+	  blending.  Say Y to enable its driver.
