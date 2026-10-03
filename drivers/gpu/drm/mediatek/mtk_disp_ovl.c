@@ -457,6 +457,18 @@ void mtk_ovl_start(struct device *dev)
 		reg = reg | OVL_LAYER_SMI_ID_EN;
 		writel_relaxed(reg, ovl->regs + DISP_REG_OVL_DATAPATH_CON);
 	}
+
+	/*
+	 * Enable the interrupts before the engine, as OVLStart() does:
+	 * DISP_REG_SET_FIELD(OVL_INTEN, 0x0f) then OVL_EN = 1.
+	 *
+	 * 0x0f covers the four low interrupt-enable bits - REG_CMT_INTEN,
+	 * FME_CPL_INTEN, FME_UND_INTEN and OVL_SWRS_INTEN.  Nothing in this
+	 * driver ever set OVL_INTEN outside the reset and stop paths, so the
+	 * engine ran with every interrupt masked and the underflow condition
+	 * was reported without the completion that should follow it.
+	 */
+	writel_relaxed(0x0f, ovl->regs + DISP_REG_OVL_INTEN);
 	writel_relaxed(0x1, ovl->regs + DISP_REG_OVL_EN);
 }
 
@@ -464,6 +476,13 @@ void mtk_ovl_stop(struct device *dev)
 {
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
+	/*
+	 * Mask the interrupts before stopping the engine, as OVLStop() does
+	 * (INTEN = 0, EN = 0).  Stopping the engine with a latched status
+	 * still enabled makes the level-triggered interrupt fire again
+	 * immediately and keeps re-entering the handler.
+	 */
+	writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_INTEN);
 	writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_EN);
 	if (ovl->data->smi_id_en) {
 		unsigned int reg;
