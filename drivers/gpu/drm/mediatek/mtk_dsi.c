@@ -757,6 +757,17 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 
 	mtk_dsi_enable(dsi);
 
+	/*
+	 * Set the lane count and the packet flags in DSI_TXRX_CTRL before the
+	 * engine is restarted.  mtk_dsi_rxtx_control() was only ever called
+	 * from mtk_dsi_stop(), so on enable LANE_NUM stayed at its reset
+	 * value of 0 and the DSI drove no lanes at all - the overlay and RDMA
+	 * completed frames without underflow and the panel stayed dark.
+	 * The bootloader writes the same field the same way (dsi_drv.c:
+	 * LANE_NUM = 0xF for four lanes) before starting video.
+	 */
+	mtk_dsi_rxtx_control(dsi);
+
 	if (dsi->driver_data->has_shadow_ctl)
 		writel(FORCE_COMMIT | BYPASS_SHADOW,
 		       dsi->regs + dsi->driver_data->reg_shadow_dbg_off);
