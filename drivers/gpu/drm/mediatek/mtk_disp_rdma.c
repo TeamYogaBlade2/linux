@@ -58,9 +58,16 @@
 
 #define RDMA_MEM_GMC				0x40402020
 
+/*
+ * ARGB8888 but not XRGB8888: the RDMA block's input-format field has only
+ * VYUY, RGB565, RGB888 and ARGB8888 encodings (data sheet, RDMA SIZE_CON_0
+ * OUTPUT_FORMAT), so there is nothing to map XRGB8888 to.  Advertising it
+ * here made DRM pick it for the usual XRGB8888 framebuffer and then hand
+ * 4-byte pixels to the block as if they were ARGB.  The OVL side, which
+ * does have an xARGB8888 encoding, is where XRGB content is handled.
+ */
 static const u32 mt6589_formats[] = {
 	DRM_FORMAT_ARGB8888,
-	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_RGB888,
 	DRM_FORMAT_RGB565,
 	DRM_FORMAT_UYVY,
@@ -283,7 +290,6 @@ static unsigned int rdma_fmt_convert_mt6589(unsigned int fmt)
 		return (4 << 4);
 	case DRM_FORMAT_RGB888:
 		return (8 << 4);
-	case DRM_FORMAT_XRGB8888:
 	case DRM_FORMAT_ARGB8888:
 		return (16 << 4);
 	default:
