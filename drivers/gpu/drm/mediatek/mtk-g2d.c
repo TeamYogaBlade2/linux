@@ -34,7 +34,21 @@
 
 #include "mtk-g2d.h"
 
-/* Control block - 16 bit wide. */
+/*
+ * Control block - documented 16 bits wide in the data sheet's address map.
+ *
+ * These five registers are nonetheless read and written as 32-bit values on
+ * purpose.  The vendor HAL for this same block does exactly that: ddp_reg.h
+ * defines DISP_REG_GET as a "volatile unsigned int" load and DISP_REG_SET as
+ * mt65xx_reg_sync_writel(), which sync_write.h expands to writel(), and
+ * ddp_drv.c reads G2D_STATUS and G2D_IRQ - both documented 16 bits here -
+ * only through those 32-bit macros.  MediaTek's APB registers are commonly
+ * 32-bit-accessible even when only the low 16 bits are defined, so the
+ * documented width is a field width, not an access constraint.  The register
+ * offsets and the bit assignments agree with the data sheet; only the
+ * documented width differs, and the vendor is the authority on how the
+ * hardware is actually driven.
+ */
 #define G2D_START			0x00
 #define G2D_MODE_CON			0x04
 #define G2D_RESET			0x08
@@ -76,6 +90,11 @@
 #define G2D_MODE_CON_ENG_MODE		BIT(0)
 #define G2D_MODE_CON_ONE_PXL		BIT(1)
 
+/* G2D_RESET */
+#define G2D_RESET_APB_RESET		BIT(2)
+#define G2D_RESET_HRST			BIT(1)
+#define G2D_RESET_WRST			BIT(0)
+
 /* G2D_STATUS - reads 0 once the engine is idle. */
 #define G2D_STATUS_BUSY		BIT(0)
 
@@ -111,7 +130,11 @@
 
 #define G2D_TIMEOUT_US			100000
 
+/* Bounded poll budget for the warm-reset sequence's "while (G2D_STATUS)" loop. */
+#define G2D_RESET_TIMEOUT_US		100000
+
 struct mtk_g2d {
+	struct device *dev;
 	void __iomem *regs;
 	struct clk *clk_engine;
 	struct clk *clk_smi;
@@ -162,6 +185,97 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
 	return 0;
 }
 
+/**
+ * g2d_reset - drive the data sheet's warm-reset sequence.
+ * @g2d: device
+ *
+ * G2D_RESET.WRST is the data sheet's "warm reset", and the register
+ * description spells out the sequence verbatim, with the reason it must be
+ * followed exactly:
+ *
+ *	G2D_START = 0;
+ *	G2D_RESET = 1;
+ *	while (G2D_STATUS != 0) { read G2D_STATUS; }
+ *	G2D_RESET = 0;
+ *
+ * "Please follow the correct reset sequence to avoid potential bus hang
+ * problem (breaking bus protocol)."  Skipping the STATUS poll, or asserting
+ * WRST while START is still high, is precisely what breaks the bus protocol,
+ * so the steps below are issued in that order and are not reordered.
+ *
+ * The data sheet's poll is unbounded; in the kernel it is bounded, so a
+ * genuinely stuck engine cannot hang the caller.  The reset is de-asserted
+ * either way: leaving WRST asserted would keep the engine permanently in
+ * reset for every later operation.
+ *
+ * G2D_IRQ is deliberately left untouched.  The data sheet scopes the register
+ * resets precisely: APB_RESET alone "resets G2D APB registers to initial
+ * value", and HRST resets everything "except for APB registers" - so this
+ * warm reset is not even documented to clear the APB-side IRQ status, and a
+ * pending IRQ_STA may well survive it.  It must not be cleaned up here
+ * regardless: IRQ_STA and EN share one register, so any write aimed at the
+ * status that did not preserve EN would drop EN as well, and the line is
+ * negative level sensitive, so the driver would never see another completion.
+ * Leaving the register alone is safe in both cases - if a stale IRQ_STA
+ * remains, the handler sees it, clears it and keeps EN, exactly as it does
+ * for a genuine completion, and the engine is idle so nothing is missed.
+ *
+ * Must be called with @g2d->lock held; the caller is the only writer of the
+ * control block, so this serialises against the next operation's programming.
+ */
+static void g2d_reset(struct mtk_g2d *g2d)
+{
+	unsigned long timeout;
+
+	lockdep_assert_held(&g2d->lock);
+
+	/* Step 1: G2D_START = 0. */
+	writel(0, g2d->regs + G2D_START);
+
+	/* Step 2: G2D_RESET = 1, i.e. WRST. */
+	writel(G2D_RESET_WRST, g2d->regs + G2D_RESET);
+
+	/* Step 3: while (G2D_STATUS != 0), bounded. */
+	timeout = jiffies + msecs_to_jiffies(G2D_RESET_TIMEOUT_US / 1000);
+	while (readl(g2d->regs + G2D_STATUS) & G2D_STATUS_BUSY) {
+		if (time_after(jiffies, timeout)) {
+			/*
+			 * Out of reset, but the engine never went idle.  That
+			 * is the one case recovery cannot fix on its own, so
+			 * report it: the caller still gets -ETIMEDOUT, but a
+			 * blit that will keep failing needs to be traceable
+			 * rather than looking like an ordinary slow one.
+			 */
+			dev_err(g2d->dev,
+				"G2D still busy after warm reset, engine may be wedged\n");
+			break;
+		}
+		cpu_relax();
+	}
+
+	/* Step 4: G2D_RESET = 0, de-assert. */
+	writel(0, g2d->regs + G2D_RESET);
+}
+
+/**
+ * g2d_recover - put the engine back into a usable state after a timeout.
+ * @g2d: device
+ *
+ * g2d_start() has already given the engine G2D_TIMEOUT_US to finish and it
+ * has not, so G2D_STATUS.BUSY may still be 1.  Clearing the software busy
+ * flag alone would leave that hardware state in place, and the next blit
+ * would reprogram the engine and re-issue START while the previous operation
+ * was possibly still running - which is how a single stall turns into
+ * permanently corrupted output.  So reset the hardware before returning.
+ *
+ * Must be called with @g2d->lock held.
+ */
+static void g2d_recover(struct mtk_g2d *g2d)
+{
+	lockdep_assert_held(&g2d->lock);
+	g2d_reset(g2d);
+}
+
 static irqreturn_t g2d_irq_handler(int irq, void *data)
 {
 	struct mtk_g2d *g2d = data;
@@ -210,6 +324,14 @@ static int g2d_start(struct mtk_g2d *g2d)
 
 	ret = g2d_wait_idle(g2d);
 	if (ret) {
+		/*
+		 * The engine did not finish in time and BUSY may still be set.
+		 * Recover the hardware *before* handing the timeout back, so
+		 * the next caller does not reprogram a still-running engine and
+		 * re-issue START on top of it.
+		 */
+		g2d_recover(g2d);
+
 		spin_lock_irq(&g2d->busy_lock);
 		g2d->busy = false;
 		spin_unlock_irq(&g2d->busy_lock);
@@ -450,6 +572,7 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	g2d = devm_kzalloc(dev, sizeof(*g2d), GFP_KERNEL);
 	if (!g2d)
 		return -ENOMEM;
+	g2d->dev = dev;
 
 	g2d->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(g2d->regs))
@@ -476,15 +599,18 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "failed to enable smi clock\n");
 	}
 
-
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return dev_err_probe(dev, irq, "failed to get irq\n");
+	if (irq < 0) {
+		ret = dev_err_probe(dev, irq, "failed to get irq\n");
+		goto disable_clocks;
+	}
 
 	ret = devm_request_threaded_irq(dev, irq, NULL, g2d_irq_handler,
 					IRQF_ONESHOT, dev_name(dev), g2d);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to request irq\n");
+	if (ret) {
+		ret = dev_err_probe(dev, ret, "failed to request irq\n");
+		goto disable_clocks;
+	}
 
 	mutex_init(&g2d->lock);
 	spin_lock_init(&g2d->busy_lock);
@@ -495,6 +621,19 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, g2d);
 
 	return 0;
+
+disable_clocks:
+	/*
+	 * The clocks were taken with clk_prepare_enable() above, not with
+	 * devm_clk_*_enable(), so unwinding is explicit: every path that leaves
+	 * probe after a clock was enabled must come through here.  Order is the
+	 * reverse of acquisition - smi first, then engine - and each clock is
+	 * disabled exactly once, on the one path that took it.
+	 */
+	clk_disable_unprepare(g2d->clk_smi);
+	clk_disable_unprepare(g2d->clk_engine);
+
+	return ret;
 }
 
 #ifdef CONFIG_PM_SLEEP
