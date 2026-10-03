@@ -691,31 +691,27 @@ static const struct snd_soc_dapm_widget mt6589_afe_widgets[] = {
 			      mt6589_afe_memif_event,
 			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
 	/*
-	 * DL1 left/right go to I05/I06 and out to O03/O04, which is the
-	 * I2S_OUT_DAC path the stock driver builds with
-	 * SetinputConnection(I05, O03) and SetinputConnection(I06, O04).
+	 * The Ixx/Oxx interconnect widgets the stock driver names in
+	 * SetinputConnection() are deliberately absent here.  They are not
+	 * endpoints, and nothing on the codec side routes to them, so
+	 * dapm_generic_check_power() would see no sink and they would never
+	 * power - dead weight that misleads a reader into thinking the
+	 * interconnect is modelled.  The interconnect itself is hardware:
+	 * AFE_CONN1 bit 21 (I05_O03_S) and AFE_CONN2 bit 6 (I06_O04_S) are
+	 * programmed in prepare().
+	 *
+	 * The graph therefore has just the two memory interfaces, with the
+	 * codec's DAC hanging off the DAI widget DAPM creates for us:
+	 *
+	 *	DL1 Playback -> DL1 -> (AFE_CONN1/CON2) -> I2S2 -> MT6320 DAC
 	 */
-	SND_SOC_DAPM_MIXER("I05", SND_SOC_NOPM, 0, 0, NULL, 0),
-	SND_SOC_DAPM_MIXER("I06", SND_SOC_NOPM, 0, 0, NULL, 0),
-	SND_SOC_DAPM_MIXER("O03", SND_SOC_NOPM, 0, 0, NULL, 0),
-	SND_SOC_DAPM_MIXER("O04", SND_SOC_NOPM, 0, 0, NULL, 0),
-	/* Capture: I03/I04 out to the VUL memory interface. */
-	SND_SOC_DAPM_MIXER("I03", SND_SOC_NOPM, 0, 0, NULL, 0),
-	SND_SOC_DAPM_MIXER("I04", SND_SOC_NOPM, 0, 0, NULL, 0),
 };
 
 static const struct snd_soc_dapm_route mt6589_afe_routes[] = {
-	/* Playback: AIF1 -> DL1 memory interface -> I05/I06 -> O03/O04. */
+	/* Playback: the DAI's own widget feeds the DL1 memory interface. */
 	{ "DL1", NULL, "DL1 Playback" },
-	{ "I05", NULL, "DL1" },
-	{ "I06", NULL, "DL1" },
-	{ "O03", NULL, "I05" },
-	{ "O04", NULL, "I06" },
-	/* Capture: I03/I04 -> VUL memory interface -> AIF1. */
-	{ "I03", NULL, "VUL Capture" },
-	{ "I04", NULL, "VUL Capture" },
-	{ "VUL", NULL, "I03" },
-	{ "VUL", NULL, "I04" },
+	/* Capture: the I2S ADC feeds the VUL memory interface. */
+	{ "VUL", NULL, "VUL Capture" },
 };
 
 static const struct snd_soc_component_driver mt6589_afe_component = {

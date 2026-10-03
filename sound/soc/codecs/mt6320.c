@@ -200,6 +200,10 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		/*
+		 * Mute while reconfiguring, as the stock driver does, then
+		 * clear it again at the end of this branch.
+		 */
 		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
 					 BIT(7), BIT(7));
 		if (ret)
@@ -255,6 +259,14 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
+		/*
+		 * Unmute.  AFUNC_AUD_CON2 bit 7 is a mute, not an enable: the
+		 * stock driver asserts it while it configures the path and
+		 * clears it once the configuration is done
+		 * (AudioMachineDevice, SetAnalogReg(AFUNC_AUD_CON2, mute << 7)).
+		 * Leaving it set keeps the output muted for as long as the
+		 * path is powered - that is, for as long as it is playing.
+		 */
 		return regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
 					  BIT(7), 0);
 	}
@@ -749,12 +761,12 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	/*
 	 * NEWIF is the serial link to the SoC AFE.  This generation of
-	 * MT6320 has no PMIC-side NEWIF configuration registers, so the
-	 * link is programmed entirely by the SoC AFE driver
-	 * (mt6589-afe-pcm).  The widget stays in the DAPM graph to keep
-	 * the routing unchanged, but has no PM callback.
+	 * MT6320 has no PMIC-side NEWIF configuration registers, so there
+	 * is nothing for the codec to program on that link: the AFE drives
+	 * the I2S2 interface and the DAC is reached through AFE_CONN1/CON2.
+	 * A "NEWIF" widget was here once, but as a supply with no sink path
+	 * it never powered and only obscured that.
 	 */
-	SND_SOC_DAPM_SUPPLY("NEWIF", SND_SOC_NOPM, 0, 0, NULL, 0),
 	SND_SOC_DAPM_DAC_E("DAC", NULL, SND_SOC_NOPM, 0, 0, mt6320_dac_event,
 			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUT_DRV_E("HP Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
@@ -780,7 +792,6 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	 * dapm_connect_dai_pair() joins the two DAIs through it.
 	 */
 	{ "DAC", NULL, "DL1 Playback" },
-	{ "DAC", NULL, "NEWIF" },
 	{ "HP Driver", NULL, "DAC" },
 	{ "HP Driver", NULL, "Analog" },
 	{ "Headphone", NULL, "HP Driver" },
@@ -867,7 +878,7 @@ static int mt6320_codec_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, PTR_ERR(priv->clk_aud26m),
 				     "failed to get aud26m clock\n");
 
-	/* Analog + NEWIF idle baseline; DAPM powers the path per stream. */
+	/* Analog idle baseline; DAPM powers the path per stream. */
 	ret = regmap_multi_reg_write(priv->regmap, mt6320_codec_init,
 				     ARRAY_SIZE(mt6320_codec_init));
 	if (ret)
