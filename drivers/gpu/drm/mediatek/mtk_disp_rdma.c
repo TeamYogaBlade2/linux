@@ -251,6 +251,19 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	mtk_rdma_reset_mt6589(rdma);
 
 	/*
+	 * Leave MODE_SEL clear so RDMA0 passes the OVL's output straight
+	 * through instead of fetching from a memory ring.
+	 *
+	 * This has to be set here rather than in layer_config: no plane is
+	 * ever attached to RDMA0 on this path, so layer_config never runs.
+	 * It was the only place MODE_SEL was cleared, which meant the reset
+	 * above left RDMA0 in memory mode and it then waited forever on a
+	 * ring start address of zero.
+	 */
+	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
+			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
+
+	/*
 	 * One-shot readback after programming, because RDMA0 raising no
 	 * interrupt is indistinguishable from it being wedged: the OVL's
 	 * OVL_STA only reports RDMA0_IDLE, not why.  Log what the engine
@@ -483,12 +496,10 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	 *
 	 *	OVL: underflow intsta=0x35 sta=0x1d (run=1 rdma0_idle=0)
 	 *
-	 * Leave MODE_SEL clear so RDMA0 passes the OVL's output straight
-	 * through.  The ring registers above stay programmed: RDMAConfig()
-	 * writes START_ADDR, SRC_PITCH and the GMC settings either way.
+	 * The ring registers above stay programmed: RDMAConfig() writes
+	 * START_ADDR, SRC_PITCH and the GMC settings either way.  MODE_SEL is
+	 * handled in mtk_rdma_config(), which is the hook that actually runs.
 	 */
-	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
 
 }
 
