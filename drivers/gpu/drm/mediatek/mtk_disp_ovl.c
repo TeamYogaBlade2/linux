@@ -241,13 +241,21 @@ struct mtk_disp_ovl_data {
 	bool set_layer_src;
 	unsigned int vblank_en_mask;
 	/*
- * int_all_mask is the whole set of OVL_INTSTA bits this block can
- * raise.  It is ANDed with the latched status to decide both what
- * to acknowledge and whether the line is ours at all, so it must
- * cover every bit vblank_en_mask is able to enable.  fme_cpl_bit
- * is the frame complete status bit - the only one that means a
- * frame was actually produced, and therefore the only one
- * allowed to fire vblank_cb.
+	 * int_all_mask is the whole set of OVL_INTSTA bits this block can
+	 * raise.  It is ANDed with the latched status to decide both what
+	 * to acknowledge and whether the line is ours at all, so it must
+	 * cover every bit vblank_en_mask is able to enable.  fme_cpl_bit
+	 * is the frame complete status bit - the only one that means a
+	 * frame was actually produced, and therefore the only one
+	 * allowed to fire vblank_cb.
+	 *
+	 * Both are OPTIONAL and a zero value selects the legacy behaviour
+	 * instead of an empty mask - see mtk_ovl_int_all_mask() and
+	 * mtk_ovl_fme_cpl_bit().  Only MT6589 has a documented
+	 * OVL_INTEN/OVL_INTSTA bit map, so the other SoCs must not be
+	 * given invented values here; leaving them zero keeps those SoCs
+	 * acknowledging exactly what their own fault-bit fields name,
+	 * which is what this driver has always done for them.
 	 */
 	unsigned int int_all_mask;
 	unsigned int fme_cpl_bit;
@@ -280,19 +288,81 @@ struct mtk_disp_ovl {
 	void				*vblank_cb_data;
 };
 
+/*
+	 * Status bits this driver acknowledges, with a fallback for the SoCs that
+	 * predate int_all_mask.
+ *
+	 * Only MT6589 has a verified OVL_INTEN/OVL_INTSTA bit map, so only MT6589
+	 * populates data->int_all_mask.  The other eight SoCs leave it 0, and a
+	 * literal 0 would mean "this block can raise nothing": the ISR would return
+	 * IRQ_NONE on every invocation, clear nothing and never fire vblank - a
+	 * regression introduced when int_all_mask was added, because those eight SoCs
+	 * silently inherited a zero-initialised field they were never asked to fill
+	 * in.
+ *
+	 * The fallback is therefore exactly the set the ISR acknowledged before
+	 * int_all_mask existed, spelled out from the same per-SoC fields it used then.
+	 * Those fields are 0 on every one of those SoCs too, so the mask degrades to
+	 * 0 and they acknowledge exactly as much (that is, as little) as they always
+	 * have - and, crucially, the ISR no longer bails out before reaching the
+	 * clear and the vblank callback.  This reconstructs committed behaviour; it
+	 * is not a guess at any SoC's interrupt map.
+ */
+static u32 mtk_ovl_int_all_mask(const struct mtk_disp_ovl *ovl)
+{
+	if (ovl->data->int_all_mask)
+		return ovl->data->int_all_mask;
+
+	return ovl->data->fme_und_bit | ovl->data->rdma0_eof_abn_bit |
+	       ovl->data->rdma1_eof_abn_bit | ovl->data->rdma0_fifo_und_bit |
+	       ovl->data->rdma1_fifo_und_bit;
+}
+
+/*
+	 * The status bit that is allowed to fire vblank_cb.
+ *
+	 * A non-zero data->fme_cpl_bit (MT6589) gates vblank on a frame actually
+	 * having completed.  A zero value means this SoC's map does not identify
+	 * that bit, so vblank keeps the old "some event arrived" behaviour - it must
+	 * not be read as "vblank never fires", which would silently stop every frame
+	 * for every SoC that has not been characterised yet.
+ */
+static u32 mtk_ovl_fme_cpl_bit(const struct mtk_disp_ovl *ovl)
+{
+	if (ovl->data->fme_cpl_bit)
+		return ovl->data->fme_cpl_bit;
+
+	/*
+	 * No frame-complete bit known for this SoC: every status bit this
+	 * driver recognises counts as a frame boundary, as it did before
+	 * fme_cpl_bit was introduced.
+	 */
+	return ~0U;
+}
+
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
+	u32 int_all_mask = mtk_ovl_int_all_mask(priv);
 	u32 handled;
 
 	/*
- * None of the bits this block can raise is asserted, so the line
- * is not ours.  Checked before touching the hardware so that this
- * really is a clean "not mine", rather than a rejection after
- * already having acknowledged status bits.
+	 * Reject the line as "not ours" only when this SoC's status map is
+	 * actually known and none of its bits is asserted.  That keeps the
+	 * check honest - we never acknowledge a status bit we do not own -
+	 * while leaving the SoCs with no recorded map to run the handler to
+	 * completion, exactly as they did before int_all_mask existed.
+	 *
+	 * The guard has to be on data->int_all_mask rather than on the
+	 * resolved mask: where int_all_mask is 0 the resolved mask is the
+	 * legacy clear list, which is 0 as well for every SoC that has not
+	 * described its map.  Testing the resolved mask alone would send all
+	 * of them straight out of the handler before the clear and before
+	 * the vblank callback, which is the regression this guard was
+	 * originally introduced with.
 	 */
-	if (!(reg & priv->data->int_all_mask))
+	if (priv->data->int_all_mask && !(reg & int_all_mask))
 		return IRQ_NONE;
 
 	/*
@@ -345,20 +415,20 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
  * goes out as 1 and a condition arriving after the readl above is
  * left alone rather than wiped.
 	 */
-	handled = reg & priv->data->int_all_mask;
+	handled = reg & int_all_mask;
 	writel(~handled, priv->regs + DISP_REG_OVL_INTSTA);
 
 	/*
- * Only a completed frame is a vblank.  Underflow and the RDMA
- * faults are errors, already reported above, and firing the vblank
- * callback for them would hand the CRTC a frame that never
- * arrived.  The callback is gated on the frame complete status
- * bit alone, not on "some interrupt arrived", so it fires
- * exactly once per frame.  A frame complete with no callback
- * registered is still acknowledged by the clear above and cannot
- * re-trigger.
+	 * On a SoC whose interrupt map is known (MT6589) only a completed
+	 * frame is a vblank: underflow and the RDMA faults are errors,
+	 * already reported above, and firing the vblank callback for them
+	 * would hand the CRTC a frame that never arrived.  Everywhere else
+	 * mtk_ovl_fme_cpl_bit() returns "any recognised bit", which is the
+	 * behaviour those SoCs have always had.  Either way a frame
+	 * complete with no callback registered is still acknowledged by the
+	 * clear above and cannot re-trigger.
 	 */
-	if (priv->vblank_cb && (reg & priv->data->fme_cpl_bit))
+	if (priv->vblank_cb && (reg & mtk_ovl_fme_cpl_bit(priv)))
 		priv->vblank_cb(priv->vblank_cb_data);
 
 	/*
@@ -463,12 +533,21 @@ void mtk_ovl_start(struct device *dev)
 	 * DISP_REG_SET_FIELD(OVL_INTEN, 0x0f) then OVL_EN = 1.
 	 *
 	 * 0x0f covers the four low interrupt-enable bits - REG_CMT_INTEN,
-	 * FME_CPL_INTEN, FME_UND_INTEN and OVL_SWRS_INTEN.  Nothing in this
-	 * driver ever set OVL_INTEN outside the reset and stop paths, so the
-	 * engine ran with every interrupt masked and the underflow condition
+	 * FME_CPL_INTEN, FME_UND_INTEN and OVL_SWRS_INTEN - and that map is
+	 * documented for MT6589 only, which is where the value lives.  It is
+	 * read from ->data here rather than written as a literal so that this
+	 * shared path cannot enable MT6589's interrupt bits on an SoC whose
+	 * map is different or unknown.  Nothing in this driver ever set
+	 * OVL_INTEN outside the reset and stop paths, so on MT6589 the engine
+	 * used to run with every interrupt masked and the underflow condition
 	 * was reported without the completion that should follow it.
+	 *
+	 * A SoC that does not set vblank_en_mask keeps the interrupts
+	 * masked here, which is exactly what it did before this write
+	 * existed - mtk_ovl_enable_vblank() is what turns them on for it.
 	 */
-	writel_relaxed(0x0f, ovl->regs + DISP_REG_OVL_INTEN);
+	writel_relaxed(ovl->data->vblank_en_mask,
+		       ovl->regs + DISP_REG_OVL_INTEN);
 	writel_relaxed(0x1, ovl->regs + DISP_REG_OVL_EN);
 }
 
