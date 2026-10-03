@@ -262,6 +262,13 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	struct mt6589_bls_pwm *bls;
 	int ret;
 
+	/*
+	 * The backlight node is a child of this one, so it can only bind once
+	 * this probe has registered the chip - and it fails silently if the
+	 * chip never appears.  Say where this gets to.
+	 */
+	dev_info(dev, "bls pwm: probe\n");
+
 	chip = devm_pwmchip_alloc(dev, 1, sizeof(*bls));
 	if (IS_ERR(chip))
 		return PTR_ERR(chip);
@@ -269,12 +276,13 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	bls->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(bls->base))
-		return PTR_ERR(bls->base);
+		return dev_err_probe(dev, PTR_ERR(bls->base),
+				     "bls pwm: ioremap failed\n");
 
 	bls->clk_main = devm_clk_get(dev, "main");
 	if (IS_ERR(bls->clk_main))
 		return dev_err_probe(dev, PTR_ERR(bls->clk_main),
-				     "failed to get clock\n");
+				     "bls pwm: no main clock\n");
 
 	bls->max_level = PWM_MAX_LEVEL;			/* hardcoded, matches downstream default */
 
@@ -302,7 +310,8 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	ret = reset_control_reset(bls->rstc);
 	if (ret)
-		return dev_err_probe(dev, ret, "failed to reset BLS\n");
+		return dev_err_probe(dev, ret,
+				     "bls pwm: failed to reset BLS\n");
 
 	/* Initialize PWM control: clock divider, idle level high */
 	writel(0x00050000 | PWM_DEFAULT_DIV, bls->base + BLS_PWM_CON);
@@ -359,7 +368,10 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	ret = devm_pwmchip_add(dev, chip);
 	if (ret < 0)
-		return dev_err_probe(dev, ret, "failed to add PWM chip\n");
+		return dev_err_probe(dev, ret,
+				     "bls pwm: failed to add PWM chip\n");
+
+	dev_info(dev, "bls pwm: chip registered\n");
 
 	/*
 	 * The DDP hooks reach the block through this pointer: the CRTC hands
