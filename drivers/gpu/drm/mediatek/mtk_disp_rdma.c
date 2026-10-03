@@ -233,6 +233,18 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	u32 rdma_fifo_size;
 
+	/*
+	 * The main path is RGB888 (the panel's format), and the stock driver
+	 * sets RDMA_INPUT_FORMAT_RGB888 even when it selects direct-link
+	 * mode, so the input format is not a memory-mode-only field.  Set it
+	 * here: the .config hook is the only place it can be written, since
+	 * no plane is ever attached to RDMA0 on this path and so
+	 * layer_config never runs.
+	 */
+	mtk_ddp_write_relaxed(cmdq_pkt,
+			      rdma->data->fmt_convert(DRM_FORMAT_RGB888),
+			      &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
+
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,

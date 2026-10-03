@@ -402,6 +402,7 @@ static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.enable_vblank = mtk_rdma_enable_vblank,
 	.disable_vblank = mtk_rdma_disable_vblank,
 	.layer_nr = mtk_rdma_layer_nr,
+	.config = mtk_rdma_config,
 	.layer_config = mtk_rdma_layer_config,
 	.get_formats = mtk_rdma_get_formats,
 	.get_num_formats = mtk_rdma_get_num_formats,
