@@ -73,6 +73,9 @@
  *
  * upmu_hw.h:702  PMIC_RG_BST_DRV_1M_CK_PDN_MASK 0x1
  * upmu_hw.h:703  PMIC_RG_BST_DRV_1M_CK_PDN_SHIFT 7
+ *
+ * This bit is programmed in TOP_CKPDN itself, not through a companion shadow:
+ * see mt6320_led_bst_clk() for why.
  */
 #define MT6320_BST_DRV_1M_CK_PDN	BIT(7)
 
@@ -290,9 +293,27 @@ static const u16 mt6320_isink_trf_reg[] = {
  * which is single-threaded teardown.  The counter is unsigned and clamped at
  * zero on the release path, so a stray release cannot wrap it round and leave
  * the clock permanently gated.
+ *
+ * The bit is programmed in TOP_CKPDN (0x0102) by read-modify-write, which is
+ * what the vendor does and deliberately not through MT6320_TOP_CKPDN_SET
+ * (0x0104) or MT6320_TOP_CKPDN_CLR (0x0106).  Those are write-one-to-set and
+ * write-one-to-clear shadows: a bit written to 0 in the _CLR shadow is simply
+ * not written, so it stays put and cannot ungate anything.  The vendor never
+ * uses them for this bit; upmu_set_rg_bst_drv_1m_ck_pdn() calls
+ * pmic_config_interface(TOP_CKPDN, val, PMIC_RG_BST_DRV_1M_CK_PDN_MASK,
+ * PMIC_RG_BST_DRV_1M_CK_PDN_SHIFT) (upmu_common.c:1379-1386), i.e. a
+ * read-modify-write on the register itself, under pmic_lock().  Its callers
+ * all pass 0x0 to ungate (leds.c:298, 315, 331, 546, 589, 632, 674) and the
+ * matching 0x1 gate-backs are commented out (556, 598, 641, 686).  TOP_CKPDN
+ * is 0x0102 in upmu_hw.h:38, matching include/linux/mfd/mt6320/registers.h.
+ *
+ * Only the first and last user touch the register: the count decides when the
+ * rail is actually switched, and only then is the bit changed, so calls at a
+ * non-transition count cost nothing but a decrement.
  */
 static int mt6320_led_bst_clk(struct mt6320_leds *leds, bool enable)
 {
+	unsigned int val;
 	int ret;
 
 	if (enable) {
@@ -306,11 +327,20 @@ static int mt6320_led_bst_clk(struct mt6320_leds *leds, bool enable)
 	}
 
 	/* Clear the power-down bit to ungate, set it to gate. */
-	ret = regmap_update_bits(leds->regmap, MT6320_TOP_CKPDN_CLR,
-				 MT6320_BST_DRV_1M_CK_PDN,
-				 enable ? 0 : MT6320_BST_DRV_1M_CK_PDN);
+	ret = regmap_read(leds->regmap, MT6320_TOP_CKPDN, &val);
+	if (ret)
+		goto err_count;
+
+	if (enable)
+		val &= ~MT6320_BST_DRV_1M_CK_PDN;
+	else
+		val |= MT6320_BST_DRV_1M_CK_PDN;
+
+	ret = regmap_write(leds->regmap, MT6320_TOP_CKPDN, val);
+
+err_count:
+	/* Undo the accounting so the rail is retried on the next transition. */
 	if (ret) {
-		/* Undo the accounting so the rail is retried next time. */
 		if (enable)
 			leds->bst_users--;
 		else
@@ -462,36 +492,26 @@ static int mt6320_led_set_blink(struct mt6320_led *led,
 }
 
 /*
- * Enable the sink and take the shared boost clock.
+ * Enable the sink's hardware enable bit.
  *
  * Split out from mt6320_led_hw_on() because the blink path shares it: both
  * paths need the sink lit, but only the brightness path may reprogram the
  * dimming counter into its steady configuration.  Calling that from here
  * would overwrite the blink pattern the caller has just programmed.
+ *
+ * This deliberately does NOT touch the shared boost clock.  Both callers take
+ * their own boost reference on the off -> on edge (see mt6320_led_hw_on())
+ * and unwind it themselves if this returns an error, so the ownership of a
+ * reference stays with the function that took it and there is exactly one
+ * release per acquisition.
  */
 static int mt6320_led_hw_enable(struct mt6320_led *led)
 {
 	struct mt6320_leds *leds = led->parent;
-	int ret;
 
-	/* The boost rail must be running before the sink is enabled. */
-	ret = mt6320_led_bst_clk(leds, true);
-	if (ret)
-		return ret;
-
-	ret = regmap_update_bits(leds->regmap, MT6320_ISINKS_EN_REG,
+	return regmap_update_bits(leds->regmap, MT6320_ISINKS_EN_REG,
 				 MT6320_ISINK_CH_EN(led->channel),
 				 MT6320_ISINK_CH_EN(led->channel));
-	if (ret) {
-		/*
-		 * The sink was not lit after all, so give the reference back
-		 * or the boost rail would stay up for a light that is off.
-		 */
-		mt6320_led_bst_clk(leds, false);
-		return ret;
-	}
-
-	return 0;
 }
 
 /*
@@ -504,13 +524,23 @@ static int mt6320_led_hw_enable(struct mt6320_led *led)
  * clamp is kept so that a step can never escape the three-bit field and land
  * on another channel's current range.
  *
- * The boost clock is taken here and released in mt6320_led_hw_off(), so the
- * two are symmetric for both the brightness and the blink path.
+ * The boost clock is referenced here and released in mt6320_led_hw_off(), so
+ * the two are symmetric for both the brightness and the blink path.
+ *
+ * The reference is taken on the off -> on edge only, detected with the
+ * cached led->current_brightness, which is 0 exactly when this sink is dark
+ * and is updated by the caller only after a transition has succeeded.  A
+ * brightness change between two non-zero levels re-programs the step but
+ * leaves the count alone, so 10 -> 12 -> 20 -> 0 takes one reference and
+ * releases it once.  Without this the count would grow with every level
+ * change and the rail would stay up forever after the sink goes dark.
  */
 static int mt6320_led_hw_on(struct mt6320_led *led,
 			    enum led_brightness brightness)
 {
+	struct mt6320_leds *leds = led->parent;
 	unsigned int step;
+	bool was_off = !led->current_brightness;
 	int ret;
 
 	/*
@@ -519,8 +549,13 @@ static int mt6320_led_hw_on(struct mt6320_led *led,
 	 * mid-pattern.  Only needed on the off -> on edge; when the sink is
 	 * already lit the counter is already in the steady configuration.
 	 */
-	if (!led->current_brightness) {
+	if (was_off) {
 		ret = mt6320_led_set_steady(led);
+		if (ret)
+			return ret;
+
+		/* The boost rail must be running before the sink is enabled. */
+		ret = mt6320_led_bst_clk(leds, true);
 		if (ret)
 			return ret;
 	}
@@ -528,9 +563,25 @@ static int mt6320_led_hw_on(struct mt6320_led *led,
 	step = min_t(unsigned int, brightness, led->cdev.max_brightness) - 1;
 	ret = mt6320_led_set_step(led, step);
 	if (ret)
-		return ret;
+		goto err_unref;
 
-	return mt6320_led_hw_enable(led);
+	ret = mt6320_led_hw_enable(led);
+	if (ret)
+		goto err_unref;
+
+	return 0;
+
+err_unref:
+	/*
+	 * The sink never lit, so this attempt's boost reference has to go back
+	 * or the rail would stay up for a light that is still dark.  Only the
+	 * off -> on edge took one, so only that path unwinds here; the caller
+	 * leaves led->current_brightness at 0 and the next attempt retries.
+	 */
+	if (was_off)
+		mt6320_led_bst_clk(leds, false);
+
+	return ret;
 }
 
 static int mt6320_led_hw_off(struct mt6320_led *led)
@@ -543,8 +594,18 @@ static int mt6320_led_hw_off(struct mt6320_led *led)
 	if (ret)
 		return ret;
 
-	/* Drop the shared boost rail once the last sink is dark. */
-	return mt6320_led_bst_clk(leds, false);
+	/*
+	 * Drop the shared boost rail once the last sink is dark.  This is the
+	 * mirror of the reference taken on the off -> on edge in
+	 * mt6320_led_hw_on(), so it only happens on an on -> off transition:
+	 * calling it for an already-dark sink would release a reference it
+	 * never took.  mt6320_led_bst_clk() clamps at zero anyway, so a
+	 * duplicate release cannot wrap the unsigned counter.
+	 */
+	if (led->current_brightness)
+		return mt6320_led_bst_clk(leds, false);
+
+	return 0;
 }
 
 static int mt6320_led_set_brightness(struct led_classdev *cdev,
@@ -624,6 +685,18 @@ static int mt6320_led_hw_blink_set(struct led_classdev *cdev,
 	mutex_lock(&led->parent->lock);
 	ret = mt6320_led_set_blink(led, on_ms, period_ms);
 	if (!ret) {
+		bool was_off = !led->current_brightness;
+
+		/*
+		 * Take a boost reference on the off -> on edge, exactly as the
+		 * brightness path does, before the sink is lit.
+		 */
+		if (was_off) {
+			ret = mt6320_led_bst_clk(led->parent, true);
+			if (ret)
+				goto out;
+		}
+
 		/*
 		 * Enable the sink, but deliberately not through
 		 * mt6320_led_hw_on(): that would put the dimming counter back
@@ -636,8 +709,12 @@ static int mt6320_led_hw_blink_set(struct led_classdev *cdev,
 			/* Only refresh the cache once it really is programmed. */
 			led->blink_on = on_ms;
 			led->blink_off = *delay_off;
+		} else if (was_off) {
+			/* Never lit: give the reference back. */
+			mt6320_led_bst_clk(led->parent, false);
 		}
 	}
+out:
 	mutex_unlock(&led->parent->lock);
 
 	return ret;
