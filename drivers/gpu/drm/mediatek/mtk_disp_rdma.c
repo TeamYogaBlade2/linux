@@ -200,6 +200,8 @@ void mtk_rdma_clk_disable(struct device *dev)
 	clk_bulk_disable_unprepare(rdma->num_clks, rdma->clks);
 }
 
+static void mtk_rdma_reset_mt6589(struct mtk_disp_rdma *rdma);
+
 void mtk_rdma_start(struct device *dev)
 {
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
@@ -228,10 +230,25 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 		     unsigned int height, unsigned int vrefresh,
 		     unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
+	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	unsigned int threshold;
 	unsigned int reg;
-	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	u32 rdma_fifo_size;
+
+	/*
+	 * Clear the engine before programming it, as the stock path does:
+	 * ddp_path.c calls RDMAStop(0) and RDMAReset(0) immediately before
+	 * RDMAConfig().  mtk_rdma_reset_mt6589() matches that RDMAReset()
+	 * but was never called from anywhere, so the block kept whatever the
+	 * bootloader and the previous mode left in its registers.  OVL
+	 * resets itself from its own config hook; RDMA0 had no such step.
+	 *
+	 * This has to run here rather than from mtk_rdma_start(), because the
+	 * CRTC configures each component before starting it - a reset in
+	 * start() would clear the values written a moment earlier.
+	 */
+	mtk_rdma_reset_mt6589(rdma);
+
 
 	/*
 	 * The main path is RGB888 (the panel's format), and the stock driver
