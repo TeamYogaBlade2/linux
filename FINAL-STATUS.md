@@ -112,6 +112,36 @@ Two things that were *not* the cause, having been suspected and then checked:
 and the DSI PHY node's `reg` size (`0x90`) covers the highest register the
 driver touches (`0x88`).
 
+## The panel was never registered, not merely unlit
+
+Worth calling out because it reads as a cosmetic problem and is not.
+`panel-simple` does this at probe:
+
+	err = drm_panel_of_backlight(&panel->base);
+	if (err) {
+		dev_err_probe(dev, err, "Could not find backlight\n");
+		goto disable_pm_runtime;
+	}
+
+	drm_panel_add(&panel->base);
+
+`drm_panel_of_backlight()` hard-errors when the node has no `backlight`
+property, and the error path jumps straight past `drm_panel_add()`. There
+was no backlight device anywhere in this tree, so the panel was never
+registered at all. A working video pipeline and a completely dead one
+would have looked identical from the outside.
+
+Fixed by adding a `pwm-backlight` node under `&bls`, pointing both panel
+nodes at it, and enabling `CONFIG_BACKLIGHT_PWM`. Both `PWM_MT6589_DISP`
+and `BACKLIGHT_PWM` are builtin, which matters: `devm_of_find_backlight()`
+returns `-EPROBE_DEFER` when the property is set but no driver has claimed
+the node yet, so as modules this would have deferred forever and done
+nothing.
+
+Note that `mt6589-lenovo-b8000.dtsi` declares two `panel@0` nodes -
+`boe,hx8896-a01-panel` and `innolux,hx8896-a01-panel` - with the same GPIO
+and supply. Both are wired; only the BOE one is built for B8000-F.
+
 ## MT6628 — features added, then audited
 
 Closed gaps from the original review: `EVENT_ID_SEND_DEAUTH` (the work in the tree
