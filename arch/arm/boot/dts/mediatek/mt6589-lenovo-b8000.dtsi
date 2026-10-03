@@ -11,19 +11,10 @@
 		memory-region = <&framebuffer_reserved>;
 		width = <1280>;
 		height = <800>;
-		/*
-		 * The panel is MIPI_DSI_FMT_RGB888, and the DSI driver takes
-		 * its format straight from the panel descriptor with no
-		 * conversion, so the framebuffer has to match or the pipeline
-		 * would hand DSI the wrong pixel size.  a8b8g8r8 is RGB888 in
-		 * a 32-bit container, which is what the DRM format list needs;
-		 * the extra byte is what makes the stride a whole number of
-		 * pixels for the OVL and RDMA pitch fields.
-		 */
-		stride = <(1280 * 4)>;
-		format = "a8b8g8r8";
+		stride = <(1280 * 2)>;
+		format = "r5g6b5";
 
-		status = "okay";
+		status = "disabled";
 	};
 };
 
