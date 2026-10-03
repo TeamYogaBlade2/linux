@@ -155,21 +155,27 @@ struct mt6589_afe {
  */
 
 /*
- * Hz -> dense DL_SRC2 rate code.  SetDLSrc2() uses its own 0..8 table,
- * distinct from SampleRateTransform() above.
+ * Hz -> the AFE's own rate code.
+ *
+ * This is a *sparse* table, distinct from the dense 0..8 one the PMIC
+ * codec uses for its DL SRC2 register (mt6320.c).  The stock driver
+ * writes u4SamplingRateConvert[] = {0, 1, 2, 4, 5, 6, 8, 9, 10}
+ * (AudioAfe.c) into AFE_DAC_CON1's DL1 mode, AFE_I2S_CON1 and the IRQ
+ * counter select.  The two agree only up to 12 kHz, so using the dense
+ * code here programs the wrong divider for nearly every rate.
  */
-static int mt6589_afe_rate_code(unsigned int rate)
+static int mt6589_afe_rate_code_sparse(unsigned int rate)
 {
 	switch (rate) {
 	case 8000:	return 0;
 	case 11025:	return 1;
 	case 12000:	return 2;
-	case 16000:	return 3;
-	case 22050:	return 4;
-	case 24000:	return 5;
-	case 32000:	return 6;
-	case 44100:	return 7;
-	case 48000:	return 8;
+	case 16000:	return 4;
+	case 22050:	return 5;
+	case 24000:	return 6;
+	case 32000:	return 8;
+	case 44100:	return 9;
+	case 48000:	return 10;
 	default:	return -EINVAL;
 	}
 }
@@ -325,20 +331,20 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int sparse_code = mt6589_afe_rate_code_sparse(runtime->rate);
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		return mt6589_afe_vul_prepare(comp, substream);
 	int ret;
 
-	if (rate_code < 0)
+	if (sparse_code < 0)
 		return -EINVAL;
 
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
 	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
 				 AFE_IRQ_MCU_CON_IRQ1_RATE,
 				 FIELD_PREP(AFE_IRQ_MCU_CON_IRQ1_RATE,
-					    rate_code));
+					    sparse_code));
 	if (ret)
 		return ret;
 
@@ -374,19 +380,19 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	 */
 	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
 			   AFE_I2S_CON1_BASE |
-			   FIELD_PREP(AFE_I2S_CON1_RATE, rate_code));
+			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code));
 	if (ret)
 		return ret;
 
 	/*
 	 * DAC_CON1 carries the DL1 memory-interface rate in bits [3:0].
 	 * SetMemIfSampleRate() writes it there for MEM_DL1, and passes it
-	 * SampleRateTransform(), which is the same table used above.
+	 * u4SamplingRateConvert[] - the same sparse table used above.
 	 */
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_DL1_RATE,
 				 FIELD_PREP(AFE_DAC_CON1_DL1_RATE,
-					    rate_code));
+					    sparse_code));
 	if (ret)
 		return ret;
 
@@ -548,7 +554,8 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	/* AFE rate fields use the sparse table, as SetMemIfSampleRate() does. */
+	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
@@ -568,7 +575,7 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	u32 base = lower_32_bits(runtime->dma_addr);
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
+	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
 	afe->vul_substream = substream;

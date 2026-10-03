@@ -150,11 +150,17 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	if (rate_code < 0)
 		return rate_code;
 
-	return regmap_update_bits(priv->regmap,
-				  MT6320_ABB_AFE_DL_SRC2_CON0_H,
-				  MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE,
-				  MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
-				  (rate_code << 12));
+	/*
+	 * Write the whole register rather than updating only the rate field.
+	 * regmap_update_bits() computes (orig & ~mask) | (val & mask), and the
+	 * mask covers just the rate bits - so the SRC-enable/base field
+	 * (0x0300) was ANDed away and never reached the register, leaving the
+	 * PMIC downlink SRC disabled.  A plain write is what the stock driver
+	 * effectively does, and what the comment above this call describes.
+	 */
+	return regmap_write(priv->regmap, MT6320_ABB_AFE_DL_SRC2_CON0_H,
+			    MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
+			    (rate_code << 12));
 }
 
 static const struct snd_soc_dai_ops mt6320_dai_ops = {
