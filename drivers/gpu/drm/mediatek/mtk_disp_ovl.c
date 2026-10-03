@@ -55,7 +55,18 @@
 #define OVL_CONST_BLEND					BIT(28)
 #define DISP_REG_OVL_RDMA_CTRL(n)		(0x00c0 + 0x20 * (n))
 #define DISP_REG_OVL_RDMA_GMC(n)		(0x00c8 + 0x20 * (n))
+/*
+ * MT6589's OVL block starts at offset 0 within DISPSYS_OVL: the data sheet
+ * lists OVL_STA at 0x14003000 and the stock header agrees, with OVL_BASE
+ * 0xF4003000 (mt_reg_base.h), which is that address before the +0xE0000000
+ * remap.  DISP_REG_OVL_ADDR_MT2701 below is a genuine 0x40 skew for the
+ * MT2701, where a second OVL sits at that offset - so reusing it here put
+ * every OVL register 0x40 too high: INTEN landed on 0x14003044, INTSTA on
+ * 0x14003048, and the driver was reading and writing registers that do not
+ * exist while the real ones stayed at their reset values.
+ */
 #define DISP_REG_OVL_ADDR_MT2701		0x0040
+#define DISP_REG_OVL_ADDR_MT6589		0x0000
 #define DISP_REG_OVL_CLRFMT_EXT			0x02d0
 #define OVL_CON_CLRFMT_BIT_DEPTH_MASK(n)		(GENMASK(1, 0) << (4 * (n)))
 #define OVL_CON_CLRFMT_BIT_DEPTH(depth, n)		((depth) << (4 * (n)))
@@ -881,7 +892,7 @@ static const struct mtk_disp_ovl_data mt8167_ovl_driver_data = {
 };
 
 static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
-	.addr = DISP_REG_OVL_ADDR_MT2701,
+	.addr = DISP_REG_OVL_ADDR_MT6589,
 	.gmc_bits = 10,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
