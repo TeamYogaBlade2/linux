@@ -210,7 +210,13 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	.period_bytes_max = 8192,
 	.periods_min = 2,
 	.periods_max = 16,
-	.buffer_bytes_max = 16 * 1024,		/* AFE on-chip SRAM */
+	/*
+	 * The AFE SRAM is 16 KB and is shared by both directions. Handing
+	 * the whole window to one stream leaves nothing for the other, so
+	 * cap it at half. speaker-test asks for 8192 with a 4096 period,
+	 * which still fits.
+	 */
+	.buffer_bytes_max = 8 * 1024,
 };
 
 /*
