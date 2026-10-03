@@ -378,20 +378,34 @@ err_count:
  * blink deliberately leaves the brightness alone, so "is the brightness
  * non-zero" would no longer answer "does this sink hold a reference".
  *
+ * Taking is idempotent, so after a successful mt6320_led_take_boost() the
+ * caller cannot tell whether it just acquired the reference or found one that
+ * was already held - which is exactly what an error path needs to know.  The
+ * take therefore reports that through @acquired, and only a reference this
+ * call really acquired may be released again: dropping one that was already
+ * held before the call leaves a sink whose enable bit is still set - a lit
+ * LED - with the boost rail gated off underneath it, and nobody left to take
+ * that reference back.
+ *
  * Callers must hold leds->lock (mt6320_led_remove() being the documented
  * exception), which is also what mt6320_led_bst_clk() requires.
  */
-static int mt6320_led_take_boost(struct mt6320_led *led)
+static int mt6320_led_take_boost(struct mt6320_led *led, bool *acquired)
 {
 	struct mt6320_leds *leds = led->parent;
 	int ret;
+
+	/* Defined for the caller even when the take itself fails. */
+	*acquired = false;
 
 	if (led->boost_ref)
 		return 0;
 
 	ret = mt6320_led_bst_clk(leds, true);
-	if (!ret)
+	if (!ret) {
 		led->boost_ref = true;
+		*acquired = true;
+	}
 
 	return ret;
 }
@@ -664,6 +678,7 @@ static int mt6320_led_hw_enable(struct mt6320_led *led)
 static int mt6320_led_hw_on(struct mt6320_led *led,
 			    enum led_brightness brightness)
 {
+	bool took_boost = false;
 	int ret;
 
 	/*
@@ -680,7 +695,7 @@ static int mt6320_led_hw_on(struct mt6320_led *led,
 	}
 
 	/* The boost rail must be running before the sink is enabled. */
-	ret = mt6320_led_take_boost(led);
+	ret = mt6320_led_take_boost(led, &took_boost);
 	if (ret)
 		return ret;
 
@@ -703,11 +718,14 @@ static int mt6320_led_hw_on(struct mt6320_led *led,
 
 err_unref:
 	/*
-	 * The sink was not lit by this call, so any reference it just took has
-	 * to go back or the rail would stay up for a light that is still dark.
-	 * A reference that was already held is left alone.
+	 * The sink was not lit by this call, so a reference it just took has to
+	 * go back or the rail would stay up for a light that is still dark.
+	 * A reference that was already held before this call is deliberately
+	 * left alone: that sink was lit when this started, so releasing here
+	 * would gate the boost rail out from under a still-enabled sink.
 	 */
-	mt6320_led_drop_boost(led);
+	if (took_boost)
+		mt6320_led_drop_boost(led);
 
 	return ret;
 }
@@ -858,6 +876,7 @@ static int mt6320_led_hw_blink_set(struct led_classdev *cdev,
 {
 	struct mt6320_led *led = container_of(cdev, struct mt6320_led, cdev);
 	unsigned int on_ms, period_ms, duty, fsel, clksel;
+	bool took_boost = false;
 	int ret;
 
 	if (!*delay_on && !*delay_off) {
@@ -891,7 +910,7 @@ static int mt6320_led_hw_blink_set(struct led_classdev *cdev,
 		goto out_unlock;
 
 	/* leds.c:298 - the boost rail must be up before the sink is lit. */
-	ret = mt6320_led_take_boost(led);
+	ret = mt6320_led_take_boost(led, &took_boost);
 	if (ret)
 		goto out_unlock;
 
@@ -946,9 +965,13 @@ err_unref:
 	/*
 	 * The sink was never lit by this call, so a reference taken a moment
 	 * ago has to go back or the rail would stay up for a dark LED.  One
-	 * held before this call is left alone.
+	 * held before this call is deliberately left alone: that sink was
+	 * already enabled when this started, and the pattern above never
+	 * cleared its enable bit, so releasing here would gate the boost rail
+	 * out from under a still-lit LED.
 	 */
-	mt6320_led_drop_boost(led);
+	if (took_boost)
+		mt6320_led_drop_boost(led);
 
 out_unlock:
 	mutex_unlock(&led->parent->lock);
