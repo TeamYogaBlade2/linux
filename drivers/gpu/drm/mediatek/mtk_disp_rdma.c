@@ -116,6 +116,7 @@ struct mtk_disp_rdma {
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
 	u32				fifo_size;
+	bool				dbg_done;
 };
 
 static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
@@ -248,6 +249,23 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	 * start() would clear the values written a moment earlier.
 	 */
 	mtk_rdma_reset_mt6589(rdma);
+
+	/*
+	 * One-shot readback after programming, because RDMA0 raising no
+	 * interrupt is indistinguishable from it being wedged: the OVL's
+	 * OVL_STA only reports RDMA0_IDLE, not why.  Log what the engine
+	 * actually latched so a stuck RDMA0 can be placed rather than
+	 * guessed at.  Rate limited so a per-frame failure cannot flood.
+	 */
+	if (!rdma->dbg_done) {
+		rdma->dbg_done = true;
+		dev_info(dev,
+			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n",
+			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1));
+	}
 
 
 	/*
