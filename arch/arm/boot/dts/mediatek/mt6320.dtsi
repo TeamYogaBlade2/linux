@@ -35,6 +35,8 @@
 
 		mt6320keys: keys {
 			compatible = "mediatek,mt6320-keys";
+			mediatek,long-press-mode = <1>;
+			power-off-time-sec = <0>;
 
 			power {
 				linux,keycodes = <KEY_POWER>;
