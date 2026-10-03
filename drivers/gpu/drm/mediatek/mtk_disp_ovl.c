@@ -509,11 +509,20 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
 	gmc_thrshd_h = GMC_THRESHOLD_HIGH >>
 		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
-	if (ovl->data->gmc_bits == 10)
-		gmc_value = gmc_thrshd_h | gmc_thrshd_h << 16;
-	else
-		gmc_value = gmc_thrshd_l | gmc_thrshd_l << 8 |
-			    gmc_thrshd_h << 16 | gmc_thrshd_h << 24;
+	/*
+	 * OVL_RDMA0_MEM_GMC_SETTING holds RDMA0_EN_THRD in bits [9:0] and
+	 * RDMA0_DISEN_THRD in bits [25:16] - two 10-bit fields in units of
+	 * 16 bytes, and the data sheet requires EN_THRD to be *smaller*
+	 * than DISEN_THRD.
+	 *
+	 * Both branches above put the high threshold in both fields, so the
+	 * two were equal and the requirement was violated; and the 8-bit
+	 * branch packed four 8-bit values into 32 bits, which is a different
+	 * layout from this one. Set the two fields from the two thresholds,
+	 * masked to the field width.
+	 */
+	gmc_value = (gmc_thrshd_l & GENMASK(9, 0)) |
+		    ((gmc_thrshd_h & GENMASK(9, 0)) << 16);
 	mtk_ddp_write(cmdq_pkt, gmc_value,
 		      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RDMA_GMC(idx));
 
