@@ -30,7 +30,11 @@
 #define RDMA_REG_UPDATE_INT				BIT(0)
 #define DISP_REG_RDMA_GLOBAL_CON		0x0010
 #define RDMA_ENGINE_EN					BIT(0)
-#define RDMA_MODE_MEMORY				BIT(1)
+/* MODE_SEL is one bit at position 1: 0 = direct link, 1 = memory
+ * (REG_FLD(1, 1) in the stock ddp_rdma.h, RDMA_MODE_DIRECT_LINK = 0).
+ * This is the field mask, so writing 0 through it selects direct link.
+ */
+#define RDMA_MODE_SEL					BIT(1)
 #define DISP_REG_RDMA_SIZE_CON_0		0x0014
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
@@ -261,7 +265,7 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	 * ring start address of zero.
 	 */
 	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
+			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_SEL);
 
 
 
