@@ -475,11 +475,15 @@
 	no-mmc;
 	no-sd;
 
+	max-frequency = <50000000>;
+
+/*
 	max-frequency = <200000000>;
 	cap-sd-highspeed;
 	sd-uhs-sdr104;
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
+*/
 
 	/*
 	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the
