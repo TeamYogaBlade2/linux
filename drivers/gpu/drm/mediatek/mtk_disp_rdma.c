@@ -589,6 +589,15 @@ static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
 	.size_con1 = 0xfffff,
 	.fmt_convert = rdma_fmt_convert_mt6589,
 	.mem_start_addr_reg = 0x0028,
+	/*
+	 * Unsourced: the data sheet gives MEM_GMC_SETTING_0 a reset value of
+	 * 0x0a0a0a0a, the shared upstream default RDMA_MEM_GMC is 0x40402020,
+	 * and the stock driver never writes this register at all - it relies
+	 * on the reset value.  This 0x20402040 came with the port and matches
+	 * neither.  Left as it is rather than changed to a value with no
+	 * better evidence; flagging it so it is a known-unknown rather than
+	 * an oversight.
+	 */
 	.mem_gmc_val = 0x20402040,
 	.reset = mtk_rdma_reset_mt6589,
 };
