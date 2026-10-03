@@ -437,7 +437,8 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	 *	OVL: underflow intsta=0x35 sta=0x1d (run=1 rdma0_idle=0)
 	 *
 	 * Leave MODE_SEL clear so RDMA0 passes the OVL's output straight
-	 * through.
+	 * through.  The ring registers above stay programmed: RDMAConfig()
+	 * writes START_ADDR, SRC_PITCH and the GMC settings either way.
 	 */
 	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
