@@ -334,6 +334,8 @@ static int prismrv_runtime_suspend(struct device *dev)
 	mutex_unlock(&pv->init_mutex);
 	up_write(&pv->submit_rwsem);
 
+	/* registers are off-limits from here on; wait out any handler */
+	prismrv_power_down_irq(pv);
 	/* assert the G3D reset line before gating the clocks */
 	reset_control_assert(pv->rstc);
 	prismrv_clks_off(pv, pv->nr_clocks);
@@ -352,6 +354,7 @@ static int prismrv_runtime_resume(struct device *dev)
 	/* release the G3D block from reset (vendor EnableSGXClocks order) */
 	reset_control_deassert(pv->rstc);
 	udelay(2);
+	WRITE_ONCE(pv->hw_powered, true);
 
 	/*
 	 * Re-initialise hardware under the submit write-lock so no
@@ -378,6 +381,8 @@ static int prismrv_runtime_resume(struct device *dev)
 				 */
 				mutex_unlock(&pv->init_mutex);
 				up_write(&pv->submit_rwsem);
+				prismrv_power_down_irq(pv);
+				reset_control_assert(pv->rstc);
 				prismrv_clks_off(pv, pv->nr_clocks);
 				dev_err(pv->drm.dev,
 					"resume: firmware load failed (%d)\n",
@@ -392,6 +397,11 @@ static int prismrv_runtime_resume(struct device *dev)
 	up_write(&pv->submit_rwsem);
 
 	if (ret) {
+		/* hw_init() already quiesced and released everything it
+		 * set up; make sure no handler can touch the registers once
+		 * the clocks are gone */
+		prismrv_power_down_irq(pv);
+		reset_control_assert(pv->rstc);
 		prismrv_clks_off(pv, pv->nr_clocks);
 		return ret;
 	}

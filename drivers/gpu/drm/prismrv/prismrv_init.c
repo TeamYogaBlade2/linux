@@ -138,6 +138,7 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	const struct firmware *fw = NULL;
 	unsigned int i;
 	int ret, next;
+	bool quiesced = false;
 
 	/*
 	 * Use the init-script name derived by prismrv_fw_load() from the DT
@@ -257,14 +258,30 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	dev_err(pv->drm.dev, "uKernel init timeout\n");
 	ret = -ETIMEDOUT;
 
+	/*
+	 * Failure cleanup follows the same rule as hw_fini(): mask the
+	 * interrupt sources and wait out any handler BEFORE the CCB,
+	 * HostCtl and MMU the handler dereferences are freed.  (The init
+	 * script has already enabled SW_EVENT by now.)
+	 */
+	prismrv_hw_irq_quiesce(pv);
+	quiesced = true;
 	prismrv_ccb_fini(pv);
 out_hostctl:
+	if (!quiesced) {
+		prismrv_hw_irq_quiesce(pv);
+		quiesced = true;
+	}
 	if (pv->hostctl) {
 		dma_free_coherent(pv->drm.dev, sizeof(*pv->hostctl),
 				  pv->hostctl, pv->hostctl_dma);
 		pv->hostctl = NULL;
 	}
 out_mmu:
+	if (!quiesced) {
+		prismrv_hw_irq_quiesce(pv);
+		quiesced = true;
+	}
 	/*
 	 * errata buffers (if applied) are mapped into the MMU; release
 	 * them before tearing down the page tables.
@@ -272,6 +289,15 @@ out_mmu:
 	prismrv_errata_release(pv);
 	prismrv_mmu_fini(pv);
 out_fw:
+	if (!quiesced) {
+		/* an init-script write may already have armed an event */
+		prismrv_hw_irq_quiesce(pv);
+		quiesced = true;
+	}
+	/* the line stays masked at the source (HOST_ENABLE = 0); rebalance
+	 * the disable depth so the next hw_init() can arm it again */
+	if (pv->irq >= 0)
+		enable_irq(pv->irq);
 	return ret;
 }
 
@@ -289,8 +315,6 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	 * the EVENT_HOST_ENABLE register.  This prevents the IRQ handler
 	 * from firing for events we are about to stop tracking.
 	 */
-	if (pv->regs)
-		writel(0, pv->regs + EUR_CR_EVENT_HOST_ENABLE);
 
 	/*
 	 * Now synchronise with the Linux IRQ subsystem.
@@ -307,8 +331,7 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	 * enable_irq() is called at the end of hw_fini() so that
 	 * hw_init() (if called afterwards) can arm the interrupt again.
 	 */
-	if (pv->irq >= 0)
-		disable_irq(pv->irq);
+	prismrv_hw_irq_quiesce(pv);
 
 	/* stop the hang watchdog before tearing the rings down */
 	cancel_delayed_work_sync(&pv->hang_work);

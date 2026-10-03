@@ -255,6 +255,7 @@ void prismrv_recovery_work(struct work_struct *work)
 	 * is safe to stop the GPU.  This halts all DMA so subsequent
 	 * teardown of CCB/MMU memory cannot race live GPU accesses.
 	 */
+	prismrv_devfreq_pause(pv);
 	prismrv_soft_reset(pv);
 
 	/*
@@ -329,6 +330,15 @@ irqreturn_t prismrv_irq_handler(int irq, void *data)
 {
 	struct prismrv_device *pv = data;
 	u32 status, enable, clear;
+
+	/*
+	 * The line is IRQF_SHARED and stays enabled while the GPU is
+	 * powered down (its source is masked, not the line).  Touching the
+	 * registers with the clocks off or the block in reset would hang
+	 * the bus, so only look at them while the device is powered.
+	 */
+	if (!READ_ONCE(pv->hw_powered))
+		return IRQ_NONE;
 
 	status = readl(pv->regs + EUR_CR_EVENT_STATUS);
 	enable = readl(pv->regs + EUR_CR_EVENT_HOST_ENABLE);
@@ -428,4 +438,34 @@ int prismrv_hw_reinit(struct prismrv_device *pv)
 	mutex_unlock(&pv->init_mutex);
 	up_write(&pv->submit_rwsem);
 	return ret;
+}
+
+/**
+ * prismrv_hw_irq_quiesce() - stop the GPU raising host interrupts and wait
+ * for any running handler / IRQ thread.  Leaves the line disabled
+ * (disable_irq() depth +1); the caller must balance it with enable_irq().
+ * Shared by hw_fini() and the failure path of hw_init(), which both free
+ * the CCB and HostCtl block the handler dereferences.
+ */
+void prismrv_hw_irq_quiesce(struct prismrv_device *pv)
+{
+	if (pv->regs && READ_ONCE(pv->hw_powered)) {
+		writel(0, pv->regs + EUR_CR_EVENT_HOST_ENABLE);
+		writel(0, pv->regs + EUR_CR_EVENT_HOST_ENABLE2);
+	}
+	if (pv->irq >= 0)
+		disable_irq(pv->irq);
+	atomic_set(&pv->irq_events, 0);
+}
+
+/**
+ * prismrv_power_down_irq() - mark the registers off-limits and wait until
+ * no handler can still be reading them.  Call before the reset line is
+ * asserted / the clocks are gated.
+ */
+void prismrv_power_down_irq(struct prismrv_device *pv)
+{
+	WRITE_ONCE(pv->hw_powered, false);
+	if (pv->irq >= 0)
+		synchronize_irq(pv->irq);
 }
