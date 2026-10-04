@@ -238,9 +238,33 @@ struct mtk_disp_ovl_data {
 	bool fmt_rgb565_is_0;
 	bool smi_id_en;
 	bool supports_afbc;
+	/*
+	 * Whether OVL_PITCH bit 28 (OVL_CONST_BLEND) exists on this SoC.
+	 *
+	 * Upstream wrote OVL_CONST_BLEND unconditionally; it is a bit in
+	 * OVL_L<n>_PITCH, and MT6589's OVL_L0_PITCH is bits 15:0
+	 * L0_SRC_PITCH only - the data sheet names no other field, and the
+	 * vendor header agrees (ddp_ovl.h L0_PITCH_FLD_L0_SRC_PITCH is
+	 * REG_FLD(16, 0)).  So this is true for the eight other SoCs and
+	 * false for MT6589.  With CONST_BLD unavailable there, an XRGB8888
+	 * layer has no constant alpha to fall back on and must use the
+	 * CLRFMT that drops the top byte instead - see mt6589_fmt_convert().
+	 */
 	bool has_const_blend;
 	bool set_layer_src;
 	unsigned int vblank_en_mask;
+	/*
+	 * Whether this SoC's OVL node declares a "resets" phandle for this
+	 * block, and so whether probe may take the warm reset at all.
+	 *
+	 * The lookup is not optional: devm_reset_control_get(dev, NULL) on a
+	 * node with no "resets" property returns -ENOENT, not NULL, because
+	 * the reset was not requested with RESET_CONTROL_FLAGS_BIT_OPTIONAL.
+	 * Only the MT6589 node declares one; the other eight SoCs would fail
+	 * probe outright, which is why this is stated per SoC rather than
+	 * probed for.
+	 */
+	bool has_reset;
 	/*
 	 * int_all_mask is the whole set of OVL_INTSTA bits this block can
 	 * raise.  It is ANDed with the latched status to decide both what
@@ -299,7 +323,6 @@ struct mtk_disp_ovl {
 	void				*vblank_cb_data;
 	/* Rate limiting for a fault that persists indefinitely. */
 	unsigned int			intsta_reported;
-	u32				last_intsta;
 	bool				layer_dbg_done;
 };
 
@@ -346,8 +369,12 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	 * is misconfigured, and the interrupt is level triggered, so an
 	 * unconditional print here fires on every frame: it filled a 16 MB
 	 * log buffer in seconds and pushed the rest of the boot out of
-	 * pstore entirely.  Print the first few, then stay quiet unless the
-	 * status changes, saying how many were dropped.
+	 * pstore entirely.  Print the first few reports and then stay
+	 * quiet, saying on the last of them how many were dropped.
+	 *
+	 * Note this counts total reports, not runs of one value: the status
+	 * alternates between two values here, so a per-value counter never
+	 * reached its limit.
 	 */
 	if (priv->intsta_reported < 8) {
 		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
@@ -360,7 +387,8 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		 */
 		pr_err("OVL: intsta=%#x sta=%#x (run=%d rdma0_idle=%d)%s\n",
 		       reg, sta, !!(sta & 1), !!(sta & 0x2),
-		       last ? " (further messages suppressed)" : "");
+		       last ? " (last of 8 reports; further ones suppressed)"
+			     : "");
 
 		if (reg & priv->data->fme_cpl_bit)
 			pr_err("OVL: frame complete\n");
@@ -862,9 +890,20 @@ static unsigned int mt6589_fmt_convert(unsigned int fmt, unsigned int blend_mode
 	case DRM_FORMAT_BGRA8888:
 	case DRM_FORMAT_BGRX8888: return (3 << 12) | OVL_CON_BYTE_SWAP;
 	case DRM_FORMAT_ARGB8888:
-	case DRM_FORMAT_XRGB8888: return (2 << 12);
+		return (2 << 12);
 	case DRM_FORMAT_ABGR8888:
-	case DRM_FORMAT_XBGR8888: return (2 << 12) | OVL_CON_BYTE_SWAP;
+		return (2 << 12) | OVL_CON_BYTE_SWAP;
+	/*
+	 * 0100 is xARGB8888 on this SoC: the top byte is dropped rather
+	 * than used as alpha.  MT6589 has no CONST_BLD bit in OVL_PITCH to
+	 * supply a constant alpha, so an XRGB framebuffer simply ignores
+	 * whatever the buffer carries there.  Mapping XRGB8888 onto 0010
+	 * (ARGB8888) instead would make the ignored byte modulate blending.
+	 */
+	case DRM_FORMAT_XRGB8888:
+		return (4 << 12);
+	case DRM_FORMAT_XBGR8888:
+		return (4 << 12) | OVL_CON_BYTE_SWAP;
 	case DRM_FORMAT_UYVY:    return (9 << 12);
 	case DRM_FORMAT_YUYV:    return (8 << 12);
 	}
@@ -1137,6 +1176,18 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 				     "failed to ioremap ovl\n");
 
 	/*
+	 * Resolve and validate the per-SoC data before anything else: the
+	 * reset below is gated on it, so it has to be known first, and a
+	 * node whose data fails the invariant check must not be left with
+	 * its clocks on and its registers half-written.
+	 */
+	priv->data = of_device_get_match_data(dev);
+
+	ret = mtk_disp_ovl_check_data(dev, priv->data);
+	if (ret)
+		return ret;
+
+	/*
  * Reset the engine before touching it.  Writing the registers
  * directly needs the block's clock running, but the bootloader can
  * leave it in a state where the engine is still fetching, so assert
@@ -1153,19 +1204,28 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
  * reset-names, so a named lookup fails with -ENOENT before any reset
  * controller is ever consulted.  Every other MediaTek display driver
  * here looks its reset up this way for the same reason.
+	 *
+	 * Only a SoC whose node actually declares the phandle may do this.
+	 * The lookup is not optional, so on a node with no "resets" it
+	 * returns -ENOENT and probe would fail - which is what the other
+	 * eight SoCs' nodes would get, since only the MT6589 node declares
+	 * one.  Gating on data->has_reset keeps their existing behaviour (no
+	 * warm reset) while MT6589 gets the reset it needs.
 	 */
-	priv->rstc = devm_reset_control_get(dev, NULL);
-	if (IS_ERR(priv->rstc)) {
-		ret = PTR_ERR(priv->rstc);
-		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
-		return dev_err_probe(dev, ret,
-				     "failed to get reset control\n");
-	}
+	if (priv->data->has_reset) {
+		priv->rstc = devm_reset_control_get(dev, NULL);
+		if (IS_ERR(priv->rstc)) {
+			ret = PTR_ERR(priv->rstc);
+			clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+			return dev_err_probe(dev, ret,
+					     "failed to get reset control\n");
+		}
 
-	ret = reset_control_reset(priv->rstc);
-	if (ret) {
-		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
-		return dev_err_probe(dev, ret, "failed to reset ovl\n");
+		ret = reset_control_reset(priv->rstc);
+		if (ret) {
+			clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+			return dev_err_probe(dev, ret, "failed to reset ovl\n");
+		}
 	}
 
 	/* Stop any leftover OVL activity from bootloader */
@@ -1178,12 +1238,6 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	if (ret)
 		dev_dbg(dev, "get mediatek,gce-client-reg fail!\n");
 #endif
-
-	priv->data = of_device_get_match_data(dev);
-
-	ret = mtk_disp_ovl_check_data(dev, priv->data);
-	if (ret)
-		return ret;
 
 	platform_set_drvdata(pdev, priv);
 
@@ -1214,6 +1268,7 @@ static const struct mtk_disp_ovl_data mt2701_ovl_driver_data = {
 	.gmc_bits = 8,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1226,6 +1281,7 @@ static const struct mtk_disp_ovl_data mt8167_ovl_driver_data = {
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
 	.smi_id_en = true,
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1242,6 +1298,14 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
 	.has_const_blend = false,
 	.set_layer_src = true,
+	/*
+	 * The only OVL node in the tree that declares
+	 * "resets = <&dispsys MT6589_DISP_OVL_RST>" (mt6589.dtsi), and so
+	 * the only one probe may take a warm reset on.  devm_reset_control_get()
+	 * returns -ENOENT for the other eight, so this also keeps their
+	 * probe from failing outright.
+	 */
+	.has_reset = true,
 	.vblank_en_mask = 0xF, /* Reg update, frame done, underflow, sw reset done */
 	/*
 	 * This is the only SoC here with a documented OVL_INTEN/OVL_INTSTA
@@ -1266,6 +1330,7 @@ static const struct mtk_disp_ovl_data mt8173_ovl_driver_data = {
 	.gmc_bits = 8,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1277,6 +1342,7 @@ static const struct mtk_disp_ovl_data mt8183_ovl_driver_data = {
 	.gmc_bits = 10,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = true,
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1288,6 +1354,7 @@ static const struct mtk_disp_ovl_data mt8183_ovl_2l_driver_data = {
 	.gmc_bits = 10,
 	.layer_nr = 2,
 	.fmt_rgb565_is_0 = true,
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1303,6 +1370,7 @@ static const struct mtk_disp_ovl_data mt8192_ovl_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1318,6 +1386,7 @@ static const struct mtk_disp_ovl_data mt8192_ovl_2l_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8173_formats,
@@ -1334,6 +1403,7 @@ static const struct mtk_disp_ovl_data mt8195_ovl_driver_data = {
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
 		       BIT(DRM_MODE_BLEND_COVERAGE) |
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
+	.has_const_blend = true,
 	.int_all_mask = 0,	/* see the note above the match table */
 	.fme_cpl_bit = OVL_FME_CPL_ANY,
 	.formats = mt8195_formats,
