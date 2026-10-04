@@ -659,7 +659,7 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 
 	ctx->infra_clk = devm_clk_get_enabled(&pdev->dev, "devapc-infra-clock");
 	if (IS_ERR(ctx->infra_clk)) {
-		ret = -EINVAL;
+		ret = PTR_ERR(ctx->infra_clk);
 		goto err_unmap_inst;
 	}
 
