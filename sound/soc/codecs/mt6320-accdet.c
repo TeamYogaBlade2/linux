@@ -487,7 +487,7 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		priv->plugged = true;
 
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_HIGH);
+				       IRQ_TYPE_EDGE_FALLING);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-in IRQ: %d\n",
@@ -514,7 +514,7 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		mt6320_accdet_report(priv, 0);
 
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_LOW);
+				       IRQ_TYPE_EDGE_RISING);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-out IRQ: %d\n",
@@ -618,9 +618,20 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	priv->plugged = !!ret;
 	priv->last_state = 3;
 
+	/*
+	 * Arm for the edge that reports the *next* transition, not for the
+	 * level the line is already sitting at.  detect-gpios is
+	 * GPIO_ACTIVE_LOW, so the pin idles high with nothing plugged and is
+	 * pulled low on insertion: an unplugged jack needs EDGE_FALLING and a
+	 * plugged one needs EDGE_RISING.  Level-triggering on the current
+	 * level instead leaves the line asserted in the stable state, and the
+	 * handler is IRQF_ONESHOT, so it re-arms and immediately re-fires -
+	 * an interrupt storm that also drives the jack report and therefore
+	 * DAPM.
+	 */
 	ret = irq_set_irq_type(priv->eint_irq,
 			       priv->plugged ?
-			       IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_LEVEL_LOW);
+			       IRQ_TYPE_EDGE_RISING : IRQ_TYPE_EDGE_FALLING);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to configure detect IRQ\n");

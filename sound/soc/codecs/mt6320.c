@@ -236,28 +236,29 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(dai->component);
 	unsigned int rate = params_rate(params);
+	bool playback = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
 	int rate_code, ul_rate_code;
 
-	rate_code = mt6320_dl_src_rate_code(rate);
-	if (rate_code < 0)
-		return rate_code;
-
-	ul_rate_code = mt6320_ul_src_rate_code(rate);
-	if (ul_rate_code < 0)
-		return ul_rate_code;
-
 	/*
-	 * Store only the code this stream uses.  This DAI driver declares both
-	 * a playback and a capture stream, so presence of a stream_name is not
-	 * what distinguishes them - the substream direction is.  Deriving the
-	 * direction from params rather than from the DAI matters because a
-	 * single shared pair of fields let capture's hw_params overwrite the
-	 * downlink code the running playback stream was using, and vice versa.
+	 * Validate only the ladder this direction actually uses.  The two are
+	 * different sizes: the downlink SRC covers 8/11.025/12/16/22.05/24/32/
+	 * 44.1/48 kHz while the uplink SRC covers only 8/16/32/48 kHz, so
+	 * resolving the uplink code during a playback hw_params rejected
+	 * perfectly valid playback rates such as 44.1 kHz.
 	 */
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+	if (playback) {
+		rate_code = mt6320_dl_src_rate_code(rate);
+		if (rate_code < 0)
+			return rate_code;
+
 		priv->rate_code = rate_code;
-	else
+	} else {
+		ul_rate_code = mt6320_ul_src_rate_code(rate);
+		if (ul_rate_code < 0)
+			return ul_rate_code;
+
 		priv->ul_rate_code = ul_rate_code;
+	}
 
 	/*
 	 * Write the whole register rather than updating only the rate field.
