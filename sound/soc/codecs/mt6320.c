@@ -37,7 +37,6 @@
  */
 #define MT6320_ABB_AFE_BASE		0x4000
 #define MT6320_ABB_AFE_CON(n)		(MT6320_ABB_AFE_BASE + (n) * 2)
-#define MT6320_ABB_AFE_DL_SRC2_CON0_H	(MT6320_ABB_AFE_CON(1))
 
 /*
  * Register names for the 0x4xxx window, all derived from
@@ -63,8 +62,8 @@
 #define MT6320_AFE_ANA_AFE_TOP_CON0	(MT6320_ABB_AFE_CON(0x12))
 #define MT6320_AFE_ANA_AUDIO_TOP_CON0	(MT6320_ABB_AFE_CON(0x13))
 #define MT6320_AFE_AFUNC_AUD_CON0	(MT6320_ABB_AFE_CON(0x1a))
-#define MT6320_AFE_AFUNC_AUD_CON1	(MT6320_ABB_AFE_CON(0x1b))
 #define MT6320_AFE_AFUNC_AUD_CON2	(MT6320_ABB_AFE_CON(0x1c))
+#define MT6320_ABB_AFE_DL_SRC2_CON0_H	(MT6320_ABB_AFE_CON(0x01))
 /*
  * The sample rate lives in bits [15:12], not a low nibble. The stock
  * driver sets this register as 0x0300 | GetDLFrequency(rate), where
@@ -113,12 +112,14 @@
  *
  * This board is built with ACCDET_28V_MODE (see the vendor
  * accdet_custom_def.h), where the downstream driver does not use the
- * ACCDET_RSV encoding at all: it drives AUDENCSPARE_CON0 (0x0732) to
- * 0x01 to enable the switch and 0x00 to disable it.  The 0x1090 value is the
- * 1.9 V path and selects RG_AUDACCDETVIN1PULLLOW, which is not what this
- * hardware wants.
+ * ACCDET_RSV encoding at all: it drives AUDENCSPARE_CON0 to 0x01 to enable
+ * the switch and 0x00 to disable it.  The 0x1090 value is the 1.9 V path
+ * and selects RG_AUDACCDETVIN1PULLLOW, which is not what this hardware
+ * wants.
+ *
+ * MT6320_AUDENCSPARE_CON0 itself comes from <linux/mfd/mt6320/registers.h>;
+ * only the two values are local.
  */
-#define MT6320_AUDENCSPARE_CON0		0x0732
 #define MT6320_ACCDET_MICBIAS_ENABLE	0x01
 #define MT6320_ACCDET_MICBIAS_DISABLE	0x00
 
@@ -155,6 +156,13 @@
 #define ZCD_GAIN_0DB			8
 #define ZCD_GAIN_CTL_MAX		0x0c	/* +8dB .. -4dB */
 #define ZCD_GAIN_REG(g)			(((g) << 8) | (g))
+/*
+ * ZCD_CON2 bits [3:0] and [11:8]: the headphone left/right volume indexes,
+ * i.e. exactly the two fields SOC_DOUBLE_TLV below drives (shift 0 and 8).
+ * Named here so the power-down path can park the gain without also trampling
+ * the rest of the register the way a full 0x0c0c write does.
+ */
+#define MT6320_ZCD_CON2_VOL_MASK	(GENMASK(11, 8) | GENMASK(3, 0))
 
 struct mt6320_codec_priv {
 	struct device *dev;
@@ -416,24 +424,45 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 }
 
 /*
- * Analog idle baseline, before any stream is running.  The ABB digital
- * path registers are programmed per-stream in mt6320_dac_event() rather
- * than here, since the stock driver does that from AnalogOpen() each time
- * the DAC path is opened and they depend on the sample rate.
+ * Analog idle baseline, before any stream is running.
  *
- * The values are the stock power-on sequence from
- * AudioPlatformDevice::AnalogOpen().  MT6320_ABB_AFE_CON(n) computes
- * 0x4000 + n * 2, which does not always land on the register the stock
- * driver means, so the entries name their registers explicitly.
+ * The ABB digital path is deliberately NOT programmed here.  Every 0x4xxx
+ * register this list used to open with is programmed per-stream in
+ * mt6320_dac_event() and mt6320_mic_event() instead, because that is where
+ * the vendor does it (AudioPlatformDevice::AnalogOpen, every DEVICE_OUT_*
+ * and DEVICE_IN_ADC* case) and several of them carry the sample rate.
+ *
+ * The block that was here was the MT6323 idle baseline, verbatim from the
+ * now-removed sound/soc/codecs/mt6323.c, MT6323 register numbering and all:
+ *
+ *	{ MT6320_ABB_AFE_CON(1),  0x0009 },
+ *	{ MT6320_ABB_AFE_CON(3),  0x0221 },
+ *	{ MT6320_ABB_AFE_CON(4),  0x0255 },
+ *	{ MT6320_ABB_AFE_CON(5),  0x0028 },
+ *	{ MT6320_ABB_AFE_CON(6),  0x0218 },
+ *	{ MT6320_ABB_AFE_CON(7),  0x0204 },
+ *	{ MT6320_ABB_AFE_CON(10), 0x0001 },
+ *
+ * MT6320_ABB_AFE_CON() is the same arithmetic on both chips (0x4000 + n * 2),
+ * but the register *layout* behind that arithmetic is not the same, so the
+ * same n lands on a different register.  Against the MT6320 map this driver
+ * follows (AudDrv_Ana.h) those seven entries are:
+ *
+ *	CON(1)  0x4002  AFE_DL_SRC2_CON0_H   the downlink sample-rate field
+ *	CON(3)  0x4006  AFE_DL_SRC2_CON1_H
+ *	CON(4)  0x4008  AFE_DL_SRC2_CON1_L
+ *	CON(5)  0x400a  AFE_DL_SDM_CON0
+ *	CON(6)  0x400c  AFE_DL_SDM_CON1
+ *	CON(7)  0x400e  AFE_UL_SRC_CON0_H   the uplink sample-rate field
+ *	CON(10) 0x4014  AFE_UL_SRC_CON1_L
+ *
+ * So probe was writing MT6323 SDM and UL-SRC trim values into MT6320's
+ * downlink-SRC and uplink-SRC *rate* registers, with the SRC enable/base
+ * bits left at their reset value.  Both power-up handlers rewrite all of
+ * them before each stream, which is what made this survivable rather than
+ * fatal, but there is no reason to leave a wrong value behind at probe.
  */
 static const struct reg_sequence mt6320_codec_init[] = {
-	{ MT6320_ABB_AFE_CON(1),  0x0009 },
-	{ MT6320_ABB_AFE_CON(3),  0x0221 },
-	{ MT6320_ABB_AFE_CON(4),  0x0255 },
-	{ MT6320_ABB_AFE_CON(5),  0x0028 },
-	{ MT6320_ABB_AFE_CON(6),  0x0218 },
-	{ MT6320_ABB_AFE_CON(7),  0x0204 },
-	{ MT6320_ABB_AFE_CON(10), 0x0001 },
 	/* Conservative default analog gain: headphone 0dB. */
 	{ MT6320_ZCD_CON2, ZCD_GAIN_REG(ZCD_GAIN_0DB) },
 };
@@ -526,18 +555,55 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AUDBUF_CFG4, 0x0014);
-		if (ret)
-			return ret;
-
-		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x7010);
+		/*
+		 * Power the DAC cores up: 0x0003 is RG_AUDDACLPWRUP_VAUDP12
+		 * (bit 0) | RG_AUDDACRPWRUP_VAUDP12 (bit 1).  These two bits
+		 * are the entire DAC power-up control - the vendor writes no
+		 * other bit of this register on any path (power_init, all four
+		 * AnalogOpen cases and all four AnalogClose cases use 0x0009,
+		 * 0x000f or 0x0000).
+		 *
+		 * This used to write 0x7010 here and 0x6010 on POST_PMD.
+		 * Both are the *MT6323* AUDTOP_CON0 values, carried over from
+		 * the now-removed sound/soc/codecs/mt6323.c, and the MT6320
+		 * register map is not compatible with them: bits [15:13] are
+		 * RG_AUDHPRSCDISABLE / RG_AUDHPLSCDISABLE / RG_AUDHSSCDISABLE
+		 * and bits [10:9] are RG_HPOUTPUTRESET0 / RG_HPINPUTRESET0
+		 * (upmu_hw.h, VAUDP12 group).  So 0x7010 powered the DAC on
+		 * *and* held the headphone amplifiers in their disabled, input-
+		 * and output-reset state: the path settled hard enough to make
+		 * one pop as the bias ramped, and then nothing came out.
+		 * 0x6010 differs only in bit 13, so power-down cleared two of
+		 * the three HS disable bits and left RG_AUDHSSCDISABLE asserted,
+		 * which would have kept the headphone silent on every stream
+		 * after the first even once power-up was right.
+		 *
+		 * Written as an explicit full value, not a bit update: the
+		 * surrounding sequence clears the HP power-up bits (bit 0) and
+		 * sets the HP-only enable (bit 3) on the same register in
+		 * mt6320_hp_event(), so leaving bits [15:9] untouched here is
+		 * what let the disable bits survive.
+		 *
+		 * The AUDBUF_CFG4 = 0x0014 write that used to sit immediately
+		 * before this one was also MT6323 carry-over (mt6323.c wrote
+		 * AUDTOP_CON(5) = 0x0014).  On MT6320 that register holds the ABI
+		 * de-click reserved bits - RG_ABIDEC_RESERVED_VAUDP12 at [15:8]
+		 * and RG_ABIDEC_RESERVED_VA28 at [7:0] (upmu_hw.h) - and
+		 * upmu_set_rg_abidec_reserved_*(), the only vendor code that
+		 * touches it, is never called from anywhere in the BSP.  It is
+		 * dropped rather than restored on POST_PMD for the same reason:
+		 * there is no power-sequence state on this register to restore.
+		 */
+		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0003);
 
 	case SND_SOC_DAPM_POST_PMD:
-		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x6010);
-		if (ret)
-			return ret;
-
-		return regmap_write(priv->regmap, MT6320_AUDBUF_CFG4, 0x0014);
+		/*
+		 * The vendor's power-down for the DAC is a plain 0x0000 on
+		 * AUDDAC_CON0 (AudioMachineDevice::AnalogClose, every case).
+		 * Nothing else: no AUDBUF_CFG4 restore, because there is
+		 * nothing on this register for a power sequence to restore.
+		 */
+		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0000);
 	}
 	return 0;
 }
@@ -638,7 +704,25 @@ static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
-		ret = regmap_write(priv->regmap, MT6320_ZCD_CON2, 0x0c0c);
+		/*
+		 * The vendor does write ZCD_CON2 0x0c0c here (AnalogClose,
+		 * DEVICE_OUT_HEADSET*), but that register is the headphone volume
+		 * control's own register: bits [3:0] and [11:8] are the left and
+		 * right volume indexes, which the "Headphone Volume" control and
+		 * the mixer read and write.  Forcing index 12 on every power-down
+		 * throws the user's volume away, and it is exactly the bug this
+		 * file already fixed once on the power-*up* side (commit
+		 * "stop power-up from overwriting the headphone volume").
+		 *
+		 * Park the volume at 0 dB instead - index 8, which is what the
+		 * probe-time baseline in mt6320_codec_init[] uses and what
+		 * GetAnalogGain() reports as volume 0 - and leave the control's
+		 * own value otherwise alone.  Powering the amplifier down is what
+		 * silences it; the index is what it comes back at.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_ZCD_CON2,
+					 MT6320_ZCD_CON2_VOL_MASK,
+					 ZCD_GAIN_REG(ZCD_GAIN_0DB));
 		if (ret)
 			return ret;
 		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
