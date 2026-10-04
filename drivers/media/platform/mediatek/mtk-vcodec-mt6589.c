@@ -29,67 +29,79 @@
  *   - programs the H.264 rate control into the fields the registers really
  *     have, rejecting quantisers outside the hardware's documented 0..51 range;
  *   - acknowledges and dispatches the encoder frame-done interrupt for both
- *     datapaths, reporting the true coded-bitstream length.
+ *     datapaths, reporting the true coded-bitstream length;
+ *   - exposes the H.264 datapath as a V4L2 memory-to-memory codec node, owning the
+ *     bitstream, reference, reconstruction and rate control scratch buffers that
+ *     the address registers need.
+ *
+ * The V4L2 layer
+ * -------------
+ * The register programming below is reachable: this driver exposes a v4l2_m2m_dev
+ * with an OUTPUT queue (raw NV12 in) and a CAPTURE queue (H.264 bitstream out), so
+ * userspace gets a /dev/videoX.  The buffer ownership the "NOT do" list used to
+ * claim was missing now exists -- see struct mtk_vcodec_enc_ctx in
+ * mtk-vcodec-mt6589.h for the reference, reconstruction and rate control scratch
+ * planes, and mtk_vcodec_enc_device_run() for how a job is set up and retired.
  *
  * What this driver does NOT do
  * ----------------------------
- * It registers no V4L2 device.  There is no video_device, no v4l2_m2m_dev, no
- * queue_setup and no /dev/videoX, and nothing here can be reached from
- * userspace today.  The register-level programming below is the hardware
- * interface, deliberately kept as reviewable code, not a working codec.
+ * It does not produce a conformant H.264 bitstream, and no amount of further
+ * kernel work will make it do so.  The specific gaps, each a real blocker rather
+ * than an oversight:
  *
- * Specifically, these are unimplemented and each one is a real blocker, not an
- * oversight that a later patch in this file would have fixed:
- *
- *   - Buffer management.  There is no dma_alloc_coherent()/vb2 buffer behind
- *     any of the address registers.  The programming functions take DMA
- *     addresses as parameters and are correct about the register unit
- *     conventions, but nothing allocates them.
- *   - Reconstruction buffers.  This is an inter-frame encoder: it writes the
- *     reconstructed pixels to FRM_REC_Y / FRM_REC_UV before the next frame can
- *     be predicted from them.  Until the driver owns a REC buffer and a REF
- *     buffer, only a single I-frame could be encoded, and even that would need
- *     the RC scratch buffers at RC_CODE/RC_INFO plus the slice side
- *     information.
- *   - Slice control.  A frame larger than one MB row has to be driven as
- *     several slices, restarting VENC_MP4_SLICE_START with a moving MBX/MBY
- *     stop position.  Nothing does that.
- *   - Rate control.  What is programmed here is the quantiser triple, the
- *     target bit rate, the CBR/initial-QP mode bits, the rate control fps and
- *     the P/B frame QP adjust limiters.  The actual bitrate algorithm, and the
- *     RC scratch memory at RC_CODE/RC_INFO_DRAM_ADDR that it loads and saves
- *     its state through, live in the vendor's closed-source userspace library.
- *   - Entropy coding, motion estimation and the coefficient buffer.  These
- *     exist only in the vendor's closed libraries (encrypted for H.264/HEVC),
- *     so no amount of kernel work produces a conformant bitstream here.
- *   - Decode.  The decoder window is mapped and its clock gated and its frame
- *     -end interrupt acknowledged, but there is no datapath programming at
- *     all.  An earlier revision of this driver pointed the decoder's
- *     v4l2_m2m_ops.device_run at the *encoder* routine; that cross-wiring has
- *     been removed rather than papered over, because a decoder node that
- *     programs the encoder cannot honestly be exposed at all.
+ *   - Entropy coding, motion estimation and the coefficient buffer.  These exist
+ *     only in the vendor's closed userspace libraries (encrypted for H.264/HEVC),
+ *     which are stripped ARM blobs: there is no source to port, only the register
+ *     map.  What this driver produces is whatever the RTL emits given the addresses
+ *     and quantiser it programs.  Userspace must treat the output as opaque.
+ *   - The bitrate algorithm.  What is programmed is the quantiser triple, the target
+ *     bit rate, the CBR/initial-QP mode bits, the rate control fps and the P/B
+ *     frame QP adjust limiters -- all real registers.  The algorithm that acts on
+ *     them, and the contents of the RC scratch memory it loads and saves its state
+ *     through, are the vendor's.  The scratch buffers ARE now allocated, so the two
+ *     RC DRAM address registers point at memory the driver owns instead of at
+ *     DRAM address integer * 16; that makes the registers valid, not the rate
+ *     control correct.
+ *   - Slice control.  A frame larger than one MB row has to be driven as several
+ *     slices, restarting VENC_MP4_SLICE_START with a moving MBX/MBY stop position.
+ *     Nothing does that.
+ *   - SPS/PPS.  They are separate one-shot bits of VENC_CODEC_CTRL and need a
+ *     parameter-set buffer to point at, which the driver does not have, so no
+ *     parameter set is ever emitted.
+ *   - Decode.  The decoder window is mapped, its clock gated and its frame-end
+ *     interrupt acknowledged, but there is no datapath programming at all.  An
+ *     earlier revision pointed the decoder's v4l2_m2m_ops.device_run at the
+ *     *encoder* routine; that cross-wiring has been removed rather than papered
+ *     over, because a decoder node that programs the encoder cannot honestly be
+ *     exposed at all.  Only the encoder gets a V4L2 node.
+ *   - MPEG-4 encoding.  The datapath's address programming is written
+ *     (mtk_venc_set_mp4_frame_addr()) and its interrupt is handled, but it needs
+ *     three distinct chroma planes plus a per-MB side information buffer at
+ *     VENC_MP4_SIDE_ADDR that this driver does not allocate, so
+ *     mtk_venc_submit_frame() rejects it with -ENODEV.  Only H.264 is exposed.
  *   - VP8.  Restricted deliberately; see mtk_venc_bitstream_size().
+ *
+ * Encode timeout
+ * --------------
+ * The submit path takes a runtime-PM reference for a frame and the interrupt handler
+ * drops it when the frame ends.  Every hardware way of ending a frame is handled:
+ * the H.264 frame-done interrupt, the MPEG-4 frame-done interrupt, and a
+ * bitstream-buffer overflow on either datapath.  What used to be missing is the
+ * case where the encoder never signals completion at all -- a wedged engine or a
+ * lost interrupt -- which left frame_pending set and the reference held forever, so
+ * every later submit returned -EBUSY with venc_clk pinned on.
+ *
+ * That is now covered rather than merely recorded: mtk_venc_timeout() fires after
+ * MTK_VENC_TIMEOUT_MS and retires the job exactly as the interrupt handler would,
+ * dropping the runtime-PM reference and completing both vb2 buffers with
+ * V4L2_BUF_FLAG_ERROR.  It does not try to make the hardware usable again; there is
+ * no documented way to un-wedge a halted encoder, and saying so is better than
+ * pretending.
  *
  * There is no hardware to test against, so none of the above is claimed to
  * work end to end.  See NOTES.md and RECOVERED-ABI.md for which parts of the
  * vendor ABI are recoverable and which are not.
  *
- * Known limitation: no encode timeout
- * -----------------------------------
- * The submit path takes a runtime-PM reference for a frame and the interrupt
- * handler drops it when the frame ends.  Every hardware way of ending a frame
- * is handled: the H.264 frame-done interrupt, the MPEG-4 frame-done interrupt,
- * and a bitstream-buffer overflow on either datapath.  What is NOT handled is
- * the encoder never signalling completion at all -- a wedged engine or a lost
- * interrupt.  In that case the reference is never dropped, the frame stays
- * pending, and every later submit returns -EBUSY with the encoder clock held on.
- *
- * That is a deliberate gap rather than an oversight: recovering from a wedged
- * encoder needs either a timeout or a hardware status poll, and this driver
- * has neither the timer nor the buffer ownership that a timeout path would
- * need.  It is recorded here because the alternative -- an ISR that
- * unconditionally drops the reference -- would be worse: it could power the
- * clocks off underneath an encode that is still running.
  */
 
 #include <linux/bitops.h>
@@ -115,6 +127,7 @@
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
+#include "mtk-vcodec-mt6589.h"
 #include "mtk-vcodec-mt6589-reg.h"
 
 #define MTK_VCODEC_DRIVER_NAME	"mtk-vcodec-mt6589"
@@ -142,6 +155,53 @@
 
 #define VENC_MP4_ADDR_MASK		GENMASK(31, 0)
 
+/*
+ * Frame type and reconstruction flush: VENC_ENCODER_INFO_3 at +0x00C.
+ *
+ * Declared here rather than in mtk-vcodec-mt6589-reg.h, which is not this change's
+ * file, and with the same sourcing discipline.  Chapter 60's summary table gives
+ * "17002010 VIDEO_ENCODER_INFO_3 32 0x00100000" (draft/ds/venc.txt:3095-3100) and
+ * its bit-field section defines:
+ *
+ *   15      GEN_REC_FRM   "Triggers de-blocking filter to dump reconstructed frame
+ *                         for reference" (draft/ds/venc.txt:3192-3193)
+ *   9       FRANE_CODING_REORDER, 8 COMVSEARCH_EN, 7:6 VENC_PDIR,
+ *   5:4     B_FRM_IDX, 3 IDR_PIC_ID, 2 IS_IDR_FRM
+ *   1:0     VENC_IMG_TYPE "Encoded frame type" -- 0: P-frame, 1: B-frame,
+ *                         2: I-frame (draft/ds/venc.txt:3296-3302)
+ *
+ * Both fields are necessary rather than cosmetic.  Without VENC_IMG_TYPE the only
+ * defined state is a P-frame, so every frame would be predicted against the
+ * reference buffer -- and on the very first frame there is no reference, so no
+ * stream could ever start.  Without GEN_REC_FRM the de-blocking filter never dumps
+ * the reconstructed frame, so the buffer the next frame predicts from would be
+ * whatever was in it before.
+ *
+ * The reset value 0x00100000 sets only bit 20 (IME_REFINE_MODE), so every field
+ * driven here resets to 0 -- a P-frame with no reconstruction flush.  The driver
+ * therefore programs both explicitly rather than relying on reset state.
+ */
+#define VENC_ENCODER_INFO_3			0x00c
+#define VENC_IMG_TYPE_P_FRAME			0x0
+#define VENC_IMG_TYPE_I_FRAME			2
+#define VENC_IMG_TYPE_MASK			GENMASK(1, 0)
+#define VENC_GEN_REC_FRM				BIT(15)
+
+/*
+ * Bounded completion watchdog, in milliseconds.
+ *
+ * How long to wait for a frame before declaring the engine wedged.  The slowest
+ * thing this encoder is specified to do is multi-frame processing at 2592x1592@5fps
+ * (draft/ds/venc.txt:1777-1782), i.e. 200ms per frame at a larger size than the
+ * 720p30 single-frame rate.  One second is five times that, generous enough not to
+ * fire on a merely slow encode while still bounding the damage from a genuinely hung
+ * one.
+ *
+ * It is a bound, not a prediction: the point is that the job and the runtime-PM
+ * reference are always released eventually, not that this value predicts when.
+ */
+#define MTK_VENC_TIMEOUT_MS			1000
+
 struct mtk_vcodec_dev {
 	void __iomem *venc;
 	void __iomem *vdec;
@@ -157,17 +217,15 @@ struct mtk_vcodec_dev {
 	 * Encoder user count, reserved for the power-management refcount scheme
 	 * below.
 	 *
-	 * HONEST WARNING: nothing in this driver increments it.  There is no V4L2
-	 * queue and no encoder open/close, because nothing can reach this driver
-	 * from userspace today (see the file header), so it is permanently 0 and
-	 * every "enc_users == 0" test in the suspend/resume paths below is
-	 * unconditionally true.  It is kept because it is the hook a future
-	 * buffer-owning layer needs, and because removing it would mean rewriting
-	 * the power-management structure, which is not what this change is about.
-	 * But it does NOT currently hold off the suspend path: what actually keeps
-	 * the encoder clocks on across a frame in flight is the runtime-PM
-	 * reference the submit path holds and the interrupt handler drops, which
-	 * is independent of these counters.
+	 * mtk_vcodec_enc_open() and mtk_vcodec_enc_release() now increment and
+	 * decrement it, so the "enc_users == 0" tests in the suspend/resume paths
+	 * are no longer unconditionally true.
+	 *
+	 * It does NOT hold off suspend for a frame in flight: what keeps the encoder
+	 * clocks on across a frame is the runtime-PM reference the submit path takes
+	 * and whichever of the interrupt handler or mtk_venc_timeout() drops it, which
+	 * is independent of this counter.  What this counter does is stop a system
+	 * suspend from tearing the registers down underneath an open but idle stream.
 	 */
 	atomic_t enc_users;
 	atomic_t dec_users;
@@ -211,6 +269,63 @@ struct mtk_vcodec_dev {
 	unsigned long venc_irq_count;
 	unsigned long mp4_irq_count;
 	bool suspended;
+
+	/*
+	 * The V4L2 mem-to-mem node.
+	 *
+	 * Encoder only: the decoder window is mapped and its interrupt acknowledged,
+	 * but nothing programs its datapath, so it gets no video device and cannot
+	 * honestly be exposed (see the file header).
+	 */
+	struct video_device		vfd;
+	struct v4l2_m2m_dev		*m2m_dev;
+	struct v4l2_device		v4l2_dev;
+
+	/*
+	 * Whether the frame that just retired failed, recorded separately from bs_bytes
+	 * rather than inferred from it.  An overflow and the watchdog both retire with a
+	 * length of zero, but so does a genuinely empty frame, and those are three
+	 * different things.
+	 */
+	bool				bs_error;
+
+	/*
+	 * Bounded completion watchdog.
+	 *
+	 * The frame-done interrupt, the MPEG-4 frame-done interrupt and the
+	 * bitstream-overflow interrupt all retire a frame.  What none of them can do is
+	 * retire a frame for an engine that never signals at all.  One delayed_work is
+	 * shared by all instances, armed by device_run() when it publishes a job and
+	 * disarmed by whichever of the interrupt path or the timeout retires that job
+	 * first.
+	 *
+	 * One work item, not one per context, because the encoder accepts exactly one
+	 * frame at a time: mtk_venc_submit_frame() returns -EBUSY for a second concurrent
+	 * submit, so there is never more than one job to time out.  It carries the context
+	 * pointer of the job it is timing out, so the timeout completes the right
+	 * instance's buffers.
+	 */
+	struct delayed_work		venc_timeout_work;
+	struct mtk_vcodec_enc_ctx	*timeout_ctx;
+
+	/*
+	 * Deferred completion.  The interrupt handler cannot return vb2 buffers to the
+	 * framework itself -- v4l2_m2m_buf_done_and_job_finish() takes a spinlock and can
+	 * schedule the next job, neither legal in hard IRQ context -- so it hands the job
+	 * here.
+	 */
+	struct work_struct		venc_complete_work;
+
+	/* Counters so a wedged or overflowing encoder is visible rather than silent. */
+	unsigned long			timeout_count;
+	unsigned long			overflow_count;
+	/*
+	 * Whether v4l2_m2m_register_media_controller() succeeded.  Tracked rather
+	 * than assumed because it is a no-op returning 0 when there is no media
+	 * controller, and its teardown must match its setup exactly -- unregistering a
+	 * graph that was never built would corrupt the media device.
+	 */
+	bool				mc_registered;
 };
 
 /*
@@ -392,6 +507,190 @@ static u32 mtk_venc_bitstream_size(struct mtk_vcodec_dev *vcodec, bool mpeg4)
 }
 
 /*
+ * Complete one encoder job.
+ *
+ * Called from exactly two places, and that is the whole point of factoring it out:
+ * the frame-done/overflow path in mtk_venc_isr() (via mtk_venc_complete_work) and
+ * the watchdog in mtk_venc_timeout().  Whichever arrives first retires the job; the
+ * other finds ctx->pending already clear and returns without touching anything.  That
+ * is what makes the runtime-PM reference exactly-once: it is taken once per started
+ * frame and dropped once by whichever of these two paths wins, and the flag saying so
+ * is set and cleared under the same spinlock.
+ *
+ * @state is VB2_BUF_STATE_DONE for a good frame and VB2_BUF_STATE_ERROR for one the
+ * hardware could not produce (bitstream overflow, or the watchdog firing).  ERROR
+ * reaches userspace as V4L2_BUF_FLAG_ERROR on DQBUF, which is the only way a caller
+ * can tell a zero-length frame from a failed one.
+ *
+ * Process context only.  v4l2_m2m_buf_done_and_job_finish() takes
+ * m2m_dev->job_spinlock and can schedule the next job, neither legal in hard IRQ
+ * context, which is why mtk_venc_isr() hands off to a work item rather than calling
+ * this directly.
+ */
+static void mtk_venc_complete_job(struct mtk_vcodec_dev *vcodec,
+				  struct mtk_vcodec_enc_ctx *ctx, u32 bs_bytes,
+				  enum vb2_buffer_state state)
+{
+	struct vb2_v4l2_buffer *dst;
+	unsigned long flags;
+	bool retire_pm = false;
+
+	/*
+	 * Claim the job.  Anything that finds it already claimed -- a spurious
+	 * interrupt, the watchdog firing microseconds after a perfectly good frame
+	 * done, or a second overflow bit in the same interrupt -- returns without
+	 * touching the buffers or the runtime-PM usage count.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	if (!ctx->pending) {
+		spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+		return;
+	}
+	ctx->pending = false;
+	vcodec->frame_pending = false;
+	vcodec->bs_addr = 0;
+	vcodec->bs_size = 0;
+	if (vcodec->enc_pm_held) {
+		vcodec->enc_pm_held = false;
+		retire_pm = true;
+	}
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	/*
+	 * Stop the watchdog before the job is released.
+	 * cancel_delayed_work_sync() rather than the _noflush variant because the timeout
+	 * work takes enc_state_lock and calls this very function: it must be certain the
+	 * watchdog is not running underneath us as we hand buffers back, or the two
+	 * could race over the same vb2 buffer.  Safe to call unconditionally -- if this
+	 * is the interrupt winning the race, the work is either not armed or is about to
+	 * find pending clear and return.
+	 */
+	cancel_delayed_work_sync(&vcodec->venc_timeout_work);
+
+	/*
+	 * Publish the coded length before the buffer is returned.  bs_bytes is the count
+	 * the hardware itself reported, so it is the true bytesused -- but only for a
+	 * good frame.  A failed frame retires with a length of zero: an overflow would
+	 * otherwise publish the bytes emitted before the encoder gave up, which is a
+	 * truncated, unparseable frame, and reporting that as bytesused is worse than
+	 * reporting nothing.
+	 */
+	dst = v4l2_m2m_dst_buf_remove(ctx->m2m);
+	if (dst) {
+		dst->planes[0].bytesused =
+			state == VB2_BUF_STATE_DONE ? (size_t)bs_bytes : 0;
+		if (state == VB2_BUF_STATE_ERROR)
+			dst->flags |= V4L2_BUF_FLAG_ERROR;
+
+		v4l2_m2m_buf_done_and_job_finish(vcodec->m2m_dev, ctx->m2m,
+						 state);
+	}
+
+	/*
+	 * Drop the reference the submit path took.  This happens on every path, including
+	 * the one where dst_buf_remove() found nothing, so a job can never release the
+	 * hardware with the usage count still held.
+	 */
+	if (retire_pm)
+		pm_runtime_put_autosuspend(&vcodec->pdev->dev);
+}
+
+/*
+ * Deferred completion, run from the workqueue rather than in the ISR.
+ *
+ * The ISR decides that a frame ended; this does what has to happen afterwards.  It
+ * exists only because v4l2_m2m_buf_done_and_job_finish() takes a spinlock and can
+ * schedule the next job, and neither is legal in hard IRQ context.
+ *
+ * schedule_work() from an ISR is safe -- the workqueue handles reentrancy -- and
+ * the work re-reads vcodec->timeout_ctx rather than carrying a captured context, so
+ * two interrupts firing back to back run the work once and the claim inside it makes
+ * any second run a no-op.
+ */
+static void mtk_venc_complete_work(struct work_struct *w)
+{
+	struct mtk_vcodec_dev *vcodec =
+		container_of(w, struct mtk_vcodec_dev, venc_complete_work);
+	struct mtk_vcodec_enc_ctx *ctx;
+	u32 bs_bytes;
+	unsigned long flags;
+	bool failed;
+
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	ctx = vcodec->timeout_ctx;
+	bs_bytes = vcodec->bs_bytes;
+	/*
+	 * Whether the frame failed is a recorded fact, not something inferred from the
+	 * length.  Inferring it from "bs_bytes == 0" would report a genuinely empty frame
+	 * as an error, which is a different thing and is not what happened.
+	 */
+	failed = vcodec->bs_error;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	if (!ctx)
+		return;
+
+	mtk_venc_complete_job(vcodec, ctx, bs_bytes,
+			       failed ? VB2_BUF_STATE_ERROR :
+					VB2_BUF_STATE_DONE);
+}
+
+/*
+ * Bounded completion watchdog.
+ *
+ * Armed by device_run() once a frame has been started, and fired only if the engine
+ * has not signalled completion within MTK_VENC_TIMEOUT_MS.
+ *
+ * What this fixes is a genuine liveness bug rather than an optimisation.  Without it,
+ * an encoder that never raised its frame-done interrupt left frame_pending set and
+ * the runtime-PM reference held, so every later submit returned -EBUSY and venc_clk
+ * stayed on until reboot, with nothing in dmesg to say why.  That gap is recorded in
+ * the file header.
+ *
+ * It does not try to make the hardware usable again -- there is no documented way to
+ * un-wedge a halted encoder, and pretending otherwise would be worse than saying so.
+ * It bounds the damage instead: the job is completed as failed, the usage count is
+ * dropped, and the next STREAMON gets a fresh attempt.
+ *
+ * Runs in process context from the workqueue, which is what lets it call the same
+ * mtk_venc_complete_job() the interrupt path uses.  The claim is the same one, so a
+ * frame that completes normally just before the watchdog fires is not reported twice.
+ */
+static void mtk_venc_timeout(struct work_struct *w)
+{
+	struct mtk_vcodec_dev *vcodec =
+		container_of(to_delayed_work(w), struct mtk_vcodec_dev,
+			     venc_timeout_work);
+	struct mtk_vcodec_enc_ctx *ctx;
+	unsigned long flags;
+
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	ctx = vcodec->timeout_ctx;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	if (!ctx)
+		return;
+
+	vcodec->timeout_count++;
+	dev_warn_ratelimited(&vcodec->pdev->dev,
+			     "encoder did not signal completion within %u ms; failing the frame and releasing the device\n",
+			     MTK_VENC_TIMEOUT_MS);
+
+	mtk_venc_complete_job(vcodec, ctx, 0, VB2_BUF_STATE_ERROR);
+}
+
+/*
+ * Arm the bounded completion watchdog for the job that has just been started.
+ */
+static void mtk_venc_timeout_arm(struct mtk_vcodec_dev *vcodec,
+				 struct mtk_vcodec_enc_ctx *ctx)
+{
+	schedule_delayed_work(&vcodec->venc_timeout_work,
+			      msecs_to_jiffies(MTK_VENC_TIMEOUT_MS));
+}
+
+
+/*
  * Encoder interrupt.
  *
  * The shared pair (H.264/VP8) reports SPS/PPS/frame/dram/pause.  The MPEG-4
@@ -418,10 +717,11 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 {
 	struct platform_device *pdev = data;
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(&pdev->dev);
+	struct mtk_vcodec_enc_ctx *ctx;
 	unsigned long flags;
 	u32 status, mp4_status, bs_bytes = 0;
 	bool frm_done = false, mp4_done = false, overflow = false;
-	bool retire_pm = false, frame_failed = false;
+	bool frame_failed = false;
 
 	status = mtk_venc_read(vcodec, VENC_IRQ_STATUS);
 	if (status & VENC_IRQ_MASK_ALL) {
@@ -545,13 +845,17 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	 * be neither released twice, which would underflow the runtime-PM count and
 	 * power the clocks off underneath a live frame, nor leaked: every frame
 	 * that is started ends in exactly one of the three retiring events above.
-	 *
-	 * The one case that still strands a reference is the hardware never
-	 * signalling completion at all -- a wedged encoder, a lost interrupt.  That
-	 * is a hardware fault with no in-driver recovery, and it is called out in
-	 * the file header rather than papered over with a timeout that this driver
-	 * has no infrastructure to implement.
-	 */
+	* The bookkeeping that used to live here -- clearing frame_pending, enc_pm_held
+	* and the bs_* fields -- is now mtk_venc_complete_job()'s, so that the watchdog
+	* and the interrupt share one claim on the job and the runtime-PM reference can
+	* be released exactly once.  All this function does now is decide *whether* a frame
+	* ended and hand that to the completion path.
+	*
+	* The fourth retiring event -- the hardware never signalling completion at all, a
+	* wedged encoder or a lost interrupt -- is mtk_venc_timeout(), so the reference can
+	* no longer be stranded either.  That is the gap the file header used to record as
+	* deliberate.
+	*/
 	frame_failed = overflow && !frm_done && !mp4_done;
 
 	if (frm_done)
@@ -561,21 +865,36 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	else if (frame_failed)
 		bs_bytes = 0;
 
-	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
-	if ((frm_done || mp4_done || frame_failed) && vcodec->frame_pending) {
-		vcodec->bs_bytes = bs_bytes;
-		vcodec->frame_pending = false;
-		vcodec->bs_addr = 0;
-		vcodec->bs_size = 0;
-	}
-	if ((frm_done || mp4_done || frame_failed) && vcodec->enc_pm_held) {
-		vcodec->enc_pm_held = false;
-		retire_pm = true;
-	}
-	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+	if (frm_done || mp4_done || frame_failed) {
+		if (frame_failed)
+			vcodec->overflow_count++;
 
-	if (retire_pm)
-		pm_runtime_put_autosuspend(&pdev->dev);
+		/*
+		 * Publish the outcome, then defer to process context.
+		 *
+		 * The result is recorded here, under the lock the completion path reads it
+		 * under, because only the ISR knows the coded length: it is a register read
+		 * taken outside the lock (this driver does not hold a spinlock across
+		 * register accesses) and has to be handed over.
+		 *
+		 * v4l2_m2m_buf_done_and_job_finish() takes m2m_dev->job_spinlock and can
+		 * schedule the next job from inside, neither of which may happen in hard
+		 * IRQ context, so the buffer bookkeeping cannot be done here.
+		 *
+		 * The claim itself -- the test-and-clear of ctx->pending -- is deliberately
+		 * NOT done here.  Leaving it in the completion path means the interrupt and
+		 * the watchdog contend for exactly one claim and the loser returns without
+		 * touching anything, which is the whole reason there is a claim at all.
+		 */
+		spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+		vcodec->bs_bytes = bs_bytes;
+		vcodec->bs_error = frame_failed;
+		ctx = vcodec->timeout_ctx;
+		spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+		if (ctx && ctx->pending)
+			schedule_work(&vcodec->venc_complete_work);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -648,13 +967,10 @@ static irqreturn_t mtk_vdec_isr(int irq, void *data)
  *
  * Return: 0 on success, -EINVAL if an address or size is out of range.
  *
- * There is no caller yet: the driver owns no DMA buffers, so nothing has real
- * addresses to supply.  It is kept deliberately and marked __maybe_unused
- * rather than left to draw a dead-code warning, because its unit and alignment
- * handling is the part of this driver most worth reviewing; the file header
- * lists what a caller would have to own first.
+ * Reached from mtk_vcodec_enc_device_run() via mtk_venc_submit_frame(); see that
+ * function for how the source, bitstream, reference and reconstruction planes are
+ * resolved from the vb2 buffers and the driver-owned REF/REC planes.
  */
-__maybe_unused
 static int mtk_venc_set_frame_addr(struct mtk_vcodec_dev *vcodec,
 				   dma_addr_t bs_addr, dma_addr_t bs_size,
 				   dma_addr_t src_y, dma_addr_t src_uv,
@@ -731,7 +1047,9 @@ static int mtk_venc_set_frame_addr(struct mtk_vcodec_dev *vcodec,
  *
  * Return: 0 on success, -EINVAL if an address is misaligned or unencodable.
  *
- * No caller yet, for the same reason as mtk_venc_set_frame_addr().
+ * Still no caller: the MPEG-4 datapath is not exposed as a format, because
+ * mtk_venc_submit_frame() rejects it with -ENODEV until the per-MB side information
+ * buffer at VENC_MP4_SIDE_ADDR is owned.  See the file header.
  */
 __maybe_unused
 static int mtk_venc_set_mp4_frame_addr(struct mtk_vcodec_dev *vcodec,
@@ -932,9 +1250,10 @@ static int mtk_venc_set_rate_control(struct mtk_vcodec_dev *vcodec,
  *
  * Return: 0 on success, -EINVAL if either address is misaligned or unencodable.
  *
- * No caller yet, for the same reason as the buffer programming helpers above.
+ * Reached from mtk_vcodec_enc_device_run(), which points the two registers at the
+ * rate control scratch buffers the driver allocates.  See that function for why
+ * having them allocated matters even though the algorithm behind them is closed.
  */
-__maybe_unused
 static int mtk_venc_set_rc_scratch_addr(struct mtk_vcodec_dev *vcodec,
 					dma_addr_t rc_code_addr,
 					dma_addr_t rc_info_addr)
@@ -1026,7 +1345,6 @@ static void mtk_venc_start_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4)
  *	   bad quantiser setting, -EBUSY if a frame is already in flight,
  *	   -ENODEV for the MPEG-4 datapath.
  */
-__maybe_unused
 static int mtk_venc_submit_frame(struct mtk_vcodec_dev *vcodec, bool mpeg4,
 				 const struct mtk_vcodec_enc_parm *parm,
 				 dma_addr_t bs_addr, dma_addr_t bs_size,
@@ -1191,6 +1509,1346 @@ out_put:
 	return ret;
 }
 
+/* ------------------------------------------------------------------ */
+/* V4L2 memory-to-memory codec layer				      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The driver-private context for a file handle.
+ *
+ * file2m2m() reaches the m2m_dev, but the negotiated formats, the buffer queues
+ * and the driver-owned frame buffers all hang off the per-instance context, so the
+ * two are tied together in one accessor rather than every ioctl carrying both.
+ */
+#define file2ctx(f) ((struct mtk_vcodec_enc_ctx *)(f)->private_data)
+
+/*
+ * This tree has no file2m2m(); the m2m_dev pointer lives in the driver instance,
+ * so reach it through the same video_device the framework does.
+ */
+#define file2m2m(f) video_drvdata(f)
+
+/* ------------------------------------------------------------------ */
+/* Controls							      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Encoder controls.
+ *
+ * Bitrate and QP are the two the hardware genuinely has registers for:
+ * RC_TARGET_BIT_RATE is 17 bits wide and the QP fields take 0..51 for H.264
+ * (draft/ds/venc.txt:4072-4087 and :2802-2804).  FPS, CBR and GOP round out what
+ * mtk_vcodec_enc_parm carries.
+ *
+ * The ranges below are the register field widths and documented ranges, not round
+ * numbers chosen for convenience, so a value the hardware cannot hold is refused at
+ * S_EXT_CTRLS rather than truncated into something else at submit time.
+ */
+enum {
+	MTK_VENC_CTRL_FIRST = V4L2_CID_USER_BASE,
+	MTK_VENC_CTRL_BITRATE,
+	MTK_VENC_CTRL_QP,
+	MTK_VENC_CTRL_FPS,
+	MTK_VENC_CTRL_CBR,
+	MTK_VENC_CTRL_GOP,
+	MTK_VENC_CTRL_LAST,
+};
+
+/* RC_TARGET_BIT_RATE is bits 16:0 (draft/ds/venc.txt:4078-4087). */
+#define MTK_VENC_CTRL_BITRATE_MIN	1
+#define MTK_VENC_CTRL_BITRATE_MAX	131071
+#define MTK_VENC_CTRL_BITRATE_DEF	131071
+/* The H.264 QP range is [0, 51], stated for all three QP fields (draft/ds/venc.txt:2803). */
+#define MTK_VENC_CTRL_QP_MIN		0
+#define MTK_VENC_CTRL_QP_MAX		51
+#define MTK_VENC_CTRL_QP_DEF		26
+/* RC_FPS is bits 23:16 of RATECONTROL_INFO_1, so 8 bits wide. */
+#define MTK_VENC_CTRL_FPS_MIN		1
+#define MTK_VENC_CTRL_FPS_MAX		255
+#define MTK_VENC_CTRL_FPS_DEF		30
+#define MTK_VENC_CTRL_CBR_MIN		0
+#define MTK_VENC_CTRL_CBR_MAX		1
+#define MTK_VENC_CTRL_CBR_DEF		0
+#define MTK_VENC_CTRL_GOP_MIN		1
+#define MTK_VENC_CTRL_GOP_MAX		255
+#define MTK_VENC_CTRL_GOP_DEF		1
+
+/*
+ * Create the encoder's controls on this instance's handler.
+ *
+ * v4l2_ctrl_new_std() in this tree takes (hdl, ops, id, min, max, step, def) with no
+ * explicit type argument; the type is inferred from the min/max/def triple, so a
+ * non-zero default with min 0 gives a boolean and a range with min >= 1 gives an
+ * integer.  That inference is exactly what CBR_MIN == 0 relies on.
+ *
+ * Return: 0 on success, or a negative errno with the handler left usable (the caller
+ *	   frees it).
+ */
+static int mtk_vcodec_enc_ctrl_init(struct mtk_vcodec_enc_ctx *ctx)
+{
+	struct v4l2_ctrl_handler *hdl = &ctx->ctrl_hdl;
+
+	v4l2_ctrl_handler_init(hdl, MTK_VENC_CTRL_LAST - MTK_VENC_CTRL_FIRST);
+	hdl->lock = &ctx->dev->lock;
+	if (hdl->error)
+		return hdl->error;
+
+	ctx->ctrl_bitrate = v4l2_ctrl_new_std(hdl, NULL,
+					     MTK_VENC_CTRL_BITRATE,
+					     MTK_VENC_CTRL_BITRATE_MIN,
+					     MTK_VENC_CTRL_BITRATE_MAX, 1,
+					     MTK_VENC_CTRL_BITRATE_DEF);
+	ctx->ctrl_qp = v4l2_ctrl_new_std(hdl, NULL, MTK_VENC_CTRL_QP,
+					MTK_VENC_CTRL_QP_MIN,
+					MTK_VENC_CTRL_QP_MAX, 1,
+					MTK_VENC_CTRL_QP_DEF);
+	ctx->ctrl_fps = v4l2_ctrl_new_std(hdl, NULL, MTK_VENC_CTRL_FPS,
+					MTK_VENC_CTRL_FPS_MIN,
+					MTK_VENC_CTRL_FPS_MAX, 1,
+					MTK_VENC_CTRL_FPS_DEF);
+	ctx->ctrl_cbr = v4l2_ctrl_new_std(hdl, NULL, MTK_VENC_CTRL_CBR,
+					MTK_VENC_CTRL_CBR_MIN,
+					MTK_VENC_CTRL_CBR_MAX, 1,
+					MTK_VENC_CTRL_CBR_DEF);
+	ctx->ctrl_gop = v4l2_ctrl_new_std(hdl, NULL, MTK_VENC_CTRL_GOP,
+					MTK_VENC_CTRL_GOP_MIN,
+					MTK_VENC_CTRL_GOP_MAX, 1,
+					MTK_VENC_CTRL_GOP_DEF);
+
+	/*
+	 * A NULL here means v4l2_ctrl_new_std() rejected the definition, which is a bug
+	 * in the list above rather than anything a user can cause.  The per-frame submit
+	 * path dereferences these without checking, so it has to be caught here.
+	 */
+	if (!ctx->ctrl_bitrate || !ctx->ctrl_qp || !ctx->ctrl_fps ||
+	    !ctx->ctrl_cbr || !ctx->ctrl_gop)
+		return -ENODEV;
+
+	return 0;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Formats and controls						      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Plane geometry for a raw NV12 picture.
+ *
+ * Both dimensions are rounded up to a whole macroblock before the planes are
+ * divided.  The encoder is macroblock based (VENC_MP4_MBX_LMT is "Source Buffer
+ * Width in Number of Macroblocks", draft/ds/mp4.txt:6461), so a picture whose plane
+ * size is not a whole number of 16x16 macroblocks describes an address range the
+ * datapath would read past the end of.
+ *
+ * Chroma is half the luma plane in each direction, which is what YUV420 means, and
+ * it starts at base + luma size because the source is one semi-planar buffer.
+ */
+static void mtk_venc_enc_plane_size(unsigned int w, unsigned int h,
+				    unsigned long *y_size)
+{
+	w = round_up(w, MTK_VENC_MB_SIZE);
+	h = round_up(h, MTK_VENC_MB_SIZE);
+
+	*y_size = (unsigned long)w * h;
+}
+
+static void mtk_vcodec_enc_src_setup(struct v4l2_format *f)
+{
+	unsigned long y_size;
+
+	mtk_venc_enc_plane_size(f->fmt.pix.width, f->fmt.pix.height, &y_size);
+
+	f->fmt.pix.bytesperline = f->fmt.pix.width;
+	f->fmt.pix.sizeimage = y_size + y_size / 2;
+}
+
+static void mtk_vcodec_enc_dst_setup(struct v4l2_format *f)
+{
+	/*
+	 * Round up to the 128-byte granularity VENC_BITSTREAM_BUF_SIZE requires:
+	 * mtk_venc_set_frame_addr() rejects a size that is not a multiple of 128, so
+	 * accepting one here would only turn an S_FMT into a submit-time failure.
+	 * Rounding here means the buffer the user sized is the buffer the hardware is
+	 * told about.
+	 */
+	f->fmt.pix.sizeimage = round_up(f->fmt.pix.sizeimage,
+					MTK_VENC_BS_SIZE_ALIGN);
+}
+
+/*
+ * Is @f a format this driver can accept on the OUTPUT queue?
+ *
+ * Exactly one: NV12.  Chapter 60 states the supported input layouts as "YUV420 two
+ * plane scan-line (NV12/NV21), YUV420 three plane scan-line (YV12/I420) or MTK block
+ * formats" (draft/ds/venc.txt:1790-1791), and this datapath programs a single
+ * CUR_UV address, so a two-plane semi-planar buffer is the only one of those that
+ * maps onto one pointer without inventing a deinterleave step the hardware does not
+ * have.
+ */
+static bool mtk_vcodec_src_fmt_ok(const struct v4l2_format *f)
+{
+	return f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT &&
+	       f->fmt.pix.pixelformat == V4L2_PIX_FMT_NV12;
+}
+
+/*
+ * Validate a picture size against what the hardware can do.
+ *
+ * Zero is rejected outright, since a zero-size frame would make every derived plane
+ * size zero and every address check trivially pass.  Odd width or height is rejected
+ * because YUV420 chroma is half the luma plane in each direction and a truncated
+ * chroma plane is not a layout the datapath can address.  The ceiling is
+ * MTK_VENC_MAX_WIDTH x MTK_VENC_MAX_HEIGHT, from Level 4.1 at 720p30 in Table 60-1
+ * (draft/ds/venc.txt:1761-1770) rounded up to a whole macroblock; see
+ * mtk-vcodec-mt6589.h.
+ */
+static int mtk_vcodec_enc_check_size(unsigned int w, unsigned int h)
+{
+	if (!w || !h)
+		return -EINVAL;
+
+	if (w % 2 || h % 2)
+		return -EINVAL;
+
+	if (w > MTK_VENC_MAX_WIDTH || h > MTK_VENC_MAX_HEIGHT)
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * ENUMFMT.
+ *
+ * There is exactly one format per queue, so this is "index 0 is it, anything else
+ * does not exist".  That is honest rather than sparse: this driver genuinely cannot
+ * be asked for anything else, and offering a second index the hardware cannot do
+ * would be worse than not offering it.
+ */
+static int mtk_vcodec_enc_enum_fmt_cap(struct file *file, void *priv,
+				       struct v4l2_fmtdesc *d)
+{
+	if (d->index)
+		return -EINVAL;
+
+	d->flags = V4L2_FMT_FLAG_COMPRESSED;
+	strscpy(d->description, "H.264 bitstream", sizeof(d->description));
+	d->pixelformat = V4L2_PIX_FMT_H264;
+	return 0;
+}
+
+static int mtk_vcodec_enc_enum_fmt_out(struct file *file, void *priv,
+				       struct v4l2_fmtdesc *d)
+{
+	if (d->index)
+		return -EINVAL;
+
+	d->flags = 0;
+	strscpy(d->description, "NV12", sizeof(d->description));
+	d->pixelformat = V4L2_PIX_FMT_NV12;
+	return 0;
+}
+
+static int mtk_vcodec_enc_g_fmt_cap(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_enc_ctx *ctx = file2ctx(file);
+
+	*f = ctx->dst_fmt;
+
+	return 0;
+}
+
+static int mtk_vcodec_enc_g_fmt_out(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_enc_ctx *ctx = file2ctx(file);
+
+	*f = ctx->src_fmt;
+
+	return 0;
+}
+
+/*
+ * Round a requested format into something the encoder can run, or refuse it.
+ *
+ * A caller asking for an unsupported pixel format gets -EINVAL rather than a silent
+ * substitution, because there is only one source format here and quietly handing
+ * back a different one would mean the user goes on to hand the driver a layout it
+ * never agreed to.
+ */
+static int mtk_vcodec_enc_try_fmt_cap(struct file *file, void *priv,
+				      struct v4l2_format *f)
+{
+	/*
+	 * The coded bitstream is not a picture: there is no width or height for the
+	 * driver to echo back, because the coded size is not known until the frame is
+	 * done.  sizeimage is the buffer size, and it is the only field with meaning
+	 * here.
+	 */
+	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+
+	if (f->fmt.pix.sizeimage < MTK_VENC_BS_SIZE_MIN ||
+	    f->fmt.pix.sizeimage > MTK_VENC_BS_SIZE_MAX)
+		return -EINVAL;
+
+	f->fmt.pix.width = 0;
+	f->fmt.pix.height = 0;
+	f->fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+	f->fmt.pix.field = V4L2_FIELD_NONE;
+	mtk_vcodec_enc_dst_setup(f);
+
+	return 0;
+}
+
+static int mtk_vcodec_enc_try_fmt_out(struct file *file, void *priv,
+				      struct v4l2_format *f)
+{
+	int ret;
+
+	if (!mtk_vcodec_src_fmt_ok(f))
+		return -EINVAL;
+
+	ret = mtk_vcodec_enc_check_size(f->fmt.pix.width, f->fmt.pix.height);
+	if (ret)
+		return ret;
+
+	f->fmt.pix.field = V4L2_FIELD_NONE;
+	mtk_vcodec_enc_src_setup(f);
+
+	return 0;
+}
+
+static int mtk_vcodec_enc_s_fmt_cap(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_enc_ctx *ctx = file2ctx(file);
+	int ret;
+
+	ret = mtk_vcodec_enc_try_fmt_cap(file, priv, f);
+	if (ret)
+		return ret;
+
+	ctx->dst_fmt = *f;
+
+	return 0;
+}
+
+
+/*
+ * Buffer ownership.
+ *
+ * The reference and reconstruction buffers are why this encoder is inter-frame: the
+ * datapath reads the current frame, predicts against FRM_REF_* and DMAs the
+ * reconstructed pixels out to FRM_REC_* (see the VENC_FRM_REF_* / VENC_FRM_REC_*
+ * definitions in mtk-vcodec-mt6589-reg.h), so all of them have to be real DRAM of
+ * the right size before any frame can be encoded.
+ *
+ * They are driver-owned rather than user-supplied because they are not part of any
+ * standard's bitstream: asking userspace for them would invent an ABI nobody else
+ * implements.  Coherent rather than streaming DMA because the hardware both reads
+ * and writes them, and a cache flush between the encode and the next frame's read of
+ * the REC buffer would be a correctness hazard for no size gain.
+ *
+ * dma_alloc_coherent() gives the 16-byte alignment the DIV16 address fields require
+ * as a side effect of its page-aligned allocation.
+ *
+ * Return: 0 on success or a negative errno, having freed whatever it did allocate so
+ * a partial failure leaves nothing behind.
+ */
+static void mtk_vcodec_enc_free_frame_buffers(struct mtk_vcodec_enc_ctx *ctx);
+
+static int mtk_vcodec_enc_alloc_frame_buffers(struct mtk_vcodec_enc_ctx *ctx)
+{
+	struct device *dev = &ctx->dev->pdev->dev;
+	unsigned int i;
+	int ret = 0;
+
+	mtk_venc_enc_plane_size(ctx->src_fmt.fmt.pix.width,
+				ctx->src_fmt.fmt.pix.height,
+				&ctx->frame_size);
+	if (!ctx->frame_size)
+		return -EINVAL;
+
+	for (i = 0; i < MTK_VCODEC_REF_BUFFER; i++) {
+		ctx->ref_vaddr[i] = dma_alloc_coherent(dev, ctx->frame_size,
+						      &ctx->ref_addr[i],
+						      GFP_KERNEL);
+		if (!ctx->ref_vaddr[i]) {
+			ret = -ENOMEM;
+			goto err_free;
+		}
+
+		ctx->rec_vaddr[i] = dma_alloc_coherent(dev, ctx->frame_size,
+						      &ctx->rec_addr[i],
+						      GFP_KERNEL);
+		if (!ctx->rec_vaddr[i]) {
+			ret = -ENOMEM;
+			goto err_free;
+		}
+	}
+
+	/*
+	 * The rate control loads and saves its state through these two scratch
+	 * buffers, and the data sheet sizes them by reference to code this driver does
+	 * not have: "The required DRAM size is equal to (the length of ROM code + 16)"
+	 * for RC_CODE_DRAM_ADDR_DIV16 (draft/ds/venc.txt:5072-5074), and the identical
+	 * sentence for RC_INFO_DRAM_ADDR_DIV16 (draft/ds/venc.txt:5132-5136).  There
+	 * is no size here to compute from anything available, so
+	 * MTK_VENC_RC_CACHE_SIZE is a generous fixed allocation.
+	 *
+	 * Allocating it at all is the point.  These two registers are DIV16 DRAM
+	 * ADDRESS registers, so before this existed the only thing that could be
+	 * written into them was a small integer, which pointed the rate control's
+	 * scratch pointer at DRAM address integer * 16 -- wherever the integrator
+	 * happened to have mapped something low.  Now they point at memory the driver
+	 * owns.
+	 *
+	 * HONEST CAVEAT: what the hardware does with the CONTENTS of this memory is the
+	 * vendor's closed rate control algorithm, not anything this driver implements.
+	 * Allocating it makes the registers valid; it does not make the bitrate control
+	 * correct, and nothing in this driver makes the resulting bitstream conformant.
+	 */
+	ctx->rc_code_vaddr = dma_alloc_coherent(dev, MTK_VENC_RC_CACHE_SIZE,
+						&ctx->rc_code_addr, GFP_KERNEL);
+	if (!ctx->rc_code_vaddr) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+
+	ctx->rc_info_vaddr = dma_alloc_coherent(dev, MTK_VENC_RC_CACHE_SIZE,
+						&ctx->rc_info_addr, GFP_KERNEL);
+	if (!ctx->rc_info_vaddr) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+
+	return 0;
+
+err_free:
+	mtk_vcodec_enc_free_frame_buffers(ctx);
+	return ret;
+}
+
+/*
+ * Free everything mtk_vcodec_enc_alloc_frame_buffers() allocated.
+ *
+ * Safe on a partially allocated context: the context is zeroed on open, so every
+ * address is either NULL or a real allocation, and dma_free_coherent() on a NULL
+ * address is a no-op.  That is what lets the failure path above call this without
+ * knowing how far the allocation got.
+ */
+static void mtk_vcodec_enc_free_frame_buffers(struct mtk_vcodec_enc_ctx *ctx)
+{
+	struct device *dev = &ctx->dev->pdev->dev;
+	unsigned int i;
+
+	for (i = 0; i < MTK_VCODEC_REF_BUFFER; i++) {
+		dma_free_coherent(dev, ctx->frame_size, ctx->ref_vaddr[i],
+				  ctx->ref_addr[i]);
+		ctx->ref_vaddr[i] = NULL;
+		ctx->ref_addr[i] = 0;
+
+		dma_free_coherent(dev, ctx->frame_size, ctx->rec_vaddr[i],
+				  ctx->rec_addr[i]);
+		ctx->rec_vaddr[i] = NULL;
+		ctx->rec_addr[i] = 0;
+	}
+
+	dma_free_coherent(dev, MTK_VENC_RC_CACHE_SIZE, ctx->rc_code_vaddr,
+			  ctx->rc_code_addr);
+	ctx->rc_code_vaddr = NULL;
+	ctx->rc_code_addr = 0;
+
+	dma_free_coherent(dev, MTK_VENC_RC_CACHE_SIZE, ctx->rc_info_vaddr,
+			  ctx->rc_info_addr);
+	ctx->rc_info_vaddr = NULL;
+	ctx->rc_info_addr = 0;
+}
+
+/*
+ * s_fmt on the OUTPUT queue.
+ *
+ * Changing the picture geometry changes the size of the driver-owned reference and
+ * reconstruction planes, so this reallocates them.  The rate control scratch does not
+ * depend on the picture and is left alone.
+ */
+static int mtk_vcodec_enc_s_fmt_out(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_enc_ctx *ctx = file2ctx(file);
+	int ret;
+
+	ret = mtk_vcodec_enc_try_fmt_out(file, priv, f);
+	if (ret)
+		return ret;
+
+	/*
+	 * The previous format is not restored on failure.  Leaving a context whose
+	 * buffers do not match its declared geometry is exactly the state where a later
+	 * submit reads past the end of an allocation; zeroing the geometry instead makes
+	 * the next S_FMT see an unconfigured context, which queue_setup() refuses.
+	 */
+	mtk_vcodec_enc_free_frame_buffers(ctx);
+	ctx->src_fmt = *f;
+	ctx->frame_count = 0;
+
+	ret = mtk_vcodec_enc_alloc_frame_buffers(ctx);
+	if (ret) {
+		memset(&ctx->src_fmt, 0, sizeof(ctx->src_fmt));
+		return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * queue_setup - how many buffers of what size each queue needs, and how big each
+ * plane is.
+ *
+ * The OUTPUT queue holds raw NV12 frames from userspace, so its geometry comes
+ * straight from the negotiated source format.  The CAPTURE queue holds coded
+ * bitstreams, so its size is the negotiated sizeimage: the buffer the encoder is
+ * allowed to fill, not a prediction of what it will fill it with.
+ *
+ * One plane on both sides.  The source is a single NV12 plane holding luma
+ * followed by chroma, which the datapath splits into its two address registers,
+ * and the coded bitstream is one contiguous byte range.
+ *
+ * Counts are clamped rather than refused.  Raising a too-small count to the
+ * minimum is the V4L2 convention for REQBUFS and is what lets a caller ask for
+ * one buffer and get a pipeline it can actually drive; two is the smallest that
+ * does not stall on every frame.
+ */
+static int mtk_vcodec_enc_queue_setup(struct vb2_queue *vq,
+				      unsigned int *num_buffers,
+				      unsigned int *num_planes,
+				      unsigned int sizes[],
+				      struct device *alloc_devs[])
+{
+	struct mtk_vcodec_enc_ctx *ctx = vq->drv_priv;
+	struct device *dev = &ctx->dev->pdev->dev;
+	unsigned int min = 2;
+
+	/*
+	 * A queue type this context has no format for is a programming error, not a
+	 * user error: REQBUFS arrives through v4l2_m2m_reqbufs(), which has already
+	 * validated the type.  So it gets a WARN_ON and a refusal rather than a
+	 * plausible-looking default.
+	 */
+	if (vq->type != V4L2_BUF_TYPE_VIDEO_OUTPUT &&
+	    vq->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
+		WARN_ON(1);
+		return -EINVAL;
+	}
+
+	/*
+	 * No negotiated format means no geometry, and a queue sized against a zero
+	 * format would allocate zero bytes for every buffer.  Refuse rather than accept
+	 * a queue that cannot work: this is reachable by a REQBUFS with no preceding
+	 * S_FMT, and it is far easier to diagnose here than as an allocation failure
+	 * later.
+	 */
+	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT &&
+	    !ctx->src_fmt.fmt.pix.sizeimage)
+		return -EINVAL;
+
+	if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE &&
+	    !ctx->dst_fmt.fmt.pix.sizeimage)
+		return -EINVAL;
+
+	*num_planes = 1;
+	sizes[0] = vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT ?
+		ctx->src_fmt.fmt.pix.sizeimage : ctx->dst_fmt.fmt.pix.sizeimage;
+
+	if (*num_buffers < min)
+		*num_buffers = min;
+
+	alloc_devs[0] = dev;
+
+	return 0;
+}
+
+/*
+ * Buffer ops.
+ *
+ * Nothing here computes anything: the buffer userspace hands over IS the source
+ * picture, and the encoder reads it from exactly where userspace put it.  What the
+ * ops do is refuse states the hardware cannot honour.
+ */
+
+/*
+ * A stateless one-shot submit is refused outright.
+ *
+ * V4L2_BUF_FLAG_LAST_SRC is a UAPI flag this checkout's videodev2.h does not carry
+ * (it has V4L2_BUF_FLAG_LAST but not the _SRC variant), so it is defined here under
+ * an #ifndef: against a kernel whose UAPI does define it, the definition is skipped
+ * and the check below is a real test of the flag userspace actually sets.
+ *
+ * The encoder here is inter-frame -- it predicts from a reference frame a previous
+ * job reconstructed -- so a stateless request has no such history.  Encoding it
+ * would predict against whatever bytes happen to be in the reference buffer: a
+ * corrupt stream, or on the very first frame an I-frame asked to be something else.
+ * Refusing is the only honest answer, and it is why this driver does not advertise
+ * stateless support.
+ */
+#ifndef V4L2_BUF_FLAG_LAST_SRC
+#define V4L2_BUF_FLAG_LAST_SRC		0x00400000
+#endif
+
+static int mtk_vcodec_enc_verify_src(struct vb2_buffer *vb, const void *pb)
+{
+	const struct v4l2_buffer *buf = pb;
+
+	if (buf->index < 0 || buf->index >= vb->num_planes)
+		return -EINVAL;
+
+	if (buf->flags & V4L2_BUF_FLAG_LAST_SRC)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int mtk_vcodec_enc_verify_dst(struct vb2_buffer *vb, const void *pb)
+{
+	const struct v4l2_buffer *buf = pb;
+
+	if (buf->index < 0 || buf->index >= vb->num_planes)
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * Dispatch to the right queue's rules.
+ *
+ * verify_planes_array is the one buffer op that is type-dependent: it runs on the
+ * capture queue as well as the output one, and the stateless check belongs only to a
+ * source buffer.  Keying on the queue type rather than installing two different
+ * structures means neither queue can be given the other's rules by mistake.
+ */
+static int mtk_vcodec_enc_verify_planes(struct vb2_buffer *vb, const void *pb)
+{
+	if (vb->vb2_queue->type == V4L2_BUF_TYPE_VIDEO_OUTPUT)
+		return mtk_vcodec_enc_verify_src(vb, pb);
+
+	return mtk_vcodec_enc_verify_dst(vb, pb);
+}
+
+static void mtk_vcodec_enc_init_buf(struct vb2_buffer *vb)
+{
+	struct vb2_v4l2_buffer *vbuf = container_of(vb, struct vb2_v4l2_buffer,
+						    vb2_buf);
+
+	vbuf->sequence = 0;
+	vbuf->flags = 0;
+	vbuf->planes[0].bytesused = 0;
+}
+
+static void mtk_vcodec_enc_fill_user_buffer(struct vb2_buffer *vb, void *pb)
+{
+	const struct vb2_v4l2_buffer *src;
+	struct vb2_v4l2_buffer *dst;
+
+	src = container_of(vb, struct vb2_v4l2_buffer, vb2_buf);
+	dst = container_of(pb, struct vb2_v4l2_buffer, vb2_buf);
+
+	dst->sequence = src->sequence;
+	dst->flags = src->flags;
+	dst->planes[0].bytesused = src->planes[0].bytesused;
+	dst->timecode = src->timecode;
+}
+
+static const struct vb2_buf_ops mtk_vcodec_enc_buf_ops = {
+	.verify_planes_array	= mtk_vcodec_enc_verify_planes,
+	.init_buffer		= mtk_vcodec_enc_init_buf,
+	.fill_user_buffer	= mtk_vcodec_enc_fill_user_buffer,
+};
+
+/*
+ * start_streaming - STREAMON reached the queue.
+ *
+ * Nothing is programmed in the hardware here, and that is a fact worth stating
+ * rather than leaving implicit: a frame is started by device_run() and finished by
+ * the frame-done interrupt, so streaming on means exactly "the framework may now
+ * call device_run".  A reader looking for where STREAMON touches VENC_CODEC_CTRL
+ * would otherwise assume it had been missed.
+ *
+ * What it does do is reset the frame counter, so a fresh stream starts a fresh GOP.
+ * Without that the keyframe decision would continue from wherever the previous
+ * STREAMON left off, and a client that seeks or restarts would get a P-frame first
+ * with no reference behind it.
+ */
+static int mtk_vcodec_enc_start_streaming(struct vb2_queue *q,
+					  unsigned int count)
+{
+	struct mtk_vcodec_enc_ctx *ctx = q->drv_priv;
+
+	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT)
+		ctx->frame_count = 0;
+
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Job execution							      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Is this the first frame of a GOP?
+ *
+ * The GOP control is the user's keyframe interval and this turns it into something
+ * the hardware can act on: VENC_IMG_TYPE selects I-frame or P-frame and nothing
+ * else, so the driver has to decide where the I-frames go.
+ *
+ * With a GOP of 1 -- the default -- every frame is an I-frame.  That is the
+ * conservative default: an I-frame needs no reference history, so a stream is
+ * decodable from its first frame, and it is what a caller who has not thought about
+ * inter prediction should get.  With a GOP of N, every Nth frame is an I-frame and
+ * the rest are P-frames.
+ */
+static bool mtk_vcodec_enc_is_keyframe(struct mtk_vcodec_enc_ctx *ctx)
+{
+	unsigned int gop = v4l2_ctrl_g_ctrl(ctx->ctrl_gop);
+
+	if (gop <= 1)
+		return true;
+
+	return (ctx->frame_count % gop) == 0;
+}
+
+/*
+ * Assemble the mtk_vcodec_enc_parm the register programming takes, from the
+ * per-instance control values.
+ *
+ * Every value that has a documented register range is validated by
+ * mtk_venc_set_rate_control() itself, which knows the field widths; the control
+ * ranges below make sure a value that cannot be held is refused at S_EXT_CTRLS
+ * rather than truncated at submit time.
+ */
+static void mtk_vcodec_enc_get_parm(struct mtk_vcodec_enc_ctx *ctx,
+				    struct mtk_vcodec_enc_parm *p)
+{
+	memset(p, 0, sizeof(*p));
+
+	p->width = ctx->src_fmt.fmt.pix.width;
+	p->height = ctx->src_fmt.fmt.pix.height;
+	p->bitrate = v4l2_ctrl_g_ctrl(ctx->ctrl_bitrate);
+	p->qp_init = v4l2_ctrl_g_ctrl(ctx->ctrl_qp);
+	p->rc_fps = v4l2_ctrl_g_ctrl(ctx->ctrl_fps);
+	p->cbr = v4l2_ctrl_g_ctrl(ctx->ctrl_cbr);
+	p->gop = v4l2_ctrl_g_ctrl(ctx->ctrl_gop);
+}
+
+/*
+ * job_ready - is there a complete job to run?
+ *
+ * The check that matters is that a destination buffer is actually queued.  Without
+ * it, V4L2_BUF_FLAG_LAST on a capture buffer -- how userspace says "this was the
+ * last frame" -- could never be honoured, because the encoder would start a job with
+ * nowhere to put the bitstream and then have nowhere to hand it back.
+ *
+ * Both queues must have something ready.  The framework requires this before it
+ * calls device_run(), but stating it here makes the guarantee local: this driver will
+ * never start a frame whose bitstream has nowhere to go or whose source it cannot
+ * read.
+ */
+static int mtk_vcodec_enc_job_ready(void *priv)
+{
+	struct mtk_vcodec_enc_ctx *ctx = priv;
+
+	if (!v4l2_m2m_num_src_bufs_ready(ctx->m2m))
+		return 0;
+
+	if (!v4l2_m2m_num_dst_bufs_ready(ctx->m2m))
+		return 0;
+
+	return 1;
+}
+
+/*
+ * device_run - encode one frame.
+ *
+ * This is the function that makes mtk_venc_submit_frame(),
+ * mtk_venc_set_frame_addr(), mtk_venc_set_rate_control() and
+ * mtk_venc_set_rc_scratch_addr() reachable: each was correct register code with no
+ * caller, and this is the caller.  None of them was modified to get here.
+ *
+ * The ordering is the correctness argument and it is not arbitrary:
+ *
+ *   1. Take the source and destination buffers off the ready lists, so the driver
+ *      owns them for the duration and userspace cannot requeue them underneath the
+ *      encode.
+ *   2. Publish ctx->pending BEFORE starting the frame.  Starting first and publishing
+ *      afterwards is a lost-wakeup race: the encoder can raise ENC_FRM_INT and the
+ *      completion path can run before we get here, find no job, retire nothing, and
+ *      leave the runtime-PM reference that mtk_venc_submit_frame() takes held
+ *      forever.
+ *   3. Let the submit path start the frame -- it owns the runtime-PM reference and
+ *      the address and rate register programming, and duplicating either here would
+ *      create two places a reference could be taken.
+ *   4. Arm the watchdog, so a frame that never completes cannot strand the job.
+ *
+ * Reference and reconstruction
+ * ---------------------------
+ * The datapath predicts against FRM_REF_* and writes the reconstruction to
+ * FRM_REC_*, and the next frame has to predict from what this one reconstructed.
+ * That is a genuine ping-pong, which is why MTK_VCODEC_REF_BUFFER is 2:
+ *
+ *   frame N uses REF[N & 1] as its reference and REC[N & 1] as its output.
+ *   frame N+1 uses REF[(N+1) & 1] -- which is frame N's REC buffer.
+ *
+ * so no copy is needed and none is done.  With a single pair the REC buffer would be
+ * both the one the hardware writes and the one it predicts from, and the prediction
+ * would read the frame the encoder is mid-way through writing.
+ *
+ * The first frame of a GOP is an I-frame and is programmed as one
+ * (VENC_IMG_TYPE = 2), so it does not read the reference at all; that is what makes
+ * the reference buffer being uninitialised at the start of a stream harmless rather
+ * than a source of garbage in the first frames.
+ *
+ * This makes the reference chain correct.  It does NOT make the bitstream
+ * conformant: see the file header on what still lives only in the vendor's closed
+ * userspace libraries.
+ */
+static void mtk_vcodec_enc_device_run(void *priv)
+{
+	struct mtk_vcodec_enc_ctx *ctx = priv;
+	struct mtk_vcodec_dev *vcodec = ctx->dev;
+	struct vb2_v4l2_buffer *src_buf, *dst_buf;
+	struct mtk_vcodec_enc_parm parm;
+	unsigned long flags;
+	dma_addr_t bs_addr, src_y, src_uv, ref_y, ref_uv, rec_y, rec_uv, bs_size;
+	unsigned int idx;
+	bool keyframe;
+	int ret;
+
+	src_buf = v4l2_m2m_src_buf_remove(ctx->m2m);
+	dst_buf = v4l2_m2m_next_dst_buf(ctx->m2m);
+	if (!src_buf || !dst_buf)
+		goto err_put;
+
+	/*
+	 * The NV12 source is one plane holding luma followed by chroma, and the datapath
+	 * has a separate address register for each, so the chroma address is the base
+	 * plus the luma plane size.  mtk_venc_enc_plane_size() rounds the geometry up to
+	 * whole macroblocks before dividing, so this offset is the one the hardware will
+	 * walk to.
+	 */
+	src_y = vb2_dma_contig_plane_dma_addr(&src_buf->vb2_buf, 0);
+	src_uv = src_y + ctx->frame_size;
+
+	bs_addr = vb2_dma_contig_plane_dma_addr(&dst_buf->vb2_buf, 0);
+
+	idx = ctx->buf_idx % MTK_VCODEC_REF_BUFFER;
+	ref_y = ctx->ref_addr[idx];
+	ref_uv = ref_y + ctx->frame_size;
+	rec_y = ctx->rec_addr[idx];
+	rec_uv = rec_y + ctx->frame_size;
+
+	mtk_vcodec_enc_get_parm(ctx, &parm);
+
+	/*
+	 * The bitstream buffer size the hardware is told about is the queue's negotiated
+	 * sizeimage, not the length of whatever the user happened to allocate.  The
+	 * encoder writes up to sizeimage bytes and raises BS_DRAM_FULL_INT past it, so
+	 * telling it the real bound is what makes that interrupt mean "overflow" rather
+	 * than "silently wrote past the buffer".  VENC_BITSTREAM_BUF_SIZE is DIV128,
+	 * which mtk_vcodec_enc_dst_setup() has already rounded this to.
+	 */
+	bs_size = ctx->dst_fmt.fmt.pix.sizeimage;
+
+	keyframe = mtk_vcodec_enc_is_keyframe(ctx);
+
+	/*
+	 * Publish the job before anything is programmed that could make it complete.
+	 * ctx->pending is the claim mtk_venc_complete_job() takes, and it is what stops
+	 * the watchdog or the interrupt from retiring a frame that has not been started.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	ctx->pending = true;
+	vcodec->bs_error = false;
+	vcodec->bs_bytes = 0;
+	vcodec->timeout_ctx = ctx;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	/*
+	 * Tell the engine what kind of frame this is, and ask it to commit the
+	 * reconstruction when it is done.
+	 *
+	 * GEN_REC_FRM is what makes the REC buffer worth having: it triggers the
+	 * de-blocking filter to dump the reconstructed frame for reference
+	 * (draft/ds/venc.txt:3192-3193).  Without it the next frame would predict from
+	 * an unfiltered -- and in practice never-written -- REC buffer.
+	 *
+	 * The whole word is written rather than read-modify-written because every field
+	 * in it this driver does not drive (the colocated-MV option, the B-frame index,
+	 * the IDR id, the prediction direction) resets to 0, so leaving them explicitly
+	 * 0 is the documented reset state anyway.  VENC_ENCODER_INFO_3 resets to
+	 * 0x00100000 (draft/ds/venc.txt:3095-3100), i.e. only bit 20 set, so no
+	 * programming of this register's own bits survives a reset.
+	 */
+	mtk_venc_write(vcodec, VENC_ENCODER_INFO_3,
+			VENC_GEN_REC_FRM |
+			(keyframe ? VENC_IMG_TYPE_I_FRAME :
+				     VENC_IMG_TYPE_P_FRAME));
+
+	/*
+	 * Point the rate control's scratch state at memory this driver owns.  This is the
+	 * call that makes mtk_venc_set_rc_scratch_addr() reachable; before it, the two RC
+	 * DRAM address registers held whatever small integer was written into them and the
+	 * hardware loaded its state from wherever integer * 16 pointed.
+	 */
+	ret = mtk_venc_set_rc_scratch_addr(vcodec, ctx->rc_code_addr,
+					    ctx->rc_info_addr);
+	if (ret)
+		goto err_job;
+
+	ret = mtk_venc_submit_frame(vcodec, false, &parm, bs_addr, bs_size,
+				    src_y, src_uv, ref_y, ref_uv,
+				    rec_y, rec_uv);
+	if (ret)
+		goto err_job;
+
+	/*
+	 * The frame is running.  Arm the watchdog now that there is something to time
+	 * out, and advance the ping-pong so the next frame's reference is this frame's
+	 * reconstruction.
+	 */
+	mtk_venc_timeout_arm(vcodec, ctx);
+	ctx->buf_idx ^= 1;
+	ctx->frame_count++;
+
+	return;
+
+err_job:
+	/*
+	 * Nothing was started, so no interrupt will arrive and the watchdog has nothing
+	 * to time out.  Take the claim back -- otherwise it would later retire a frame
+	 * that never ran -- and hand the buffers to userspace as failed, so a rejected
+	 * job does not silently swallow a buffer the caller is waiting to reuse.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	ctx->pending = false;
+	vcodec->timeout_ctx = NULL;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	dst_buf->flags |= V4L2_BUF_FLAG_ERROR;
+	dst_buf->planes[0].bytesused = 0;
+	v4l2_m2m_buf_done_and_job_finish(vcodec->m2m_dev, ctx->m2m,
+					 VB2_BUF_STATE_ERROR);
+	return;
+
+err_put:
+	if (src_buf)
+		v4l2_m2m_buf_done(src_buf, VB2_BUF_STATE_ERROR);
+	if (dst_buf)
+		v4l2_m2m_buf_done(dst_buf, VB2_BUF_STATE_ERROR);
+}
+
+/*
+ * job_abort - STREAMOFF arrived with a frame in flight.
+ *
+ * The frame is left to complete or time out rather than being torn down here: there
+ * is no documented way to halt a running encode without corrupting the engine's
+ * state, and abandoning the buffers is exactly what the watchdog already does
+ * safely.
+ *
+ * ctx->pending is deliberately NOT cleared.  The watchdog and the interrupt still
+ * need it to make their exactly-once claim on the runtime-PM reference; it is cleared
+ * by whichever of them runs first.  Clearing it now would let a late completion find
+ * no job and strand the reference, which is the bug this mechanism exists to prevent.
+ */
+static void mtk_vcodec_enc_job_abort(void *priv)
+{
+}
+
+
+/*
+ * stop_streaming - STREAMOFF.
+ *
+ * Deliberately does nothing.  A frame may still be in flight; job_abort() has
+ * already been told not to abandon it and the watchdog owns finishing it.  Freeing
+ * or rewriting buffers here would be exactly wrong.
+ */
+static void mtk_vcodec_enc_stop_streaming(struct vb2_queue *q)
+{
+}
+
+static const struct vb2_ops mtk_vcodec_enc_qops = {
+	.queue_setup		= mtk_vcodec_enc_queue_setup,
+	.start_streaming	= mtk_vcodec_enc_start_streaming,
+	.stop_streaming		= mtk_vcodec_enc_stop_streaming,
+};
+
+/*
+ * queue_init - build the two vb2 queues.
+ *
+ * Called by v4l2_m2m_ctx_init() once per open, before any buffer exists, so this
+ * is where the queue types, the memory model and the queue operations are chosen.
+ *
+ * The buffers are the source picture and the coded bitstream, both of which the
+ * hardware DMAs to and from, so vb2_dma_contig_memops is the right allocator: it
+ * is what this hardware's IOMMU actually wants and what the DIV16 address
+ * registers need.
+ *
+ * drv_priv points at the context so that queue_setup() and the buffer ops can
+ * reach the negotiated format without re-deriving it from the queue.
+ */
+static const struct vb2_buf_ops mtk_vcodec_enc_buf_ops;
+
+static int mtk_vcodec_enc_queue_init(void *priv, struct vb2_queue *src_vq,
+				     struct vb2_queue *dst_vq)
+{
+	struct mtk_vcodec_enc_ctx *ctx = priv;
+	int ret;
+
+	src_vq->type		= V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	src_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
+	src_vq->drv_priv	= ctx;
+	src_vq->buf_struct_size	= sizeof(struct v4l2_m2m_buffer);
+	src_vq->ops		= &mtk_vcodec_enc_qops;
+	src_vq->buf_ops		= &mtk_vcodec_enc_buf_ops;
+	src_vq->mem_ops		= &vb2_dma_contig_memops;
+
+	ret = vb2_queue_init(src_vq);
+	if (ret)
+		return ret;
+
+	dst_vq->type		= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	dst_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
+	dst_vq->drv_priv	= ctx;
+	dst_vq->buf_struct_size	= sizeof(struct v4l2_m2m_buffer);
+	dst_vq->ops		= &mtk_vcodec_enc_qops;
+	dst_vq->buf_ops		= &mtk_vcodec_enc_buf_ops;
+	dst_vq->mem_ops		= &vb2_dma_contig_memops;
+
+	return vb2_queue_init(dst_vq);
+}
+
+/*
+ * open - a userspace client starts using the encoder.
+ *
+ * The per-instance context owns the reference, reconstruction and rate control
+ * scratch allocations, so it is created here and torn down in release().  It is
+ * per file descriptor rather than per device because those buffers are sized from
+ * the negotiated picture geometry, and two clients encoding different resolutions
+ * must not fight over them.
+ */
+static int mtk_vcodec_enc_open(struct file *file)
+{
+	struct mtk_vcodec_dev *vcodec = file2m2m(file);
+	struct mtk_vcodec_enc_ctx *ctx;
+	struct v4l2_format *fmt;
+	int ret;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+
+	ctx->dev = vcodec;
+
+	/*
+	 * Defaults, so a client that never sets a format still gets something
+	 * coherent.  The source format deliberately starts with no geometry: there is
+	 * no sensible default picture size, and queue_setup() refuses a queue sized
+	 * against a zero format, so the failure lands where it is diagnosable rather
+	 * than as an allocation failure later.
+	 */
+	fmt = &ctx->src_fmt;
+	fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+
+	fmt = &ctx->dst_fmt;
+	fmt->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+	fmt->fmt.pix.field = V4L2_FIELD_NONE;
+	fmt->fmt.pix.sizeimage = MTK_VENC_BS_SIZE_DEFAULT;
+
+	/*
+	 * Controls are created before the queues exist, so a client that sets the
+	 * bitrate or QP with EXT_CTRLS does so against a fully populated handler.
+	 */
+	ret = mtk_vcodec_enc_ctrl_init(ctx);
+	if (ret)
+		goto err_free;
+
+	file->private_data = ctx;
+
+	ctx->m2m = v4l2_m2m_ctx_init(vcodec->m2m_dev, ctx,
+				     &mtk_vcodec_enc_queue_init);
+	if (IS_ERR(ctx->m2m)) {
+		ret = PTR_ERR(ctx->m2m);
+		ctx->m2m = NULL;
+		goto err_free;
+	}
+
+	/*
+	 * enc_users keeps a system suspend from tearing the encoder's registers down
+	 * underneath an open but idle stream.  It is decremented in release().
+	 */
+	atomic_inc(&vcodec->enc_users);
+
+	return 0;
+
+err_free:
+	v4l2_ctrl_handler_free(&ctx->ctrl_hdl);
+	kfree(ctx);
+
+	return ret;
+}
+
+/*
+ * release - the client is done with the encoder.
+ *
+ * The queues are drained first, because that is what releases any buffer the
+ * hardware is still holding a DMA handle on.
+ */
+static int mtk_vcodec_enc_release(struct file *file)
+{
+	struct mtk_vcodec_enc_ctx *ctx = file->private_data;
+	struct mtk_vcodec_dev *vcodec = ctx->dev;
+	unsigned long flags;
+	bool owns_job;
+
+	/*
+	 * Settle any job this instance still owns before ANY of its memory goes away.
+	 *
+	 * Both work items are cancelled, and cancel_delayed_work_sync() makes this a
+	 * guarantee rather than a hope: it returns only once the watchdog is not
+	 * running.  The watchdog is what retires a job the hardware has stopped
+	 * completing, so after these two calls no completion path can still be holding
+	 * a pointer to this context.
+	 *
+	 * Order matters against the frees below.  If the frame were freed first, a
+	 * watchdog firing in the same window would hand a job's buffers back to the
+	 * framework after the REF/REC planes the encoder was DMA-ing through had been
+	 * unmapped -- a use-after-free visible only when an encode wedges exactly as
+	 * the client closes the node.
+	 *
+	 * The cancels are CONDITIONAL on this context owning the job, which matters
+	 * because both work items are per-device, not per-open.  The encoder takes one
+	 * frame at a time and the m2m framework runs one context at a time, so
+	 * timeout_ctx names at most one running job -- but with two handles open, one
+	 * of them idle, an unconditional cancel here would disarm the IDLE handle's
+	 * counterpart's watchdog and leave a genuinely wedged frame with no way to be
+	 * timed out.  That is the exact liveness bug the watchdog exists to fix, so it
+	 * is not acceptable to reintroduce it in the close path.
+	 */
+	spin_lock_irqsave(&vcodec->enc_state_lock, flags);
+	owns_job = vcodec->timeout_ctx == ctx;
+	if (owns_job)
+		vcodec->timeout_ctx = NULL;
+	spin_unlock_irqrestore(&vcodec->enc_state_lock, flags);
+
+	if (owns_job) {
+		cancel_delayed_work_sync(&vcodec->venc_timeout_work);
+		cancel_work_sync(&vcodec->venc_complete_work);
+	}
+
+	v4l2_m2m_ctx_release(ctx->m2m);
+
+	mtk_vcodec_enc_free_frame_buffers(ctx);
+	v4l2_ctrl_handler_free(&ctx->ctrl_hdl);
+	kfree(ctx);
+
+	atomic_dec(&vcodec->enc_users);
+
+	return 0;
+}
+
+static const struct v4l2_file_operations mtk_vcodec_enc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= mtk_vcodec_enc_open,
+	.release	= mtk_vcodec_enc_release,
+	.poll		= v4l2_m2m_fop_poll,
+	.mmap		= v4l2_m2m_fop_mmap,
+};
+
+static int mtk_vcodec_enc_querycap(struct file *file, void *priv,
+				   struct v4l2_capability *cap)
+{
+	/*
+	 * V4L2_CAP_VIDEO_M2M is the mem-to-mem capability.  This driver's UAPI copy has
+	 * no separate V4L2_CAP_VIDEO_CODEC bit, so a codec node is expressed as a
+	 * mem-to-mem node whose capture side is a compressed format;
+	 * V4L2_CAP_STREAMING is what advertises VIDIOC_STREAMON to userspace.
+	 */
+	strscpy(cap->driver, MTK_VCODEC_DRIVER_NAME, sizeof(cap->driver));
+	strscpy(cap->card, MTK_VCODEC_DRIVER_NAME, sizeof(cap->card));
+	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
+		 MTK_VCODEC_DRIVER_NAME);
+
+	/* Nothing here needs 32-bit interface emulation, so they are the same set. */
+	cap->device_caps = cap->capabilities = V4L2_CAP_VIDEO_M2M |
+						  V4L2_CAP_STREAMING;
+
+	return 0;
+}
+
+static const struct v4l2_ioctl_ops mtk_vcodec_enc_ioctl_ops = {
+	.vidioc_querycap		= mtk_vcodec_enc_querycap,
+
+	.vidioc_enum_fmt_vid_cap	= mtk_vcodec_enc_enum_fmt_cap,
+	.vidioc_enum_fmt_vid_out	= mtk_vcodec_enc_enum_fmt_out,
+	.vidioc_g_fmt_vid_cap	= mtk_vcodec_enc_g_fmt_cap,
+	.vidioc_g_fmt_vid_out	= mtk_vcodec_enc_g_fmt_out,
+	.vidioc_try_fmt_vid_cap	= mtk_vcodec_enc_try_fmt_cap,
+	.vidioc_try_fmt_vid_out	= mtk_vcodec_enc_try_fmt_out,
+	.vidioc_s_fmt_vid_cap	= mtk_vcodec_enc_s_fmt_cap,
+	.vidioc_s_fmt_vid_out	= mtk_vcodec_enc_s_fmt_out,
+
+	/*
+	 * Buffer lifecycle is multiplexed by the framework: those ioctls arrive without
+	 * a queue type and it dispatches them to the right one.
+	 */
+	.vidioc_reqbufs		= v4l2_m2m_ioctl_reqbufs,
+	.vidioc_querybuf	= v4l2_m2m_ioctl_querybuf,
+	.vidioc_qbuf		= v4l2_m2m_ioctl_qbuf,
+	.vidioc_dqbuf		= v4l2_m2m_ioctl_dqbuf,
+	.vidioc_prepare_buf	= v4l2_m2m_ioctl_prepare_buf,
+	.vidioc_create_bufs	= v4l2_m2m_ioctl_create_bufs,
+	.vidioc_remove_bufs	= v4l2_m2m_ioctl_remove_bufs,
+	.vidioc_expbuf		= v4l2_m2m_ioctl_expbuf,
+
+	.vidioc_streamon	= v4l2_m2m_ioctl_streamon,
+	.vidioc_streamoff	= v4l2_m2m_ioctl_streamoff,
+};
+
+static const struct v4l2_m2m_ops mtk_vcodec_enc_m2m_ops = {
+	.device_run	= mtk_vcodec_enc_device_run,
+	.job_ready	= mtk_vcodec_enc_job_ready,
+	.job_abort	= mtk_vcodec_enc_job_abort,
+};
+
+/*
+ * The video_device template.
+ *
+ * A static instance is copied into the driver's own storage in vf_init() rather
+ * than allocated, because every field in it is a constant: this tree's
+ * struct video_device has no per-instance allocation need beyond the struct
+ * itself, and video_set_drvdata()/vfd->lock are what bind it to this probe.
+ *
+ * .vfl_dir = VFL_DIR_M2M is what makes this a mem-to-mem node rather than a
+ * video capture or output one, and .minor = -1 asks for an automatic minor.
+ */
+static struct video_device mtk_vcodec_enc_videodev = {
+	.name		= MTK_VCODEC_DRIVER_NAME,
+	.vfl_dir	= VFL_DIR_M2M,
+	.fops		= &mtk_vcodec_enc_fops,
+	.ioctl_ops	= &mtk_vcodec_enc_ioctl_ops,
+	.minor		= -1,
+	.release	= video_device_release,
+	.device_caps	= V4L2_CAP_STREAMING,
+};
+
+/*
+ * Bring up the encoder's video_device.
+ *
+ * Every step that registers something is undone explicitly on the failure paths
+ * below, in reverse order, because the v4l2_device is embedded in this driver's
+ * own private state rather than devm-managed: if video_register_device() fails,
+ * the m2m context has to be released and the v4l2_device unregistered, or the
+ * node is left half-built.
+ */
+static int mtk_vcodec_enc_vf_init(struct mtk_vcodec_dev *vcodec)
+{
+	struct v4l2_device *v4l2_dev = &vcodec->v4l2_dev;
+	struct video_device *vfd;
+	int ret;
+
+	/*
+	 * v4l2_device_register() first: it is what makes the v4l2_device usable and it
+	 * is what later teardown has to undo.  It also takes dev->driver_data, so
+	 * platform_set_drvdata() must have run first (probe() does that before calling
+	 * this).
+	 */
+	ret = v4l2_device_register(&vcodec->pdev->dev, v4l2_dev);
+	if (ret)
+		return ret;
+
+	vcodec->vfd = mtk_vcodec_enc_videodev;
+	vfd = &vcodec->vfd;
+
+	vfd->lock = &vcodec->lock;
+	vfd->v4l2_dev = v4l2_dev;
+	vfd->device_caps |= V4L2_CAP_VIDEO_M2M;
+	video_set_drvdata(vfd, vcodec);
+
+	vcodec->m2m_dev = v4l2_m2m_init(&mtk_vcodec_enc_m2m_ops);
+	if (IS_ERR(vcodec->m2m_dev)) {
+		ret = PTR_ERR(vcodec->m2m_dev);
+		vcodec->m2m_dev = NULL;
+		goto err_unregister_dev;
+	}
+
+	/*
+	 * Register the node with the video core FIRST, then attach it to the media
+	 * graph.  The order is not interchangeable: v4l2_m2m_register_media_controller()
+	 * needs vfd->minor to name the /dev/videoX interface it creates, and minor
+	 * numbers are only allocated by video_register_device().
+	 */
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
+	if (ret)
+		goto err_release_m2m;
+
+	/*
+	 * Register the media controller.  v4l2_m2m_register_media_controller() builds
+	 * the three m2m entities (source, processing, sink), creates their pads and
+	 * links them together; it is a no-op returning 0 when there is no media
+	 * controller, so the node still works without one.
+	 *
+	 * A failure here is not fatal to the node: the video device is registered and
+	 * usable through the streaming ioctls regardless, it just has no graph
+	 * representation.  It is reported rather than allowed to fail probe over
+	 * something userspace can still reach.
+	 */
+	ret = v4l2_m2m_register_media_controller(vcodec->m2m_dev, vfd,
+						MEDIA_ENT_F_PROC_VIDEO_ENCODER);
+	if (ret) {
+		v4l2_warn(v4l2_dev,
+			  "failed to register m2m media controller: %d\n", ret);
+		vcodec->mc_registered = false;
+	} else {
+		vcodec->mc_registered = true;
+	}
+
+	v4l2_info(v4l2_dev, "encoder registered as /dev/video%d\n", vfd->num);
+
+	return 0;
+
+err_release_m2m:
+	v4l2_m2m_release(vcodec->m2m_dev);
+	vcodec->m2m_dev = NULL;
+err_unregister_dev:
+	v4l2_device_unregister(v4l2_dev);
+
+	return ret;
+}
+
+/*
+ * Undo mtk_vcodec_enc_vf_init().
+ *
+ * Order matters: the node is unregistered first so no new open can race the
+ * teardown, then the media controller (whose entities and links it owns), then
+ * the m2m context, and only then the v4l2_device itself.
+ */
+static void mtk_vcodec_enc_vf_deinit(struct mtk_vcodec_dev *vcodec)
+{
+	if (vcodec->m2m_dev) {
+		if (vcodec->mc_registered)
+			v4l2_m2m_unregister_media_controller(vcodec->m2m_dev);
+		vcodec->mc_registered = false;
+		video_unregister_device(&vcodec->vfd);
+	}
+
+	v4l2_m2m_release(vcodec->m2m_dev);
+	vcodec->m2m_dev = NULL;
+
+	v4l2_device_unregister(&vcodec->v4l2_dev);
+}
+
 static int mtk_vcodec_runtime_suspend(struct device *dev)
 {
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(dev);
@@ -1278,6 +2936,14 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	mutex_init(&vcodec->enc_lock);
 	mutex_init(&vcodec->dec_lock);
 	spin_lock_init(&vcodec->enc_state_lock);
+
+	/*
+	 * The two work items are initialised here rather than lazily: the watchdog is
+	 * armed per job by device_run() and the completion work is scheduled from the
+	 * encoder ISR, both of which can happen before any streaming begins.
+	 */
+	INIT_DELAYED_WORK(&vcodec->venc_timeout_work, mtk_venc_timeout);
+	INIT_WORK(&vcodec->venc_complete_work, mtk_venc_complete_work);
 	vcodec->enc_pm_held = false;
 	atomic_set(&vcodec->enc_users, 0);
 	atomic_set(&vcodec->dec_users, 0);
@@ -1325,9 +2991,42 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to request vdec irq\n");
 
+	/*
+	 * Register the V4L2 node last, once every resource it depends on is in place:
+	 * a /dev/videoX node that exists while its clocks or IRQ are missing would let
+	 * userspace open an encoder that cannot encode.
+	 */
+	ret = mtk_vcodec_enc_vf_init(vcodec);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to register encoder video device\n");
+
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
+}
+
+/*
+ * remove - the platform device is going away.
+ *
+ * The node is torn down before the runtime-PM domain is: an open file handle holds
+ * a runtime-PM reference, and letting the video device go first is what stops a new
+ * open from arriving after the resources under it have been released.
+ */
+static void mtk_vcodec_remove(struct platform_device *pdev)
+{
+	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(&pdev->dev);
+
+	/*
+	 * Settle any watchdog work BEFORE the node goes away, so the completion path
+	 * cannot run against a half-torn-down m2m_dev.
+	 */
+	cancel_delayed_work_sync(&vcodec->venc_timeout_work);
+	cancel_work_sync(&vcodec->venc_complete_work);
+
+	mtk_vcodec_enc_vf_deinit(vcodec);
+
+	pm_runtime_disable(&pdev->dev);
 }
 
 static const struct dev_pm_ops mtk_vcodec_pm_ops = {
@@ -1344,6 +3043,7 @@ MODULE_DEVICE_TABLE(of, mtk_vcodec_of_match);
 
 static struct platform_driver mtk_vcodec_driver = {
 	.probe = mtk_vcodec_probe,
+	.remove = mtk_vcodec_remove,
 	.driver = {
 		.name = MTK_VCODEC_DRIVER_NAME,
 		.pm = &mtk_vcodec_pm_ops,
