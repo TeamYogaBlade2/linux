@@ -89,10 +89,19 @@
 	 * that mt6589.dtsi already gives to other drivers (jpgdec at
 	 * 0x15009000/0x1000 and jpgenc at 0x1500a000/0x1000), so claiming even
 	 * half of each was a second overlapping reservation.
+	 *
+	 * The three reg properties below are two-cell <address size> tuples,
+	 * not four.  The parent soc node is #address-cells = <1>,
+	 * #size-cells = <1> (mt6589.dtsi), and so is every other imgsys child.
+	 * Written as four cells they are not rejected at build time - dtc does
+	 * not check reg against the parent - but the kernel reads cell 0 as the
+	 * address and cell 1 as the size, so "reg = <0x0 0x15008000 0x0 0x200>"
+	 * became a request for 0x00000000..0x15007fff and probe died with
+	 * -EBUSY on all three drivers.
 	 */
 	seninf: csi2-rx@15008000 {
 		compatible = "mediatek,mt6589-csi2-rx";
-		reg = <0x0 0x15008000 0x0 0x200>;
+		reg = <0x15008000 0x200>;
 
 		/*
 		 * No "clocks" here on purpose.  The receiver wants seninf, csi2
@@ -247,7 +256,7 @@
 	 */
 	scam: scam@15008200 {
 		compatible = "mediatek,mt6589-scam";
-		reg = <0x0 0x15008200 0x0 0x44>;
+		reg = <0x15008200 0x44>;
 
 		mediatek,scam-port = <0>;
 
@@ -282,7 +291,7 @@
 
 	cam: cam@15004000 {
 		compatible = "mediatek,mt6589-cam";
-		reg = <0x0 0x15004000 0x0 0x400>;
+		reg = <0x15004000 0x400>;
 
 		ports {
 			cam_in: port@0 {
