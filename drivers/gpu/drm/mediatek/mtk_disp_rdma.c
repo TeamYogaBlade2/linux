@@ -61,6 +61,15 @@
 #define RDMA_FIFO_SIZE(rdma)			((rdma)->data->fifo_size)
 #define DISP_RDMA_MEM_START_ADDR		0x0f00
 
+/*
+ * Every status bit this block can raise, and therefore the whole of what
+ * RDMAStart() enables.  Only meaningful where data->int_enable_mask says so
+ * - see mtk_rdma_start().
+ */
+#define RDMA_INT_ALL \
+(RDMA_REG_UPDATE_INT | RDMA_FRAME_START_INT | RDMA_FRAME_END_INT | \
+ RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT | RDMA_TARGET_LINE_INT)
+
 #define RDMA_MEM_GMC				0x40402020
 
 /*
@@ -105,6 +114,34 @@ struct mtk_disp_rdma_data {
 	u32 mem_start_addr_reg;
 	u32 mem_gmc_val;
 	void (*reset)(struct mtk_disp_rdma *rdma);
+	/*
+	 * int_enable_mask is what mtk_rdma_start() writes to INT_ENABLE
+	 * before enabling the engine.  Zero - the value on every SoC whose
+	 * INT_STATUS bit map this driver has not checked - leaves the
+	 * register alone, exactly as this driver did before the MT6589 work,
+	 * and lets mtk_rdma_enable_vblank() be the only thing that enables
+	 * an interrupt.  A non-zero mask is only set where the reset value
+	 * of the block is known and that mask is the complete set of status
+	 * bits, so the write cannot enable a bit this driver cannot name.
+	 */
+	unsigned int int_enable_mask;
+	/*
+	 * direct_link_no_plane says this RDMA is chained behind a layer
+	 * block that feeds it, and no plane is ever attached to it, so
+	 * mtk_rdma_layer_config() never runs for it.  mtk_rdma_config() then
+	 * has to program what the layer hook would otherwise have written:
+	 * MODE_SEL is left clear so the block passes its input straight
+	 * through instead of fetching from a memory ring, and the input
+	 * format, source pitch and ring start address are programmed here.
+	 *
+	 * The block needs no plane in that arrangement: the stock driver
+	 * selects RDMA_MODE_DIRECT_LINK with address 0 (ddp_path.c), and
+	 * the layer block in front is what has the plane.  On the other
+	 * SoCs the plane *is* attached to the RDMA, so layer_config does
+	 * run and doing any of this again from the config hook would be
+	 * both redundant and, for the mode bit, wrong.
+	 */
+	bool direct_link_no_plane;
 };
 
 /*
@@ -220,8 +257,20 @@ void mtk_rdma_start(struct device *dev)
 	 * zeroes INT_STATUS, but nothing clears EOF_ABNORMAL raised while
 	 * the engine was idle - and a latched status keeps the OVL reporting
 	 * "RDMA0 didn't complete frame" on every frame.
+	 *
+	 * That reasoning is MT6589's: 0x3F is only correct if all six
+	 * interrupt bits are the ones named above, which is a fact about
+	 * this block's INT_STATUS layout and not something the stock
+	 * driver's constant can be assumed to mean on a different SoC.  So
+	 * the write is per-SoC data, and a SoC that has not stated a mask
+	 * gets no write here at all - which is what this function did for
+	 * every SoC before the MT6589 work.  Those blocks are left with the
+	 * interrupts probe() cleared, and mtk_rdma_enable_vblank() still
+	 * turns on frame-end for them.
 	 */
-	writel(0x3f, rdma->regs + DISP_REG_RDMA_INT_ENABLE);
+	if (rdma->data->int_enable_mask)
+		writel(rdma->data->int_enable_mask,
+		       rdma->regs + DISP_REG_RDMA_INT_ENABLE);
 
 	rdma_update_bits(dev, DISP_REG_RDMA_GLOBAL_CON, RDMA_ENGINE_EN,
 			 RDMA_ENGINE_EN);
@@ -252,62 +301,82 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	 * This has to run here rather than from mtk_rdma_start(), because the
 	 * CRTC configures each component before starting it - a reset in
 	 * start() would clear the values written a moment earlier.
-	 */
-	mtk_rdma_reset_mt6589(rdma);
-
-	/*
-	 * Leave MODE_SEL clear so RDMA0 passes the OVL's output straight
-	 * through instead of fetching from a memory ring.
 	 *
-	 * This has to be set here rather than in layer_config: no plane is
-	 * ever attached to RDMA0 on this path, so layer_config never runs.
-	 * It was the only place MODE_SEL was cleared, which meant the reset
-	 * above left RDMA0 in memory mode and it then waited forever on a
-	 * ring start address of zero.
+	 * It is also the only SoC-specific step here, and it is reached only
+	 * through data->reset, which only the MT6589 data sets.  The other
+	 * SoCs never had a reset in this hook and must not grow one: the
+	 * register values above are this block's, and the reset sequence
+	 * they came from is written against the MT6589 reset state.
 	 */
-	mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_SEL);
-
-
+	if (rdma->data->reset)
+		rdma->data->reset(rdma);
 
 	/*
-	 * The main path is RGB888 (the panel's format), and the stock driver
-	 * sets RDMA_INPUT_FORMAT_RGB888 even when it selects direct-link
-	 * mode, so the input format is not a memory-mode-only field.  Set it
-	 * here: the .config hook is the only place it can be written, since
-	 * no plane is ever attached to RDMA0 on this path and so
-	 * layer_config never runs.
+	 * direct_link_no_plane says no plane is ever attached to this RDMA,
+	 * so mtk_rdma_layer_config() - which programs the mode, the input
+	 * format, the pitch and the ring address - never runs for it, and
+	 * everything below has to be programmed here instead.
 	 */
-	mtk_ddp_write_relaxed(cmdq_pkt,
-			      rdma->data->fmt_convert(DRM_FORMAT_RGB888),
-			      &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
+	if (rdma->data->direct_link_no_plane) {
+		/*
+		 * Leave MODE_SEL clear so RDMA0 passes the OVL's output
+		 * straight through instead of fetching from a memory ring.
+		 *
+		 * This has to be set here rather than in layer_config: no
+		 * plane is ever attached to RDMA0 on this path, so
+		 * layer_config never runs.  It was the only place MODE_SEL
+		 * was cleared, which meant the reset above left RDMA0 in
+		 * memory mode and it then waited forever on a ring start
+		 * address of zero.
+		 */
+		mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
+				   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_SEL);
+
+		/*
+		 * The main path is RGB888 (the panel's format), and the stock
+		 * driver sets RDMA_INPUT_FORMAT_RGB888 even when it selects
+		 * direct-link mode, so the input format is not a
+		 * memory-mode-only field.  Set it here: the .config hook is
+		 * the only place it can be written, since no plane is ever
+		 * attached to RDMA0 on this path and so layer_config never
+		 * runs.
+		 */
+		mtk_ddp_write_relaxed(cmdq_pkt,
+				      rdma->data->fmt_convert(DRM_FORMAT_RGB888),
+				      &rdma->cmdq_reg, rdma->regs,
+				      DISP_RDMA_MEM_CON);
+
+		/*
+		 * Source pitch, in pixels per line - the same conversion the
+		 * layer path does, because the field is scaled by a line
+		 * index rather than by bytes-per-pixel.
+		 *
+		 * This has to be written here as well as in
+		 * mtk_rdma_layer_config(): the layer hook never runs on this
+		 * path, since no plane is ever attached to RDMA0, and the
+		 * stock driver programs the pitch from RDMAConfig() in
+		 * direct-link mode too - ddp_path.c passes the real pitch
+		 * with address 0 when it selects RDMA_MODE_DIRECT_LINK.
+		 * Leaving the pitch at reset is what left RDMA0 raising
+		 * EOF_ABNORMAL while the overlay completed frames around
+		 * it.
+		 *
+		 * The start address is zero in direct-link mode for the same
+		 * reason the stock driver passes 0: there is no memory ring
+		 * to read from.
+		 */
+		mtk_ddp_write_relaxed(cmdq_pkt, (width & GENMASK(15, 0)),
+				      &rdma->cmdq_reg, rdma->regs,
+				      DISP_REG_RDMA_MEM_SRC_PITCH);
+		mtk_ddp_write_relaxed(cmdq_pkt, 0, &rdma->cmdq_reg,
+				      rdma->regs,
+				      rdma->data->mem_start_addr_reg);
+	}
 
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_SIZE_CON_1, rdma->data->size_con1);
-
-	/*
-	 * Source pitch, in pixels per line - the same conversion the layer
-	 * path does, because the field is scaled by a line index rather than
-	 * by bytes-per-pixel.
-	 *
-	 * This has to be written here as well as in mtk_rdma_layer_config():
-	 * the layer hook never runs on this path, since no plane is ever
-	 * attached to RDMA0, and the stock driver programs the pitch from
-	 * RDMAConfig() in direct-link mode too - ddp_path.c passes the real
-	 * pitch with address 0 when it selects RDMA_MODE_DIRECT_LINK. Leaving
-	 * the pitch at reset is what left RDMA0 raising EOF_ABNORMAL while
-	 * the overlay completed frames around it.
-	 *
-	 * The start address is zero in direct-link mode for the same reason
-	 * the stock driver passes 0: there is no memory ring to read from.
-	 */
-	mtk_ddp_write_relaxed(cmdq_pkt, (width & GENMASK(15, 0)),
-			      &rdma->cmdq_reg, rdma->regs,
-			      DISP_REG_RDMA_MEM_SRC_PITCH);
-	mtk_ddp_write_relaxed(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-			      rdma->data->mem_start_addr_reg);
 
 	if (rdma->fifo_size)
 		rdma_fifo_size = rdma->fifo_size;
@@ -615,7 +684,16 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
-	ret = pm_runtime_get_sync(dev);
+	/*
+	 * resume_and_get(), not get_sync(): get_sync() leaves the usage
+	 * counter incremented when the resume fails, and the pm_runtime_disable()
+	 * below does not undo that reference, so returning an error would
+	 * hand the device back with a reference nobody will ever drop.
+	 * The reference taken here is kept for the lifetime of the bound
+	 * device - pm_runtime_put_sync() below is balanced against the reset
+	 * setup below it, not against this one.
+	 */
+	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0) {
 		pm_runtime_disable(dev);
 		return dev_err_probe(dev, ret, "Failed to enable power\n");
@@ -713,6 +791,21 @@ static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
 	 */
 	.mem_gmc_val = 0x20402040,
 	.reset = mtk_rdma_reset_mt6589,
+	/*
+	 * This block's INT_STATUS has exactly the six bits named above, and
+	 * the stock RDMAStart() enables all six, so the whole set is safe to
+	 * write here.  Stated per SoC rather than assumed, because on the
+	 * other SoCs 0x3F would be an unverified guess at their bit maps.
+	 */
+	.int_enable_mask = RDMA_INT_ALL,
+	/*
+	 * MT6589: mtk_crtc_hw_init() disables every plane and routes them
+	 * all to OVL - MT6589's COLOR claims no layers and OVL claims all
+	 * four - so mtk_ddp_comp_for_plane() never returns this RDMA and
+	 * mtk_rdma_layer_config() never runs for it.  The mode, format and
+	 * ring registers therefore have to be written from the config hook.
+	 */
+	.direct_link_no_plane = true,
 };
 
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
