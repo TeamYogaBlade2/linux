@@ -32,6 +32,17 @@
 #include "mtk_disp_drv.h"
 #include "mtk_drm_drv.h"
 
+/*
+ * Total number of mtk_dsi_dump_status() lines for the life of the device.
+ * Each enable emits two (pre-start and post-start); 16 leaves the headroom to
+ * see every snapshot of the first eight enables, which is where a boot-time
+ * black screen is decided.  Beyond that the dump goes silent with one
+ * announcement, because pstore survives only a few KiB and an unconditional
+ * per-enable print from a hot path has already cost us the previous boot's
+ * logs once.
+ */
+#define DSI_STATUS_DUMP_MAX	16
+
 #define DSI_START		0x00
 
 /*
@@ -282,6 +293,8 @@ struct mtk_dsi {
 	int refcount;
 	bool enabled;
 	bool lanes_ready;
+	unsigned int status_dumps;
+	bool status_dumps_suppressed;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	const struct mtk_dsi_driver_data *driver_data;
@@ -677,14 +690,29 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 /**
  * mtk_dsi_dump_status - log the DSI link state, for black-screen triage
  * @dsi: DSI master
+ * @when: which snapshot this is, "pre-start" or "post-start"
  *
- * One dev_info line, emitted once per enable.  The next boot is only
- * diagnosable from pstore, which holds only ~16 KiB, so this deliberately
- * replaces any per-register or per-command trace: it packs the whole link
- * state into a single line instead of a dozen.
+ * One dev_info line per snapshot.  It is called twice per enable - once
+ * before and once after mtk_dsi_start() - because a single snapshot taken
+ * only in atomic_pre_enable() cannot distinguish "the link came up" from
+ * "the engine was never started": DSI_STA reads 0x00 with no error bits in
+ * both cases, so a pre-start-only dump makes a dead link look healthy.
+ * Comparing the two is the point - ctl frozen at its reset value in BOTH
+ * lines means the engine never left reset; ack appearing only in the
+ * post-start line means the start is what woke the link up.
+ *
+ * The next boot is only diagnosable from pstore, which holds only ~16 KiB,
+ * so this deliberately replaces any per-register or per-command trace: it
+ * packs the whole link state into a single line instead of a dozen.  The
+ * total line count is additionally capped (DSI_STATUS_DUMP_MAX) because an
+ * unconditional pr_err in the OVL IRQ handler once filled a 16 MB log
+ * buffer in seconds and evicted everything from pstore.
  *
  * What to read from it:
  *
+ *   - txrx/start: DSI_TXRX_CTRL lane count and DSI_START.  In the
+ *     post-start line a non-zero START with a non-zero LANE_NUM is the
+ *     cheapest "the engine was actually told to run" fact.
  *   - sta: DSI_STA.  Any of BUF_UNDERRUN/ESC_ENTRY_ERR/LPDT_SYNC_ERR/
  *     CTRL_ERR/CONTENT_ERR set means the engine hit a protocol error and the
  *     transfer is being retried or dropped; all-zero with no DMA traffic is
@@ -722,15 +750,37 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
  * belongs in a drm_panel .init_sequence under drivers/gpu/drm/panel/, not
  * here.
  */
-static void mtk_dsi_dump_status(struct mtk_dsi *dsi)
+static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 {
-	u32 sta = readl(dsi->regs + DSI_STA);
-	u32 trig = readl(dsi->regs + DSI_TRIG_STA);
-	u32 dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
+	u32 txrx, start, sta, trig, dbg0;
+
+	/*
+	 * Cap the lines for the life of the device, and say so once when the
+	 * cap is hit rather than silently going quiet.  A hard count rather
+	 * than dev_ratelimited() on purpose: a time-based limit would drop the
+	 * post-start line first during a modeset storm, and that is exactly
+	 * the line which says whether the link came up.
+	 */
+	if (dsi->status_dumps >= DSI_STATUS_DUMP_MAX) {
+		if (!dsi->status_dumps_suppressed) {
+			dsi->status_dumps_suppressed = true;
+			dev_info(dsi->host.dev,
+				 "DSI: %u status snapshots logged, further ones suppressed\n",
+				 DSI_STATUS_DUMP_MAX);
+		}
+		return;
+	}
+	dsi->status_dumps++;
+
+	txrx = readl(dsi->regs + DSI_TXRX_CTRL);
+	start = readl(dsi->regs + DSI_START);
+	sta = readl(dsi->regs + DSI_STA);
+	trig = readl(dsi->regs + DSI_TRIG_STA);
+	dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
 
 	dev_info(dsi->host.dev,
-		 "DSI link: sta=0x%02x trig=0x%02x ack=%u ctl=0x%03x hx=0x%x rx0=0x%02x\n",
-		 sta, trig, !!(trig & TRIG_ACK),
+		 "DSI %s: txrx=0x%08x start=0x%08x sta=0x%02x trig=0x%02x ack=%u ctl=0x%03x hx=0x%x rx0=0x%02x\n",
+		 when, txrx, start, sta, trig, !!(trig & TRIG_ACK),
 		 FIELD_GET(CTL_STATE_C, dbg0),
 		 FIELD_GET(HX_TX_STATE_C, dbg0),
 		 readb(dsi->regs + DSI_RX_DATA0));
@@ -945,6 +995,16 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_start(dsi);
 
+	/*
+	 * Dump after the start, not just before it.  A snapshot taken in
+	 * atomic_pre_enable() predates this write and so cannot show whether
+	 * the engine ever ran; DSI_STA reads 0x00 with no error bits both
+	 * before and after a failed link, which is what made the earlier dump
+	 * read like a healthy link.  This one is post-start and shares the
+	 * same rate limit as the pre-start one.
+	 */
+	mtk_dsi_dump_status(dsi, "post-start");
+
 	dsi->enabled = true;
 }
 
@@ -1002,18 +1062,49 @@ static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
 	int ret;
 
 	ret = mtk_dsi_poweron(dsi);
-	if (ret < 0)
-		DRM_ERROR("failed to power on dsi\n");
+	if (ret < 0) {
+		/*
+		 * Abort the enable here.  mtk_dsi_poweron() has already undone
+		 * whatever it managed to do (it drops the refcount and unwinds
+		 * clocks/phy on every error path), so the link is not powered and
+		 * must not be poked further: putting the lanes into HS mode and
+		 * dumping registers of an unpowered DSI only produces a second,
+		 * more confusing set of secondary errors on top of the real one.
+		 *
+		 * atomic_pre_enable() has no error return - drm_bridge has no way
+		 * to abort an atomic commit from it - so the failure is recorded
+		 * by leaving dsi->refcount at 0.  mtk_dsi_bridge_atomic_enable()
+		 * already skips mtk_output_dsi_enable() in that case, so the
+		 * engine is never started and the display pipe comes up dark but
+		 * intact, exactly as mtk_dsi_poweroff()'s WARN_ON(refcount == 0)
+		 * guard expects.  Nothing calls mtk_dsi_poweron() speculatively,
+		 * and refcount was 0 coming in, so the counter is back to where it
+		 * started either way.
+		 */
+		DRM_ERROR("failed to power on dsi: %d\n", ret);
+		return;
+	}
 
 	mtk_dsi_lane_ready(dsi);
 	mtk_dsi_clk_hs_mode(dsi, 1);
-	mtk_dsi_dump_status(dsi);
+	mtk_dsi_dump_status(dsi, "pre-start");
 }
 
 static void mtk_dsi_bridge_atomic_post_disable(struct drm_bridge *bridge,
 					       struct drm_atomic_state *state)
 {
 	struct mtk_dsi *dsi = bridge_to_dsi(bridge);
+
+	/*
+	 * drm_atomic_bridge_chain_post_disable() calls this unconditionally,
+	 * including for the enable that atomic_pre_enable() failed to power on
+	 * - there is no way to tell the core to skip it.  mtk_dsi_poweroff()
+	 * would correctly WARN_ON(refcount == 0) and return, but a WARN splat
+	 * for a failure already reported is pure noise, so check here and stay
+	 * silent: nothing was powered on, so there is nothing to power off.
+	 */
+	if (dsi->refcount == 0)
+		return;
 
 	mtk_dsi_poweroff(dsi);
 }
