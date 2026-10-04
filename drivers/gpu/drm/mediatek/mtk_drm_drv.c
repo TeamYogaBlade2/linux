@@ -76,9 +76,32 @@ static const unsigned int mt2701_mtk_ddp_ext[] = {
 	DDP_COMPONENT_DPI0,
 };
 
+/*
+ * Main path: OVL0 -> BLS -> RDMA0 -> DSI0.
+ *
+ * COLOR is deliberately NOT in this list.  mtk_mmsys_ddp_connect() only
+ * applies a route when (cur, next) is an ADJACENT pair in this array, and
+ * mtk_crtc_ddp_hw_init() generates exactly those consecutive pairs.  With
+ * COLOR0 between OVL0 and BLS, the pair (OVL0, BLS) never occurs, so the
+ * routes that select the real topology - DISP_OVL_MOUT_EN bit 1 (output to
+ * BLS) and DISP_BLS_SEL = "from overlay" - were never programmed at all.
+ * DISP_OVL_MOUT_EN kept whatever the bootloader left in it, which is why
+ * this only appeared to work: LK writes 0x2 (bit 1) for its own path.
+ *
+ * Dropping COLOR makes (OVL0, BLS) adjacent so the route fires, and it is
+ * also what the hardware does.  Both vendor trees agree the main path does
+ * not pass through COLOR: the bootloader writes OVL_MOUT_EN = 0x2 and
+ * BLS_SEL = 0 for DSI_VDO, while the BSP kernel's COLOR route is a
+ * different topology entirely.
+ *
+ * COLOR's registers are still documented and its clock gate still exists;
+ * it is simply not part of this path.  If a mode ever needs the colour
+ * engine, put COLOR0 back here AND add the (COLOR0, BLS) route using
+ * MT6589_COLOR_MOUT_EN_BLS_MASK - the two lists must agree, and neither
+ * half alone does anything.
+ */
 static const unsigned int mt6589_mtk_ddp_main[] = {
 	DDP_COMPONENT_OVL0,
-	DDP_COMPONENT_COLOR0,
 	DDP_COMPONENT_BLS,
 	DDP_COMPONENT_RDMA0,
 	DDP_COMPONENT_DSI0,
