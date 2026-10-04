@@ -9,35 +9,52 @@
 #include "mtk-mmsys.h"
 
 /*
- * MT6589 display pipeline overview:
+ * MT6589 display pipeline overview.
  *
- * Main path (OVL → LCD):
- *   OVL → COLOR → BLS → RDMA0 → DSI0
- *   OVL → COLOR → BLS → RDMA0 → DBI
- *   OVL → COLOR → BLS → RDMA0 → DPI0
+ * These are the routes mt6589_dispsys_routing_table[] below actually
+ * programs; the register summary that follows is the encoding it uses.
  *
- * Memory-out path (concurrent with main path):
- *   OVL → WDMA1
+ * Main paths (overlay to an LCD interface):
+ *   OVL0 → BLS → RDMA0 → DSI0
+ *   OVL0 → BLS → RDMA0 → DBI0
+ *   OVL0 → BLS → RDMA0 → DPI0
  *
- * Direct RDMA1 paths (bypass OVL/COLOR/BLS):
+ * Note that COLOR is NOT on the signal path: OVL_MOUT_EN bit 1 selects
+ * BLS and COLOR_MOUT_EN is left alone.  COLOR stays in the path component
+ * list so its registers are still clocked and configured.  Routing the
+ * overlay through COLOR instead left OVL_RUN clear with FME_UND and the
+ * RDMA EOF aborts set - the overlay was feeding an engine that was not in
+ * the path, so it never drained.  See the OVL0 → BLS entries below.
+ *
+ * Memory-out path (concurrent with a main path):
+ *   OVL0 → WDMA1
+ *
+ * Direct RDMA1 paths (bypass OVL/BLS/COLOR entirely):
  *   RDMA1 → DPI0
  *   RDMA1 → DPI1
  *
  * MDP path:
  *   SCL → WDMA0
  *
- * Routing register bit/value summary (from vendor disp_path_config_()):
+ * Routing register bit/value summary (from the vendor disp_path_config_()
+ * in lk/ddp_path.c, cross-checked against the data sheet):
  *
- *   OVL_MOUT_EN   GENMASK(2,0)  bit[0]=WDMA1, bit[2]=COLOR
- *   COLOR_MOUT_EN GENMASK(3,0)  bit[3]=BLS
- *   COLOR_SEL     0x1           0x1=from OVL
- *   BLS_SEL       0x1           0x1=from COLOR
- *   RDMA0_OUT_SEL 0x3           0x0=DSI0, 0x1=DBI, 0x2=DPI0
- *   RDMA1_OUT_SEL 0x3           0x1=DPI0, 0x2=DPI1
+ *   OVL_MOUT_EN   GENMASK(2,0)  bit[1]=BLS, bit[0]=WDMA1, bit[2]=COLOR
+ *   COLOR_MOUT_EN GENMASK(3,0)  bit[3]=BLS        (defined, not programmed)
+ *   COLOR_SEL     0x1           0x1=from OVL      (SEL only; not on the path)
+ *   BLS_SEL       0x0           0x0=from overlay, 0x1=from color engine
+ *   RDMA0_OUT_SEL GENMASK(1,0)  0x0=DSI0, 0x1=DBI, 0x2=DPI0
+ *   RDMA1_OUT_SEL GENMASK(1,0)  0x1=DPI0, 0x2=DPI1
  *   DPI0_SEL      0x1           0x0=RDMA0, 0x1=RDMA1
- *   DBI_SEL       0x1           0x0=RDMA0
+ *   DBI_SEL       0x0           0x0=RDMA0
  *   SCL_MOUT_EN   BIT(0)        bit[0]=WDMA0
- *   WDMA0_SEL     0x1           0x0=SCL
+ *   WDMA0_SEL     0x0           0x0=SCL          (reset default, not written)
+ *
+ * MT6589_DISP_COLOR_MOUT_EN, MT6589_DISP_WDMA0_SEL_IN and the RDMA0→DBI0
+ * and RDMA0→DPI0 entries exist in the map for completeness but are not
+ * exercised by any path this driver instantiates; the DBI0 and DPI0
+ * routes are listed because the register is shared with the live DSI0
+ * route and writing one value necessarily selects the other.
  */
 
 /*
