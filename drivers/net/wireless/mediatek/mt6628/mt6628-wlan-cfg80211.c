@@ -10,6 +10,8 @@
 #include <linux/ieee80211.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <net/cfg80211.h>
+#include <net/regulatory.h>
 
 #include "mtk-wlan-hif.h"
 #include "mtk-wlan.h"
@@ -103,7 +105,21 @@ static struct ieee80211_channel mt6628_2ghz_channels[] = {
 	{ .center_freq = 2462, .hw_value = 11, .max_power = 20 },
 	{ .center_freq = 2467, .hw_value = 12, .max_power = 20 },
 	{ .center_freq = 2472, .hw_value = 13, .max_power = 20 },
-	{ .center_freq = 2484, .hw_value = 14, .max_power = 20 },
+	/*
+	 * Channel 14 is 802.11b only: no HT (so no 40 MHz bonding on either
+	 * side of it) and no OFDM.  That is a property of the channel itself,
+	 * not of any regulatory domain, so it is asserted here.
+	 *
+	 * Channels 12 and 13 are deliberately left with no flags.  They are
+	 * listed because the hardware can tune them, but whether they may be
+	 * scanned on, radiated on or bonded is a regulatory domain decision -
+	 * the world fallback marks both NO_IR and most domains restrict them
+	 * further.  reg_process_ht_flags() derives their NO_HT40PLUS/
+	 * NO_HT40MINUS pair from the active domain's bandwidth and adjacent
+	 * channel rules at registration, so a guess here would be overwritten.
+	 */
+	{ .center_freq = 2484, .hw_value = 14, .max_power = 20,
+	  .flags = IEEE80211_CHAN_NO_HT40 | IEEE80211_CHAN_NO_OFDM },
 };
 
 static struct ieee80211_supported_band mt6628_2ghz_band = {
@@ -114,6 +130,11 @@ static struct ieee80211_supported_band mt6628_2ghz_band = {
 	.ht_cap = mt6628_ht_cap,
 };
 
+/*
+ * UNII-2 (5260-5725 MHz) and UNII-2 extended are deliberately absent from
+ * this table.  See mt6628_reg_dfs_guard() below for why a DFS channel must
+ * not be usable here even though the hardware itself can tune one.
+ */
 static struct ieee80211_channel mt6628_5ghz_channels[] = {
 	{ .center_freq = 5170, .hw_value = 34, .max_power = 30 },
 	{ .center_freq = 5180, .hw_value = 36, .max_power = 30 },
@@ -150,6 +171,41 @@ static struct ieee80211_supported_band mt6628_5ghz_band = {
 	.n_bitrates = ARRAY_SIZE(mt6628_5ghz_rates),
 	.ht_cap = mt6628_ht_cap,
 };
+
+/* UNII-2 and UNII-2 extended, the bands that require radar detection. */
+#define MT6628_DFS_FIRST_FREQ	5260
+#define MT6628_DFS_LAST_FREQ	5725
+
+/*
+ * cfg80211 does not hold a station back from a DFS channel:
+ * cfg80211_chandef_dfs_required() returns 0 for station mode, so a channel
+ * flagged IEEE80211_CHAN_RADAR is still something a station can associate
+ * to, and no CAC is ever run on this driver's behalf.  This driver has no
+ * radar detection at all - the RDD commands the downstream tree defines
+ * (CMD_ID_SET_RDD_CH, EVENT_ID_UPDATE_RDD_STATUS) are not implemented here -
+ * so a DFS channel must never be usable.  The 5 GHz table above contains
+ * none; this turns a future careless addition into a hard failure rather
+ * than a channel this radio would radiate on without CAC.
+ */
+static void mt6628_reg_dfs_guard(struct ieee80211_supported_band *sband)
+{
+	unsigned int i;
+
+	if (!sband)
+		return;
+
+	for (i = 0; i < sband->n_channels; i++) {
+		struct ieee80211_channel *chan = &sband->channels[i];
+
+		if (chan->center_freq < MT6628_DFS_FIRST_FREQ ||
+		    chan->center_freq > MT6628_DFS_LAST_FREQ)
+			continue;
+
+		pr_warn("mt6628: disabling DFS channel %u (%d MHz), this driver performs no radar detection\n",
+			chan->hw_value, chan->center_freq);
+		chan->flags |= IEEE80211_CHAN_DISABLED;
+	}
+}
 
 static const u32 mt6628_cipher_suites[] = {
 	WLAN_CIPHER_SUITE_WEP40,
@@ -958,6 +1014,22 @@ drop:
 	return true;
 }
 
+/*
+ * Called by the regulatory core whenever the active domain changes.  The
+ * channel tables are static and shared, and cfg80211 has already written the
+ * resulting flags and max_reg_power into them by the time this runs, so
+ * there is nothing to reprogram here - only the DFS guard, which has to run
+ * again in case a later domain re-enabled a channel the guard disabled.
+ */
+static void mt6628_reg_notifier(struct wiphy *wiphy,
+				struct regulatory_request *request)
+{
+	if (WARN_ON(!wiphy))
+		return;
+
+	mt6628_reg_dfs_guard(&mt6628_5ghz_band);
+}
+
 int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 {
 	int ret;
@@ -977,6 +1049,37 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 	wl->wiphy->bands[NL80211_BAND_5GHZ] = &mt6628_5ghz_band;
 	wl->wiphy->cipher_suites = mt6628_cipher_suites;
 	wl->wiphy->n_cipher_suites = ARRAY_SIZE(mt6628_cipher_suites);
+	wl->wiphy->reg_notifier = mt6628_reg_notifier;
+
+	/*
+	 * No custom regulatory domain and no country code are claimed here, so
+	 * cfg80211 and CRDA own the channel set and the transmit power.
+	 *
+	 * A country IE is ignored: this board carries no verifiable country,
+	 * and letting an AP define this radio's regulatory domain would let a
+	 * neighbour decide what we are allowed to transmit.
+	 *
+	 * Beacon hints are deliberately left ENABLED.  They cannot compromise
+	 * DFS safety - regulatory_hint_found_beacon() returns early on a
+	 * IEEE80211_CHAN_RADAR channel (net/wireless/reg.c:3658) - and on 2.4 GHz
+	 * they are restricted to channels 12/13/14 (freq_is_chan_12_13_14()).
+	 * Without them, and with the world fallback active whenever no
+	 * regulatory.db is present, every 5 GHz channel stays NO_IR and the
+	 * 5 GHz band would be unusable on such a system.
+	 *
+	 * REGULATORY_STRICT_REG is likewise not set: with no driver-set regd,
+	 * ignore_reg_update() would discard every later regulatory change and
+	 * pin the radio to the world fallback permanently.
+	 */
+	wl->wiphy->regulatory_flags = REGULATORY_COUNTRY_IE_IGNORE;
+
+	/*
+	 * Channel power in the tables above is the hardware ceiling only;
+	 * wiphy_register() clamps it to the active domain's max_eirp.  The DFS
+	 * guard runs here as well as from the notifier, so a DFS channel is
+	 * never usable even in the window before the first domain is applied.
+	 */
+	mt6628_reg_dfs_guard(&mt6628_5ghz_band);
 
 	wl->wdev.wiphy = wl->wiphy;
 	wl->wdev.iftype = NL80211_IFTYPE_STATION;

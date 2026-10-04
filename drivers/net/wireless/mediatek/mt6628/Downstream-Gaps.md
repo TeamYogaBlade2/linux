@@ -184,10 +184,17 @@ PCM2_VOICE
   remain-on-channel now uses, so the two overlap in register usage.
 - **VHT / 802.11ac.** No VHT capability advertised, and no firmware control
   beyond 11AN.
-- **DFS and regulatory.** The channel tables are hard-coded. Downstream carries
-  RDD/DFS command and event definitions (`CMD_ID_SET_RDD_CH`,
-  `EVENT_ID_UPDATE_RDD_STATUS`) that are unused here. No country code, no radar
-  detection, no CAC.
+- **Radar detection (DFS master function).** This is the part that genuinely
+  cannot work: the firmware RDD command and event (`CMD_ID_SET_RDD_CH`,
+  `EVENT_ID_UPDATE_RDD_STATUS`) exist downstream but are not ported, and
+  `CFG_SUPPORT_RDD_TEST_MODE` is `0` (`include/config.h:1397`). There is no
+  CAC and no radar detection in this driver, so the consequence is enforced
+  rather than left to configuration — see §2.6. DFS channels are absent from
+  the 5 GHz table and `mt6628_reg_dfs_guard()` disables any that appear.
+- **No country code.** The driver ships no `regulatory_hint()` and no custom
+  regulatory domain, so the active domain is whatever cfg80211 and CRDA say.
+  No DT property was added for this: there is no verifiable country for this
+  tablet, and inventing one would be worse than letting the board fall back.
 - **PMF / 802.11w.** `connect()` rejects anything but `NL80211_MFP_NO`.
   Downstream has `CFG_SUPPORT_802_11W` code but it is `0` in the product
   configuration.
@@ -235,8 +242,9 @@ wanted here, give the queue a real consumer first.
   reconnect path. It does not roam to a *different* network, and it does
   not carry traffic across the move (cfg80211 is told the link dropped
   first), so userspace may still see a brief disconnect and reconnect.
-- **Regulatory:** hard-coded channels with fixed max power; a 5 GHz channel on a
-  DFS channel would be used without CAC.
+- **Regulatory:** CRDA-governed. The channel tables describe what the hardware
+  can do; the active domain decides what is usable. Country IEs are ignored
+  and there is no country code. See §2.6.
 - **Suspend/resume:** implemented. Suspend cancels the idle countdown and hands
   the chip to the firmware, refusing the suspend (`-EBUSY`) if traffic is still
   in flight. `freeze`/`thaw` share that path and `restore` reclaims Driver Own.
@@ -247,6 +255,98 @@ wanted here, give the queue a real consumer first.
   only one command transaction is in flight at a time.
 
 ---
+
+## 2.6 Regulatory handling
+
+### What is claimed, and what is not
+
+The driver sets exactly one regulatory flag, ships no custom regulatory domain
+and makes no `regulatory_hint()`. The channel set and the transmit power are
+therefore owned by cfg80211 and CRDA, not by this driver:
+
+```c
+wl->wiphy->regulatory_flags = REGULATORY_COUNTRY_IE_IGNORE;
+```
+
+- **`REGULATORY_COUNTRY_IE_IGNORE`** — this board carries no verifiable
+  country, and `mt6628_cfg80211_mgmt_handler()` feeds every ESS beacon it sees
+  to `cfg80211_inform_bss_frame()`, which in turn raises a regulatory hint
+  (`net/wireless/scan.c:2333`). Without this flag an AP broadcasting nearby
+  gets to define what this radio may transmit.
+- **Beacon hints stay enabled, deliberately.** They cannot compromise DFS
+  safety: `regulatory_hint_found_beacon()` returns early on an
+  `IEEE80211_CHAN_RADAR` channel (`net/wireless/reg.c:3658`), and on 2.4 GHz it
+  is limited to channels 12/13/14 by `freq_is_chan_12_13_14()`. But they are
+  what keeps the 5 GHz band usable whenever no `regulatory.db` is present —
+  see the behaviour notes below.
+- **`REGULATORY_STRICT_REG` is not set.** It is only meaningful alongside a
+  driver-set `wiphy->regd`; with none, `ignore_reg_update()` discards every
+  subsequent regulatory change (`net/wireless/reg.c:2113`), which would pin the
+  radio to the world fallback even after a regdb or user hint arrives.
+
+`mt6628_reg_notifier()` re-runs the DFS guard on every domain change; there is
+nothing else to reprogram, because cfg80211 has already written the resulting
+flags and `max_reg_power` into the tables by then.
+
+### DFS
+
+The 5 GHz table contains channels 34–48 and 149–173 only. None of those are
+DFS, so **no DFS channel is reachable today** — the failure mode the summary
+used to warn about ("a 5 GHz channel on a DFS channel would be used without
+CAC") cannot occur. Note that `cfg80211_chandef_dfs_required()` returns `0`
+unconditionally for station mode (`net/wireless/chan.c:815`), so merely
+*flagging* a channel `IEEE80211_CHAN_RADAR` would not have made a station
+associate to it safely — there is no CAC in this driver to wait for either way.
+
+Downstream does list channels 52–144 (`gl_init.c:745-751`), all with
+`.flags = 0`, so the hardware can tune them. They are omitted rather than
+added-and-disabled, since an entry with no usable configuration is not a
+capability. To keep that from silently regressing, `mt6628_reg_dfs_guard()`
+walks the 5 GHz band at registration and from the regulatory notifier, and sets
+`IEEE80211_CHAN_DISABLED` on anything in 5260–5725 MHz with a warning. Adding
+a DFS channel to the table later therefore fails loudly instead of turning
+into a channel this radio would use without CAC.
+
+### Per-channel flags
+
+Only one flag is asserted in the table, on channel 14:
+
+| Channel | Freq | Flags | Why |
+|---|---|---|---|
+| 1–13 | 2412–2472 MHz | none | see below |
+| 14 | 2484 MHz | `NO_HT40`, `NO_OFDM` | 802.11b only — a property of the channel, not of any domain |
+
+Channels 12 and 13 are present because the hardware can tune them, but are left
+unflagged on purpose: whether they may be scanned on or radiated on is a
+domain decision. `reg_process_ht_flags()` derives their `NO_HT40PLUS` /
+`NO_HT40MINUS` from the active domain's bandwidth and adjacent-channel rules
+(`net/wireless/reg.c:2305`), and cfg80211 recomputes those at
+`wiphy_register()`, so a hard-coded guess would be overwritten.
+
+### Behaviour with and without `regulatory.db`
+
+`wiphy_register()` calls `wiphy_regulatory_register()` unconditionally
+(`net/wireless/core.c:1140`), so the world fallback is applied either way.
+
+- **No regdb (this board).** cfg80211 uses `world_regdom`
+  (`net/wireless/reg.c:233`): 2.4 GHz 1–11 usable; 12/13 `NO_IR`; 14
+  `NO_IR | NO_OFDM`; all 5 GHz `NO_IR`. Beacon hints then lift `NO_IR` on the
+  channels where this driver actually reports a beacon, so 2.4 GHz 1–11 and
+  the 5 GHz channels in use by a nearby AP become connectable — 5 GHz keeps
+  working on a board with no domain, which is the common case here. Channels
+  12/13/14 are unaffected either way: hints never apply to them on 2.4 GHz
+  unless the domain itself says so.
+- **With regdb / a user hint.** The domain applies normally: `max_reg_power`
+  clamps every channel, DFS channels a domain permits are still absent from
+  the table and stay disabled, and channels a domain forbids get
+  `IEEE80211_CHAN_DISABLED` from `handle_channel()`.
+
+`max_power` in the tables (20 dBm 2.4 GHz, 30 dBm 5 GHz) is the hardware
+ceiling; cfg80211 reduces it to the domain's `max_eirp`. The driver does not
+program transmit power to the firmware at all.
+
+---
+
 
 ## 3. Summary
 
@@ -267,14 +367,16 @@ wanted here, give the queue a real consumer first.
 | Voice / modem PCM / DAI / sidetone | out of scope |
 | AP / P2P / monitor | not implemented |
 | VHT | not implemented |
-| DFS / regulatory | not implemented |
+| DFS (radar detection / CAC) | impossible — no firmware RDD support; DFS channels are disabled |
+| Regulatory domain | CRDA-governed; country IEs ignored, no country code |
 | PMF, SAE, 802.1X | not implemented |
 | `async_event_queue` | removed — unhandled events are freed, not queued |
 
 The driver is a complete STA-mode full-MAC driver. Everything in the "blocked"
 and "out of scope" rows is absent for a reason other than the port falling
-short; the genuinely missing functionality is AP/P2P/monitor, VHT, DFS and the
-security extensions.
+short; the genuinely missing functionality is AP/P2P/monitor, VHT and the
+security extensions. Radar detection is enforced-absent rather than missing:
+DFS channels cannot be used (§2.6).
 ---
 
 ## Bring-up note
