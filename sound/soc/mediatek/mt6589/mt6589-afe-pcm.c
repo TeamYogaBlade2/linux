@@ -13,6 +13,7 @@
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
+#include <linux/genalloc.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -49,7 +50,22 @@
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
 #define AFE_DAC_CON1_VUL_RATE	GENMASK(19, 16)
-#define AFE_DAC_CON1_VUL_MONO	BIT(27)
+/*
+ * AFE_DAC_CON1 is a bank of mode fields, one 4-bit slice per memory
+ * interface, followed by the per-interface data/mono bits:
+ *
+ *	[3:0]   DL1_MODE	[7:4]   DL2_MODE	[11:8]  I2S_MODE
+ *	[15:12] AWB_MODE	[19:16] VUL_MODE	[20]    DAI_MODE
+ *	[21]    DL1_DATA	[22]    DL2_DATA	[23]    I2S_DATA
+ *	[24]    AWB_DATA	[25]    AWB_R_MONO	[27]    VUL_DATA
+ *	[28]    VUL_R_MONO
+ *
+ * VUL_R_MONO is bit 28 - bit 27 is VUL_DATA, the VUL data width.  Writing
+ * bit 27 here set the data width instead of the right-justification flag,
+ * which the stock driver never does for a 16-bit stream.
+ */
+#define AFE_DAC_CON1_VUL_DATA	BIT(27)
+#define AFE_DAC_CON1_VUL_R_MONO	BIT(28)
 #define AFE_VUL_BASE		0x0080
 #define AFE_VUL_CUR		0x008c
 #define AFE_VUL_END		0x0088		/* ring end, inclusive */
@@ -105,6 +121,24 @@
  */
 #define AFE_ADDA_PREDIS_CON0	0x0260
 #define AFE_ADDA_PREDIS_CON1	0x0264
+/*
+ * The AFE's own 16 KiB SRAM.  The DL1 and VUL memory interfaces fetch
+ * directly out of it with no DMA engine behind them: DL1_BASE/DL1_END are
+ * plain physical addresses the AFE dereferences itself.  A buffer anywhere
+ * else is never fetched, and the failure is silent - the memif runs, but
+ * DL1_CUR never advances past the base while the period interrupt still
+ * fires off the counter, so ALSA sees a healthy stream carrying no audio.
+ *
+ * AFE_INTERNAL_SRAM_PHY_BASE in the stock header is written
+ * (AUDIO_HW_PHYSICAL_BASE - 0x70000 + 0x8000), which evaluates to
+ * 0x12008000, yet the comment immediately above it states the range is
+ * 0x12004000..0x12007fff.  The comment is right: 0x12008000 is not in the
+ * audsys window (reg = <0x12070000 0x1000>, ending at 0x12070fff) and no
+ * vendor code ever allocates from it, whereas the DT sram@12004000 matches
+ * the comment exactly.  So use 0x12004000.
+ */
+#define AFE_SRAM_PHYS_BASE	0x12004000
+#define AFE_SRAM_PHYS_END	0x12007fff	/* inclusive */
 /*
  * There is no NEWIF (AFE<->PMIC serial link) register on MT6589.  The
  * offsets this driver used to program - 0x0138 and 0x013c - are MT6797
@@ -303,8 +337,36 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned int bytes = params_buffer_bytes(params);
-	u32 base = lower_32_bits(runtime->dma_addr);
+	dma_addr_t dma = runtime->dma_addr;
+	u64 base = lower_32_bits(dma);
 	int ret;
+
+	/*
+	 * The AFE has no DMA engine for these ring buffers - it dereferences
+	 * DL1_BASE/DL1_END itself - so the buffer has to sit in the AFE SRAM.
+	 *
+	 * SNDRV_DMA_TYPE_DEV_IRAM cannot be trusted to have put it there:
+	 * snd_dma_iram_alloc() falls back to plain dma_alloc_coherent() the
+	 * moment the gen_pool lookup or the allocation fails (it does so
+	 * silently, only retyping dmab->dev.type to SNDRV_DMA_TYPE_DEV), and
+	 * it falls back whenever of_gen_pool_get() cannot resolve the "iram"
+	 * phandle to a live pool - including when the sram@ node probed late
+	 * or was never instantiated at all, since the phandle then has no
+	 * platform_device and gen_pool_get() returns NULL.
+	 *
+	 * That fallback yields a perfectly ordinary SDRAM buffer that the AFE
+	 * can never fetch, and the resulting failure is silent: the stream
+	 * opens, periods elapse on schedule off the MCU counter, and the
+	 * DAC is fed nothing.  So refuse it loudly instead.
+	 */
+	if (dma < AFE_SRAM_PHYS_BASE ||
+	    dma > AFE_SRAM_PHYS_END ||
+	    dma + bytes - 1 > AFE_SRAM_PHYS_END)
+		return dev_err_probe(comp->dev, -EINVAL,
+				     "PCM buffer at %pa (%u bytes) is outside the AFE SRAM window %pa..%pa; the AFE cannot fetch it\n",
+				     &dma, bytes,
+				     (phys_addr_t *)AFE_SRAM_PHYS_BASE,
+				     (phys_addr_t *)AFE_SRAM_PHYS_END);
 
 	/* Program this direction's memif DMA ring, in the AFE on-chip SRAM. */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -312,7 +374,20 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 		if (ret)
 			return ret;
 
-		return regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
+		ret = regmap_write(afe->regmap, AFE_DL1_END, base + bytes - 1);
+		if (ret)
+			return ret;
+
+		/*
+		 * DL1_CUR is the memif's read pointer.  The stock driver does
+		 * not program it either, but it works around the consequence
+		 * twice - in both its ISR and its pointer callback it reads
+		 * DL1_CUR and, when it comes back 0, substitutes the buffer
+		 * address.  It really can read 0, so do the substitution here
+		 * rather than in the callback: seed the register explicitly so
+		 * the very first pointer read after start is already sane.
+		 */
+		return regmap_write(afe->regmap, AFE_DL1_CUR, base);
 	}
 
 	ret = regmap_write(afe->regmap, AFE_VUL_BASE, base);
@@ -523,12 +598,24 @@ static snd_pcm_uframes_t mt6589_afe_pcm_pointer(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	u32 base = lower_32_bits(runtime->dma_addr);
+	u64 base = lower_32_bits(runtime->dma_addr);
 	unsigned int cur = 0;
 
 	regmap_read(afe->regmap,
 		    substream->stream == SNDRV_PCM_STREAM_CAPTURE ?
 		    AFE_VUL_CUR : AFE_DL1_CUR, &cur);
+
+	/*
+	 * DL1_CUR legitimately reads back 0 until the memif has started
+	 * fetching; the stock driver treats that one value specially and
+	 * substitutes the buffer address rather than reporting a wrapped
+	 * pointer.  hw_params now seeds the register, but keep the same
+	 * substitution here so a hardware reset under a running stream
+	 * cannot turn into a wild pointer.
+	 */
+	if (!cur)
+		cur = base;
+
 	if (cur < base || cur >= base + runtime->dma_bytes)
 		return 0;
 	return bytes_to_frames(runtime, cur - base);
@@ -538,6 +625,25 @@ static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 				    struct snd_soc_pcm_runtime *rtd)
 {
 	size_t size = mt6589_afe_hardware.buffer_bytes_max;
+	struct gen_pool *pool;
+
+	/*
+	 * The ring is not allocated yet - snd_pcm_lib_malloc_pages() runs
+	 * from snd_pcm_hw_params(), not from here - but the AFE SRAM pool it
+	 * will come from has to exist.  snd_dma_iram_alloc() silently degrades
+	 * to ordinary SDRAM when it does not, and the AFE cannot fetch SDRAM,
+	 * so refuse to create the PCM at all rather than hand the user a
+	 * stream that opens and then produces nothing.
+	 */
+	pool = of_gen_pool_get(comp->dev->of_node, "iram", 0);
+	if (!pool)
+		return dev_err_probe(comp->dev, -ENODEV,
+				     "no gen_pool for the AFE SRAM (iram phandle)\n");
+
+	if (gen_pool_avail(pool) < size)
+		return dev_err_probe(comp->dev, -ENOMEM,
+				     "AFE SRAM has %zu bytes free, need %zu\n",
+				     gen_pool_avail(pool), size);
 
 	return snd_pcm_set_managed_buffer_all(rtd->pcm,
 					      SNDRV_DMA_TYPE_DEV_IRAM,
@@ -566,7 +672,7 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 
 	/* One VUL buffer holds a single interleaved stream. */
 	return regmap_set_bits(afe->regmap, AFE_DAC_CON1,
-			       AFE_DAC_CON1_VUL_MONO);
+			       AFE_DAC_CON1_VUL_R_MONO);
 }
 
 static int mt6589_afe_vul_start(struct snd_soc_component *comp,
