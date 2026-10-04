@@ -12,6 +12,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
@@ -32,8 +33,28 @@
  * clock is OFF, which is why the overlay can hold OVL_EN == 1 and still
  * never leave its reset state of OVL_RUN == 0.
  */
-#define DISP_REG_OVL_CG_CON0			0x100
-#define DISP_REG_OVL_CG_CON0_OVL_MASK		0x30
+/*
+ * DISP_CG_CON0 is at 0x14000100, NOT inside the OVL block.  It lives in
+ * DISPSYS_CONFIG, which both vendor trees define as DISPSYS_BASE =
+ * IO_PHYS + 0x04000000 (lk/include/platform/mt_reg_base.h:163,
+ * kernel/drivers/met/platform/mt6589/mt_reg_base.h:167); the vendor's
+ * DISP_REG_CONFIG_CG_CON0 is that base plus 0x100 (ddp_reg.h:133), and the
+ * data sheet puts DISP_CG_CON0 at 0x14000100 (draft/ds/ovl.txt:193960).
+ *
+ * An offset of 0x100 taken from the OVL base instead lands on 0x14003100,
+ * which is OVL_RDMA2_CTRL - an unrelated engine register that reads back
+ * 0x3ff0001.  Reading that and calling the result a clock gate cannot
+ * report a gate, which is why this diagnostic had never produced a verdict.
+ * drivers/soc/mediatek/mt6589-dispsys.h documents the same block and base.
+ *
+ * The bit map is per the data sheet (draft/ds/ovl.txt:193985): bit 4 = OVL
+ * engine, bit 5 = OVL SMI.  clk-mt6589-disp.c gates those two through
+ * DISP_CG_SET0/CLR0 at that very 0x100/0x104/0x108, so this readback looks
+ * at exactly the bits clk_bulk_prepare_enable() manipulates.
+ */
+#define MT6589_DISPSYS_CONFIG_CG_CON0		0x14000100
+#define DISP_CG_CON0_OVL_ENGINE			BIT(4)
+#define DISP_CG_CON0_OVL_SMI			BIT(5)
 #define DISP_REG_OVL_INTEN					0x0004
 /*
  * OVL_INTEN (0x14003004) and OVL_INTSTA (0x14003008) share one bit map.
@@ -109,6 +130,14 @@ OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 #define DISP_REG_OVL_RDMA_CTRL(n)		(0x00c0 + 0x20 * (n))
 #define DISP_REG_OVL_RDMA_GMC(n)		(0x00c8 + 0x20 * (n))
 #define DISP_REG_OVL_CLRFMT_EXT			0x02d0
+/*
+ * OVL_FLOW_CTRL_DBG, the overlay's flow-control debug port
+ * (draft/ds/ovl.txt:220209; the vendor names the same register
+ * DISP_REG_OVL_FLOW_CTRL_DBG at DISPSYS_OVL_BASE + 0x0240,
+ * kernel ddp_reg.h:306).  Read-only, and the only register that says
+ * *why* the engine is or is not running - see mtk_ovl_start().
+ */
+#define DISP_REG_OVL_FLOW_CTRL_DBG			0x0240
 #define OVL_CON_CLRFMT_BIT_DEPTH_MASK(n)		(GENMASK(1, 0) << (4 * (n)))
 #define OVL_CON_CLRFMT_BIT_DEPTH(depth, n)		((depth) << (4 * (n)))
 #define OVL_CON_CLRFMT_8_BIT				(0)
@@ -278,6 +307,15 @@ struct mtk_disp_ovl_data {
 	 */
 	bool has_reset;
 	/*
+	 * Whether probe may borrow a mapping of DISPSYS_CONFIG so that
+	 * mtk_ovl_start() can read DISP_CG_CON0 and report whether the OVL
+	 * engine and SMI gates are actually open.  Only MT6589 names a
+	 * dispsys syscon parent in DT; the other nine OVL nodes sit under
+	 * their own top-level (or soc) parent, so no such mapping exists
+	 * for them and the readback is skipped.
+	 */
+	bool has_dispsys_cfg;
+	/*
 	 * int_all_mask is the whole set of OVL_INTSTA bits this block can
 	 * raise.  It is ANDed with the latched status to decide both what
 	 * to acknowledge and whether the line is ours at all, so it must
@@ -329,6 +367,12 @@ struct mtk_disp_ovl {
 	struct reset_control		*rstc;
 	int				num_clks;
 	void __iomem			*regs;
+	/*
+	 * DISPSYS_CONFIG (0x14000000), mapped only so the clock-gate state can
+	 * be read back.  NULL on every SoC except MT6589, the only one whose
+	 * node names a dispsys syscon parent to borrow the mapping from.
+	 */
+	void __iomem			*cfg_regs;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
@@ -580,37 +624,65 @@ void mtk_ovl_start(struct device *dev)
 	writel_relaxed(0x1, ovl->regs + DISP_REG_OVL_EN);
 
 	/*
-	 * Report what the engine was actually left holding, because
-	 * OVL_STA reading OVL_RUN == 0 afterwards is ambiguous - OVL_EN is
-	 * set, so either OVL_TRIG selects a source that never delivers, or
-	 * something stops the engine straight afterwards.
+	 * Report what the engine was actually left holding, plus the state
+	 * of the flow-control FSM that decides whether it ever started.
 	 *
 	 * OVL_TRIG bit0 is OVL_SW_TRIG: 0 means "use the hardware sof", 1
 	 * means "software control enables the engine".  Nothing sets it here
-	 * or in the stock driver, so the OVL depends on the DSI/MUTEX
-	 * emitting sof - worth measuring rather than assuming.
+	 * or in the stock driver, so the OVL depends on the MUTEX emitting
+	 * sof.  That must stay 0 - setting it would fake a start and hide
+	 * the fault - so it is only ever reported.
+	 *
+	 * flow is OVL_FLOW_CTRL_DBG (0x14003240).  Its reset value 0x000f8c01
+	 * (draft/ds/ovl.txt:220209) decodes as FSM_STATE == 1, and the stock
+	 * driver says exactly what 1 and 2 mean: "OVL at IDLE state(0x1), if
+	 * en=0; OVL at WAIT state(0x2), if en=1" (kernel ddp_path.c:262).
+	 * So after OVL_EN = 1 a healthy, merely not-yet-triggered overlay
+	 * must read FSM_STATE 2.  Any other value is the state the stock
+	 * driver calls "ovl abnormal" and resets the block over
+	 * (ddp_path.c:265-273), and it names the register to dump.  Bit 21
+	 * (TRIG) is the overlay's own trigger seen arriving, and bit 28
+	 * (OVL_START) latches that it started, so those two separate "no sof
+	 * arrived" from "sof arrived but the engine refused".
 	 */
+	u32 en, flow, fsm_state, cg;
+
+	en = readl(ovl->regs + DISP_REG_OVL_EN);
+	flow = readl(ovl->regs + DISP_REG_OVL_FLOW_CTRL_DBG);
+	fsm_state = flow & GENMASK(9, 0);
+	/*
+	 * ~0 rather than 0 when there is no mapping, so a missing mapping is
+	 * visible in the line instead of silently reading as "no gate set".
+	 */
+	cg = ovl->cfg_regs ?
+		     readl(ovl->cfg_regs + MT6589_DISPSYS_CONFIG_CG_CON0) : ~0U;
+
 	dev_info(dev,
-		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x\n",
-		 readl(ovl->regs + DISP_REG_OVL_EN),
+		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x fsm=%#x fsm_state=%#x\n",
+		 en,
 		 readl(ovl->regs + DISP_REG_OVL_TRIG),
 		 readl(ovl->regs + DISP_REG_OVL_ROI_SIZE),
 		 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
 		 readl(ovl->regs + DISP_REG_OVL_STA),
-		 readl(ovl->regs + DISP_REG_OVL_CG_CON0));
+		 cg, flow, fsm_state);
 
 	/*
-	 * Same fault condition the stock driver checks at ddp_path.c:247:
-	 * OVL_EN clear, or the OVL clock gate still set.  Both leave the
-	 * overlay unable to run while nothing else in the log says why.
+	 * The same three conditions the stock driver checks before it
+	 * releases the mutex (kernel ddp_path.c:247-252 and :265-273):
+	 * OVL_EN clear, the OVL clock gates still set, or the flow-control
+	 * FSM parked in a state that is neither IDLE (1) nor WAIT (2).  Each
+	 * leaves the overlay unable to run while nothing else in the log
+	 * says why.  The clock gate term is guarded on the mapping rather
+	 * than on has_dispsys_cfg, so a SoC whose parent has no memory
+	 * resource is simply not judged on it.
 	 */
-	if (!(readl(ovl->regs + DISP_REG_OVL_EN) & 0x1) ||
-	    (readl(ovl->regs + DISP_REG_OVL_CG_CON0) &
-	     DISP_REG_OVL_CG_CON0_OVL_MASK))
+	if (!(en & 0x1) ||
+	    (ovl->cfg_regs &&
+	     (cg & (DISP_CG_CON0_OVL_ENGINE | DISP_CG_CON0_OVL_SMI))) ||
+	    (fsm_state != 0x1 && fsm_state != 0x2))
 		dev_err(dev,
-			"ovl abnormal: en=%#x cg_con0=%#x - the overlay clock is gated off or the engine is disabled\n",
-			readl(ovl->regs + DISP_REG_OVL_EN),
-			readl(ovl->regs + DISP_REG_OVL_CG_CON0));
+			"ovl abnormal: en=%#x cg_con0=%#x fsm_state=%#x - clock gated, engine disabled, or the FSM is parked\n",
+			en, cg, fsm_state);
 }
 
 void mtk_ovl_stop(struct device *dev)
@@ -1223,6 +1295,36 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 		return ret;
 
 	/*
+	 * Borrow the DISPSYS_CONFIG mapping so the clock-gate state can be
+	 * read back in mtk_ovl_start().  The OVL clock gates are bits 4 and
+	 * 5 of DISP_CG_CON0, which lives in that block at 0x14000000 and
+	 * not in this driver's own reg window - so it cannot be reached
+	 * through priv->regs at all.
+	 *
+	 * The mapping comes from the clock/reset provider this node already
+	 * depends on, via devm_ioremap_resource() on the parent id.  That
+	 * parent is the dispsys syscon named by "clocks" and "resets"
+	 * (mt6589.dtsi:960, dispsys: syscon@14000000), so no new DT is
+	 * needed and no property is invented.  A missing provider is not an
+	 * error: the readback is a diagnostic, so on a SoC whose node has no
+	 * such parent cfg_regs simply stays NULL and the check is skipped.
+	 */
+	if (priv->data->has_dispsys_cfg) {
+		struct device_node *np;
+		struct platform_device *parent;
+		struct resource *res = NULL;
+
+		np = of_get_parent(dev->of_node);
+		parent = of_find_device_by_node(np);
+		if (parent)
+			res = platform_get_resource(parent, IORESOURCE_MEM, 0);
+		if (res)
+			priv->cfg_regs = devm_ioremap_resource(&parent->dev, res);
+		if (IS_ERR(priv->cfg_regs))
+			priv->cfg_regs = NULL;
+	}
+
+	/*
  * Reset the engine before touching it.  Writing the registers
  * directly needs the block's clock running, but the bootloader can
  * leave it in a state where the engine is still fetching, so assert
@@ -1341,6 +1443,13 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	 * probe from failing outright.
 	 */
 	.has_reset = true,
+	/*
+	 * The only OVL node that sits beside the dispsys syscon
+	 * (arch/arm/boot/dts/mediatek/mt6589.dtsi:960) rather than under a
+	 * top-level parent, so the only one whose DISP_CG_CON0 clock gates
+	 * can be read back in mtk_ovl_start().
+	 */
+	.has_dispsys_cfg = true,
 	.vblank_en_mask = 0xF, /* Reg update, frame done, underflow, sw reset done */
 	/*
 	 * This is the only SoC here with a documented OVL_INTEN/OVL_INTSTA

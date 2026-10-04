@@ -6,6 +6,7 @@
 #ifndef MTK_DRM_DRV_H
 #define MTK_DRM_DRV_H
 
+#include <drm/drm_ioctl.h>
 #include <linux/io.h>
 #include "mtk_ddp_comp.h"
 
@@ -184,5 +185,15 @@ int mtk_g2d_can_blit(u32 src_format, u32 dst_format);
  * Returns a static string, or "unsupported".
  */
 const char *mtk_g2d_format_name(u32 format);
+
+/*
+ * mtk_g2d_ioctls - the G2D userspace ioctls, in mtk-g2d-uapi.c.
+ *
+ * Referenced by mtk_drm_driver's .ioctls/.num_ioctls.  It is declared here
+ * rather than as a local extern in mtk_drm_drv.c because .num_ioctls applies
+ * sizeof() to it, which needs the complete type; mtk_drm_drv.c does not include
+ * the header that defines it.
+ */
+extern const struct drm_ioctl_desc mtk_g2d_ioctls[];
 
 #endif /* MTK_DRM_DRV_H */

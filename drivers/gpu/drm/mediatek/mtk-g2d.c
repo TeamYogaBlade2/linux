@@ -355,6 +355,47 @@ static int g2d_check_fmt(u32 format)
 	return 0;
 }
 
+u32 mtk_g2d_max_pitch(void)
+{
+	return G2D_PITCH_MAX;
+}
+
+u32 mtk_g2d_max_width(void)
+{
+	return G2D_MAX_WIDTH;
+}
+
+u32 mtk_g2d_max_height(void)
+{
+	return G2D_MAX_HEIGHT;
+}
+
+/**
+ * mtk_g2d_addr_align - required start-address alignment of one format.
+ * @format: an &enum g2d_format
+ * @align: alignment in bytes, returned to the caller
+ *
+ * The public form of g2d_check_align(): the same table, the same
+ * g2d_check_fmt() test, so a caller that validates a request against this cannot
+ * accept a format the engine would then reject - or the reverse, which would be
+ * worse, since a format the engine does not have is one whose encoding the
+ * caller has no way to predict.
+ *
+ * @align is only written on success.
+ */
+int mtk_g2d_addr_align(u32 format, u32 *align)
+{
+	int ret;
+
+	ret = g2d_check_fmt(format);
+	if (ret)
+		return ret;
+
+	*align = g2d_formats[format].address_align;
+
+	return 0;
+}
+
 /**
  * g2d_check_rect - validate one surface before any register is programmed.
  * @pitch: pitch of that surface, in bytes

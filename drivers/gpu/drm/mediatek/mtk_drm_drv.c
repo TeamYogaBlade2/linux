@@ -28,6 +28,7 @@
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
+#include <drm/mtk_g2d.h>
 
 #include "mtk-g2d.h"
 #include "mtk_crtc.h"
@@ -1299,6 +1300,9 @@ static const struct drm_driver mtk_drm_driver = {
 
 	DRM_GEM_DMA_DRIVER_OPS,
 	DRM_FBDEV_DMA_DRIVER_OPS,
+
+	.ioctls		= mtk_g2d_ioctls,
+	.num_ioctls	= MTK_G2D_NR_IOCTLS,
 
 	.fops = &mtk_drm_fops,
 

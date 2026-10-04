@@ -27,6 +27,45 @@ struct g2d_format_info {
 	u32 address_align;
 };
 
+/**
+ * mtk_g2d_max_pitch - largest pitch the engine can express, in bytes.
+ *
+ * The pitch registers hold 14 bits and 0x2000 is the usable maximum.  Exposed so
+ * that a caller which has to check a pitch *before* handing it over - a
+ * userspace ABI, say - reads the same number the engine will apply instead of
+ * keeping a second copy of it that can quietly drift out of date.
+ */
+u32 mtk_g2d_max_pitch(void);
+
+/**
+ * mtk_g2d_max_width - largest scan window width, in pixels.
+ *
+ * G2D_W2M_SIZE holds WIDTH as a 12-bit field documented as 1..2048.
+ */
+u32 mtk_g2d_max_width(void);
+
+/**
+ * mtk_g2d_max_height - largest scan window height, in pixels.
+ *
+ * G2D_W2M_SIZE holds HEIGHT as a 12-bit field documented as 1..2048.
+ */
+u32 mtk_g2d_max_height(void);
+
+/**
+ * mtk_g2d_addr_align - required start-address alignment of one format.
+ * @format: an &enum g2d_format
+ * @align: alignment in bytes, returned to the caller
+ *
+ * The data sheet requires 2-byte alignment for RGB565 and 4-byte for the 8888
+ * formats; RGB888 may start at any address, which is reported as 1.
+ *
+ * Returns 0 and writes @align, or -EINVAL if @format is not a format the engine
+ * can encode - in which case @align is not written.  This is the same test
+ * g2d_check_align() makes internally, exposed so a caller validating a request
+ * cannot disagree with the engine about which formats exist.
+ */
+int mtk_g2d_addr_align(u32 format, u32 *align);
+
 /*
  * Pitch is in bytes, not pixels, and width/height are in pixels.
  *
