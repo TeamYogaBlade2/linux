@@ -77,6 +77,7 @@ OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 #define DISP_REG_OVL_INTSTA			0x0008
 
 #define DISP_REG_OVL_EN				0x000c
+#define DISP_REG_OVL_TRIG			0x0010
 #define DISP_REG_OVL_RST			0x0014
 
 #define DISP_REG_OVL_ROI_SIZE			0x0020
@@ -514,6 +515,25 @@ void mtk_ovl_start(struct device *dev)
 	writel_relaxed(ovl->data->vblank_en_mask,
 		       ovl->regs + DISP_REG_OVL_INTEN);
 	writel_relaxed(0x1, ovl->regs + DISP_REG_OVL_EN);
+
+	/*
+	 * Report what the engine was actually left holding, because
+	 * OVL_STA reading OVL_RUN == 0 afterwards is ambiguous - OVL_EN is
+	 * set, so either OVL_TRIG selects a source that never delivers, or
+	 * something stops the engine straight afterwards.
+	 *
+	 * OVL_TRIG bit0 is OVL_SW_TRIG: 0 means "use the hardware sof", 1
+	 * means "software control enables the engine".  Nothing sets it here
+	 * or in the stock driver, so the OVL depends on the DSI/MUTEX
+	 * emitting sof - worth measuring rather than assuming.
+	 */
+	dev_info(dev,
+		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x\n",
+		 readl(ovl->regs + DISP_REG_OVL_EN),
+		 readl(ovl->regs + DISP_REG_OVL_TRIG),
+		 readl(ovl->regs + DISP_REG_OVL_ROI_SIZE),
+		 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
+		 readl(ovl->regs + DISP_REG_OVL_STA));
 }
 
 void mtk_ovl_stop(struct device *dev)
