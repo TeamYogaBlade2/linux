@@ -161,9 +161,55 @@ struct mtk_disp_rdma {
 static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_rdma *priv = dev_id;
+	u32 status;
 
-	/* Clear frame completion interrupt */
-	writel(0x0, priv->regs + DISP_REG_RDMA_INT_STATUS);
+	/*
+	 * Acknowledge whatever latched, and nothing else.
+	 *
+	 * DISP_RDMA_INT_STATUS (0x14006004) is write-1-to-clear.  The data
+	 * sheet gives every one of its six bits the type "A1", the same
+	 * type the WDMA, GAMMA, BLS, COLOR and DBI status registers use,
+	 * and it spells out the mechanism in prose on at least one of them
+	 * ("SW writes this bit to clear IRQ", ovl.txt:221469 for BLS).  The
+	 * stock driver agrees: ddp_drv.c:662 acknowledges a captured
+	 * status with DISP_REG_SET(..., ~reg_val), i.e. writing a 1 to each
+	 * bit that is set - the same thing mtk_disp_ovl_irq_handler() does
+	 * for OVL_INTSTA.
+	 *
+	 * Writing 0x0, as this handler used to, therefore acknowledged
+	 * nothing at all: on a write-1-to-clear register a zero bit has no
+	 * effect.  Because RDMA's line is level triggered and INT_ENABLE
+	 * has six bits unmasked (mtk_rdma_start() writes RDMA_INT_ALL), the
+	 * condition stayed asserted after every entry and the handler
+	 * re-entered immediately, forever - the 33575 RDMA interrupts in
+	 * /proc/interrupts, roughly one per millisecond, which also starved
+	 * everything else of CPU time.
+	 *
+	 * The write is inverted on purpose: a condition that arrives after
+	 * the readl above goes out as a 0 and is left alone rather than
+	 * being wiped before it can be reported.
+	 *
+	 * This is not a read-then-write-0 ("clear everything") either.
+	 * Read 0x0, write 0x0 clears nothing; read 0x0, write 0xffffffff
+	 * would clear every bit including ones that arrived unobserved, and
+	 * would also poke bits 31..6, which the data sheet leaves unnamed
+	 * on this block.  Acknowledging exactly the bits that were read is
+	 * the only form that cannot lose an event or invent one.
+	 */
+	status = readl(priv->regs + DISP_REG_RDMA_INT_STATUS);
+	writel(status, priv->regs + DISP_REG_RDMA_INT_STATUS);
+
+	/*
+	 * Acknowledge only the bits this driver knows how to name.  The
+	 * write above already acknowledged everything that was latched, so
+	 * this test cannot lose an event; it only decides whether the line
+	 * really was ours, which is what IRQ_NONE has to mean.  RDMA_INT_ALL
+	 * is a compile-time constant, so it is never zero here - the test
+	 * is written to make that explicit rather than to guard a value
+	 * that could vary per SoC.
+	 */
+	if (!RDMA_INT_ALL || !(status & RDMA_INT_ALL))
+		return IRQ_NONE;
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
@@ -653,9 +699,24 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	if (ret && (ret != -EINVAL))
 		return dev_err_probe(dev, ret, "Failed to get rdma fifo size\n");
 
-	/* Disable and clear pending interrupts */
+	/*
+	 * Disable and clear pending interrupts.
+	 *
+	 * INT_ENABLE is a plain RW register of interrupt-enable bits, so 0
+	 * masks everything.  INT_STATUS is write-1-to-clear (see
+	 * mtk_disp_rdma_irq_handler()), so 0 does *not* clear it: writing 0
+	 * leaves every latched status bit standing.  Since the enable is
+	 * masked here the status cannot raise the line, but it survives
+	 * into mtk_rdma_start(), which unmasks all six bits - and the first
+	 * status bit the block finds already set is delivered as a
+	 * "fresh" interrupt the moment the engine is enabled.  Acknowledge
+	 * by writing all ones, which is what the stock RDMAStop() relies on
+	 * being harmless (ddp_rdma.c:54 writes 0 and does not clear either,
+	 * which is why the stock driver only ever gets away with it because
+	 * RDMAReset() follows immediately).
+	 */
 	writel(0x0, priv->regs + DISP_REG_RDMA_INT_ENABLE);
-	writel(0x0, priv->regs + DISP_REG_RDMA_INT_STATUS);
+	writel(~0u, priv->regs + DISP_REG_RDMA_INT_STATUS);
 
 	ret = devm_request_irq(dev, irq, mtk_disp_rdma_irq_handler,
 			       IRQF_TRIGGER_NONE, dev_name(dev), priv);
@@ -720,7 +781,7 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 
 		/* Clear anything the reset left latched. */
 		writel(0x0, priv->regs + DISP_REG_RDMA_INT_ENABLE);
-		writel(0x0, priv->regs + DISP_REG_RDMA_INT_STATUS);
+		writel(~0u, priv->regs + DISP_REG_RDMA_INT_STATUS);
 
 		priv->data->reset(priv);
 		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
