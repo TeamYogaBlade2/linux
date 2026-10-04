@@ -820,7 +820,7 @@ static int mtk_cam_vb2_queue_setup(struct vb2_queue *vq,
 static void mtk_cam_vb2_return_buffers(struct mtk_cam *cam,
 				       enum vb2_buffer_state state)
 {
-	struct vb2_queue *q = cam->vdev_dev.queue;
+	struct vb2_queue *q = &cam->vq;
 	unsigned int num, i;
 
 	lockdep_assert_held(&cam->lock);
@@ -1382,7 +1382,7 @@ err_entity:
 static void mtk_cam_unregister(struct v4l2_subdev *sd)
 {
 	struct mtk_cam *cam = to_mtk_cam(sd);
-	struct vb2_queue *vq = cam->vdev_dev.queue;
+	struct vb2_queue *vq = &cam->vq;
 
 	/*
 	 * Stop the hardware before the node goes away.  The reverse order would
