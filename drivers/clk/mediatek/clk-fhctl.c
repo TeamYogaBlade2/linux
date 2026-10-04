@@ -226,21 +226,30 @@ static int fhctl_hopping(struct mtk_fh *fh, unsigned int new_dds,
 	int ret;
 
 	/*
-	 * Only channels with spread-spectrum clocking enabled are actually
-	 * driven through the hopping sequence.  The stock driver gates this on
-	 * a per-PLL status that defaults to disabled for every PLL here except
-	 * MSDCPLL (mt_freqhopping.c: "default SSC disable" for ARMPLL, MAINPLL,
-	 * TVDPLL, LVDSPLL; SSC enabled only for MEMPLL and MSDCPLL).
+	 * Frequency hopping and spread spectrum are two independent things.
+	 * FH means changing the PLL frequency through the FHCTL hardware;
+	 * SSC means modulating the emitted clock around the nominal
+	 * frequency.  The vendor API spells this out with three states -
+	 * FH_FH_DISABLE, FH_FH_ENABLE_SSC and FH_FH_ENABLE_DFH, the last
+	 * being hopping with no SSC at all (mt_freqhopping.h:42-46) - and
+	 * lists ARMPLL, MAINPLL, MSDCPLL, TVDPLL and LVDSPLL as FH_PLL_ENABLE
+	 * with "default SSC disable" (mt_freqhopping.c:87-92), i.e. their
+	 * hopping path is expected to exist but to be off by default.
 	 *
-	 * Without that gate a plain frequency change on a channel with no SSC
-	 * still runs the full hop, and on this part that does not complete:
-	 * every FHCTL channel register reads back zero and the DDS monitor
-	 * never reaches the new value, so boot spent a second per attempt in
-	 * "FHCTL hopping timeout".  Fall back to a direct reprogramming of the
-	 * PCW field, which is what the data sheet prescribes for these
-	 * non-SDM PLLs anyway.
+	 * So the hop is gated on state->fh_capable, which the device tree
+	 * sets per PLL, and state->ssc_rate only ever decides whether the
+	 * spread-spectrum modulation is programmed around the hop.
+	 *
+	 * A channel that is wired to an FHCTL channel but is not marked
+	 * capable falls back to reprogramming the PCW field directly, which
+	 * is what the data sheet prescribes for these non-SDM PLLs anyway.
+	 * That fallback is not a nicety: running the hop on a channel that
+	 * is not capable does not complete.  On this part every FHCTL
+	 * channel register read back zero and the DDS monitor never reached
+	 * the new value, so boot spent a second per attempt in "FHCTL
+	 * hopping timeout".
 	 */
-	if (!state->ssc_rate) {
+	if (!state->fh_capable) {
 		unsigned int pcw;
 		u32 val;
 
@@ -251,8 +260,8 @@ static int fhctl_hopping(struct mtk_fh *fh, unsigned int new_dds,
 		 *
 		 * The postdiv handling below is deliberately not reached: it
 		 * only does anything for a PLL that has a postdiv divider
-		 * table, and every channel without SSC on this part - ARMPLL,
-		 * MAINPLL, TVDPLL, LVDSPLL - is declared without one.
+		 * table, and the channels that reach this branch on this part -
+		 * ARMPLL, MAINPLL, TVDPLL, LVDSPLL - are declared without one.
 		 */
 		pcw = new_dds & data->dds_mask;
 

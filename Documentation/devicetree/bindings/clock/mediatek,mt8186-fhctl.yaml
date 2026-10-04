@@ -41,6 +41,20 @@ properties:
       minimum: 0
       maximum: 8
 
+  mediatek,fhctl-hopping-enabled:
+    description:
+      Whether a rate change on the corresponding PLL is driven through the
+      FHCTL hardware, one cell per entry in "clocks". This is separate from
+      mediatek,hopping-ssc-percent, which is the spread-spectrum modulation
+      depth and says nothing about whether the FHCTL path is used at all.
+      A PLL can hop without spreading, and conversely a spread-spectrum
+      percentage does not by itself make the hop work.
+    minItems: 0
+    maxItems: 30
+    items:
+      enum: [0, 1]
+      default: 0
+
 required:
   - compatible
   - reg

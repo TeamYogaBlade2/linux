@@ -688,6 +688,35 @@
 		 * attempt.  The stock tree carries the same wrong constant
 		 * (FHCTL_BASE 0xF1005000 in mt_fhreg.h), so it cannot be used
 		 * as corroboration here.
+		 *
+		 * Two properties describe two different things and must not be
+		 * read as one:
+		 *
+		 *   mediatek,hopping-ssc-percent - how far to modulate the
+		 *   emitted clock around the nominal frequency.  It says nothing
+		 *   about whether the FHCTL hop works on the channel.
+		 *
+		 *   mediatek,fhctl-hopping-enabled - whether a rate change on
+		 *   that channel goes through the FHCTL hardware at all.  It is
+		 *   listed explicitly for every channel here precisely so that
+		 *   the answer is on the record; only MSDCPLL is on.
+		 *
+		 * The reference implementation confirms the two are independent:
+		 * it has a third state FH_FH_ENABLE_DFH, hopping with no SSC
+		 * (mt_freqhopping.h:42-46), and lists all five channels as
+		 * FH_PLL_ENABLE with "default SSC disable"
+		 * (mt_freqhopping.c:87-92) - the hopping path is expected to
+		 * exist for them but to be off by default.
+		 *
+		 * They are left off here because that is where measurement, not
+		 * the reference code, decides.  On ARMPLL, MAINPLL, TVDPLL and
+		 * LVDSPLL the hop has been observed not to complete: every
+		 * FHCTLx register read back zero and the DDS monitor never
+		 * reached the new value, so each attempt cost about a second at
+		 * boot.  Turning them on needs a boot log to show a completed
+		 * hop, not just a changed clock.  Until then they reprogram the
+		 * PCW field directly, which is what the data sheet describes for
+		 * these non-SDM PLLs.
 		 */
 		fhctl: clock-controller@11006000 {
 			compatible = "mediatek,mt6589-fhctl";
@@ -698,6 +727,7 @@
 				 <&apmixedsys CLK_APMIXED_TVDPLL>,
 				 <&apmixedsys CLK_APMIXED_LVDSPLL>;
 			mediatek,hopping-ssc-percent = <0>, <0>, <3>, <0>, <0>;
+			mediatek,fhctl-hopping-enabled = <0>, <0>, <1>, <0>, <0>;
 		};
 
 		auxadc: adc@11003000 {
