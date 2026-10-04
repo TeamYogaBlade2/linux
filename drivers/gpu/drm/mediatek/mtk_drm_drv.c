@@ -636,12 +636,28 @@ static int mtk_g2d_clip_rect(const struct mtk_g2d_drm_surf *src,
 	dst_h = dst->height;
 
 	/*
-	 * Each origin must be inside its own image, and the rectangle must
-	 * start within both.  A rectangle starting past the edge of either
-	 * buffer is not clamped - it is rejected, because there is no
-	 * meaningful part of it left to keep.
+	 * Each origin must be inside its own image, on the axis it moves on:
+	 * src_x against the source's usable row width, src_y against the
+	 * source's height, and likewise for the destination.  A rectangle
+	 * starting past the edge of either buffer is not clamped - it is
+	 * rejected, because there is no meaningful part of it left to keep.
+	 *
+	 * The x and y terms are deliberately compared against the matching
+	 * extent.  Testing src_x against src_h as well cannot reject anything
+	 * the engine would have refused - g2d_check_rect() bounds x by the
+	 * pitch, not the height - but it does refuse legitimate work: a
+	 * surface wider than it is tall (a 1920x20 strip is the ordinary case)
+	 * has src_x >= src_h for every origin past its height, and an entire
+	 * blit becomes impossible.
+	 *
+	 * This check is also what makes the subtractions below safe.  They are
+	 * u32, so a src_y or dst_y past its own height would wrap to a value
+	 * near 2^32; the bounds above are strict, so each subtraction leaves at
+	 * least one and cannot wrap.  Checking x and y against each other's
+	 * extent, as this once did, left src_y and dst_y entirely unvalidated -
+	 * so the wrap was reachable at exactly the point these lines guard.
 	 */
-	if (src_x >= src_w || src_x >= src_h || dst_x >= dst_w || dst_x >= dst_h)
+	if (src_x >= src_w || src_y >= src_h || dst_x >= dst_w || dst_y >= dst_h)
 		return -EINVAL;
 
 	/*
@@ -829,22 +845,91 @@ static int mtk_g2d_drm_lock_pair(struct mtk_g2d_drm_surf *a,
 		}
 	}
 
+	/*
+	 * The acquire context is a transaction, not bookkeeping the caller
+	 * owns.  ww_acquire_init() ... ww_acquire_fini() brackets it, and
+	 * ww_acquire_fini() while @ctx still holds locks is premature: it
+	 * releases the transaction's lockdep state and clears its acquired
+	 * count while the mutexes stay locked, so a later ww_mutex_lock() on
+	 * this class no longer knows the task already holds them and can no
+	 * longer order against them.  The documented order is init, lock every
+	 * object, ww_acquire_done(), release the locks, then fini - so fini()
+	 * belongs to the unlock side, not to the end of the lock side, and the
+	 * lock side must close the transaction with ww_acquire_done() first.
+	 */
 	ww_acquire_init(&ctx, &reservation_ww_class);
+
 	ret = mtk_g2d_drm_lock(first, &ctx);
 	if (ret)
-		return ret;
+		goto err_fini;
 
 	if (second) {
 		ret = mtk_g2d_drm_lock(second, &ctx);
-		if (ret) {
+
+		/*
+		 * reservation_ww_class is a DEFINE_WD_CLASS, so the ww mutex
+		 * *dies* rather than waiting when it finds a cycle: -EDEADLK
+		 * is how it reports contention, not a failure of the request.
+		 * Returning it up would turn an ordinary concurrent blit into a
+		 * spurious error, so the pair is retried on the slowpath.
+		 *
+		 * The die case has a hard requirement, from dma_resv.h and
+		 * ww_mutex.h alike: *everything* @ctx holds must be released
+		 * before dma_resv_lock_slow() is called on the contended
+		 * object, and it is forbidden to call the slowpath with any
+		 * other mutex of this context still held.  So @first goes back
+		 * first, then the slowpath claims the object that died, and
+		 * only then is @first re-taken.  Both buffers are held when this
+		 * returns, which the engine requires: it reads the source while
+		 * it writes the destination.
+		 *
+		 * Ordering cannot simply be restarted from the top here - that
+		 * is the same cycle that just produced the -EDEADLK.  Backing
+		 * off one object and waiting for it is what breaks it, and
+		 * ww_mutex.h explicitly allows the remaining mutexes to be
+		 * re-acquired with ww_mutex_lock() afterwards.
+		 */
+		if (ret == -EDEADLK) {
 			mtk_g2d_drm_unlock(first);
-			return ret;
+
+			/* Cannot fail: the slowpath is an uninterruptible wait. */
+			dma_resv_lock_slow(second->obj->resv, &ctx);
+
+			ret = mtk_g2d_drm_lock(first, &ctx);
+			if (ret) {
+				/*
+				 * Only reachable as -EALREADY, which cannot happen
+				 * here because @first was just released and @second
+				 * is a different object.  Unwound anyway rather than
+				 * assumed away: returning with a reservation held
+				 * and nothing able to release it is a leak, not a
+				 * shortcut.
+				 */
+				mtk_g2d_drm_unlock(second);
+				goto err_fini;
+			}
+		} else if (ret) {
+			mtk_g2d_drm_unlock(first);
+			goto err_fini;
 		}
 	}
 
+	/* Both locks held: close the transaction, then release the context. */
+	ww_acquire_done(&ctx);
 	ww_acquire_fini(&ctx);
 
 	return 0;
+
+err_fini:
+	/*
+	 * Every lock has already been released on the paths that reach here,
+	 * so only the context is left.  No ww_acquire_done(): the transaction
+	 * never completed, and claiming that it did is exactly what makes a
+	 * later ww_acquire_fini() believe it may still hold locks.
+	 */
+	ww_acquire_fini(&ctx);
+
+	return ret;
 }
 
 static void mtk_g2d_drm_unlock_pair(struct mtk_g2d_drm_surf *a,
