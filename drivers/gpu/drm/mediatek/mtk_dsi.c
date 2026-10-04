@@ -34,6 +34,25 @@
 
 #define DSI_START		0x00
 
+/*
+ * DSI_STA.  The MT6589 data sheet extract available for this board has no DSI
+ * chapter at all, so these names and bit positions are taken from the vendor
+ * bootloader header, lk/include/platform/dsi_reg.h:266-274, where the register
+ * is declared at offset 0004 and each bit is named:
+ *
+ *	rsv_0:1 BUF_UNDERRUN:1 rsv_2:2 ESC_ENTRY_ERR:1
+ *	LPDT_SYNC_ERR:1 CTRL_ERR:1 CONTENT_ERR:1
+ *
+ * All six error bits are sticky status, cleared by writing the DSI_RACK
+ * handshake; they are read-only for diagnostics here.
+ */
+#define DSI_STA		0x04
+#define BUF_UNDERRUN	BIT(1)
+#define ESC_ENTRY_ERR	BIT(4)
+#define LPDT_SYNC_ERR	BIT(5)
+#define CTRL_ERR	BIT(6)
+#define CONTENT_ERR	BIT(7)
+
 #define DSI_INTEN		0x08
 
 #define DSI_INTSTA		0x0c
@@ -108,6 +127,28 @@
 
 #define DSI_RACK		0x84
 #define RACK				BIT(0)
+
+/*
+ * DSI_TRIG_STA (0088 in the vendor header's numbering).  dsi_reg.h:450-458
+ * names each bit; TRIG2 is the LPRX acknowledgement, i.e. the panel
+ * acknowledging a turnaround.
+ */
+#define DSI_TRIG_STA		0x88
+#define TRIG_ACK			BIT(2)
+
+/*
+ * DSI_STATE_DBG0 (0148) holds the controller/D-PHY state machines;
+ * dsi_reg.h:551-561 names CTL_STATE_C[8:0] and HX_TX_STATE_C[11:9].  These are
+ * diagnostic only.
+ */
+#define DSI_STATE_DBG0		0x148
+/*
+ * Field masks for DSI_STATE_DBG0.  These are spelled as u32 constants rather
+ * than GENMASK() because GENMASK() expands to an unsigned long expression,
+ * which FIELD_GET() rejects as a non-constant mask on this kernel.
+ */
+#define CTL_STATE_C		0x000001ff
+#define HX_TX_STATE_C		0x00000e00
 
 #define DSI_PHY_LCCON		0x104
 #define LC_HS_TX_EN			BIT(0)
@@ -633,6 +674,68 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 	writel(inten, dsi->regs + DSI_INTEN);
 }
 
+/**
+ * mtk_dsi_dump_status - log the DSI link state, for black-screen triage
+ * @dsi: DSI master
+ *
+ * One dev_info line, emitted once per enable.  The next boot is only
+ * diagnosable from pstore, which holds only ~16 KiB, so this deliberately
+ * replaces any per-register or per-command trace: it packs the whole link
+ * state into a single line instead of a dozen.
+ *
+ * What to read from it:
+ *
+ *   - sta: DSI_STA.  Any of BUF_UNDERRUN/ESC_ENTRY_ERR/LPDT_SYNC_ERR/
+ *     CTRL_ERR/CONTENT_ERR set means the engine hit a protocol error and the
+ *     transfer is being retried or dropped; all-zero with no DMA traffic is
+ *     the interesting "nothing was ever attempted" case.
+ *   - trig: DSI_TRIG_STA.TRIG_ACK.  Set means the panel returned an LPRX
+ *     acknowledgement, i.e. the panel is physically attached and answering.
+ *     Clear with lanes running means nothing is on the other end of the link.
+ *   - ctl/hx: DSI_STATE_DBG0 CTL_STATE_C[8:0] / HX_TX_STATE_C[11:9].  These
+ *     are the last controller and D-PHY transmit states.  A CTL_STATE_C frozen
+ *     at its reset value means the engine was never started.
+ *   - rx0: DSI_RX_DATA0, the first LPRX response byte, only meaningful when
+ *     trig shows an acknowledgement.
+ *
+ * Note there is deliberately no DCS command sequence sent to the panel.  The
+ * BOE HX8896-A01 runs in pure video mode: the stock driver for this board,
+ * TeamYogaBlade2/android_kernel_lenovo_b8000-new
+ * mediatek/custom/common/kernel/lcm/cm_hx8896a01_dsi_vdo_boe/cm_hx8896a01_dsi_vdo_boe.c,
+ * sets (params->dsi).mode = SYNC_EVENT_VDO_MODE and its lcm_init() is in full
+ *
+ *	static void lcm_init(void)
+ *	{
+ *	  lcd_power_en();
+ *	  return;
+ *	}
+ *
+ * with not one DCS byte anywhere in the file - no 0x11, no 0x3A, no 0x29,
+ * no 0xB0 page programming.  In video mode the host never enters command mode
+ * and never issues a command queue, so there is nothing to send; with no page
+ * programming the panel self-configures from its internal defaults, which is
+ * why upstream panel-simple declares boe_hx8896_a01 with no .init_sequence.
+ * That driver's porches also match the stock parameters exactly -
+ * 100/4/32 horizontal and 10/2/10 vertical around 1280x800 - so the timing
+ * comes from two independent agreeing sources rather than from one of them
+ * alone.  If a hardware capture ever shows this part needs a sequence, it
+ * belongs in a drm_panel .init_sequence under drivers/gpu/drm/panel/, not
+ * here.
+ */
+static void mtk_dsi_dump_status(struct mtk_dsi *dsi)
+{
+	u32 sta = readl(dsi->regs + DSI_STA);
+	u32 trig = readl(dsi->regs + DSI_TRIG_STA);
+	u32 dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
+
+	dev_info(dsi->host.dev,
+		 "DSI link: sta=0x%02x trig=0x%02x ack=%u ctl=0x%03x hx=0x%x rx0=0x%02x\n",
+		 sta, trig, !!(trig & TRIG_ACK),
+		 FIELD_GET(CTL_STATE_C, dbg0),
+		 FIELD_GET(HX_TX_STATE_C, dbg0),
+		 readb(dsi->regs + DSI_RX_DATA0));
+}
+
 static void mtk_dsi_irq_data_set(struct mtk_dsi *dsi, u32 irq_bit)
 {
 	dsi->irq_data |= irq_bit;
@@ -904,6 +1007,7 @@ static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
 
 	mtk_dsi_lane_ready(dsi);
 	mtk_dsi_clk_hs_mode(dsi, 1);
+	mtk_dsi_dump_status(dsi);
 }
 
 static void mtk_dsi_bridge_atomic_post_disable(struct drm_bridge *bridge,
