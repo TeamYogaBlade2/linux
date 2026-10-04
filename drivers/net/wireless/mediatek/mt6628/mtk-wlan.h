@@ -175,6 +175,15 @@ struct mt6628_wlan {
 	size_t cmd_response_len;
 	size_t cmd_response_capacity;
 	int cmd_status;
+
+	/*
+	 * Counters for the unsolicited RX Block Ack session notifications.
+	 * The sessions themselves are the firmware's - see the RX BA section
+	 * of Downstream-Gaps.md - so this is a record that they happened, not
+	 * a copy of them.
+	 */
+	u32 rx_addba_events;
+	u32 rx_delba_events;
 };
 
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl);
@@ -218,6 +227,8 @@ int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
 				   struct mt6628_event_sta_statistics *stats);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 			 size_t frame_len, bool wait_for_status, bool need_ack);
+bool mt6628_wlan_handle_rx_ba_event(struct mt6628_wlan *wl, u8 eid,
+				    const void *body, size_t body_len);
 
 int mt6628_cfg80211_init(struct mt6628_wlan *wl);
 void mt6628_cfg80211_deinit(struct mt6628_wlan *wl);

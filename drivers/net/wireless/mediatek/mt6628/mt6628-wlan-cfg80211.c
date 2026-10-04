@@ -976,6 +976,20 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 		return true;
 	}
 
+	/*
+	 * RX_ADDBA / RX_DELBA: unsolicited Block Ack session notifications.
+	 * Handled outside the scan path because they arrive on their own,
+	 * whether or not a scan is running.  The handler validates the body
+	 * before reading it and never touches the skb, so the free stays
+	 * here and this is a plain claim, exactly like the cases above.
+	 */
+	if (mt6628_wlan_handle_rx_ba_event(wl, event->eid,
+					    skb->data + MT6628_WIFI_EVENT_HEADER_LEN,
+					    body_len)) {
+		kfree_skb(skb);
+		return true;
+	}
+
 	if (event->eid != MT6628_EVENT_ID_SCAN_DONE)
 		return false;
 	if (body_len != sizeof(*scan_done))

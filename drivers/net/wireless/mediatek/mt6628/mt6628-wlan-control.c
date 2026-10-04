@@ -45,6 +45,34 @@
 #define MT6628_PS_PROFILE_CAM		0
 #define MT6628_PS_PROFILE_FAST_PSP	2
 
+/*
+ * Unsolicited RX Block Ack session notifications.  These are the two event
+ * ids the downstream enum marks "(obsolete)"; the annotation is wrong, both
+ * are dispatched to live code (nic_rx.c:1715-1722).
+ */
+#define MT6628_EVENT_ID_RX_ADDBA	0x11
+#define MT6628_EVENT_ID_RX_DELBA	0x12
+
+/*
+ * CFG_STA_REC_NUM, the bound the downstream STA_REC lookup applies to the
+ * index carried in these events (include/nic/wlan_def.h:287).  The two
+ * reserved index values, STA_REC_INDEX_BMCAST and STA_REC_INDEX_NOT_FOUND
+ * (include/mgmt/cnm_mem.h:501-502), are 0xff and 0xfe and therefore fall
+ * outside this range as well, so one test rejects all three.
+ */
+#define MT6628_STA_REC_NUM		20
+
+/*
+ * Block Ack Parameter Set field and BAR Start Sequence Control, as the
+ * firmware decodes them (include/nic/mac.h:465, include/nic/mac.h:681-684).
+ * BITS(2,5) and BITS(6,15) there are inclusive of both ends.
+ */
+#define MT6628_BA_PARAM_SET_TID_MASK		GENMASK(5, 2)
+#define MT6628_BA_PARAM_SET_TID_OFFSET		2
+#define MT6628_BA_PARAM_SET_WIN_SIZE_MASK	GENMASK(15, 6)
+#define MT6628_BA_PARAM_SET_WIN_SIZE_OFFSET	6
+#define MT6628_BAR_SSC_SN_OFFSET		4
+
 #define MT6628_KEY_INDEX_MAX		MT6628_WLAN_KEY_INDEX_MAX
 #define MT6628_KEY_MATERIAL_LEN		32
 #define MT6628_KEY_RSC_LEN		16
@@ -162,6 +190,26 @@ struct mt6628_cmd_ps_profile {
 	u8 reserved[2];
 } __packed;
 
+/*
+ * Body of EVENT_ID_RX_ADDBA: EVENT_RX_ADDBA_T minus the eight-byte event
+ * header the dispatcher has already consumed (include/nic/que_mgt.h:532).
+ * The fields the firmware copied out of the peer's ADDBA request are the
+ * ones the host acted on downstream.
+ */
+struct mt6628_event_rx_addba {
+	u8 sta_rec_idx;
+	u8 dialog_token;
+	__le16 ba_parameter_set;
+	__le16 ba_timeout_value;
+	__le16 ba_start_seq_ctrl;
+} __packed;
+
+/* Body of EVENT_ID_RX_DELBA: EVENT_RX_DELBA_T minus the event header. */
+struct mt6628_event_rx_delba {
+	u8 sta_rec_idx;
+	u8 tid;
+} __packed;
+
 struct mt6628_hif_mgmt_tx_hdr {
 	__le16 tx_byte_count_user_priority;
 	u8 ether_type_offset;
@@ -202,6 +250,8 @@ static_assert(sizeof(struct mt6628_cmd_remove_sta_record) == 8);
 static_assert(sizeof(struct mt6628_cmd_ps_profile) == 4);
 static_assert(sizeof(struct mt6628_cmd_add_remove_key) == 64);
 static_assert(sizeof(struct mt6628_hif_mgmt_tx_hdr) == 16);
+static_assert(sizeof(struct mt6628_event_rx_addba) == 8);
+static_assert(sizeof(struct mt6628_event_rx_delba) == 2);
 
 int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const struct ieee80211_channel *channel,
@@ -708,6 +758,118 @@ int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
 		return -ENODATA;
 
 	return 0;
+}
+
+/*
+ * Consume EVENT_ID_RX_ADDBA and EVENT_ID_RX_DELBA.
+ *
+ * The firmware raises these when a peer opens or tears down a Block Ack
+ * session on one of our TIDs.  Downstream turns them into per-station,
+ * per-TID reorder-queue state (qmAddRxBaEntry()/qmDelRxBaEntry(),
+ * nic/que_mgt.c:3468/3550), and the only reader of that state is the host
+ * receive reorder path (qmProcessPktWithReordering(), que_mgt.c:2795).
+ *
+ * That reader does not exist in this port, and cannot be copied blindly:
+ * the HIF header field that selects a packet for reordering is parsed inside
+ * an "#if 0" block in the downstream driver itself (nic_rx.c:1088-1115), and
+ * cfg80211 has no use for a reorder window - the frames arrive already
+ * reassembled from the SDIO descriptor queue.  Keeping a window here would be
+ * a table nothing ever consults, so this driver decodes the events and
+ * reports them instead.  See Downstream-Gaps.md section 2.4.
+ *
+ * "body" is the event payload after the eight-byte event header, which the
+ * dispatcher has already validated; "body_len" its length.  The caller owns
+ * the skb.  Returns false only when the event is not one of the two, in
+ * which case the caller must leave it alone.
+ */
+bool mt6628_wlan_handle_rx_ba_event(struct mt6628_wlan *wl, u8 eid,
+				    const void *body, size_t body_len)
+{
+	u8 tid, sta_rec_idx;
+	u16 win_size, win_start, param;
+
+	/* Not one of ours: leave the event to the caller's own dispatch. */
+	if (eid != MT6628_EVENT_ID_RX_ADDBA && eid != MT6628_EVENT_ID_RX_DELBA)
+		return false;
+
+	/*
+	 * Count before validating the payload: these are unsolicited, so the
+	 * number the firmware raised them is worth keeping even when what
+	 * follows turns out to be unusable.
+	 *
+	 * No lock is taken.  Events are dispatched one at a time from the
+	 * single event_work item, so this cannot race another event, and the
+	 * counters are only ever incremented from that one context.  The
+	 * counters saturate rather than wrap, so a long-lived counter cannot
+	 * roll back to zero and read as "never happened".
+	 */
+	if (eid == MT6628_EVENT_ID_RX_ADDBA) {
+		if (wl->rx_addba_events != U32_MAX)
+			wl->rx_addba_events++;
+	} else {
+		if (wl->rx_delba_events != U32_MAX)
+			wl->rx_delba_events++;
+	}
+
+	/*
+	 * The firmware sizes these bodies exactly, so a mismatch means the
+	 * event is not the one this id names.  Reject on inequality rather
+	 * than on a minimum: the structures carry no trailing variable part,
+	 * and accepting a longer body would mean reading a field that is not
+	 * part of this event.
+	 */
+	if (eid == MT6628_EVENT_ID_RX_ADDBA) {
+		const struct mt6628_event_rx_addba *addba = body;
+
+		if (body_len != sizeof(*addba))
+			return true;
+
+		sta_rec_idx = addba->sta_rec_idx;
+		param = le16_to_cpu(addba->ba_parameter_set);
+		tid = (param & MT6628_BA_PARAM_SET_TID_MASK) >>
+			MT6628_BA_PARAM_SET_TID_OFFSET;
+		win_size = (param & MT6628_BA_PARAM_SET_WIN_SIZE_MASK) >>
+			MT6628_BA_PARAM_SET_WIN_SIZE_OFFSET;
+		win_start = le16_to_cpu(addba->ba_start_seq_ctrl) >>
+			    MT6628_BAR_SSC_SN_OFFSET;
+
+		/*
+		 * Reject an out-of-range station index and discard the event,
+		 * exactly as the downstream lookup does (que_mgt.c:3363-3369):
+		 * the index selects a STA_REC that does not exist here.  This
+		 * test also rejects the two reserved values 0xfe and 0xff,
+		 * which are above the table bound.
+		 */
+		if (sta_rec_idx >= MT6628_STA_REC_NUM)
+			return true;
+
+		dev_dbg(&wl->func->dev,
+			"RX BA agreement from STA %u: tid %u, window %u, start %u, timeout %u, dialog %u\n",
+			sta_rec_idx, tid, win_size, win_start,
+			le16_to_cpu(addba->ba_timeout_value),
+			addba->dialog_token);
+		return true;
+	}
+
+	if (eid == MT6628_EVENT_ID_RX_DELBA) {
+		const struct mt6628_event_rx_delba *delba = body;
+
+		if (body_len != sizeof(*delba))
+			return true;
+
+		sta_rec_idx = delba->sta_rec_idx;
+		tid = delba->tid;
+
+		if (sta_rec_idx >= MT6628_STA_REC_NUM)
+			return true;
+
+		dev_dbg(&wl->func->dev,
+			"RX BA agreement with STA %u torn down: tid %u\n",
+			sta_rec_idx, tid);
+		return true;
+	}
+
+	return false;
 }
 
 static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)

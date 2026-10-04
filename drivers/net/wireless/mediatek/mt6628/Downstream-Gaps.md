@@ -210,7 +210,6 @@ The downstream dispatch table (`nic_rx.c`) handles ~40 events. Events the
 firmware may raise that this driver does not act on:
 
 ```
-RX_ADDBA / RX_DELBA          no per-station BA session handling
 STA_AGING_TIMEOUT            AP/P2P oriented
 BSS_ABSENCE_PRESENCE         BSS monitoring
 RX_FLUSH                     invalidation on BSS change
@@ -230,6 +229,80 @@ such event and — because `mt6628_wlan_give_firmware_own()` treats a non-empty
 queue as outstanding traffic — permanently prevented the radio from reaching
 its idle state. The queues have been removed. If an extension point is ever
 wanted here, give the queue a real consumer first.
+
+#### RX Block Ack sessions — counted, not tracked
+
+`RX_ADDBA` (0x11) and `RX_DELBA` (0x12) used to be listed above. They are now
+consumed — decoded, counted and logged — but deliberately without host-side BA
+state. The enum annotates both "(obsolete)"
+(`include/nic_cmd_event.h:779-780`); that comment is wrong.
+`nic_rx.c:1715-1722` dispatches them to `qmHandleEventRxAddBa()` /
+`qmHandleEventRxDelBa()`, and `include/config.h:1158` has
+`CFG_RX_REORDERING_ENABLED 1`. So this is live downstream code. The event bodies
+are:
+
+```c
+/* include/nic/que_mgt.h:532 — EVENT_RX_ADDBA_T, 8 bytes after the header */
+u8     ucStaRecIdx;
+u8     ucDialogToken;
+__le16 u2BAParameterSet;     /* BA policy, TID, buffer size */
+__le16 u2BATimeoutValue;
+__le16 u2BAStartSeqCtrl;     /* SSN */
+
+/* include/nic/que_mgt.h:551 — EVENT_RX_DELBA_T, 2 bytes after the header */
+u8 ucStaRecIdx;
+u8 ucTid;
+```
+
+Downstream feeds those into a bounded per-station/per-TID table
+(`RX_BA_ENTRY_T`, `include/nic/que_mgt.h:441`; `CFG_NUM_OF_RX_BA_AGREEMENTS`
+= 8, `include/config.h:1154`) through `qmAddRxBaEntry()` (`nic/que_mgt.c:3468`)
+and `qmDelRxBaEntry()` (`:3550`).
+
+**This driver keeps no such table, on purpose.** The table is not consumed for
+its own sake — its only reader is the host RX reorder path:
+`qmHandleRxPackets()` dispatches to `qmProcessPktWithReordering()`
+(`nic/que_mgt.c:2762`, defined `:2795`) when the per-packet HIF reorder flag is
+set, and to `qmProcessBarFrame()` for Block Ack Request frames. Nothing else
+reads `aprRxReorderParamRefTbl` except a debug dump in `mgmt/swcr.c:392`.
+
+That reorder path is unreachable here, and is not something that could simply
+be re-enabled:
+
+- The flag comes from `uc80211_Reorder_PAL_TCL & HIF_RX_HDR_DO_REORDER`
+  (`include/nic/hif_rx.h:170`), but the downstream code that decodes that byte
+  into `HIF_RX_HDR_FLAG_DO_REORDERING`, `u2SSN` and `ucTid` sits inside an
+  `#if 0` block in the **downstream driver itself** (`nic_rx.c:1088-1115`). So
+  `prSwRfb->ucTid` and `u2SSN` are never set from the wire, and
+  `qmProcessPktWithReordering()` would key every lookup on a stale zero TID.
+- cfg80211 has no reorder-window concept. The 802.11 frames reach
+  `mt6628_napi_poll()` already reassembled out of the SDIO descriptor queue
+  (`mt6628-wlan-runtime.c:238`), and `mt6628_cfg80211_rx_mgmt()` reads the
+  management frame straight from the HIF payload.
+- Window start/end/size would therefore be a table written on every event and
+  never read — state implying a capability the driver does not have, and that
+  would rot silently across disconnects.
+
+The events are still worth consuming, because they are the only host-visible
+handle on what the firmware agreed to. `mt6628_wlan_handle_rx_ba_event()` in
+`mt6628-wlan-control.c` decodes both with the firmware's own field masks rather
+than a guess (`include/nic/mac.h:681-684` and `:465`):
+
+```c
+tid       = (u2BAParameterSet & BITS(2,5))  >> 2;   /* TID         */
+win_size  = (u2BAParameterSet & BITS(6,15)) >> 6;   /* buffer size */
+win_start = u2BAStartSeqCtrl >> 4;                  /* SSC Start SN */
+```
+
+and logs them at debug level, counting them in `wl->rx_addba_events` /
+`wl->rx_delba_events`. An out-of-range `ucStaRecIdx` discards the event, as
+downstream does (`nic/que_mgt.c:3363-3369`); the bound is `CFG_STA_REC_NUM` = 20
+(`include/nic/wlan_def.h:287`), which also rejects the two reserved indices
+`STA_REC_INDEX_BMCAST` / `STA_REC_INDEX_NOT_FOUND`, 0xff and 0xfe
+(`include/mgmt/cnm_mem.h:501-502`).
+
+If host-side reordering is ever wanted, a reorder *flag* has to be decoded out of
+the HIF RX header first. That is separate work, not an extension of this one.
 
 ### 2.5 Behavioural notes
 
