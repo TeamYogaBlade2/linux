@@ -22,6 +22,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -30,6 +31,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
 
@@ -754,6 +756,81 @@ static const struct of_device_id mtk_g2d_of_match[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
+
+/**
+ * mtk_g2d_get - find the G2D device belonging to a DRM device.
+ * @dev: the mediatek-drm device
+ *
+ * Returns a &struct mtk_g2d with a reference held, or NULL if this DRM device
+ * has no blitter.  NULL is a normal answer, not an error: the MDP DRM device
+ * has no G2D, and callers must fall back rather than fail when there is none.
+ *
+ * The reference is what makes the returned pointer safe to use.  A bare
+ * dev_get_drvdata() on a device found by node would be a use-after-free the
+ * moment the platform device unbound, and unbinding is not gated on the DRM
+ * device going away.
+ */
+struct mtk_g2d *mtk_g2d_get(struct device *dev)
+{
+	struct device_node *node;
+	struct mtk_g2d *g2d = NULL;
+	struct device *pdev;
+
+	if (!dev->parent || !dev->parent->of_node || !dev->parent->of_node->parent)
+		return NULL;
+
+	/*
+	 * G2D is a sibling of the DRM device under MMSYS, not a child of it,
+	 * so this walks MMSYS - the same enumeration mtk_drm_probe() does when
+	 * it looks for the DISP blocks.  Being under MMSYS is not enough on
+	 * its own: an MDP DRM device sits under the same MMSYS and has no G2D,
+	 * which is why this is a lookup and not a shared global.
+	 *
+	 * The node may be absent, disabled, unbound or bound; each of those is
+	 * "no blitter" rather than an error, because none of them is something
+	 * the caller can act on.
+	 */
+	for_each_child_of_node(dev->parent->of_node->parent, node) {
+		if (!of_match_node(mtk_g2d_of_match, node))
+			continue;
+		if (!of_device_is_available(node))
+			break;
+
+		/*
+		 * The node existing says nothing about the driver: probe can
+		 * still fail, or not have run yet.  Only a bound device can be
+		 * programmed, so an unbound one is reported as absent rather
+		 * than dereferenced.
+		 */
+		pdev = bus_find_device_by_of_node(&platform_bus_type, node);
+		of_node_put(node);
+		if (!pdev)
+			break;
+
+		g2d = dev_get_drvdata(pdev);
+		/*
+		 * bus_find_device_by_of_node() already took a reference, and
+		 * that reference is what keeps both the device and its drvdata
+		 * alive, so it is kept for as long as the caller holds g2d.
+		 */
+		break;
+	}
+
+	return g2d;
+}
+
+void mtk_g2d_put(struct mtk_g2d *g2d)
+{
+	if (!g2d)
+		return;
+
+	put_device(g2d->dev);
+}
+
+struct device *mtk_g2d_device(struct mtk_g2d *g2d)
+{
+	return g2d ? g2d->dev : NULL;
+}
 
 static struct platform_driver mtk_g2d_driver = {
 	.probe		= mtk_g2d_probe,

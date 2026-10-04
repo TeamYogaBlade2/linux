@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause */
+/* SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause) */
 /*
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  */
@@ -53,5 +53,37 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 int mtk_g2d_fill(struct mtk_g2d *g2d,
 		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
 		u32 x, u32 y, u32 width, u32 height, u32 color);
+
+/**
+ * mtk_g2d_get - find the G2D device belonging to a DRM device.
+ * @dev: a mediatek-drm device
+ *
+ * The DRM device and the G2D block are separate platform devices under the same
+ * MMSYS parent.  Returns the &struct mtk_g2d that @dev may use, with a
+ * reference held, or NULL if there is none - in which case an accelerated path
+ * must fall back rather than fail.  An MDP DRM device, for instance, has no
+ * G2D.
+ *
+ * The reference is what makes the pointer safe: it holds the platform device
+ * alive, so the result cannot dangle if the block is unbound.  It must be
+ * released with mtk_g2d_put().
+ */
+struct mtk_g2d *mtk_g2d_get(struct device *dev);
+
+/**
+ * mtk_g2d_put - release a reference taken by mtk_g2d_get().
+ *
+ * NULL is accepted and ignored, so a caller that treats "no blitter" as an
+ * ordinary case needs no branch of its own.
+ */
+void mtk_g2d_put(struct mtk_g2d *g2d);
+
+/**
+ * mtk_g2d_device - the &struct device behind an engine.
+ *
+ * Exposed so a caller holding a reference can attribute diagnostics to the
+ * right device.  The &struct mtk_g2d itself is private to the driver.
+ */
+struct device *mtk_g2d_device(struct mtk_g2d *g2d);
 
 #endif /* _MTK_G2D_H_ */

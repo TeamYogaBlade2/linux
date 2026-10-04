@@ -5,6 +5,7 @@
  */
 
 #include <linux/aperture.h>
+#include <linux/dma-resv.h>
 #include <linux/component.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -20,6 +21,7 @@
 #include <drm/drm_fbdev_dma.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_ioctl.h>
@@ -27,6 +29,7 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
+#include "mtk-g2d.h"
 #include "mtk_crtc.h"
 #include "mtk_ddp_comp.h"
 #include "mtk_disp_drv.h"
@@ -380,6 +383,516 @@ static const struct of_device_id mtk_drm_of_ids[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mtk_drm_of_ids);
+
+/**
+ * struct mtk_g2d_drm_surf - a framebuffer resolved for the engine.
+ * @addr: DMA address of the first pixel, already advanced past any offset
+ * @pitch: stride in bytes
+ * @bpp: bytes per pixel, needed for the address arithmetic
+ * @obj: the GEM object, referenced while this surface is live
+ * @width: image width in pixels
+ * @height: image height in pixels
+ * @g2d_fmt: CLRFMT this buffer is programmed with
+ *
+ * @width and @height are the image dimensions, which bound every rectangle:
+ * the engine only ever sees a pitch, and a pitch says nothing about how many
+ * rows exist.
+ *
+ * @obj is NULL for a disabled plane.  That is the one case where the remaining
+ * fields are meaningless, which is why callers check @obj rather than @addr.
+ */
+struct mtk_g2d_drm_surf {
+	dma_addr_t addr;
+	u32 pitch;
+	u32 bpp;
+	u32 width;
+	u32 height;
+	enum g2d_format g2d_fmt;
+	struct drm_gem_object *obj;
+};
+
+/*
+ * DRM fourcc to CLRFMT.
+ *
+ * Only the encodings the engine actually has are listed, and each is mapped to
+ * the DRM format whose in-memory layout the matching CLRFMT describes - there
+ * is no byte-swap or channel-swap bit being used here, so a BGR variant of any
+ * of these is deliberately absent rather than approximated.
+ *
+ * DRM_FORMAT_RGB888 is the packed 24bpp RGB format, which is exactly what
+ * g2d_clrfmt_rgb888 describes, including its 1-byte start-address alignment.
+ */
+static int mtk_g2d_drm_to_clrfmt(u32 format, enum g2d_format *out)
+{
+	switch (format) {
+	case DRM_FORMAT_RGB565:
+		*out = g2d_clrfmt_rgb565;
+		return 0;
+	case DRM_FORMAT_RGB888:
+		*out = g2d_clrfmt_rgb888;
+		return 0;
+	case DRM_FORMAT_ARGB8888:
+		*out = g2d_clrfmt_argb8888;
+		return 0;
+	case DRM_FORMAT_XRGB8888:
+		*out = g2d_clrfmt_xrgb8888;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+const char *mtk_g2d_format_name(u32 format)
+{
+	switch (format) {
+	case DRM_FORMAT_RGB565:
+		return "RGB565";
+	case DRM_FORMAT_RGB888:
+		return "RGB888";
+	case DRM_FORMAT_ARGB8888:
+		return "ARGB8888";
+	case DRM_FORMAT_XRGB8888:
+		return "XRGB8888";
+	default:
+		return "unsupported";
+	}
+}
+
+int mtk_g2d_can_blit(u32 src_format, u32 dst_format)
+{
+	enum g2d_format unused;
+
+	if (mtk_g2d_drm_to_clrfmt(src_format, &unused))
+		return -EINVAL;
+
+	return mtk_g2d_drm_to_clrfmt(dst_format, &unused);
+}
+
+/**
+ * mtk_g2d_drm_surf_init - resolve one framebuffer for the engine.
+ * @dev: device used for diagnostics
+ * @fb: the framebuffer, or NULL for a disabled plane
+ * @out: resolved surface
+ *
+ * The address comes from fb->obj[0]'s dma_addr, which is exactly what
+ * mtk_plane_update_new_state() hands to OVL and RDMA: the DRM device has no
+ * IOMMU on the display path, so the hardware consumes the raw DMA address and
+ * a buffer G2D writes is the same buffer the display engines read.
+ *
+ * Everything that could make that address mean something other than "the first
+ * pixel of a linear image" is rejected: a non-linear modifier, more than one
+ * plane, or a format the engine cannot encode.  Guessing at any of them would
+ * mean programming the engine with an address into the middle of somebody
+ * else's data.
+ *
+ * Returns 0, or -EINVAL.  A NULL @fb succeeds with @out->obj left NULL.
+ */
+static int mtk_g2d_drm_surf_init(struct device *dev,
+				 struct drm_framebuffer *fb,
+				 struct mtk_g2d_drm_surf *out)
+{
+	struct drm_gem_dma_object *dma_obj;
+	const struct drm_format_info *info;
+	enum g2d_format g2d_fmt;
+	int ret;
+
+	memset(out, 0, sizeof(*out));
+
+	/* A disabled plane is a normal thing to be handed; the caller checks. */
+	if (!fb)
+		return 0;
+
+	if (fb->format->num_planes != 1) {
+		dev_dbg(dev, "G2D: %u-plane framebuffer rejected\n",
+			fb->format->num_planes);
+		return -EINVAL;
+	}
+
+	/*
+	 * Only linear.  mtk_plane.c handles the compressed (AFBC) layout by
+	 * deriving a second address and pitch from block geometry, and none of
+	 * that reaches the engine, so a compressed buffer would be read as a
+	 * plain linear one at the wrong address.
+	 */
+	if (fb->modifier != DRM_FORMAT_MOD_LINEAR) {
+		dev_dbg(dev, "G2D: modifier 0x%llx rejected\n",
+			(unsigned long long)fb->modifier);
+		return -EINVAL;
+	}
+
+	if (!fb->obj[0]) {
+		dev_dbg(dev, "G2D: framebuffer without a GEM object rejected\n");
+		return -EINVAL;
+	}
+
+	if (mtk_g2d_drm_to_clrfmt(fb->format->format, &g2d_fmt)) {
+		dev_dbg(dev, "G2D: format %s rejected\n",
+			mtk_g2d_format_name(fb->format->format));
+		return -EINVAL;
+	}
+
+	info = fb->format;
+
+	out->pitch = fb->pitches[0];
+	out->bpp = info->cpp[0];
+	out->width = fb->width;
+	out->height = fb->height;
+	out->g2d_fmt = g2d_fmt;
+
+	/*
+	 * fb->offsets[0] is a byte offset into the backing object where the
+	 * image starts, and is not an x/y pixel offset.  Adding it is the same
+	 * arithmetic drm_gem_fb_create() set up, so the address is the first
+	 * pixel of the image and not the first byte of the allocation.
+	 */
+	dma_obj = to_drm_gem_dma_obj(fb->obj[0]);
+	out->addr = dma_obj->dma_addr + fb->offsets[0];
+	out->obj = fb->obj[0];
+
+	/*
+	 * Take the reference here rather than leaving it to the caller: the
+	 * framebuffer itself only borrows fb->obj[], so a last_plane_state
+	 * reference going away must not free the GEM object out from under an
+	 * operation that is about to program its address into the engine.
+	 * mtk_g2d_drm_surf_fini() drops it, on the error paths below too.
+	 */
+	drm_gem_object_get(out->obj);
+
+	/*
+	 * The pitch registers hold 14 bits with 0x2000 as the usable maximum.
+	 * Checking it here rather than letting mtk_g2d_blt() reject it later
+	 * means the diagnostic names the framebuffer instead of a number, and it
+	 * keeps the pitch checks and the reference above in one place.
+	 */
+	if (out->pitch > 0x2000) {
+		dev_dbg(dev, "G2D: pitch %u exceeds the engine maximum\n",
+			out->pitch);
+		ret = -EINVAL;
+		goto err_put;
+	}
+
+	return 0;
+
+err_put:
+	drm_gem_object_put(out->obj);
+	out->obj = NULL;
+
+	return ret;
+}
+
+static void mtk_g2d_drm_surf_fini(struct mtk_g2d_drm_surf *surf)
+{
+	if (surf->obj)
+		drm_gem_object_put(surf->obj);
+}
+
+/**
+ * mtk_g2d_clip_rect - clamp a rectangle to what both surfaces can address.
+ * @src: source surface, which must be a real image
+ * @dst: destination surface, which must be a real image
+ * @x: origin in pixels, applied to both
+ * @y: origin in pixels, applied to both
+ * @w: requested width in pixels
+ * @h: requested height in pixels
+ * @out_w: clipped width in pixels
+ * @out_h: clipped height in pixels
+ *
+ * The engine has one origin for both surfaces, so the rectangle it can express
+ * is bounded by the smaller of the two images, offset by the shared origin.
+ * Clipping here is what keeps a caller-supplied rectangle from running off the
+ * end of either buffer: the pitch registers are the only thing bounding a row,
+ * and nothing else in the engine knows where the buffer ends.
+ *
+ * Returns 0 and a non-empty rectangle, or -EINVAL if nothing is left.
+ */
+static int mtk_g2d_clip_rect(const struct mtk_g2d_drm_surf *src,
+			     const struct mtk_g2d_drm_surf *dst,
+			     u32 x, u32 y, u32 w, u32 h,
+			     u32 *out_w, u32 *out_h)
+{
+	u32 src_w, dst_w, src_h, dst_h;
+
+	/*
+	 * A row can only be as wide as the pitch allows, and the pitch is
+	 * usually larger than the image, so the binding limit on a row is the
+	 * narrower of the two.  Height is bounded by the image, since a pitch
+	 * says nothing about how many rows exist.
+	 */
+	src_w = min(src->width, src->pitch / src->bpp);
+	dst_w = min(dst->width, dst->pitch / dst->bpp);
+	src_h = src->height;
+	dst_h = dst->height;
+
+	/*
+	 * The origin must be inside both images.  A rectangle starting past
+	 * the edge of either buffer is not clamped - it is rejected, because
+	 * there is no meaningful part of it left to keep.
+	 */
+	if (x >= src_w || x >= dst_w || y >= src_h || y >= dst_h)
+		return -EINVAL;
+
+	/*
+	 * g2d_check_offset() caps the origin at the same 2048 bound it caps the
+	 * scan window at, so an origin past that is refused there.  Refusing it
+	 * here too, with the same bound spelled out, keeps the reason attached
+	 * to the framebuffer rather than to a number the caller passed in.
+	 */
+	if (x > 2048 || y > 2048)
+		return -EINVAL;
+
+	src_w -= x;
+	dst_w -= x;
+	src_h -= y;
+	dst_h -= y;
+
+	w = min3(w, src_w, dst_w);
+	h = min3(h, src_h, dst_h);
+	if (!w || !h)
+		return -EINVAL;
+
+	/*
+	 * W2M_SIZE holds the width and height as 12-bit fields documented as
+	 * 1..2048.  A larger request is truncated rather than refused, so a
+	 * caller asking to copy a whole screen gets the part the engine can
+	 * express instead of nothing at all.
+	 */
+	w = min(w, 2048u);
+	if (!w)
+		return -EINVAL;
+	h = min(h, 2048u);
+
+	*out_w = w;
+	*out_h = h;
+
+	return 0;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Lifetime.
+ *
+ * The engine reads and writes memory that userspace owns, asynchronously with
+ * respect to userspace's view of it.  Two things therefore have to be true for
+ * the whole of an operation, and both are established here rather than assumed:
+ *
+ *   - The buffers cannot be freed or remapped underneath us.  The GEM object
+ *     reference taken in mtk_g2d_drm_surf_init() stops the allocation being
+ *     freed, and the reservation lock stops anything that mutates the mapping -
+ *     a vmap/vunmap of the same object, a prime export, another driver taking
+ *     it for its own use - from proceeding while the engine is reading it.
+ *     This is the same pairing drm_gem_vmap()/drm_gem_vunmap() use, for the
+ *     same reason.
+ *
+ *   - The engine has stopped before the locks are dropped.  mtk_g2d_blt() and
+ *     mtk_g2d_fill() poll G2D_STATUS to idle before returning, so releasing
+ *     the locks afterwards is not a race: there is nothing left running that
+ *     could touch the memory.
+ *
+ * That is why this is synchronous and installs no fence.  A fence would let
+ * the source be released earlier, which is a real benefit, but it would also
+ * mean the engine outliving this call - and the display path here has no
+ * fencing infrastructure to hang one on, because nothing in the OVL/RDMA path
+ * ever installs one either.  A correct synchronous wait is the honest choice:
+ * it is bounded (100 ms, then a warm reset), it cannot hang, and it leaves no
+ * window in which a buffer is unlocked while the engine is still running.
+ *
+ * No engine lock is taken here: mtk_g2d_blt()/mtk_g2d_fill() take g2d->lock
+ * internally around register programming, and this code never programs a
+ * register itself, so there is nothing here that could race with another user
+ * of the engine.
+ */
+
+/**
+ * mtk_g2d_drm_lock - take a surface's reservation object.
+ * @surf: surface to lock; a disabled plane has nothing to lock
+ *
+ * drm_gem_lock() is dma_resv_lock(obj->resv, NULL); the NULL acquire context is
+ * documented as legal for locking a reservation object against itself, and
+ * drm_gem_lock() is the established way for a DRM client to take it.
+ *
+ * Not interruptible, deliberately: what is being waited on is another G2D user
+ * finishing a copy that is itself bounded to 100 ms, so bailing out with
+ * -EINTR halfway through owning one of two buffers would cost more state to
+ * unwind than it saves.
+ */
+static void mtk_g2d_drm_lock(struct mtk_g2d_drm_surf *surf)
+{
+	if (surf->obj)
+		drm_gem_lock(surf->obj);
+}
+
+static void mtk_g2d_drm_unlock(struct mtk_g2d_drm_surf *surf)
+{
+	if (surf->obj)
+		drm_gem_unlock(surf->obj);
+}
+
+/**
+ * mtk_g2d_drm_lock_pair - lock two surfaces.
+ * @a: first surface to lock
+ * @b: second surface to lock
+ */
+static void mtk_g2d_drm_lock_pair(struct mtk_g2d_drm_surf *a,
+				  struct mtk_g2d_drm_surf *b)
+{
+	/*
+	 * Both buffers must be held for the whole operation - the engine reads
+	 * the source while it writes the destination, so locking only one would
+	 * leave the other exposed - and always in this order, so a concurrent
+	 * G2D user cannot deadlock against this one.
+	 */
+	mtk_g2d_drm_lock(a);
+	mtk_g2d_drm_lock(b);
+}
+
+static void mtk_g2d_drm_unlock_pair(struct mtk_g2d_drm_surf *a,
+				    struct mtk_g2d_drm_surf *b)
+{
+	mtk_g2d_drm_unlock(b);
+	mtk_g2d_drm_unlock(a);
+}
+
+/**
+ * mtk_g2d_drm_blt - copy a rectangle between two DRM framebuffers.
+ * @g2d: the engine
+ * @src_fb: source framebuffer
+ * @dst_fb: destination framebuffer
+ * @x: origin in pixels, applied to both surfaces
+ * @y: origin in pixels, applied to both surfaces
+ * @width: rectangle width in pixels
+ * @height: rectangle height in pixels
+ *
+ * The engine has no independent source and destination origins, so this can
+ * only express a same-coordinate copy.  That is a property of the hardware and
+ * of mtk_g2d_blt(), not a simplification made here; a caller that needs to
+ * move a region to a different position must pre-compose it itself.
+ *
+ * Both framebuffers must be single-plane, linear and in a format the engine can
+ * encode; anything else is -EINVAL rather than an approximation.
+ *
+ * Returns 0 once the engine is idle, or a negative errno.
+ */
+int mtk_g2d_drm_blt(struct mtk_g2d *g2d,
+		    struct drm_framebuffer *src_fb,
+		    struct drm_framebuffer *dst_fb,
+		    u32 x, u32 y, u32 width, u32 height)
+{
+	struct mtk_g2d_drm_surf src, dst;
+	u32 w, h;
+	int ret;
+
+	if (!g2d || !src_fb || !dst_fb)
+		return -EINVAL;
+
+	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), src_fb, &src);
+	if (ret)
+		return ret;
+
+	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), dst_fb, &dst);
+	if (ret)
+		goto out_src;
+
+	/* Both planes must exist: this is a copy, not a fill. */
+	if (!src.obj || !dst.obj) {
+		ret = -EINVAL;
+		goto out_dst;
+	}
+
+	ret = mtk_g2d_clip_rect(&src, &dst, x, y, width, height, &w, &h);
+	if (ret)
+		goto out_dst;
+
+	mtk_g2d_drm_lock_pair(&src, &dst);
+
+	ret = mtk_g2d_blt(g2d,
+			  src.addr, src.pitch, src.g2d_fmt,
+			  dst.addr, dst.pitch, dst.g2d_fmt,
+			  x, y, w, h);
+
+	/*
+	 * The engine is idle here whether or not it succeeded: mtk_g2d_blt()
+	 * waits for that, and on a timeout it warm-resets before returning.
+	 * So dropping the locks on both paths is safe, and not dropping them
+	 * on the error path would be a leak, not caution.
+	 */
+	mtk_g2d_drm_unlock_pair(&src, &dst);
+
+out_dst:
+	mtk_g2d_drm_surf_fini(&dst);
+out_src:
+	mtk_g2d_drm_surf_fini(&src);
+
+	return ret;
+}
+
+/**
+ * mtk_g2d_drm_fill - fill a rectangle of a DRM framebuffer with a constant.
+ * @g2d: the engine
+ * @dst_fb: destination framebuffer
+ * @x: origin in pixels
+ * @y: origin in pixels
+ * @width: rectangle width in pixels
+ * @height: rectangle height in pixels
+ * @color: an ordinary DRM pixel value in the destination's format
+ *
+ * mtk_g2d_fill() takes the raw constant the CLRFMT describes, not a DRM pixel
+ * value, so @color is converted here.  DRM_FORMAT_XRGB8888 is mapped onto the
+ * same CLRFMT as ARGB8888, and for a fill that is not an approximation: the
+ * top byte of a constant fill is ignored by both encodings, which is why an
+ * XRGB framebuffer does not need a separate one.
+ *
+ * Returns 0 once the engine is idle, or a negative errno.
+ */
+int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
+		     struct drm_framebuffer *dst_fb,
+		     u32 x, u32 y, u32 width, u32 height, u32 color)
+{
+	struct mtk_g2d_drm_surf dst, empty;
+	u32 w, h;
+	int ret;
+
+	if (!g2d || !dst_fb)
+		return -EINVAL;
+
+	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), dst_fb, &dst);
+	if (ret)
+		return ret;
+
+	if (!dst.obj) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * The fill has only one surface, but the rectangle is still clipped
+	 * against a second, empty one so that the shared origin bound is
+	 * applied the same way as in the blit.  That is not a trick to avoid
+	 * duplicating the check: it means one origin rule exists, and a caller
+	 * cannot pass an origin that is legal for a blit and illegal for a
+	 * fill.
+	 */
+	memset(&empty, 0, sizeof(empty));
+	empty.width = dst.width;
+	empty.height = dst.height;
+	empty.pitch = dst.pitch;
+	empty.bpp = dst.bpp;
+
+	ret = mtk_g2d_clip_rect(&dst, &empty, x, y, width, height, &w, &h);
+	if (ret)
+		goto out;
+
+	mtk_g2d_drm_lock(&dst);
+
+	ret = mtk_g2d_fill(g2d, dst.addr, dst.pitch, dst.g2d_fmt,
+			   x, y, w, h, color);
+
+	mtk_g2d_drm_unlock(&dst);
+
+out:
+	mtk_g2d_drm_surf_fini(&dst);
+
+	return ret;
+}
 
 static int mtk_drm_match(struct device *dev, const void *data)
 {
@@ -1223,6 +1736,21 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		goto err_node;
 	}
 
+	/*
+	 * Find the 2D blitter for this MMSYS, once, and keep the reference for
+	 * as long as the DRM device exists.  A NULL result is normal - the MDP
+	 * DRM device has no G2D, and so does any board whose DTS omits the node -
+	 * and is not an error, because nothing in the existing display path
+	 * depends on it.  It only decides whether an accelerated path can be
+	 * taken where one asks for one.
+	 */
+	private->g2d = mtk_g2d_get(dev);
+	if (private->g2d)
+		dev_info(dev, "Found G2D blitter at %s\n",
+			 dev_name(mtk_g2d_device(private->g2d)));
+	else
+		dev_info(dev, "No G2D blitter, software paths only\n");
+
 	pm_runtime_enable(dev);
 
 	platform_set_drvdata(pdev, private);
@@ -1235,6 +1763,8 @@ static int mtk_drm_probe(struct platform_device *pdev)
 
 err_pm:
 	pm_runtime_disable(dev);
+	mtk_g2d_put(private->g2d);
+	private->g2d = NULL;
 err_node:
 	of_node_put(private->mutex_node);
 	for (i = 0; i < DDP_COMPONENT_DRM_ID_MAX; i++)
@@ -1249,6 +1779,8 @@ static void mtk_drm_remove(struct platform_device *pdev)
 
 	component_master_del(&pdev->dev, &mtk_drm_ops);
 	pm_runtime_disable(&pdev->dev);
+	mtk_g2d_put(private->g2d);
+	private->g2d = NULL;
 	of_node_put(private->mutex_node);
 	for (i = 0; i < DDP_COMPONENT_DRM_ID_MAX; i++)
 		of_node_put(private->comp_node[i]);
