@@ -508,6 +508,8 @@ static const struct v4l2_subdev_pad_ops mtk_cam_pad_ops = {
 static void mtk_cam_config_imgo(struct mtk_cam *cam, dma_addr_t addr,
 				u32 width, u32 height)
 {
+	unsigned long flags;
+
 	lockdep_assert_held(&cam->lock);
 
 	/*
@@ -574,6 +576,34 @@ static void mtk_cam_config_imgo(struct mtk_cam *cam, dma_addr_t addr,
 	 * here -- the whole buffer is the frame -- so both are 0.
 	 */
 	cam_write(cam, CAM_IMGO_CROP, 0);
+
+	/*
+	 * Drain any interrupt status left over from a previous stream, BEFORE
+	 * the caller strobes the start bits.
+	 *
+	 * CAM_CTL_INT_EN bit 31 (INT_WCLR_EN) is left at its reset value of 0,
+	 * which the data sheet documents as "0: Read clear" (see the header), so
+	 * this plain read is what clears CAM_CTL_DMA_INT.  It has to happen here
+	 * because nothing else clears a status bit that was raised and then never
+	 * serviced: mtk_cam_stop() only clears the *enable* (it writes
+	 * CAM_CTL_DMA_INT = 0), and the status is otherwise cleared only by the
+	 * read in mtk_cam_irq().
+	 *
+	 * A status bit surviving the STREAMOFF/STREAMON boundary is exactly the
+	 * stale-IRQ case: the first interrupt of the new stream would find
+	 * IMGO_DONE_ST already set, together with an active_buf that has just
+	 * been programmed, and mtk_cam_irq() would then hand userspace a buffer
+	 * that no frame was ever DMA'd into.  Nothing is started yet, so a
+	 * genuine completion cannot be discarded by this read.
+	 *
+	 * Taken under irq_lock, the lock mtk_cam_irq() uses, so the drain cannot
+	 * interleave with an interrupt that is already being serviced.  cam->lock
+	 * is held here and is the outer lock, and the IRQ path takes only
+	 * irq_lock, so cam->lock -> irq_lock is the only order that occurs.
+	 */
+	spin_lock_irqsave(&cam->irq_lock, flags);
+	(void)cam_read(cam, CAM_CTL_DMA_INT);
+	spin_unlock_irqrestore(&cam->irq_lock, flags);
 }
 
 /*
@@ -878,6 +908,66 @@ static struct vb2_buffer *mtk_cam_vb2_get_queued(struct vb2_queue *vq)
 }
 
 /*
+ * Start or stop whatever feeds CAM's sink.
+ *
+ * v4l2_subdev_enable_streams() is NOT a call that walks the pipeline: it acts
+ * on exactly one subdev and one of ITS pads.  Which is why the call this
+ * replaces was guaranteed to fail.  It passed CAM_PAD_SINK, and the very first
+ * sanity check in v4l2_subdev_enable_streams() is
+ *
+ *	if (!(sd->entity.pads[pad].flags & MEDIA_PAD_FL_SOURCE))
+ *		return -EOPNOTSUPP;
+ *
+ * (v4l2-subdev.c:2321), and CAM_PAD_SINK is a SINK pad (mtk_cam_probe() sets
+ * MEDIA_PAD_FL_SINK on it).  So every STREAMON returned -EOPNOTSUPP, and since
+ * start_streaming() returning an error makes vb2_core_streamon() fail, the node
+ * could never stream at all -- and the bug was invisible, because with no sensor
+ * attached a failing STREAMON looks exactly like the documented "nothing ever
+ * completes".
+ *
+ * Enabling CAM's own sink pad would also have been the wrong thing even if the
+ * direction check passed.  Streams are enabled at the SOURCE of the pipeline
+ * and the enable propagates *downstream* through each driver's own
+ * enable_streams callback (see stm32_csi_enable_streams(),
+ * drivers/media/platform/st/stm32/stm32-csi.c:702, which enables its own
+ * upstream subdev and is itself called in turn from the next entity down).
+ * The entity that starts the chain is therefore the one feeding CAM, found from
+ * the remote end of CAM's sink link -- the same idiom rkcif-stream.c:280-285 and
+ * dcmipp-input.c:420-437 use.
+ *
+ * Returns 0 when there is nothing to enable, which is a real case here and not
+ * an error: CAM's sink has no peer when the graph has no upstream link (the
+ * camera bridge's receiver sink is deliberately unlinked on this board), and
+ * with no sensor there is no clock or lane data to start either.  CAM's own
+ * registers are programmed by mtk_cam_start() regardless, so the IMGO engine
+ * still comes up and the stream is simply inert, which is the documented
+ * behaviour for a pipeline with no source.
+ */
+static int mtk_cam_set_upstream_streaming(struct mtk_cam *cam, bool on)
+{
+	struct media_pad *remote;
+	struct v4l2_subdev *src_sd;
+	u32 src_pad;
+	int ret;
+
+	lockdep_assert_held(&cam->lock);
+
+	remote = media_pad_remote_pad_first(&cam->pads[CAM_PAD_SINK]);
+	if (!remote || !is_media_entity_v4l2_subdev(remote->entity))
+		return 0;
+
+	src_sd = media_entity_to_v4l2_subdev(remote->entity);
+	src_pad = remote->index;
+
+	if (on)
+		ret = v4l2_subdev_enable_streams(src_sd, src_pad, BIT(0));
+	else
+		ret = v4l2_subdev_disable_streams(src_sd, src_pad, BIT(0));
+
+	return ret;
+}
+
+/*
  * Program the engine for the first queued buffer and mark the pipeline
  * streaming.
  *
@@ -945,19 +1035,22 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
 	}
 
 	/*
-	 * Now enable the stream on this subdev, which is what makes the whole
-	 * upstream chain run: v4l2_subdev_enable_streams() walks the pipeline
-	 * from this entity back towards the source and calls s_stream() on each
-	 * one that has one, which is what turns the receiver and SCAM on.
+	 * Now start the upstream chain, which is what turns the receiver and
+	 * SCAM on.  This is the entity feeding CAM, not CAM itself; see
+	 * mtk_cam_set_upstream_streaming() for why the pad and the direction
+	 * matter here.
+	 *
+	 * Started before mtk_cam_start() so that, if the upstream entity fails
+	 * to start, CAM's engine is never strobed at all.
 	 */
-	ret = v4l2_subdev_enable_streams(&cam->sd, CAM_PAD_SINK, BIT(0));
+	ret = mtk_cam_set_upstream_streaming(cam, true);
 	if (ret)
 		goto err_pipeline;
 
 	ret = mtk_cam_start(cam, width, height,
 			    mtk_cam_vb2_to_buf(vb)->dma_addr);
 	if (ret)
-		goto err_subdev;
+		goto err_upstream;
 
 	/*
  * Retain the buffer so it is not handed back to userspace while the engine may
@@ -976,8 +1069,8 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 	return 0;
 
-err_subdev:
-	v4l2_subdev_disable_streams(&cam->sd, CAM_PAD_SINK, BIT(0));
+err_upstream:
+	mtk_cam_set_upstream_streaming(cam, false);
 err_pipeline:
 	video_device_pipeline_stop(&cam->vdev_dev);
 	media_pipeline_stop(&cam->pads[CAM_PAD_SRC]);
@@ -1009,7 +1102,17 @@ static void mtk_cam_vb2_stop_streaming(struct vb2_queue *vq)
 	 */
 	mtk_cam_vb2_return_buffers(cam, VB2_BUF_STATE_ERROR);
 
-	v4l2_subdev_disable_streams(&cam->sd, CAM_PAD_SINK, BIT(0));
+	/*
+	 * Stop the upstream chain before the pipeline is torn down, in the
+	 * reverse of the start order.  The return value is dropped on purpose:
+	 * vb2 stop_streaming() returns void, so there is nowhere to report a
+	 * teardown failure, and the remaining steps (stopping the pipeline and
+	 * clearing active_buf) must happen regardless.  The engine itself has
+	 * already been stopped above, so the worst case is an upstream entity
+	 * left running with nothing consuming it, which is recoverable by the
+	 * next STREAMON or by closing the file.
+	 */
+	mtk_cam_set_upstream_streaming(cam, false);
 
 	video_device_pipeline_stop(&cam->vdev_dev);
 	media_pipeline_stop(&cam->pads[CAM_PAD_SRC]);
@@ -1118,6 +1221,15 @@ static int mtk_cam_enum_fmt_video(struct file *file, void *priv,
  * width and height.  The clamp is applied and then stored, so a caller that
  * asks for something the engine cannot do is told what it actually got rather
  * than silently receiving a buffer too small for the registers.
+ *
+ * A format change is refused while the queue holds buffers, because the buffer
+ * sizes and the DMA geometry come from the SAME field and are computed at
+ * different times: mtk_cam_vb2_queue_setup() sizes an allocation with
+ * mtk_cam_image_size(cam->src_fmt...) at REQBUFS time, while the engine is
+ * programmed with mtk_cam_config_imgo(cam, addr, width, height) at STREAMON
+ * time.  Overwriting src_fmt in between makes the programmed scan window larger
+ * than the buffer the engine was handed, i.e. a DMA overrun, with nothing in the
+ * sequence able to notice.
  */
 static int mtk_cam_s_fmt(struct file *file, void *priv,
 			 struct v4l2_format *v4l2_fmt)
@@ -1128,6 +1240,32 @@ static int mtk_cam_s_fmt(struct file *file, void *priv,
 
 	if (v4l2_fmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
+
+	/*
+	 * Reject the change rather than deferring it.  This node advertises
+	 * V4L2_CAP_STREAMING, so userspace may issue VIDIOC_S_FMT at any point,
+	 * including in the middle of a running stream, and there is nothing to
+	 * "apply it later" -- the only thing the driver could do with a new
+	 * geometry is reprogram the engine mid-frame, which mtk_cam_vb2_buf_queue()
+	 * explicitly declines to do (see the comment there).  -EBUSY is the in-tree
+	 * convention for exactly this and is what makes the error actionable:
+	 * STREAMOFF (or VIDIOC_REQBUFS with count 0) then S_FMT succeeds.
+	 *
+	 * vb2_is_busy() is the check the rest of this tree uses
+	 * (rkcif-stream.c:364, ti/vpe/vpe.c:1739).  It is true from the moment
+	 * REQBUFS allocates until REQBUFS(0)/queue release drops them, so it covers
+	 * a running stream AND the window between REQBUFS and STREAMON where
+	 * buffers are already allocated and sized but nothing is running.  The
+	 * latter is the case that matters most here: that is exactly when a size
+	 * change silently invalidates the existing allocations, and it is not
+	 * covered by cam->streaming.
+	 *
+	 * Safe to read without further locking: VIDIOC_S_FMT is serialised by
+	 * vdev_dev.lock, which is cam->lock, and q->is_busy is only written under
+	 * the vb2 queue lock, which is that same mutex (see mtk_cam_register()).
+	 */
+	if (vb2_is_busy(&cam->vq))
+		return -EBUSY;
 
 	if (fmt->pixelformat != CAM_PIX_FMT)
 		fmt->pixelformat = CAM_PIX_FMT;
@@ -1251,8 +1389,14 @@ static const struct v4l2_file_operations mtk_cam_v4l2_fops = {
  * there is no frame.  It is written anyway, so that the moment a sensor and a
  * D-PHY land the path exists and the only remaining question is whether the DMA
  * programming itself is right.
+ *
+ * Returns true only when an IMGO completion was actually consumed, which is
+ * what lets mtk_cam_dev_irq() report IRQ_NONE for an interrupt that was not
+ * ours.  Note the asymmetry with the read: the status register is read (and so
+ * cleared) on every call regardless of the return value, but a completion is
+ * only ever acted on when the status bit was set.
  */
-static void mtk_cam_irq(struct mtk_cam *cam)
+static bool mtk_cam_irq(struct mtk_cam *cam)
 {
 	unsigned long flags;
 	u32 status;
@@ -1273,7 +1417,7 @@ static void mtk_cam_irq(struct mtk_cam *cam)
 
 	if (!(status & CAM_CTL_DMA_INT_IMGO_DONE_ST) || !cam->active_buf) {
 		spin_unlock_irqrestore(&cam->irq_lock, flags);
-		return;
+		return false;
 	}
 
 	/*
@@ -1306,27 +1450,39 @@ static void mtk_cam_irq(struct mtk_cam *cam)
 	 * would run userspace-triggered work under this driver's spinlock.
 	 */
 	vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
-}/* ------------------------------------------------------------------ */
+
+	return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* Registration                                                       */
 /* ------------------------------------------------------------------ */
 
 /*
  * The IRQ handler.
  *
- * mtpd() in interrupt.h does the things this needs: it returns IRQ_NONE for a
- * spurious interrupt (no status bit set), so a shared line is safe, and it
- * returns IRQ_HANDLED only once the driver has actually consumed the event.
- * Reading the status into a local is what performs the read-clear the data
- * sheet describes, so it has to happen for every interrupt on the line,
- * including ones this driver has no handler for.
+ * The line is shared (probe passes IRQF_SHARED), so the return value matters:
+ * returning IRQ_HANDLED for an interrupt this driver did not consume steals it
+ * from every other handler on the same line and keeps the line from being
+ * re-asserted, which on a shared ISP interrupt can wedge the other channel
+ * permanently.  IRQ_NONE is the right answer when there is no IMGO completion
+ * of ours to act on, and it lets the next handler on the line run.
+ *
+ * The status register is still READ for every interrupt on the line whether or
+ * not it concerns us, because the read is what performs the read-clear the data
+ * sheet describes (see mtk_cam_irq()); a status bit raised for a channel this
+ * driver does not own is thereby cleared instead of left to re-fire forever.
+ *
+ * "No IMGO completion" covers two cases, both of which must report IRQ_NONE:
+ * no status bit at all (a spurious or foreign interrupt), and a status bit with
+ * no active buffer (STREAMOFF already happened, so there is nothing to hand
+ * back and the completion is stale by construction).
  */
 static irqreturn_t mtk_cam_dev_irq(int irq, void *dev_id)
 {
 	struct mtk_cam *cam = dev_id;
 
-	mtk_cam_irq(cam);
-
-	return IRQ_HANDLED;
+	return mtk_cam_irq(cam) ? IRQ_HANDLED : IRQ_NONE;
 }
 
 /*
