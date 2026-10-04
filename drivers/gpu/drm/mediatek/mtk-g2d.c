@@ -25,6 +25,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -108,7 +109,15 @@
 #define G2D_IRQ_IRQ_STA		BIT(8)
 #define G2D_IRQ_EN		BIT(0)
 
-/* *_CON format and attribute fields, shared by SRC_CON and DST_CON. */
+/*
+ * *_CON format and attribute fields.
+ *
+ * FLIP, RB_SWP, BYTE_SWP and CLRFMT exist in all three of SRC_CON, DST_CON
+ * and W2M_CON.  DI_ALP_MUL, DITHER_EN and COLOR_EN only exist in SRC_CON and
+ * W2M_CON - DST_CON has no bit 9 at all - so COLOR_EN below is valid on
+ * W2M_CON (which is what the constant-colour fill programs) but must never be
+ * OR'd into a DST_CON value.
+ */
 #define G2D_CON_DI_ALP_MUL		BIT(13)
 #define G2D_CON_DITHER_EN		BIT(12)
 #define G2D_CON_FLIP			GENMASK(11, 10)
@@ -139,8 +148,7 @@ struct mtk_g2d {
 	struct clk *clk_engine;
 	struct clk *clk_smi;
 	struct mutex lock;
-	spinlock_t busy_lock;
-	bool busy;
+	int irq;
 };
 
 /* Formats the CLRFMT field encodes. */
@@ -174,15 +182,18 @@ static const struct g2d_format_info g2d_formats[] = {
 
 static int g2d_wait_idle(struct mtk_g2d *g2d)
 {
-	unsigned long timeout = jiffies + msecs_to_jiffies(G2D_TIMEOUT_US / 1000);
+	u32 status;
 
-	while (readl(g2d->regs + G2D_STATUS) & G2D_STATUS_BUSY) {
-		if (time_after(jiffies, timeout))
-			return -ETIMEDOUT;
-		cpu_relax();
-	}
-
-	return 0;
+	/*
+	 * readl_poll_timeout() does its own deadline arithmetic, so the
+	 * microsecond budget needs no jiffies conversion here, and it sleeps
+	 * between reads.  A hand-rolled "while (BUSY) cpu_relax()" loop spins
+	 * on the APB bus without ever yielding, which is a scheduler-hostile
+	 * way to sit on a mutex for a 100 ms budget.
+	 */
+	return readl_poll_timeout(g2d->regs + G2D_STATUS, status,
+				  !(status & G2D_STATUS_BUSY), 20,
+				  G2D_TIMEOUT_US);
 }
 
 /**
@@ -225,7 +236,7 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
  */
 static void g2d_reset(struct mtk_g2d *g2d)
 {
-	unsigned long timeout;
+	u32 status;
 
 	lockdep_assert_held(&g2d->lock);
 
@@ -236,21 +247,20 @@ static void g2d_reset(struct mtk_g2d *g2d)
 	writel(G2D_RESET_WRST, g2d->regs + G2D_RESET);
 
 	/* Step 3: while (G2D_STATUS != 0), bounded. */
-	timeout = jiffies + msecs_to_jiffies(G2D_RESET_TIMEOUT_US / 1000);
-	while (readl(g2d->regs + G2D_STATUS) & G2D_STATUS_BUSY) {
-		if (time_after(jiffies, timeout)) {
-			/*
-			 * Out of reset, but the engine never went idle.  That
-			 * is the one case recovery cannot fix on its own, so
-			 * report it: the caller still gets -ETIMEDOUT, but a
-			 * blit that will keep failing needs to be traceable
-			 * rather than looking like an ordinary slow one.
-			 */
-			dev_err(g2d->dev,
-				"G2D still busy after warm reset, engine may be wedged\n");
-			break;
-		}
-		cpu_relax();
+	readl_poll_timeout(g2d->regs + G2D_STATUS, status,
+			   !(status & G2D_STATUS_BUSY), 20,
+			   G2D_RESET_TIMEOUT_US);
+
+	if (status & G2D_STATUS_BUSY) {
+		/*
+		 * Out of reset, but the engine never went idle.  That is the
+		 * one case recovery cannot fix on its own, so report it: the
+		 * caller still gets -ETIMEDOUT, but a blit that will keep
+		 * failing needs to be traceable rather than looking like an
+		 * ordinary slow one.
+		 */
+		dev_err(g2d->dev,
+			"G2D still busy after warm reset, engine may be wedged\n");
 	}
 
 	/* Step 4: G2D_RESET = 0, de-assert. */
@@ -297,10 +307,6 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
 	 */
 	writel(irq_reg & ~G2D_IRQ_IRQ_STA, g2d->regs + G2D_IRQ);
 
-	spin_lock_irq(&g2d->busy_lock);
-	g2d->busy = false;
-	spin_unlock_irq(&g2d->busy_lock);
-
 	return IRQ_HANDLED;
 }
 
@@ -309,15 +315,15 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
  * @g2d: device
  *
  * Writes G2D_START = 0 then 1, which is what the data sheet asks for, and
- * then either waits for G2D_STATUS to read 0 or for the interrupt.
+ * then waits for G2D_STATUS to read 0.
+ *
+ * The completion wait is a poll, not an interrupt wait: the interrupt only
+ * retires the level-sensitive line, so nothing here depends on it and a late
+ * or lost interrupt cannot turn into a hang.
  */
 static int g2d_start(struct mtk_g2d *g2d)
 {
 	int ret;
-
-	spin_lock_irq(&g2d->busy_lock);
-	g2d->busy = true;
-	spin_unlock_irq(&g2d->busy_lock);
 
 	writel(0, g2d->regs + G2D_START);
 	writel(G2D_START_START, g2d->regs + G2D_START);
@@ -331,10 +337,6 @@ static int g2d_start(struct mtk_g2d *g2d)
 		 * re-issue START on top of it.
 		 */
 		g2d_recover(g2d);
-
-		spin_lock_irq(&g2d->busy_lock);
-		g2d->busy = false;
-		spin_unlock_irq(&g2d->busy_lock);
 		return ret;
 	}
 
@@ -399,6 +401,52 @@ static int g2d_check_align(dma_addr_t addr,
 }
 
 /**
+ * g2d_check_offset - validate a pixel origin against one surface's pitch.
+ * @base: surface base address, as handed in by the caller
+ * @pitch: pitch of that surface, in bytes
+ * @bpp: bytes per pixel of that surface
+ * @x: x origin, in pixels
+ * @y: y origin, in pixels
+ * @addr: computed start address, returned to the caller
+ *
+ * x and y arrive from the caller as plain u32s, so "base + y * pitch +
+ * x * bpp" is computed in 32-bit arithmetic and wraps silently on a
+ * configuration where dma_addr_t is 32 bits wide (this one: LPAE and HIGHMEM
+ * are off, so CONFIG_ARCH_DMA_ADDR_T_64BIT is not set).  A wrapped address
+ * is exactly the sort of value that still passes the alignment test, and it
+ * would send the engine to write somewhere else entirely.  So reject any
+ * origin whose byte offset does not fit rather than programming a wrapped
+ * one.
+ *
+ * The caller must already have run g2d_check_rect() on this surface, which
+ * bounds pitch and keeps x * bpp well clear of any overflow.
+ *
+ * x and y are additionally capped at the documented maximum scan window
+ * (G2D_MAX_WIDTH/HEIGHT).  That is a deliberate limit on the exported
+ * contract rather than a hardware requirement - the engine can address a row
+ * at an offset past the window, and a wide RGB888 pitch would allow an x
+ * slightly above 2048 - but keeping the origin inside the same bound the
+ * window size is checked against means the whole request is describable in the
+ * register set without further reasoning.
+ */
+static int g2d_check_offset(dma_addr_t base, u32 pitch, u32 bpp,
+			     u32 x, u32 y, dma_addr_t *addr)
+{
+	u64 offset;
+
+	if (x > G2D_MAX_WIDTH || y > G2D_MAX_HEIGHT)
+		return -EINVAL;
+
+	offset = (u64)y * pitch + (u64)x * bpp;
+	if (offset + base > (u64)(dma_addr_t)~0ULL)
+		return -EINVAL;
+
+	*addr = base + offset;
+
+	return 0;
+}
+
+/**
  * mtk_g2d_blt - copy one rectangular region between two surfaces.
  * @x: x offset, in pixels, applied to both the source and the destination
  * @y: y offset, in pixels, applied to both the source and the destination
@@ -448,8 +496,12 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	 * x/y are pixel offsets into both surfaces, so the byte address handed
 	 * to the engine is the one that has to carry the format's alignment.
 	 */
-	src_addr = src + y * src_pitch + x * src_bpp;
-	dst_addr = dst + y * dst_pitch + x * dst_bpp;
+	ret = g2d_check_offset(src, src_pitch, src_bpp, x, y, &src_addr);
+	if (ret)
+		return ret;
+	ret = g2d_check_offset(dst, dst_pitch, dst_bpp, x, y, &dst_addr);
+	if (ret)
+		return ret;
 	ret = g2d_check_align(src_addr, &g2d_formats[src_fmt]);
 	if (ret)
 		return ret;
@@ -531,7 +583,9 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 	if (ret)
 		return ret;
 
-	dst_addr = dst + y * dst_pitch + x * bpp;
+	ret = g2d_check_offset(dst, dst_pitch, bpp, x, y, &dst_addr);
+	if (ret)
+		return ret;
 	ret = g2d_check_align(dst_addr, &g2d_formats[dst_fmt]);
 	if (ret)
 		return ret;
@@ -611,9 +665,9 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 		ret = dev_err_probe(dev, ret, "failed to request irq\n");
 		goto disable_clocks;
 	}
+	g2d->irq = irq;
 
 	mutex_init(&g2d->lock);
-	spin_lock_init(&g2d->busy_lock);
 
 	/* G2D_IRQ EN, bit 0: enables the 2D engine interrupt. */
 	writel(G2D_IRQ_EN, g2d->regs + G2D_IRQ);
@@ -636,11 +690,37 @@ disable_clocks:
 	return ret;
 }
 
+/**
+ * mtk_g2d_remove - give back what probe took.
+ *
+ * The clocks were enabled with clk_prepare_enable(), which devm does not
+ * undo, so without this the engine and SMI clock gates stay enabled for the
+ * rest of the boot after the device is unbound.  devm frees the register
+ * mapping, the IRQ and the allocation after this returns, so the clocks must
+ * go first and in reverse acquisition order.  Mutex destruction is not
+ * needed - the memory is about to be freed.
+ */
+static void mtk_g2d_remove(struct platform_device *pdev)
+{
+	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+
+	clk_disable_unprepare(g2d->clk_smi);
+	clk_disable_unprepare(g2d->clk_engine);
+}
+
 #ifdef CONFIG_PM_SLEEP
 static int mtk_g2d_suspend(struct platform_device *pdev,
 			   pm_message_t state)
 {
 	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+
+	/*
+	 * The line is negative level sensitive, so leaving the IRQ enabled
+	 * across a suspend means a completion that lands while the clocks are
+	 * off calls the handler against register reads that no longer have a
+	 * clock behind them.  Mask it first; unmask on resume.
+	 */
+	disable_irq(g2d->irq);
 
 	clk_disable_unprepare(g2d->clk_smi);
 	clk_disable_unprepare(g2d->clk_engine);
@@ -663,6 +743,8 @@ static int mtk_g2d_resume(struct platform_device *pdev)
 		return ret;
 	}
 
+	enable_irq(g2d->irq);
+
 	return 0;
 }
 #endif
@@ -675,6 +757,7 @@ MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
 
 static struct platform_driver mtk_g2d_driver = {
 	.probe		= mtk_g2d_probe,
+	.remove		= mtk_g2d_remove,
 	.driver		= {
 		.name		= "mtk-g2d",
 		.of_match_table	= mtk_g2d_of_match,
