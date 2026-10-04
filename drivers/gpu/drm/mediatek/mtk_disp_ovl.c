@@ -300,6 +300,7 @@ struct mtk_disp_ovl {
 	/* Rate limiting for a fault that persists indefinitely. */
 	unsigned int			intsta_reported;
 	u32				last_intsta;
+	bool				layer_dbg_done;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -996,6 +997,29 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	if (ovl->data->fmt_convert == mt6589_fmt_convert &&
 	    (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV))
 		mt6589_ovl_write_yuv_matrix(ovl, idx, cmdq_pkt);
+
+	/*
+	 * Read the layer back once it has actually been programmed.  The
+	 * readback in mtk_ovl_start() runs before any layer_config(), so it
+	 * cannot show whether the framebuffer reached the hardware: it
+	 * reported src_con = 0 simply because no layer had been set up yet.
+	 *
+	 * This is the one that matters while RDMA0_EOF_ABNORMAL is still
+	 * being raised alongside FME_CPL - the frame completes, but the
+	 * overlay's own RDMA does not finish by EOF.  If L0_ADDR is zero or
+	 * the pitch is wrong, that is the reason.
+	 */
+	if (!ovl->layer_dbg_done) {
+		ovl->layer_dbg_done = true;
+		dev_info(dev,
+			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n",
+			 idx,
+			 readl(ovl->regs + DISP_REG_OVL_ADDR(ovl, idx)),
+			 readl(ovl->regs + DISP_REG_OVL_PITCH(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_SRC_SIZE(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
+			 readl(ovl->regs + DISP_REG_OVL_CON(idx)));
+	}
 }
 
 void mtk_ovl_bgclr_in_on(struct device *dev)
