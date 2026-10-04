@@ -796,7 +796,20 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 	SND_SOC_DAPM_OUT_DRV_E("Speaker Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
 			       mt6320_speaker_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_ADC_E("AIF1 Capture", NULL, SND_SOC_NOPM, 0, 0,
+	/*
+	 * The analog mic front end, named after the "DAC" it mirrors on
+	 * playback, and the widget that carries mt6320_mic_event (mic bias and
+	 * AUXADC channel select).
+	 *
+	 * It must NOT be called "VUL Capture": that is the name ASoC gives the
+	 * capture DAI widget, which it auto-creates from the DAI's stream_name
+	 * below (snd_soc_dapm_new_dai_widgets()).  This widget used to be
+	 * called "AIF1 Capture" - the very same name as that auto-created DAI
+	 * widget - so two widgets in this one component shared a name, and
+	 * route lookup for the codec's own routes could not tell them apart.
+	 * It needs a name of its own.
+	 */
+	SND_SOC_DAPM_ADC_E("ADC", NULL, SND_SOC_NOPM, 0, 0,
 			   mt6320_mic_event,
 			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_INPUT("Mic Bias"),
@@ -806,11 +819,24 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 
 static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	/*
-	 * The AFE side of these two routes is the AFE's DAI stream widget,
-	 * named after its DAI stream_name - "DL1 Playback" and "VUL Capture"
-	 * in mt6589-afe-pcm.c - not a separate set of AFE endpoints.  A DAI
-	 * gets an auto-created DAPM widget under that name and
-	 * dapm_connect_dai_pair() joins the two DAIs through it.
+	 * "DL1 Playback" and "VUL Capture" are the AFE's DAI stream widgets.
+	 * Each DAI gets an auto-created DAPM widget named after its
+	 * stream_name (snd_soc_dapm_new_dai_widgets()), and
+	 * dapm_connect_dai_pair() walks those widgets by pointer to join the
+	 * codec DAI to the CPU DAI.  The names matter for two other reasons,
+	 * which is why they have to agree across components:
+	 *
+	 *  - the routes below are looked up by name across every widget on the
+	 *    card (snd_soc_dapm_add_route()), so a route named for the wrong
+	 *    stream resolves to nothing, or worse to a same-named widget that
+	 *    is not on the path; and
+	 *  - snd_soc_dapm_link_dai_widgets() pairs widgets up by substring
+	 *    match on their stream names, so only equal names pair.
+	 *
+	 * Both AFE names are fixed by the hardware interface (AFE memory
+	 * interfaces DL1 and VUL), so the codec matches them end to end rather
+	 * than imposing "AIF1 ...", and the analog front ends hang off the
+	 * matching widget just as "DAC" hangs off "DL1 Playback" above.
 	 */
 	{ "DAC", NULL, "DL1 Playback" },
 	{ "HP Driver", NULL, "DAC" },
@@ -819,7 +845,8 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker Driver", NULL, "DAC" },
 	{ "Speaker Driver", NULL, "Analog" },
 	{ "Speaker", NULL, "Speaker Driver" },
-	{ "Mic Bias", NULL, "VUL Capture" },
+	{ "Mic Bias", NULL, "ADC" },
+	{ "ADC", NULL, "VUL Capture" },
 };
 
 /* Output volume: -4dB .. +8dB in 1dB steps. */
@@ -863,7 +890,16 @@ static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 			.formats = MT6320_CODEC_FORMATS,
 		},
 		.capture = {
-			.stream_name = "AIF1 Capture",
+			/*
+			 * Named for the AFE capture DAI's memory interface,
+			 * which is also the machine dai_link's stream_name
+			 * ("VUL Capture" in both mt6589-afe-pcm.c and
+			 * mt6589-mt6320.c).  It has to be this exact string:
+			 * it names the DAI widget the routes connect to, and
+			 * only equal stream names pair up in
+			 * snd_soc_dapm_link_dai_widgets().
+			 */
+			.stream_name = "VUL Capture",
 			.channels_min = 1,
 			.channels_max = 1,
 			.rates = MT6320_CODEC_RATES,
