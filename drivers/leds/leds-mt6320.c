@@ -897,7 +897,8 @@ static int mt6320_led_hw_off(struct mt6320_led *led)
 	 * rather than swallowing because otherwise it is invisible until
 	 * somebody notices the boost clock never parked.
 	 */
-	if (!mt6320_led_drop_boost(led) && led->boost_ref)
+	ret = mt6320_led_drop_boost(led);
+	if (ret)
 		dev_warn(led->parent->dev,
 			 "failed to release boost clock for channel %u; rail left on\n",
 			 led->channel);
