@@ -28,7 +28,63 @@
 #include <sound/soc-dapm.h>
 #include <sound/tlv.h>
 
-#define MT6320_CODEC_RATES	SNDRV_PCM_RATE_8000_48000
+/*
+ * Downlink and uplink rate sets, deliberately different.
+ *
+ * The downlink SRC covers the full nine-rate ladder 8/11.025/12/16/22.05/24/32/
+ * 44.1/48 kHz.  Note that SNDRV_PCM_RATE_8000_48000 does *not* contain 12000 or
+ * 24000: ALSA gives those two their own bits, added long after the range macro
+ * was defined (SNDRV_PCM_RATE_12000 = 1U<<17, SNDRV_PCM_RATE_24000 = 1U<<18,
+ * include/sound/pcm.h:127-128), so they have to be ORed in explicitly or a
+ * supported rate silently becomes unavailable to userspace.
+ *
+ * The uplink SRC is narrower - only 8/16/32/48 kHz are encodable - so the
+ * capture DAI must not advertise the others.  See mt6320_ul_src_rate_code().
+ *
+ * Deliberately absent: 88200, 96000 and 192000.  The MT6589 data sheet's "6 kHz
+ * to 96 kHz" audio claim is not backed by anything in the hardware description
+ * available for this part, and every rate ladder reachable from this SoC tops
+ * out at 48000:
+ *
+ *	- AFE memif / IRQ counters, u4SamplingRateConvert[9]
+ *	  (mediatek/platform/mt6589/kernel/drivers/ldvt/audio/AudioAfe.c:66)
+ *	  = {0,1,2,4,5,6,8,9,10}
+ *	- the AFE kernel driver's own SampleRateTransform()
+ *	  (kernel/sound/soc/__mediatek/mt_soc_afe_control.c:374-400) has no case
+ *	  for anything above 48 kHz and falls through to `return ..._44K`
+ *	- the codec downlink SRC, GetDLFrequency()
+ *	  (AudioPlatformDevice.cpp:91-127), codes 0..8
+ *	- the codec uplink SRC, GetULFrequency()
+ *	  (AudioPlatformDevice.cpp:130-152), codes 0x0/0x5/0xa/0xf
+ *
+ * The enum in the shared audio V2 header
+ * (mediatek/platform/common/hardware/audio/V2/include/AudioStreamAttribute.h:50-61)
+ * does define AFE_88K/96K/174K/192K, and the AFE kernel driver's
+ * Soc_Aud_I2S_SAMPLERATE repeats them (mt_soc_digital_type.h:256-259), but no
+ * code ever emits those values: SampleRateTransform() has no case for them, so
+ * 88.2/96/192 kHz would reach the hardware as 44.1 kHz.  The DL_SRC2_CON0_H rate
+ * field is four bits wide (GENMASK(15,12) below) and the documented ladder 0..8
+ * already fills it, so there is no code to extend it with either.  Advertising
+ * these rates would mean playing 44.1 kHz while reporting 96 kHz, so they are
+ * rejected here rather than accepted and silently mistrusted.
+ */
+#define MT6320_CODEC_DL_RATES	(SNDRV_PCM_RATE_8000_48000 |	\
+				 SNDRV_PCM_RATE_12000 |		\
+				 SNDRV_PCM_RATE_24000)
+
+/* Only the four rates the uplink SRC can encode. */
+#define MT6320_CODEC_UL_RATES	(SNDRV_PCM_RATE_8000 |		\
+				 SNDRV_PCM_RATE_16000 |		\
+				 SNDRV_PCM_RATE_32000 |		\
+				 SNDRV_PCM_RATE_48000)
+
+/*
+ * Only S16_LE.  The AFE memif's fetch widths are 16-bit and 32-bit-with-24-bit-
+ * data (SetMemIfFetchFormatPerSample, mt_soc_afe_control.c:1351-1390, writing
+ * AFE_MEMIF_PBUF_SIZE) - there is no 8-bit fetch format in that hardware, so
+ * U8 cannot be offered even though the downstream PCM advertises it
+ * (USE_FORMATS, mt_soc_pcm_afe.c:164).
+ */
 #define MT6320_CODEC_FORMATS	SNDRV_PCM_FMTBIT_S16_LE
 
 /*
@@ -197,6 +253,13 @@ struct mt6320_codec_priv {
 	unsigned int ul_rate_code;
 };
 
+/*
+ * Downlink SRC rate code, i.e. the vendor's GetDLFrequency() before the <<12.
+ *
+ * This is a dense 0..8 ladder, distinct from the AFE's sparse one (see
+ * mt6589_afe_rate_code_sparse()); the two must not be unified.  Verified
+ * case by case against GetDLFrequency(), AudioPlatformDevice.cpp:91-127.
+ */
 static int mt6320_dl_src_rate_code(unsigned int rate)
 {
 	switch (rate) {
@@ -219,6 +282,14 @@ static int mt6320_dl_src_rate_code(unsigned int rate)
 	case 48000:
 		return 8;
 	default:
+		/*
+		 * The field is four bits wide (GENMASK(15,12) above) and the
+		 * ladder above fills every documented code, so there is nothing
+		 * to map a higher rate onto.  88200/96000/192000 in particular
+		 * are rejected rather than approximated: encoding them as 9/10
+		 * would be invention, and letting them fall through would
+		 * record at 48 kHz while reporting otherwise.
+		 */
 		return -EINVAL;
 	}
 }
@@ -229,9 +300,20 @@ static int mt6320_dl_src_rate_code(unsigned int rate)
  * This is deliberately *not* mt6320_dl_src_rate_code(): the uplink uses a
  * different encoding (see MT6320_ABB_AFE_UL_SRC_CON0_H_RATE) and the vendor
  * only decodes 8/16/32/48 kHz, warning - and programming 0 - for anything
- * else.  The codec's capture DAI advertises the full 8k..48k ladder via
- * MT6320_CODEC_RATES, so a rate outside this set can legitimately arrive
- * here; return an error instead of silently recording at the wrong rate.
+ * else.
+ *
+ * That four-rate limit is why the capture DAI advertises
+ * MT6320_CODEC_UL_RATES rather than the full downlink ladder: it is a hardware
+ * restriction, not a conservative choice.  The field itself is four bits wide
+ * (GENMASK(4,1) above) and only these four of its sixteen codes are documented,
+ * so the remaining rates cannot be extended without guessing at the SRC's
+ * divider encoding.  The error return is still kept so a rate reaching this
+ * function by some other route fails loudly instead of silently recording at
+ * the wrong rate - which is exactly what GetULFrequency() does.
+ *
+ * Consequence: capture is limited to 8/16/32/48 kHz even though playback
+ * reaches 12 and 24 kHz.  A 12 kHz or 24 kHz capture stream is refused at
+ * hw_params rather than mis-recorded.
  */
 static int mt6320_ul_src_rate_code(unsigned int rate)
 {
@@ -245,6 +327,7 @@ static int mt6320_ul_src_rate_code(unsigned int rate)
 	case 48000:
 		return 0xf;
 	default:
+		/* Unencodable in this SRC; see above. */
 		return -EINVAL;
 	}
 }
@@ -1308,7 +1391,7 @@ static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 			.stream_name = "DL1 Playback",
 			.channels_min = 1,
 			.channels_max = 2,
-			.rates = MT6320_CODEC_RATES,
+			.rates = MT6320_CODEC_DL_RATES,
 			.formats = MT6320_CODEC_FORMATS,
 		},
 		.capture = {
@@ -1324,7 +1407,12 @@ static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 			.stream_name = "VUL Capture",
 			.channels_min = 1,
 			.channels_max = 1,
-			.rates = MT6320_CODEC_RATES,
+			/*
+			 * Narrower than the playback mask above, and that is a
+			 * hardware limit rather than a copy-and-paste: the uplink
+			 * SRC only encodes these four rates.
+			 */
+			.rates = MT6320_CODEC_UL_RATES,
 			.formats = MT6320_CODEC_FORMATS,
 		},
 	},

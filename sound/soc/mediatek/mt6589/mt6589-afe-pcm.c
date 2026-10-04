@@ -81,6 +81,44 @@
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
 #define AFE_DL1_END		0x0048		/* ring end, inclusive */
+
+/*
+ * DL2, AWB, DAI, VUL - present in the hardware, deliberately not driven.
+ *
+ * Register map (AudDrv_Afe.h:449-463, the AFE's own map, not the codec's):
+ *
+ *	DL1  BASE/CUR/END  +0x40 / +0x44 / +0x48	driven by this driver
+ *	DL2  BASE/CUR/END  +0x50 / +0x54 / +0x58	not driven
+ *	AWB  BASE/END/CUR  +0x70 / +0x78 / +0x7c	not driven
+ *	VUL  BASE/END/CUR  +0x80 / +0x88 / +0x8c	driven by this driver
+ *	DAI  BASE/END/CUR  +0x90 / +0x98 / +0x9c	not driven
+ *
+ * Note DL2 is at +0x50..+0x58, NOT +0x80..; +0x80/+0x8c is VUL, which this
+ * driver already uses for capture.  Anyone adding DL2 by copying the VUL
+ * offsets would silently overwrite the capture ring registers.
+ *
+ * DL2 is deliberately left unimplemented rather than wired up, because nothing
+ * in the vendor tree ever drives it as a stream:
+ *
+ *	- it has no dai_link at all (no reference in mt_soc_dai_routing.c or
+ *	  mt_soc_pcm_routing.c), so there is no PCM to attach to it;
+ *	- the only mention in the playback driver is
+ *	  mt_soc_pcm_afe.c:573, which sets DL2's *fetch format* while starting
+ *	  DL1 - it never enables DL2;
+ *	- DL2 has no channel/mono configuration: SetChannels()
+ *	  (mt_soc_afe_control.c:468-487) handles AWB and VUL only and returns
+ *	  false from its default branch for MEM_DL1 and MEM_DL2 alike.
+ *
+ * Its enable bit does exist (AFE_DAC_CON0, DL2_ON = bit 2,
+ * AudDrv_Afe.h:574) and its rate lives in AFE_DAC_CON1[7:4], so a future
+ * second-output path is possible, but it would be untestable dead code today.
+ *
+ * AWB (asynchronous write buffer, the FM/modem output interface) and DAI are
+ * likewise absent.  The vendor FM radio path is kernel/sound/soc/__mediatek/
+ * mt_soc_fm_i2s2.c, which has no mainline equivalent; wiring it up would need
+ * a second AFE output, the 2nd I2S input and an MT6320 input, none of which
+ * this card's DT or DAI links describe.  Left out on purpose.
+ */
 #define AFE_IRQ_MCU_CON		0x03a0
 #define AFE_IRQ_MCU_CON_IRQ1_ON		BIT(0)
 #define AFE_IRQ_MCU_CON_IRQ2_ON		BIT(1)
@@ -186,6 +224,25 @@ struct mt6589_afe {
  * this same code, because SetMemIfSampleRate() and SetIRQMCUAttribute()
  * both pass their argument through SampleRateTransform() before
  * shifting it into place.  There is no second, sparse table in that path.
+ *
+ * The data sheet's "6 kHz to 96 kHz" audio figure is not achievable on this
+ * part.  SampleRateTransform() - the single function every AFE rate field goes
+ * through - has cases for exactly the nine rates below and falls through to
+ * `return Soc_Aud_I2S_SAMPLERATE_I2S_44K` for anything else
+ * (mt_soc_afe_control.c:374-400).  The shared audio V2 header does define
+ * AFE_88K/96K/174K/192K and the AFE kernel driver's own enum repeats them
+ * (mediatek/platform/common/hardware/audio/V2/include/AudioStreamAttribute.h:50-61,
+ * mt_soc_digital_type.h:256-259), but nothing ever emits those values, so
+ * asking for 88.2 or 96 kHz would reach the hardware as 44.1 kHz.
+ * The 4-bit rate fields are likewise full at the highest documented code (10),
+ * leaving no spare code to extend into.  Those rates are therefore rejected
+ * below with -EINVAL, and mt6589_afe_rate_code_sparse() returning an error is
+ * what keeps them out of the advertised mask.  There is also no 6 kHz code
+ * anywhere in the ladder.
+ *
+ * 12000 and 24000 *are* encodable (codes 2 and 6) and are offered; see the
+ * rate masks below, which have to add them by hand because ALSA gives those
+ * two their own bits.
  */
 
 /*
@@ -197,6 +254,11 @@ struct mt6589_afe {
  * (AudioAfe.c) into AFE_DAC_CON1's DL1 mode, AFE_I2S_CON1 and the IRQ
  * counter select.  The two agree only up to 12 kHz, so using the dense
  * code here programs the wrong divider for nearly every rate.
+ *
+ * The table is verbatim u4SamplingRateConvert[] (AudioAfe.c:66) indexed by the
+ * dense rate enum, so the {0,1,2,4,5,6,8,9,10} code sequence must not be
+ * "tidied" into 0..8.  Values below 8000 and above 48000 return -EINVAL on
+ * purpose - see the rate-transform note above this function.
  */
 static int mt6589_afe_rate_code_sparse(unsigned int rate)
 {
@@ -214,6 +276,20 @@ static int mt6589_afe_rate_code_sparse(unsigned int rate)
 	}
 }
 
+/*
+ * Rates the AFE hardware can encode, as an ALSA rate mask.
+ *
+ * SNDRV_PCM_RATE_8000_48000 looks like it should cover everything the table
+ * above encodes, but it does not contain 12000 or 24000: ALSA assigns those two
+ * bits of their own, added long after the range macro was defined
+ * (SNDRV_PCM_RATE_12000 = 1U<<17, SNDRV_PCM_RATE_24000 = 1U<<18,
+ * include/sound/pcm.h:127-128).  Without the explicit OR they are supported by
+ * the hardware and by the ladder above yet unavailable to userspace.
+ */
+#define MT6589_AFE_RATES	(SNDRV_PCM_RATE_8000_48000 |	\
+				 SNDRV_PCM_RATE_12000 |		\
+				 SNDRV_PCM_RATE_24000)
+
 static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 	{
 		.name = "mt6589-afe-dl1",
@@ -221,7 +297,7 @@ static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 			.stream_name = "DL1 Playback",
 			.channels_min = 1,
 			.channels_max = 2,
-			.rates = SNDRV_PCM_RATE_8000_48000,
+			.rates = MT6589_AFE_RATES,
 			.formats = SNDRV_PCM_FMTBIT_S16_LE,
 		},
 	},
@@ -231,7 +307,22 @@ static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 			.stream_name = "VUL Capture",
 			.channels_min = 1,
 			.channels_max = 2,
-			.rates = SNDRV_PCM_RATE_8000_48000,
+			/*
+			 * The AFE's own VUL ladder does encode 12 kHz and
+			 * 24 kHz, so this side advertises the full AFE set.
+			 *
+			 * A capture stream is nevertheless limited to
+			 * 8/16/32/48 kHz end to end, because the codec's
+			 * uplink SRC encodes only those four rates
+			 * (MT6320_CODEC_UL_RATES, mt6320_ul_src_rate_code()).
+			 * ALSA intersects the per-DAI rate masks of a link, so
+			 * that narrower codec mask is what userspace
+			 * negotiates against and the two extra rates never
+			 * reach hw_params.  They are deliberately not repeated
+			 * here as a restriction: the AFE really can encode
+			 * them, and it is the codec that cannot.
+			 */
+			.rates = MT6589_AFE_RATES,
 			.formats = SNDRV_PCM_FMTBIT_S16_LE,
 		},
 	},
@@ -241,7 +332,7 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	/* on-chip SRAM buffer, no mmap */
 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
-	.rates = SNDRV_PCM_RATE_8000_48000,
+	.rates = MT6589_AFE_RATES,
 	.rate_min = 8000,
 	.rate_max = 48000,
 	.channels_min = 1,
