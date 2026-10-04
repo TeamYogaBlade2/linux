@@ -22,6 +22,18 @@
 #include "mtk_drm_drv.h"
 
 #define DISP_REG_OVL_STA				0x0000
+
+/*
+ * DISPSYS_CONFIG clock-gate control, and the OVL gate within it.  The stock
+ * driver treats a non-zero OVL gate in here as a fault: ddp_path.c:247-252
+ * reports "ovl abnormal, en=%d, clk=%#x" when
+ * DISP_REG_CONFIG_CG_CON0 & DDP_OVL_POWER_BIT is non-zero, with
+ * DDP_OVL_POWER_BIT = 0x30 (ddp_path.c:212).  A set gate bit means the
+ * clock is OFF, which is why the overlay can hold OVL_EN == 1 and still
+ * never leave its reset state of OVL_RUN == 0.
+ */
+#define DISP_REG_OVL_CG_CON0			0x100
+#define DISP_REG_OVL_CG_CON0_OVL_MASK		0x30
 #define DISP_REG_OVL_INTEN					0x0004
 /*
  * OVL_INTEN (0x14003004) and OVL_INTSTA (0x14003008) share one bit map.
@@ -579,12 +591,26 @@ void mtk_ovl_start(struct device *dev)
 	 * emitting sof - worth measuring rather than assuming.
 	 */
 	dev_info(dev,
-		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x\n",
+		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x\n",
 		 readl(ovl->regs + DISP_REG_OVL_EN),
 		 readl(ovl->regs + DISP_REG_OVL_TRIG),
 		 readl(ovl->regs + DISP_REG_OVL_ROI_SIZE),
 		 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
-		 readl(ovl->regs + DISP_REG_OVL_STA));
+		 readl(ovl->regs + DISP_REG_OVL_STA),
+		 readl(ovl->regs + DISP_REG_OVL_CG_CON0));
+
+	/*
+	 * Same fault condition the stock driver checks at ddp_path.c:247:
+	 * OVL_EN clear, or the OVL clock gate still set.  Both leave the
+	 * overlay unable to run while nothing else in the log says why.
+	 */
+	if (!(readl(ovl->regs + DISP_REG_OVL_EN) & 0x1) ||
+	    (readl(ovl->regs + DISP_REG_OVL_CG_CON0) &
+	     DISP_REG_OVL_CG_CON0_OVL_MASK))
+		dev_err(dev,
+			"ovl abnormal: en=%#x cg_con0=%#x - the overlay clock is gated off or the engine is disabled\n",
+			readl(ovl->regs + DISP_REG_OVL_EN),
+			readl(ovl->regs + DISP_REG_OVL_CG_CON0));
 }
 
 void mtk_ovl_stop(struct device *dev)
