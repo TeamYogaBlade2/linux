@@ -1287,7 +1287,7 @@ static irqreturn_t mtk_cam_dev_irq(int irq, void *dev_id)
 static int mtk_cam_register(struct v4l2_subdev *sd)
 {
 	struct mtk_cam *cam = to_mtk_cam(sd);
-	struct vb2_queue *vq = cam->vdev_dev.queue;
+	struct vb2_queue *vq = &cam->vq;
 	int ret;
 
 	/*
@@ -1314,7 +1314,13 @@ static int mtk_cam_register(struct v4l2_subdev *sd)
 	 * vb2_init_queue(), which does not exist in this tree) sets up the
 	 * queue against a driver-global drv_priv and lock, which is the same
 	 * arrangement mali-c55-capture.c uses for the same reason.
+	 *
+	 * video_device::queue is a pointer the core never fills in, so it must
+	 * be assigned here before anything reads it.  Reading it first is a NULL
+	 * dereference: the core dereferences it while registering the node.
 	 */
+	cam->vdev_dev.queue = vq;
+
 	vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	vq->io_modes = VB2_MMAP | VB2_DMABUF;
 	vq->drv_priv = cam;

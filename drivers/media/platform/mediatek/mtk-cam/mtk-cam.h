@@ -453,6 +453,14 @@ struct mtk_cam {
 	 */
 	struct media_pad vdev_pad;
 
+	/*
+	 * video_device::queue is a *pointer*, not an embedded struct, and the
+	 * core never allocates it: the driver owns the queue and assigns the
+	 * pointer.  Keeping the queue here rather than separately allocated
+	 * means there is exactly one lifetime to reason about.
+	 */
+	struct vb2_queue vq;
+
 	/* The buffer currently programmed into the engine, if any. */
 	struct mtk_cam_vb2_buf *active_buf;
 	dma_addr_t active_dma_addr;
