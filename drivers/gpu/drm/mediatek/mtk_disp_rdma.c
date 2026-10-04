@@ -336,11 +336,17 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	if (!rdma->dbg_done) {
 		rdma->dbg_done = true;
 		dev_info(dev,
-			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n",
+			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n"
+			 "rdma0: mem_con=%#x src_pitch=%#x start_addr=%#x gmc1=%#x fifo_con=%#x\n",
 			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
 			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
 			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
-			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1));
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1),
+			 readl(rdma->regs + DISP_RDMA_MEM_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
+			 readl(rdma->regs + rdma->data->mem_start_addr_reg),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_GMC_SETTING_1),
+			 readl(rdma->regs + DISP_REG_RDMA_FIFO_CON));
 	}
 }
 
