@@ -297,6 +297,9 @@ struct mtk_disp_ovl {
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
+	/* Rate limiting for a fault that persists indefinitely. */
+	unsigned int			intsta_reported;
+	u32				last_intsta;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -337,23 +340,39 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
  * RDMA0 not idle means RDMA stalled fetching, both idle means nothing
  * is triggering start-of-frame.
 	 */
-	if (reg & (priv->data->fme_und_bit | priv->data->rdma0_eof_abn_bit)) {
+	/*
+	 * Rate limited.  These conditions persist for as long as the engine
+	 * is misconfigured, and the interrupt is level triggered, so an
+	 * unconditional print here fires on every frame: it filled a 16 MB
+	 * log buffer in seconds and pushed the rest of the boot out of
+	 * pstore entirely.  Print the first few, then stay quiet unless the
+	 * status changes, saying how many were dropped.
+	 */
+	if (reg != priv->last_intsta)
+		priv->intsta_reported = 0;
+
+	if (priv->intsta_reported < 4) {
 		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
 
-		pr_err("OVL: underflow intsta=%#x sta=%#x (run=%d rdma0_idle=%d)\n",
-		       reg, sta, !!(sta & 1), !!(sta & 0x2));
-	}
+		pr_err("OVL: underflow intsta=%#x sta=%#x (run=%d rdma0_idle=%d)%s\n",
+		       reg, sta, !!(sta & 1), !!(sta & 0x2),
+		       priv->intsta_reported == 3 ?
+		       " (further messages suppressed)" : "");
 
-	if (reg & priv->data->fme_und_bit)
-		pr_err("OVL: OVL frame underflow\n");
-	if (reg & priv->data->rdma0_eof_abn_bit)
-		pr_err("OVL: RDMA0 didn't complete frame\n");
-	if (reg & priv->data->rdma1_eof_abn_bit)
-		pr_err("OVL: RDMA1 didn't complete frame\n");
-	if (reg & priv->data->rdma0_fifo_und_bit)
-		pr_err("OVL: RDMA0 FIFO underflow\n");
-	if (reg & priv->data->rdma1_fifo_und_bit)
-		pr_err("OVL: RDMA1 FIFO underflow\n");
+		if (reg & priv->data->fme_und_bit)
+			pr_err("OVL: OVL frame underflow\n");
+		if (reg & priv->data->rdma0_eof_abn_bit)
+			pr_err("OVL: RDMA0 didn't complete frame\n");
+		if (reg & priv->data->rdma1_eof_abn_bit)
+			pr_err("OVL: RDMA1 didn't complete frame\n");
+		if (reg & priv->data->rdma0_fifo_und_bit)
+			pr_err("OVL: RDMA0 FIFO underflow\n");
+		if (reg & priv->data->rdma1_fifo_und_bit)
+			pr_err("OVL: RDMA1 FIFO underflow\n");
+
+		priv->intsta_reported++;
+		priv->last_intsta = reg;
+	}
 
 	/*
  * Acknowledge every status bit this block can raise, not merely the
