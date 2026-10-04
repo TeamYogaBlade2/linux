@@ -448,17 +448,31 @@ static int mt6320_led_take_boost(struct mt6320_led *led, bool *acquired)
  * set on failure is what makes the retry possible: the state stays consistent,
  * the rail stays counted as held, and the next hw_off() drains it.
  */
-static void mt6320_led_drop_boost(struct mt6320_led *led)
+/*
+ * Release this sink's reference on the shared boost rail.
+ *
+ * Returns 0 when there is nothing to release or the release succeeded, and
+ * a negative errno when the release failed and boost_ref was left set to stay
+ * consistent with the bst_users that mt6320_led_bst_clk() rolled back.  The
+ * caller decides whether that is worth reporting: the LED has already been
+ * switched off by then, so it must not turn a successful brightness change
+ * into an error.
+ */
+static int mt6320_led_drop_boost(struct mt6320_led *led)
 {
 	struct mt6320_leds *leds = led->parent;
+	int ret;
 
 	if (!led->boost_ref)
-		return;
+		return 0;
 
-	if (mt6320_led_bst_clk(leds, false))
-		return;
+	ret = mt6320_led_bst_clk(leds, false);
+	if (ret)
+		return ret;
 
 	led->boost_ref = false;
+
+	return 0;
 }
 
 /*
@@ -875,8 +889,18 @@ static int mt6320_led_hw_off(struct mt6320_led *led)
 	 * power cost and not a correctness problem: the state is coherent and
 	 * the next brightness 0 on this sink - or mt6320_led_remove() - drains
 	 * it.
+	 *
+	 * Report it, but only after the sink is already dark.  Failing this
+	 * write did not stop the LED from turning off, so the brightness
+	 * change itself succeeded and the LED core must not see an error for
+	 * it; what failed is releasing a shared rail, which is worth logging
+	 * rather than swallowing because otherwise it is invisible until
+	 * somebody notices the boost clock never parked.
 	 */
-	mt6320_led_drop_boost(led);
+	if (!mt6320_led_drop_boost(led) && led->boost_ref)
+		dev_warn(led->parent->dev,
+			 "failed to release boost clock for channel %u; rail left on\n",
+			 led->channel);
 
 	return 0;
 }
