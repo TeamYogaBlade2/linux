@@ -587,27 +587,38 @@ static void mtk_g2d_drm_surf_fini(struct mtk_g2d_drm_surf *surf)
 }
 
 /**
- * mtk_g2d_clip_rect - clamp a rectangle to what both surfaces can address.
+ * mtk_g2d_clip_rect - narrow a rectangle to what both surfaces can address.
  * @src: source surface, which must be a real image
  * @dst: destination surface, which must be a real image
- * @x: origin in pixels, applied to both
- * @y: origin in pixels, applied to both
+ * @src_x, @src_y: origin within the source, in pixels
+ * @dst_x, @dst_y: origin within the destination, in pixels
  * @w: requested width in pixels
  * @h: requested height in pixels
  * @out_w: clipped width in pixels
  * @out_h: clipped height in pixels
  *
- * The engine has one origin for both surfaces, so the rectangle it can express
- * is bounded by the smaller of the two images, offset by the shared origin.
- * Clipping here is what keeps a caller-supplied rectangle from running off the
- * end of either buffer: the pitch registers are the only thing bounding a row,
- * and nothing else in the engine knows where the buffer ends.
+ * The engine has one scan window sized once for both ports, so the rectangle
+ * has to be expressible in both surfaces: it is bounded by the narrower of the
+ * two, offset from each surface by that surface's own origin.  Clipping here is
+ * what keeps a caller-supplied rectangle from running off the end of either
+ * buffer: the pitch registers are the only thing bounding a row, and nothing
+ * else in the engine knows where the buffer ends.
  *
- * Returns 0 and a non-empty rectangle, or -EINVAL if nothing is left.
+ * @w and @h are clipped down to what both surfaces hold and then to the
+ * engine's 2048 scan window.  A larger request is truncated rather than
+ * refused, so a caller asking to copy a whole screen gets the part the engine
+ * can express instead of nothing at all.
+ *
+ * Returns 0 and a non-empty rectangle, or -EINVAL.  @out_w and @out_h are only
+ * written on success, so a caller that fails here cannot pass a stale zero on
+ * to the engine - a zero-area rectangle would be rejected downstream anyway,
+ * but by then it would already be a much less specific error.
  */
 static int mtk_g2d_clip_rect(const struct mtk_g2d_drm_surf *src,
 			     const struct mtk_g2d_drm_surf *dst,
-			     u32 x, u32 y, u32 w, u32 h,
+			     u32 src_x, u32 src_y,
+			     u32 dst_x, u32 dst_y,
+			     u32 w, u32 h,
 			     u32 *out_w, u32 *out_h)
 {
 	u32 src_w, dst_w, src_h, dst_h;
@@ -624,42 +635,38 @@ static int mtk_g2d_clip_rect(const struct mtk_g2d_drm_surf *src,
 	dst_h = dst->height;
 
 	/*
-	 * The origin must be inside both images.  A rectangle starting past
-	 * the edge of either buffer is not clamped - it is rejected, because
-	 * there is no meaningful part of it left to keep.
+	 * Each origin must be inside its own image, and the rectangle must
+	 * start within both.  A rectangle starting past the edge of either
+	 * buffer is not clamped - it is rejected, because there is no
+	 * meaningful part of it left to keep.
 	 */
-	if (x >= src_w || x >= dst_w || y >= src_h || y >= dst_h)
+	if (src_x >= src_w || src_x >= src_h || dst_x >= dst_w || dst_x >= dst_h)
 		return -EINVAL;
 
 	/*
-	 * g2d_check_offset() caps the origin at the same 2048 bound it caps the
+	 * g2d_check_rect() caps each origin at the same 2048 bound it caps the
 	 * scan window at, so an origin past that is refused there.  Refusing it
 	 * here too, with the same bound spelled out, keeps the reason attached
 	 * to the framebuffer rather than to a number the caller passed in.
 	 */
-	if (x > 2048 || y > 2048)
+	if (src_x > 2048 || src_y > 2048 || dst_x > 2048 || dst_y > 2048)
 		return -EINVAL;
 
-	src_w -= x;
-	dst_w -= x;
-	src_h -= y;
-	dst_h -= y;
+	src_w -= src_x;
+	src_h -= src_y;
+	dst_w -= dst_x;
+	dst_h -= dst_y;
 
 	w = min3(w, src_w, dst_w);
 	h = min3(h, src_h, dst_h);
 	if (!w || !h)
 		return -EINVAL;
 
-	/*
-	 * W2M_SIZE holds the width and height as 12-bit fields documented as
-	 * 1..2048.  A larger request is truncated rather than refused, so a
-	 * caller asking to copy a whole screen gets the part the engine can
-	 * express instead of nothing at all.
-	 */
+	/* W2M_SIZE holds width and height as 12-bit fields, documented 1..2048. */
 	w = min(w, 2048u);
-	if (!w)
-		return -EINVAL;
 	h = min(h, 2048u);
+	if (!w || !h)
+		return -EINVAL;
 
 	*out_w = w;
 	*out_h = h;
@@ -683,112 +690,260 @@ static int mtk_g2d_clip_rect(const struct mtk_g2d_drm_surf *src,
  *     This is the same pairing drm_gem_vmap()/drm_gem_vunmap() use, for the
  *     same reason.
  *
- *   - The engine has stopped before the locks are dropped.  mtk_g2d_blt() and
- *     mtk_g2d_fill() poll G2D_STATUS to idle before returning, so releasing
- *     the locks afterwards is not a race: there is nothing left running that
- *     could touch the memory.
+ *   - The engine has stopped before the locks are dropped.  mtk_g2d_blt_rect()
+ *     and mtk_g2d_fill() both block in g2d_wait_idle() until G2D_STATUS reads
+ *     idle before they return, so releasing the locks afterwards is not a
+ *     race: there is nothing left running that could touch the memory.
  *
  * That is why this is synchronous and installs no fence.  A fence would let
  * the source be released earlier, which is a real benefit, but it would also
  * mean the engine outliving this call - and the display path here has no
  * fencing infrastructure to hang one on, because nothing in the OVL/RDMA path
  * ever installs one either.  A correct synchronous wait is the honest choice:
- * it is bounded (100 ms, then a warm reset), it cannot hang, and it leaves no
- * window in which a buffer is unlocked while the engine is still running.
+ * it is bounded (100 ms), it cannot hang, and it leaves no window in which a
+ * buffer is unlocked while the engine is still running.
  *
- * No engine lock is taken here: mtk_g2d_blt()/mtk_g2d_fill() take g2d->lock
- * internally around register programming, and this code never programs a
- * register itself, so there is nothing here that could race with another user
+ * The one qualifier on that claim is the timeout path, and it is worth stating
+ * plainly rather than glossing.  On -ETIMEDOUT g2d_start() calls g2d_recover(),
+ * which performs the data sheet's warm reset (G2D_START = 0, G2D_RESET = 1,
+ * poll G2D_STATUS, G2D_RESET = 0).  That is a best-effort recovery: if
+ * G2D_STATUS still reads BUSY afterwards, g2d_reset() logs "engine may be
+ * wedged" and the reset is de-asserted regardless, because leaving WRST
+ * asserted would brick the block for every later operation.  In that case the
+ * engine may still be running, and the buffer may therefore still be being
+ * read or written after the locks are dropped.
+ *
+ * That residual risk is accepted rather than fixed, because closing it properly
+ * needs a stronger recovery than this driver can justify: the data sheet
+ * documents HRST and APB_RESET but the vendor tree never programs this block at
+ * all, so the semantics of a hard reset are unverified, and inventing a
+ * recovery sequence on this hardware risks turning a slow blit into a bus hang.
+ * A caller that cannot tolerate the best-effort case should treat -ETIMEDOUT as
+ * "the engine state is now unknown" and stop using the blitter, which is why
+ * the errno is surfaced rather than swallowed.
+ *
+ * Locking order.  A blit takes two reservation locks, and two concurrent
+ * blits of the same pair of buffers in opposite directions would deadlock if
+ * the order depended on which buffer was passed first.  It does not:
+ * mtk_g2d_drm_lock_pair() always takes them in reservation-object pointer
+ * order, which is one global order over every buffer in the system, and
+ * short-circuits the same-buffer case that has no order to speak of.  The
+ * reservation locks are therefore the only locks held across the engine
+ * operation, and they are always released in the reverse of the order taken.
+ *
+ * No engine lock is taken here: mtk_g2d_blt_rect()/mtk_g2d_fill() take
+ * g2d->lock internally around register programming, and this code never programs
+ * a register itself, so there is nothing here that could race with another user
  * of the engine.
  */
 
 /**
  * mtk_g2d_drm_lock - take a surface's reservation object.
- * @surf: surface to lock; a disabled plane has nothing to lock
+ * @surf: surface to lock
+ * @owner: set to the reservation object actually locked, for the pair case
  *
- * drm_gem_lock() is dma_resv_lock(obj->resv, NULL); the NULL acquire context is
- * documented as legal for locking a reservation object against itself, and
- * drm_gem_lock() is the established way for a DRM client to take it.
+ * drm_gem_lock() is dma_resv_lock(obj->resv, NULL), and a NULL acquire context
+ * is documented as legal only for locking a reservation object against itself.
+ * That is exactly the wrong property for a pair of buffers: a NULL context
+ * carries no record of what this task already holds, so if the two surfaces
+ * turn out to be the same object the second lock blocks on a mutex the first
+ * one is still holding, and the task sleeps forever.  A pair lock therefore
+ * uses a real ww_acquire_ctx, and returns -EALREADY when the two surfaces are
+ * one and the same buffer.
  *
  * Not interruptible, deliberately: what is being waited on is another G2D user
  * finishing a copy that is itself bounded to 100 ms, so bailing out with
  * -EINTR halfway through owning one of two buffers would cost more state to
  * unwind than it saves.
  */
-static void mtk_g2d_drm_lock(struct mtk_g2d_drm_surf *surf)
+static int mtk_g2d_drm_lock(struct mtk_g2d_drm_surf *surf,
+			    struct ww_acquire_ctx *ctx)
 {
-	if (surf->obj)
-		drm_gem_lock(surf->obj);
+	/* A disabled plane has nothing to lock. */
+	if (!surf->obj)
+		return 0;
+
+	return dma_resv_lock(surf->obj->resv, ctx);
 }
 
 static void mtk_g2d_drm_unlock(struct mtk_g2d_drm_surf *surf)
 {
 	if (surf->obj)
-		drm_gem_unlock(surf->obj);
+		dma_resv_unlock(surf->obj->resv);
 }
 
 /**
- * mtk_g2d_drm_lock_pair - lock two surfaces.
- * @a: first surface to lock
- * @b: second surface to lock
+ * mtk_g2d_drm_lock_pair - lock two surfaces in a deadlock-free order.
+ * @a: first surface
+ * @b: second surface
+ *
+ * Both buffers must be held for the whole operation - the engine reads the
+ * source while it writes the destination, so locking only one would leave the
+ * other exposed.
+ *
+ * Two things make the order here safe rather than merely conventional:
+ *
+ *   - The locks are always taken in reservation-object pointer order, which
+ *     is a single global order over every buffer in the system.  Two
+ *     concurrent blits of the same pair of buffers, one in each direction,
+ *     therefore queue up behind each other instead of deadlocking.  Ordering
+ *     by "which argument it was" instead would not: A->B and B->A are both
+ *     reachable, and the second thread would take the first lock the first
+ *     thread is holding and wait for it forever.
+ *
+ *   - The same-object case is short-circuited.  Two framebuffers over one GEM
+ *     object share one reservation object, so there is no order to establish
+ *     and taking the lock twice would be a self-deadlock.  One lock is taken
+ *     instead of two: an in-place copy within one buffer is legal - the
+ *     overlap, not the sharing, is what mtk_g2d_blt_rect() rejects - so this
+ *     is not an error case, just a smaller lock set.
+ *
+ * Returns 0, or the error from the first lock that could not be taken, in
+ * which case anything already taken has been released again.
  */
-static void mtk_g2d_drm_lock_pair(struct mtk_g2d_drm_surf *a,
-				  struct mtk_g2d_drm_surf *b)
+static int mtk_g2d_drm_lock_pair(struct mtk_g2d_drm_surf *a,
+				 struct mtk_g2d_drm_surf *b)
 {
+	struct ww_acquire_ctx ctx;
+	struct mtk_g2d_drm_surf *first, *second;
+	int ret;
+
 	/*
-	 * Both buffers must be held for the whole operation - the engine reads
-	 * the source while it writes the destination, so locking only one would
-	 * leave the other exposed - and always in this order, so a concurrent
-	 * G2D user cannot deadlock against this one.
+	 * One reservation object means one lock is already enough, and taking
+	 * it twice is a self-deadlock.  An in-place copy within one buffer is
+	 * legal (mtk_g2d_blt_rect() rejects only *overlapping* rectangles), so
+	 * this is not an error - just one lock instead of two.
 	 */
-	mtk_g2d_drm_lock(a);
-	mtk_g2d_drm_lock(b);
+	if (a->obj && a->obj == b->obj) {
+		first = a;
+		second = NULL;
+	} else {
+		/* Deterministic global order, independent of argument position. */
+		if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+			first = b;
+			second = a;
+		} else {
+			first = a;
+			second = b;
+		}
+	}
+
+	ww_acquire_init(&ctx, &reservation_ww_class);
+	ret = mtk_g2d_drm_lock(first, &ctx);
+	if (ret)
+		return ret;
+
+	if (second) {
+		ret = mtk_g2d_drm_lock(second, &ctx);
+		if (ret) {
+			mtk_g2d_drm_unlock(first);
+			return ret;
+		}
+	}
+
+	ww_acquire_fini(&ctx);
+
+	return 0;
 }
 
 static void mtk_g2d_drm_unlock_pair(struct mtk_g2d_drm_surf *a,
 				    struct mtk_g2d_drm_surf *b)
 {
-	mtk_g2d_drm_unlock(b);
-	mtk_g2d_drm_unlock(a);
+	/* Strict reverse of the order mtk_g2d_drm_lock_pair() took them in. */
+	if (a->obj && a->obj == b->obj) {
+		mtk_g2d_drm_unlock(a);
+		return;
+	}
+
+	if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+		mtk_g2d_drm_unlock(a);
+		mtk_g2d_drm_unlock(b);
+	} else {
+		mtk_g2d_drm_unlock(b);
+		mtk_g2d_drm_unlock(a);
+	}
 }
 
 /**
- * mtk_g2d_drm_blt - copy a rectangle between two DRM framebuffers.
- * @g2d: the engine
- * @src_fb: source framebuffer
- * @dst_fb: destination framebuffer
+ * mtk_g2d_drm_blt - copy a rectangle between two DRM framebuffers at one
+ *		    shared origin.
  * @x: origin in pixels, applied to both surfaces
  * @y: origin in pixels, applied to both surfaces
- * @width: rectangle width in pixels
- * @height: rectangle height in pixels
  *
- * The engine has no independent source and destination origins, so this can
- * only express a same-coordinate copy.  That is a property of the hardware and
- * of mtk_g2d_blt(), not a simplification made here; a caller that needs to
- * move a region to a different position must pre-compose it itself.
+ * The shared-origin form of mtk_g2d_drm_blt_rect(), kept because a
+ * same-coordinate copy is the common case and it is the smaller call.
  *
- * Both framebuffers must be single-plane, linear and in a format the engine can
- * encode; anything else is -EINVAL rather than an approximation.
- *
- * Returns 0 once the engine is idle, or a negative errno.
+ * Returns 0 once the engine is idle, or a negative errno: -ENODEV if there is
+ * no blitter, -EINVAL for a bad argument or an unsupported framebuffer, or
+ * -ETIMEDOUT if the engine did not stop in time.
  */
 int mtk_g2d_drm_blt(struct mtk_g2d *g2d,
 		    struct drm_framebuffer *src_fb,
 		    struct drm_framebuffer *dst_fb,
 		    u32 x, u32 y, u32 width, u32 height)
 {
+	if (!g2d)
+		return -ENODEV;
+
+	/* Shared origin: the same x/y on both surfaces, which is the whole
+	 * difference between this and mtk_g2d_drm_blt_rect().
+	 */
+	return mtk_g2d_drm_blt_rect(g2d, src_fb, x, y, dst_fb, x, y,
+				    width, height);
+}
+
+/**
+ * mtk_g2d_drm_blt_rect - copy a rectangle between two DRM framebuffers at
+ *			  independent origins.
+ * @src_x, @src_y: origin within the source framebuffer, in pixels
+ * @dst_x, @dst_y: origin within the destination framebuffer, in pixels
+ *
+ * The engine has one scan window rather than two rectangles, so @width and
+ * @height apply to both surfaces and the source and destination regions can
+ * never differ in size.  Their origins can differ freely, which is what this
+ * entry point adds over mtk_g2d_drm_blt().
+ *
+ * Each origin is clipped against its own framebuffer and the rectangle is
+ * sized to what both can supply, so a rectangle that runs off either edge is
+ * narrowed rather than trusted.
+ *
+ * An in-place copy is allowed when the two rectangles do not overlap;
+ * mtk_g2d_blt_rect() rejects an overlapping one.  Overlapping is reported
+ * before either buffer is locked, so no lock is left held.
+ *
+ * Returns 0 once the engine is idle, or a negative errno: -ENODEV if there is
+ * no blitter, -EINVAL for a bad argument, an unsupported framebuffer or an
+ * overlapping in-place copy, or -ETIMEDOUT if the engine did not stop in time.
+ */
+int mtk_g2d_drm_blt_rect(struct mtk_g2d *g2d,
+			 struct drm_framebuffer *src_fb,
+			 u32 src_x, u32 src_y,
+			 struct drm_framebuffer *dst_fb,
+			 u32 dst_x, u32 dst_y,
+			 u32 width, u32 height)
+{
 	struct mtk_g2d_drm_surf src, dst;
+	struct device *dev;
 	u32 w, h;
 	int ret;
 
-	if (!g2d || !src_fb || !dst_fb)
+	/*
+	 * A NULL engine is "this DRM device has no blitter", which is an
+	 * ordinary configuration - the MDP device has no G2D - so it is its own
+	 * errno rather than a NULL dereference of the device behind it.
+	 */
+	if (!g2d)
+		return -ENODEV;
+	if (!src_fb || !dst_fb)
 		return -EINVAL;
 
-	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), src_fb, &src);
+	dev = mtk_g2d_device(g2d);
+
+	ret = mtk_g2d_drm_surf_init(dev, src_fb, &src);
 	if (ret)
 		return ret;
 
-	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), dst_fb, &dst);
+	ret = mtk_g2d_drm_surf_init(dev, dst_fb, &dst);
 	if (ret)
 		goto out_src;
 
@@ -798,19 +953,22 @@ int mtk_g2d_drm_blt(struct mtk_g2d *g2d,
 		goto out_dst;
 	}
 
-	ret = mtk_g2d_clip_rect(&src, &dst, x, y, width, height, &w, &h);
+	ret = mtk_g2d_clip_rect(&src, &dst, src_x, src_y,
+				dst_x, dst_y, width, height, &w, &h);
 	if (ret)
 		goto out_dst;
 
-	mtk_g2d_drm_lock_pair(&src, &dst);
+	ret = mtk_g2d_drm_lock_pair(&src, &dst);
+	if (ret)
+		goto out_dst;
 
-	ret = mtk_g2d_blt(g2d,
-			  src.addr, src.pitch, src.g2d_fmt,
-			  dst.addr, dst.pitch, dst.g2d_fmt,
-			  x, y, w, h);
+	ret = mtk_g2d_blt_rect(g2d,
+			       src.addr, src.pitch, src.g2d_fmt, src_x, src_y,
+			       dst.addr, dst.pitch, dst.g2d_fmt, dst_x, dst_y,
+			       w, h);
 
 	/*
-	 * The engine is idle here whether or not it succeeded: mtk_g2d_blt()
+	 * The engine is idle here whether or not it succeeded: mtk_g2d_blt_rect()
 	 * waits for that, and on a timeout it warm-resets before returning.
 	 * So dropping the locks on both paths is safe, and not dropping them
 	 * on the error path would be a leak, not caution.
@@ -841,7 +999,9 @@ out_src:
  * top byte of a constant fill is ignored by both encodings, which is why an
  * XRGB framebuffer does not need a separate one.
  *
- * Returns 0 once the engine is idle, or a negative errno.
+ * Returns 0 once the engine is idle, or a negative errno: -ENODEV if there is
+ * no blitter, -EINVAL for a bad argument or an unsupported framebuffer, or
+ * -ETIMEDOUT if the engine did not stop in time.
  */
 int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
 		     struct drm_framebuffer *dst_fb,
@@ -851,7 +1011,10 @@ int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
 	u32 w, h;
 	int ret;
 
-	if (!g2d || !dst_fb)
+	/* A device with no G2D is an ordinary configuration, not a crash. */
+	if (!g2d)
+		return -ENODEV;
+	if (!dst_fb)
 		return -EINVAL;
 
 	ret = mtk_g2d_drm_surf_init(mtk_g2d_device(g2d), dst_fb, &dst);
@@ -865,11 +1028,10 @@ int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
 
 	/*
 	 * The fill has only one surface, but the rectangle is still clipped
-	 * against a second, empty one so that the shared origin bound is
-	 * applied the same way as in the blit.  That is not a trick to avoid
-	 * duplicating the check: it means one origin rule exists, and a caller
-	 * cannot pass an origin that is legal for a blit and illegal for a
-	 * fill.
+	 * against a second, empty one so that the origin rule is applied the
+	 * same way as in the blit.  That is not a trick to avoid duplicating
+	 * the check: it means one origin rule exists, and a caller cannot pass
+	 * an origin that is legal for a blit and illegal for a fill.
 	 */
 	memset(&empty, 0, sizeof(empty));
 	empty.width = dst.width;
@@ -877,11 +1039,13 @@ int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
 	empty.pitch = dst.pitch;
 	empty.bpp = dst.bpp;
 
-	ret = mtk_g2d_clip_rect(&dst, &empty, x, y, width, height, &w, &h);
+	ret = mtk_g2d_clip_rect(&dst, &empty, x, y, x, y, width, height, &w, &h);
 	if (ret)
 		goto out;
 
-	mtk_g2d_drm_lock(&dst);
+	ret = mtk_g2d_drm_lock(&dst, NULL);
+	if (ret)
+		goto out;
 
 	ret = mtk_g2d_fill(g2d, dst.addr, dst.pitch, dst.g2d_fmt,
 			   x, y, w, h, color);

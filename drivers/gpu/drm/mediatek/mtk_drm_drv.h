@@ -101,18 +101,38 @@ extern struct platform_driver mtk_padding_driver;
  * than in the G2D object because mtk-g2d.o is deliberately free of DRM
  * dependencies.
  *
- * All of them are synchronous: the engine is idle by the time they return.
+ * Contract common to all of them:
+ *
+ *  - Synchronous.  The engine is idle by the time they return, so there is no
+ *    fence to wait on and the buffers can be released the moment they do.
+ *
+ *  - They may block, and can sleep: they take a reservation lock on each
+ *    buffer for the whole operation.
+ *
+ *  - They refuse rather than guess.  A framebuffer that is not single-plane,
+ *    linear and in a format the engine can encode is -EINVAL, and an origin,
+ *    pitch or size the registers cannot hold is -EINVAL too.  A rectangle
+ *    larger than the buffers hold is clipped down to what both surfaces can
+ *    supply.  No argument is rounded into something the caller did not ask
+ *    for.  The one error that is not a refusal is -ETIMEDOUT, which means the
+ *    engine did not stop in time and its state is unknown.
+ *
+ *  - @g2d may be NULL, meaning the DRM device has no blitter.  That is an
+ *    ordinary configuration - the MDP device has none - so it returns
+ *    -ENODEV.  A caller that wants to fall back rather than fail must test
+ *    mtk_drm_private::g2d itself before calling.
  */
 
 /**
- * mtk_g2d_drm_blt - copy a rectangle between two DRM framebuffers.
- * @g2d: the engine, from mtk_drm_private::g2d
+ * mtk_g2d_drm_blt - copy a rectangle at one origin shared by both surfaces.
  * @src_fb, @dst_fb: single-plane linear framebuffers
  * @x, @y: one origin, applied to both surfaces
  * @width, @height: rectangle, clipped to what both buffers contain
  *
- * The engine has no independent source and destination origins, so this can
- * only express a same-coordinate copy.  Returns 0 once the engine is idle.
+ * The shared-origin form of mtk_g2d_drm_blt_rect().  Use that one to move a
+ * rectangle to a different position.
+ *
+ * Returns 0 once the engine is idle, or -ENODEV, -EINVAL or -ETIMEDOUT.
  */
 int mtk_g2d_drm_blt(struct mtk_g2d *g2d,
 		    struct drm_framebuffer *src_fb,
@@ -120,10 +140,32 @@ int mtk_g2d_drm_blt(struct mtk_g2d *g2d,
 		    u32 x, u32 y, u32 width, u32 height);
 
 /**
+ * mtk_g2d_drm_blt_rect - copy a rectangle between two independent origins.
+ * @src_x, @src_y: origin within @src_fb, in pixels
+ * @dst_x, @dst_y: origin within @dst_fb, in pixels
+ * @width, @height: rectangle, clipped to what both buffers contain
+ *
+ * @width and @height are one size for both surfaces, because the engine has a
+ * single scan window and no per-surface size register.  The origins may differ
+ * freely; each is validated against its own framebuffer.
+ *
+ * An in-place copy is allowed when the two rectangles do not overlap; an
+ * overlapping one is -EINVAL.
+ *
+ * Returns 0 once the engine is idle, or -ENODEV, -EINVAL or -ETIMEDOUT.
+ */
+int mtk_g2d_drm_blt_rect(struct mtk_g2d *g2d,
+			 struct drm_framebuffer *src_fb,
+			 u32 src_x, u32 src_y,
+			 struct drm_framebuffer *dst_fb,
+			 u32 dst_x, u32 dst_y,
+			 u32 width, u32 height);
+
+/**
  * mtk_g2d_drm_fill - fill a rectangle of a DRM framebuffer with a constant.
  * @color: an ordinary DRM pixel value in the destination's format
  *
- * Returns 0 once the engine is idle.
+ * Returns 0 once the engine is idle, or -ENODEV, -EINVAL or -ETIMEDOUT.
  */
 int mtk_g2d_drm_fill(struct mtk_g2d *g2d,
 		     struct drm_framebuffer *dst_fb,

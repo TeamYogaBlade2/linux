@@ -358,6 +358,9 @@ static int g2d_check_fmt(u32 format)
 /**
  * g2d_check_rect - validate one surface before any register is programmed.
  * @pitch: pitch of that surface, in bytes
+ * @bpp: bytes per pixel of that surface
+ * @x: x origin of the rectangle on this surface, in pixels
+ * @y: y origin of the rectangle on this surface, in pixels
  * @width: scan window width, in pixels
  * @height: scan window height, in pixels
  *
@@ -366,8 +369,21 @@ static int g2d_check_fmt(u32 format)
  * so an over-large pitch would be silently truncated to a different (and
  * possibly zero) pitch, and W2M_SIZE holds WIDTH and HEIGHT as 12 bits
  * documented as 1..2048.
+ *
+ * The rectangle must fit within a single row, origin included: (x + width) *
+ * bpp must not exceed the pitch.  Checking only width * bpp <= pitch would
+ * leave a rectangle that starts partway along a row free to run off the end of
+ * it, and for the destination that is a write into memory the caller never
+ * handed over.  The origin is baked into the address the engine is given, so
+ * the bound has to be checked against it as well as against the pitch.
+ *
+ * @height is deliberately not bounded here.  The engine is only ever told a
+ * starting address and a pitch, so it cannot walk more rows than the caller
+ * actually owns; bounding the height is the caller's job, and
+ * mtk_g2d_clip_rect() does it against the framebuffer's own height.
  */
-static int g2d_check_rect(u32 pitch, u32 bpp, u32 width, u32 height)
+static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
+			  u32 width, u32 height)
 {
 	if (!width || width > G2D_MAX_WIDTH)
 		return -EINVAL;
@@ -375,12 +391,22 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 width, u32 height)
 		return -EINVAL;
 
 	/*
-	 * Pitch is in bytes: pitch / bpp must be at least the ROI width, and
-	 * the pitch must be a whole number of pixels.
+	 * Pitch is in bytes: the entire rectangle, origin included, must fit in
+	 * one row, and the pitch must be a whole number of pixels.  The sum is
+	 * evaluated in u64 so a large x cannot wrap past the check on a
+	 * configuration where dma_addr_t is 32 bits wide.
 	 */
 	if (pitch > G2D_PITCH_MAX)
 		return -EINVAL;
-	if (pitch < width * bpp || pitch % bpp)
+	if ((u64)(x + width) * bpp > pitch || pitch % bpp)
+		return -EINVAL;
+
+	/*
+	 * The origin is capped at the same scan-window bound the size is
+	 * checked against, so that the whole request is describable in the
+	 * register set without further reasoning.
+	 */
+	if (x > G2D_MAX_WIDTH || y > G2D_MAX_HEIGHT)
 		return -EINVAL;
 
 	return 0;
@@ -423,21 +449,15 @@ static int g2d_check_align(dma_addr_t addr,
  * The caller must already have run g2d_check_rect() on this surface, which
  * bounds pitch and keeps x * bpp well clear of any overflow.
  *
- * x and y are additionally capped at the documented maximum scan window
- * (G2D_MAX_WIDTH/HEIGHT).  That is a deliberate limit on the exported
- * contract rather than a hardware requirement - the engine can address a row
- * at an offset past the window, and a wide RGB888 pitch would allow an x
- * slightly above 2048 - but keeping the origin inside the same bound the
- * window size is checked against means the whole request is describable in the
- * register set without further reasoning.
+ * There is no hardware offset register in this block, so the origin is folded
+ * into the base address here, in software, before it reaches the engine.  That
+ * is also why the source and destination origins are independent of each
+ * other: they are two separate base-address registers.
  */
 static int g2d_check_offset(dma_addr_t base, u32 pitch, u32 bpp,
 			     u32 x, u32 y, dma_addr_t *addr)
 {
 	u64 offset;
-
-	if (x > G2D_MAX_WIDTH || y > G2D_MAX_HEIGHT)
-		return -EINVAL;
 
 	offset = (u64)y * pitch + (u64)x * bpp;
 	if (offset + base > (u64)(dma_addr_t)~0ULL)
@@ -449,29 +469,182 @@ static int g2d_check_offset(dma_addr_t base, u32 pitch, u32 bpp,
 }
 
 /**
- * mtk_g2d_blt - copy one rectangular region between two surfaces.
- * @x: x offset, in pixels, applied to both the source and the destination
- * @y: y offset, in pixels, applied to both the source and the destination
+ * g2d_program_blt - program one bitblt, with both origins already applied.
+ * @g2d: device
+ * @src_addr: source start address, already advanced past the source origin
+ * @src_pitch: source pitch, in bytes
+ * @src_fmt: source CLRFMT
+ * @dst_addr: destination start address, already advanced past the destination
+ *	origin
+ * @dst_pitch: destination pitch, in bytes
+ * @dst_fmt: destination CLRFMT
+ * @width: scan window width, in pixels
+ * @height: scan window height, in pixels
  *
- * Limitation: the 2D engine has no independent source and destination
- * origins, so a single x/y pair is used for both surfaces.  This function
- * therefore only expresses a same-coordinate copy - it cannot blit a region
- * from one position to a different position.  Callers must pre-compose
- * such a move themselves (or use two calls with explicit offsets), and pass
- * the destination address already advanced past the intended origin.
+ * This is the register-programming half of a bitblt, split out so that the
+ * legacy one-origin form and the full two-origin form share exactly one
+ * sequence.  Both entry points funnel through here, so the two cannot drift.
  *
- * The request is fully validated before any register is programmed, so a
- * rejected request leaves the engine untouched.
+ * Must be called with @g2d->lock held.
  */
-int mtk_g2d_blt(struct mtk_g2d *g2d,
-		dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
-		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
-		u32 x, u32 y, u32 width, u32 height)
+static int g2d_program_blt(struct mtk_g2d *g2d,
+			    dma_addr_t src_addr, u32 src_pitch,
+			    enum g2d_format src_fmt,
+			    dma_addr_t dst_addr, u32 dst_pitch,
+			    enum g2d_format dst_fmt,
+			    u32 width, u32 height)
 {
-	u32 con, flip = 0;
+	/*
+	 * The address registers are 32 bits wide, which is also the width of
+	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
+	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
+	 * g2d_check_offset() has already refused anything that would not fit.
+	 */
+	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
+	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
+	writel(g2d_formats[src_fmt].clrfmt, g2d->regs + G2D_SRC_CON);
+
+	/*
+	 * The write target is the W2M (write-to-memory) engine.  The data
+	 * sheet's note on W2M_CON.DST_NEQ says that when the destination read
+	 * buffer is the same as the write buffer - which is what a plain
+	 * bitblt is - the bit is 0 and the driver then does not need to set
+	 * G2D_DST_CON, G2D_DST_ADDR or G2D_DST_PITCH at all.  DST_NEQ is 0 out
+	 * of reset, so only the W2M side is programmed here.
+	 *
+	 * Note that G2D_DST_* is the destination *read* port, used for
+	 * read-modify-write blending, not an alternative write target: the only
+	 * writable surface is W2M_ADDR.  That is why a blit programs two
+	 * addresses here and why G2D_DST_ADDR cannot be used as a second
+	 * destination origin.
+	 */
+	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
+	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
+	writel(g2d_formats[dst_fmt].clrfmt, g2d->regs + G2D_W2M_CON);
+
+	/*
+	 * G2D_W2M_SIZE is the width and height of the destination scan window,
+	 * and it is the only geometry register in the block: there is no
+	 * G2D_SRC_SIZE, no ROI and no clip register.  Both ports therefore
+	 * always move the same number of pixels, which is what makes one shared
+	 * window unavoidable and is the one real limitation of this engine.
+	 */
+	writel((width << 16) | height, g2d->regs + G2D_W2M_SIZE);
+
+	/* ENG_MODE 0 selects bitblt. */
+	writel(0, g2d->regs + G2D_MODE_CON);
+
+	return g2d_start(g2d);
+}
+
+/**
+ * g2d_rects_overlap - test whether a blit would read and write the same bytes.
+ * @src_bpp: bytes per pixel of the source
+ * @src_x, @src_y: origin of the source rectangle within @src, in pixels
+ * @dst_bpp: bytes per pixel of the destination
+ * @dst_x, @dst_y: origin of the destination rectangle within @dst, in pixels
+ * @width: rectangle width, in pixels
+ * @height: rectangle height, in pixels
+ *
+ * Both rectangles are the same size, because G2D_W2M_SIZE sizes the single scan
+ * window that both ports share.  A blit from a buffer onto itself is only
+ * meaningful when the two regions are disjoint: the engine reads a row and
+ * writes a row, and with overlapping regions the outcome depends on the order
+ * it does that in, which nothing in this driver specifies or can observe.  So
+ * an in-place blit is reported as an overlap and rejected, rather than
+ * producing the usual undefined result.
+ *
+ * Two distinct base addresses cannot alias, whatever the origins - they are
+ * two different allocations - so the arithmetic only runs for the same-surface
+ * case.  There the comparison is done in bytes, because the two ports may have
+ * different bytes-per-pixel, but only over the rows where the two rectangles
+ * actually meet: the y ranges are compared first, and a row range that does not
+ * intersect cannot overlap at all.  The pitch is deliberately not used - within
+ * one row each rectangle is a contiguous run of pixels, so the byte offsets of
+ * the two origins decide it.
+ */
+static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
+			       u32 src_x, u32 src_y,
+			       dma_addr_t dst, u32 dst_bpp,
+			       u32 dst_x, u32 dst_y,
+			       u32 width, u32 height)
+{
+	u32 y_start, y_end;
+	u64 s, d;
+
+	if (src != dst)
+		return false;
+
+	/* Rows the two rectangles have in common. */
+	y_start = max(src_y, dst_y);
+	y_end = min(src_y + height, dst_y + height);
+	if (y_start >= y_end)
+		return false;
+
+	/*
+	 * Within any shared row, the source span and the destination span are
+	 * each a contiguous byte range, so one interval intersection decides
+	 * every shared row at once.
+	 */
+	s = (u64)src_x * src_bpp;
+	d = (u64)dst_x * dst_bpp;
+
+	return min(s + (u64)width * src_bpp, d + (u64)width * dst_bpp) >
+	       max(s, d);
+}
+
+/**
+ * mtk_g2d_blt_rect - copy one rectangle between two surfaces at independent
+ *			origins.
+ * @g2d: device
+ * @src: source surface base address
+ * @src_pitch: source pitch, in bytes
+ * @src_fmt: source CLRFMT
+ * @src_x: x origin within the source, in pixels
+ * @src_y: y origin within the source, in pixels
+ * @dst: destination surface base address
+ * @dst_pitch: destination pitch, in bytes
+ * @dst_fmt: destination CLRFMT
+ * @dst_x: x origin within the destination, in pixels
+ * @dst_y: y origin within the destination, in pixels
+ * @width: rectangle width, in pixels
+ * @height: rectangle height, in pixels
+ *
+ * The source and destination origins are independent, so this expresses a true
+ * move as well as a same-coordinate copy.
+ *
+ * What is shared is the *size*: G2D_W2M_SIZE describes the single scan window
+ * that both ports read and write, so a source rectangle and a destination
+ * rectangle can never differ in size.  The engine has no per-surface size
+ * register to express one.
+ *
+ * The origins themselves are not hardware offsets - the block has no offset
+ * register at all - they are folded into the two base addresses in software
+ * here, which is why each surface's origin is validated against *that*
+ * surface's pitch and alignment.
+ *
+ * @src and @dst may name the same surface only if the two rectangles do not
+ * overlap; an overlapping in-place blit is rejected with -EINVAL rather than
+ * producing the usual undefined result, because the engine reads and writes in
+ * an order this driver cannot describe.
+ *
+ * Every argument is validated before any register is programmed, so a request
+ * rejected with -EINVAL leaves the engine untouched.  Blocks until the engine
+ * is idle; -ETIMEDOUT means it did not stop, after a warm reset.
+ */
+int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
+		      dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
+		      u32 src_x, u32 src_y,
+		      dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
+		      u32 dst_x, u32 dst_y,
+		      u32 width, u32 height)
+{
 	u32 src_bpp, dst_bpp;
 	dma_addr_t src_addr, dst_addr;
 	int ret;
+
+	if (!g2d)
+		return -EINVAL;
 
 	ret = g2d_check_fmt(src_fmt);
 	if (ret)
@@ -485,25 +658,24 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 
 	/*
 	 * Validate both surfaces up front: the registers must not be touched at
-	 * all unless the whole request is programmable.
+	 * all unless the whole request is programmable.  Each surface is
+	 * checked against its own origin, because the origins differ.
 	 */
-	ret = g2d_check_rect(src_pitch, src_bpp, width, height);
+	ret = g2d_check_rect(src_pitch, src_bpp, src_x, src_y, width, height);
 	if (ret)
 		return ret;
-	ret = g2d_check_rect(dst_pitch, dst_bpp, width, height);
+	ret = g2d_check_rect(dst_pitch, dst_bpp, dst_x, dst_y, width, height);
 	if (ret)
 		return ret;
 
-	/*
-	 * x/y are pixel offsets into both surfaces, so the byte address handed
-	 * to the engine is the one that has to carry the format's alignment.
-	 */
-	ret = g2d_check_offset(src, src_pitch, src_bpp, x, y, &src_addr);
+	ret = g2d_check_offset(src, src_pitch, src_bpp, src_x, src_y, &src_addr);
 	if (ret)
 		return ret;
-	ret = g2d_check_offset(dst, dst_pitch, dst_bpp, x, y, &dst_addr);
+	ret = g2d_check_offset(dst, dst_pitch, dst_bpp, dst_x, dst_y, &dst_addr);
 	if (ret)
 		return ret;
+
+	/* Each origin must carry its own format's start-address alignment. */
 	ret = g2d_check_align(src_addr, &g2d_formats[src_fmt]);
 	if (ret)
 		return ret;
@@ -511,60 +683,44 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
 	if (ret)
 		return ret;
 
+	if (g2d_rects_overlap(src, src_bpp, src_x, src_y,
+			      dst, dst_bpp, dst_x, dst_y,
+			      width, height))
+		return -EINVAL;
+
 	mutex_lock(&g2d->lock);
 
-	/*
-	 * FLIP is bits [11:10]: 0 none, 1 horizontal, 2 vertical, 3 both.
-	 * x/y here is the source rectangle origin, not a flip request - the
-	 * data sheet drives flips from SRC_CON, not from the rectangle.
-	 */
-	/*
-	 * x/y are byte offsets into the two surfaces: src_pitch counts bytes
-	 * per line, so a row is a pitch, and a column is bytes-per-pixel.
-	 */
-	/*
-	 * The address registers are 32 bits wide, which is also the width of
-	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
-	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
-	 */
-	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
-	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
-	con = g2d_formats[src_fmt].clrfmt | flip;
-	writel(con, g2d->regs + G2D_SRC_CON);
-
-	/*
-	 * The write target is the W2M (write-to-memory) engine.  The data
-	 * sheet's note on W2M_CON.DST_NEQ says that when the destination read
-	 * buffer is the same as the write buffer - which is what a plain
-	 * bitblt is - the bit is 0 and the driver then does not need to set
-	 * G2D_DST_CON, G2D_DST_ADDR or G2D_DST_PITCH at all.  DST_NEQ is 0
-	 * out of reset, so only the W2M side is programmed here.
-	 */
-	/*
-	 * W2M_SIZE is the width/height of the destination *scan window*, so
-	 * x/y position the window in the destination and the source origin
-	 * follows from it.  Offsetting both surfaces independently would make
-	 * only the x=0,y=0 case behave.  So: window origin in the
-	 * destination, matching source offset in the source.
-	 */
-	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
-	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
-	writel(g2d_formats[dst_fmt].clrfmt, g2d->regs + G2D_W2M_CON);
-
-	/*
-	 * Destination scan window.  There is no separate ROI register: the
-	 * source rectangle is implied by this window plus SRC_ADDR.
-	 */
-	writel((width << 16) | height, g2d->regs + G2D_W2M_SIZE);
-
-	/* ENG_MODE 0 selects bitblt. */
-	writel(0, g2d->regs + G2D_MODE_CON);
-
-	ret = g2d_start(g2d);
+	ret = g2d_program_blt(g2d, src_addr, src_pitch, src_fmt,
+			      dst_addr, dst_pitch, dst_fmt, width, height);
 
 	mutex_unlock(&g2d->lock);
 
 	return ret;
+}
+
+/**
+ * mtk_g2d_blt - copy one rectangular region between two surfaces at a shared
+ *		 origin.
+ * @x: x offset, in pixels, applied to both the source and the destination
+ * @y: y offset, in pixels, applied to both the source and the destination
+ *
+ * The legacy one-origin form, kept because it is what a same-coordinate copy
+ * means and it is the smaller call.  It is exactly
+ * mtk_g2d_blt_rect() with @src_x == @dst_x == @x and @src_y == @dst_y == @y;
+ * it shares that function's programming sequence verbatim.
+ */
+int mtk_g2d_blt(struct mtk_g2d *g2d,
+		dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
+		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
+		u32 x, u32 y, u32 width, u32 height)
+{
+	if (!g2d)
+		return -EINVAL;
+
+	return mtk_g2d_blt_rect(g2d,
+				src, src_pitch, src_fmt, x, y,
+				dst, dst_pitch, dst_fmt, x, y,
+				width, height);
 }
 
 int mtk_g2d_fill(struct mtk_g2d *g2d,
@@ -576,12 +732,15 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 	dma_addr_t dst_addr;
 	int ret;
 
+	if (!g2d)
+		return -EINVAL;
+
 	ret = g2d_check_fmt(dst_fmt);
 	if (ret)
 		return ret;
 
 	bpp = g2d_formats[dst_fmt].bytes_per_pixel;
-	ret = g2d_check_rect(dst_pitch, bpp, width, height);
+	ret = g2d_check_rect(dst_pitch, bpp, x, y, width, height);
 	if (ret)
 		return ret;
 
@@ -801,18 +960,22 @@ struct mtk_g2d *mtk_g2d_get(struct device *dev)
 		 * still fail, or not have run yet.  Only a bound device can be
 		 * programmed, so an unbound one is reported as absent rather
 		 * than dereferenced.
+		 *
+		 * bus_find_device_by_of_node() returns a device with a reference
+		 * taken, and it is kept - not put here - because that reference
+		 * is what keeps both the platform device and its drvdata alive
+		 * for as long as the caller holds the &struct mtk_g2d.  The
+		 * matching put_device() is in mtk_g2d_put().  Note that
+		 * for_each_child_of_node() itself refcounts @node and releases
+		 * its own reference on the next iteration, so @node needs no
+		 * of_node_put() here and must not get one: doing so would drop
+		 * the reference the iteration is holding for us.
 		 */
 		pdev = bus_find_device_by_of_node(&platform_bus_type, node);
-		of_node_put(node);
 		if (!pdev)
 			break;
 
 		g2d = dev_get_drvdata(pdev);
-		/*
-		 * bus_find_device_by_of_node() already took a reference, and
-		 * that reference is what keeps both the device and its drvdata
-		 * alive, so it is kept for as long as the caller holds g2d.
-		 */
 		break;
 	}
 
@@ -824,6 +987,13 @@ void mtk_g2d_put(struct mtk_g2d *g2d)
 	if (!g2d)
 		return;
 
+	/*
+	 * mtk_g2d_get() kept the reference bus_find_device_by_of_node() took,
+	 * so this is put_device() and not anything G2D-specific: it is what
+	 * finally allows the platform device to be unbound and its drvdata
+	 * freed.  Calling it more than once per get() would be an over-release,
+	 * which is why the contract is one put per get().
+	 */
 	put_device(g2d->dev);
 }
 
