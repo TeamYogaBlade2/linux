@@ -96,6 +96,30 @@ properties:
     const: dphy
 
   resets:
+    description: |
+      Reset for the sensor front end.  OPTIONAL, and deliberately not
+      required: the driver takes it with devm_reset_control_get_optional() and
+      guards its reset_control_assert()/reset_control_deassert() calls on the
+      control being present, so a node without this property probes and its
+      ports program correctly.
+
+      The property is optional because the provider for this reset does not
+      exist yet.  The data sheet puts img_rst at bit 5 of WDT_SWSYSRST
+      ("writes 1 to reset imgsys and its related pad macro (cam, mipi_rx)"),
+      and that register is at 0x10000000 + 0x18 in the WDT block - not in
+      topckgen, which is syscon@10000100 and which declares no #reset-cells at
+      all.  The in-tree board therefore omits the property rather than
+      reference a node and index that cannot resolve.
+
+      The honest cost of omitting it: without a reset, whatever state the
+      imgsys/mipi_rx registers were left in is not cleared before this driver
+      programs them.  On a cold boot the block is already at its documented
+      reset values and this is harmless; after a warm reboot, stale state can
+      survive.  The driver restores the registers it cares about (CSI2_CTRL,
+      CSI2_INTSTA) but cannot claim the rest are clean.
+
+      Add this property once a reset provider for WDT_SWSYSRST bit 5 exists;
+      the driver needs no change to pick it up.
     maxItems: 1
 
   reset-names:
@@ -138,7 +162,12 @@ examples:
          * optional and programs the receiver without them.
          */
 
-        resets = <&toprgu MT6589_TOPRGU_IMG_RST>;
+        /*
+         * No "resets" here either, for the same reason as the clocks: the
+         * provider does not exist yet.  The driver takes the reset as
+         * optional, so this node probes without it.  See the description on
+         * "resets".
+         */
 
         /*
          * Only the source pad is shown, pointing at the SCAM adaptor that

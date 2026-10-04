@@ -30,7 +30,10 @@
  *
  *   - This subdev has ONE PAD, a sink, so it IS the downstream endpoint of
  *     the media graph: csi2-rx -> scam -> cam resolves end to end, and
- *     media-ctl can list the chain and the pads on it.
+ *     media-ctl can list the chain and the pads on it.  The media_device and
+ *     the links themselves are owned by mtk-cam-graph, not by this driver;
+ *     see the note on that node in
+ *     arch/arm/boot/dts/mediatek/mt6589-lenovo-blade-camera.dtsi.
  *   - There is NO DMA and NO video node.  Nothing allocates buffers, so no
  *     frame is ever delivered to userspace, and the stream that arrives on
  *     the sink pad goes nowhere.  The pad describes what the block is wired
@@ -271,6 +274,7 @@ static int mtk_cam_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	cam->dev = dev;
+	platform_set_drvdata(pdev, cam);
 	dev_set_drvdata(dev, cam);
 	mutex_init(&cam->lock);
 
@@ -319,6 +323,18 @@ static int mtk_cam_probe(struct platform_device *pdev)
 	 */
 	v4l2_subdev_init(&cam->sd, &mtk_cam_subdev_ops);
 	strscpy(cam->sd.name, dev_name(dev), sizeof(cam->sd.name));
+
+	/*
+	 * sd.dev is what makes this subdev matchable.  See the long note in
+	 * mtk-scam.c: v4l2_async_register_subdev() only derives sd->fwnode from
+	 * dev_fwnode(sd->dev) when sd->dev is set, so leaving it NULL would
+	 * leave the fwnode NULL, and a subdev with no fwnode is skipped by
+	 * v4l2_async_find_match() and never joins the graph -- which for CAM
+	 * specifically means the SCAM -> CAM link could never be created even
+	 * though CAM's own sink pad exists.  The same fwnode is what
+	 * v4l2_create_fwnode_links() walks to derive that link.
+	 */
+	cam->sd.dev = dev;
 
 	/*
 	 * CAM has no pad_ops, so no pad operation runs under this lock; the
@@ -385,6 +401,23 @@ err_subdev_cleanup:
 	return ret;
 }
 
+static void mtk_cam_remove(struct platform_device *pdev)
+{
+	struct mtk_cam *cam = platform_get_drvdata(pdev);
+
+	/*
+	 * v4l2_subdev_init_finalize() allocated the active state in probe, so
+	 * v4l2_subdev_cleanup() has to run on the way out or the state leaks on
+	 * every unbind/rebind.  v4l2_async_unregister_subdev() first, which
+	 * detaches CAM from the graph driver's notifier and so tears down the
+	 * links into CAM's sink pad.
+	 *
+	 * The pads live in the devm allocation of cam and go with it.
+	 */
+	v4l2_async_unregister_subdev(&cam->sd);
+	v4l2_subdev_cleanup(&cam->sd);
+}
+
 static const struct of_device_id mtk_cam_of_match[] = {
 	{ .compatible = "mediatek,mt6589-cam" },
 	{ /* sentinel */ },
@@ -393,6 +426,7 @@ MODULE_DEVICE_TABLE(of, mtk_cam_of_match);
 
 static struct platform_driver mtk_cam_driver = {
 	.probe = mtk_cam_probe,
+	.remove = mtk_cam_remove,
 	.driver = {
 		.name = "mtk-cam",
 		.of_match_table = mtk_cam_of_match,

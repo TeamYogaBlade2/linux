@@ -35,10 +35,13 @@
  *   2. The media graph is wired as far as the blocks that exist: this
  *      subdev has a real sink and source pad (see SCAM_PAD_* in mtk-scam.h)
  *      and initialises them in probe, so the receiver -> SCAM -> CAM links
- *      resolve.  What is still missing is the frame notifier and any
- *      propagation of a format negotiated upstream; the CAM/ISP side
- *      consumes the stream without doing anything with it yet.  See
- *      README.md.
+ *      can resolve.  Creating those links is NOT this driver's job: it needs
+ *      a media_device, which needs a v4l2_async_notifier, and that is owned
+ *      by mtk-cam-graph (the mediatek,mt6589-cam-graph node), which creates
+ *      the links from the DT endpoints once all three blocks have bound.
+ *      What is still missing is the frame notifier and any propagation of a
+ *      format negotiated upstream; the CAM/ISP side consumes the stream
+ *      without doing anything with it yet.  See README.md.
  *   3. This tree's media API is a reduced fork, so the usual
  *      v4l2_mbus_csi2_capability negotiation is unavailable; the frame
  *      format is taken from the sensor through set_pad() instead.  The
@@ -961,6 +964,7 @@ static int mtk_scam_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	scam->dev = dev;
+	platform_set_drvdata(pdev, scam);
 	dev_set_drvdata(dev, scam);
 	mutex_init(&scam->lock);
 
@@ -1036,6 +1040,33 @@ static int mtk_scam_probe(struct platform_device *pdev)
 	 */
 	v4l2_subdev_init(&scam->sd, &mtk_scam_subdev_ops);
 	strscpy(scam->sd.name, dev_name(dev), sizeof(scam->sd.name));
+
+	/*
+	 * sd.dev is what makes this subdev matchable, and it is NOT redundant
+	 * with the fields set above.
+	 *
+	 * v4l2_async_register_subdev() only fills the fwnode in from the
+	 * device, and only when there is one:
+	 *
+	 *	if (!sd->fwnode && sd->dev)
+	 *		sd->fwnode = dev_fwnode(sd->dev);
+	 *
+	 * With sd.dev left NULL, sd->fwnode stays NULL.  A subdev with no
+	 * fwnode can never be matched against a notifier's fwnode, so
+	 * v4l2_async_find_match() skips it and this block never binds to the
+	 * graph at all.  That fwnode is also what
+	 * v4l2_create_fwnode_links() walks with
+	 * fwnode_graph_for_each_endpoint(), so without it there is no way to
+	 * derive the links the DT declares.
+	 *
+	 * Assigning sd.fwnode here as well would be harmless but redundant: the
+	 * registration path derives exactly dev_fwnode(dev).  Following the
+	 * established convention instead -- stm32-csi.c, microchip-csi2dc.c and
+	 * imx7-media-csi.c all assign sd.dev in probe and leave the fwnode to
+	 * the core -- is also what keeps notifier_dev() safe, since it calls
+	 * dev_name(notifier->sd->dev).
+	 */
+	scam->sd.dev = dev;
 
 	/*
 	 * The pad ops run under this mutex (v4l2_subdev_init_finalize() makes
@@ -1137,6 +1168,28 @@ err_subdev_cleanup:
 	return ret;
 }
 
+static void mtk_scam_remove(struct platform_device *pdev)
+{
+	struct mtk_scam *scam = platform_get_drvdata(pdev);
+
+	/*
+	 * v4l2_subdev_init_finalize() allocated the subdev's active state in
+	 * probe, so unregistering the subdev is not enough: the matching
+	 * v4l2_subdev_cleanup() has to run too or the state leaks on every
+	 * unbind/rebind cycle.
+	 *
+	 * v4l2_async_unregister_subdev() also detaches this block from the
+	 * graph driver's notifier, which is what causes the links into the
+	 * SCAM pads to be torn down; the ordering below (unregister, then
+	 * cleanup) matches what every in-tree subdev with a remove does.
+	 *
+	 * The pads themselves live in the devm allocation of scam, so they go
+	 * away with it and need no explicit teardown.
+	 */
+	v4l2_async_unregister_subdev(&scam->sd);
+	v4l2_subdev_cleanup(&scam->sd);
+}
+
 static const struct of_device_id mtk_scam_of_match[] = {
 	{ .compatible = "mediatek,mt6589-scam" },
 	{ /* sentinel */ },
@@ -1145,6 +1198,7 @@ MODULE_DEVICE_TABLE(of, mtk_scam_of_match);
 
 static struct platform_driver mtk_scam_driver = {
 	.probe = mtk_scam_probe,
+	.remove = mtk_scam_remove,
 	.driver = {
 		.name = "mtk-scam",
 		.of_match_table = mtk_scam_of_match,

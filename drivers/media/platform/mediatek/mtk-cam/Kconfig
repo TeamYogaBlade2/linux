@@ -4,6 +4,10 @@ config VIDEO_MTK_CAM
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	select VIDEO_V4L2_SUBDEV_API
 	select V4L2_ASYNC
+	# No camera subdev can join a media graph without it: it owns the
+	# media_device, the v4l2_device, the async notifier and the link
+	# creation for the whole camera path.
+	select VIDEO_MTK_CAM_GRAPH
 	help
 	  Say Y here if you want to use the MediaTek MT6589 CAM/ISP control
 	  plane.

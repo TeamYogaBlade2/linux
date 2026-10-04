@@ -18,7 +18,9 @@
  *     DMA behind it: the link ends at a subdev that consumes nothing yet.
  *   - The sensor step is absent.  There is no D-PHY node and no sensor node,
  *     so the receiver's sink pad exists in the driver but has no peer in the
- *     graph; the receiver -> SCAM -> CAM links do resolve.
+ *     graph.  The receiver -> SCAM -> CAM links do resolve, because the
+ *     mtk-cam-graph node below owns the media_device and creates them from
+ *     the remote-endpoint properties in this file.
  *
  * Address map of the sensor front end, from the data sheet:
  *
@@ -49,7 +51,9 @@
  *   csi2-rx (seninf port 0) -> scam (port 0) -> cam
  *
  * with the D-PHY step deliberately absent between the sensor and the
- * receiver.
+ * receiver.  The media_device, the async notifier and the media links that
+ * make that chain a graph are owned by the mtk-cam-graph node at the bottom
+ * of this file; the three hardware nodes below own no graph between them.
  */
 
 #include <dt-bindings/gpio/gpio.h>
@@ -112,15 +116,39 @@
 		/*
 		 * img_rst in the data sheet resets "imgsys and its related
 		 * pad macro (cam, mipi_rx)", so the sensor front end shares
-		 * the imgsys top reset, which is TOPRGU bit 5.
+		 * the imgsys top reset.
 		 *
-		 * TODO: topckgen (syscon@10000100) owns TOPRGU, but it declares
-		 * only #clock-cells, not #reset-cells, and no in-tree DTS
-		 * references a TOPRGU reset yet.  Adding #reset-cells = <1> to
-		 * that node is a prerequisite for this reference to resolve, so
-		 * it is left commented out for now to keep the node buildable.
+		 * It is left out here, deliberately, and NOT because the
+		 * property is wrong or because the driver insists on it.  The
+		 * driver takes the reset as optional (devm_reset_control_get_
+		 * optional), so it probes without this property; see the note
+		 * in mtk-csi2-rx.c for the full contract.
+		 *
+		 * The earlier comment here said the reset was "TOPRGU bit 5" and
+		 * pointed at topckgen.  The bit position is right but the node
+		 * is not: img_rst is bit 5 of WDT_SWSYSRST, and that register is
+		 * at 0x10000000 + 0x18 in the WDT block
+		 * (draft/ds/ovl.txt:55062 and 55144), not in topckgen.  The
+		 * vendor tree agrees on the bit:
+		 *
+		 *	mtk_wdt.h: #define MTK_WDT_SWSYS_RST_IMG_RST (0x0020)
+		 *
+		 * and the datasheet's own description of bit 5 is "writes 1 to
+		 * reset imgsys and its related pad macro (cam, mipi_rx)".
+		 *
+		 * topckgen in this tree is syscon@10000100, a different node,
+		 * and it declares only #clock-cells with no #reset-cells, so
+		 * "&topckgen ..." could not have resolved even with the right
+		 * index.  Restoring that line as written would not build.
+		 *
+		 * What is needed to bring the reset back is a provider node for
+		 * WDT_SWSYSRST with #reset-cells = <1>, and then:
+		 *
+		 *	resets = <&wdt MT6589_WDT_SWSYSRST_IMG_RST>;
+		 *
+		 * The driver needs no change to pick that up.
 		 */
-		// resets = <&topckgen MT6589_TOPRGU_IMG_RST>;
+		// resets = <&wdt 5>;
 
 		/*
 		 * The D-PHY this receiver sits on top of.
@@ -222,8 +250,19 @@
 
 		mediatek,scam-port = <0>;
 
-		/* See the note on the receiver node about topckgen. */
-		// resets = <&topckgen MT6589_TOPRGU_IMG_RST>;
+		/*
+		 * No "resets" property, and none should be added here without a
+		 * driver change: mtk-scam.c requests no reset control at all.  It
+		 * brings the block up through SCAM_CON's own documented
+		 * enable/reset field instead.
+		 *
+		 * An earlier version of this file carried the same commented-out
+		 * topckgen reference as the receiver, which implied the SCAM
+		 * driver wanted a reset it never asked for.  It did not, and
+		 * adding the property would have no effect.  See the long note on
+		 * the receiver node for why the topckgen reference is wrong in
+		 * the first place.
+		 */
 
 		ports {
 			scam_in: port@0 {
@@ -247,6 +286,85 @@
 		ports {
 			cam_in: port@0 {
 				cam_in_ep: endpoint {
+					remote-endpoint = <&scam_out_ep>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * The owner of the media graph the three nodes above form.
+	 *
+	 * This node owns no hardware: there is no "reg", it maps nothing, and
+	 * it programs no registers.  It exists because a media graph is a
+	 * runtime object that has to be built, and the device tree alone does
+	 * not build it.  Concretely, the driver bound here registers the
+	 * media_device (/dev/media0) and the v4l2_device, runs the
+	 * v4l2_async_notifier that pulls csi2-rx, scam and cam into that
+	 * v4l2_device -- which is what registers their entities into the
+	 * media_device -- and creates the media links between them.
+	 *
+	 * Without this node the three subdevs still register as async subdevs,
+	 * but nothing is waiting for them, so no entity joins a media_device
+	 * and no media_link is ever created.  Their pads would exist and this
+	 * file's remote-endpoint properties would point at each other, and the
+	 * graph would still be empty: a media_link is created by the driver, not
+	 * by the DT.
+	 *
+	 * The endpoints below are the driver's OWN endpoints, one per block it
+	 * should wait for.  Each names a remote that lives on the block in
+	 * question:
+	 *
+	 *   graph_to_rx   -> seninf_out_ep, i.e. the receiver's output
+	 *   graph_to_scam -> scam_out_ep,    i.e. SCAM's output
+	 *
+	 * Both are chosen to point at a *source* endpoint on a block that has
+	 * already been probed, because that is what makes the notifier's match
+	 * resolve: the receiver and SCAM are the two blocks with a source pad,
+	 * and they probe independently of this node.
+	 *
+	 * CAM needs no endpoint here.  It is reached through scam_out_ep, whose
+	 * remote is cam_in_ep: once SCAM has bound, that endpoint is already
+	 * known to the notifier as the remote of graph_to_scam, and the SCAM ->
+	 * CAM link is created from the DT without CAM needing to bind to this
+	 * driver at all.  Pointing an endpoint at cam_in_ep instead would only
+	 * add a second wait on a block that is already reachable.
+	 *
+	 * Note there is deliberately no endpoint for the receiver's SINK pad.
+	 * That pad has no peer: the sensor step and the MIPI CSI-2 D-PHY are
+	 * both absent from this tree (see the long note on the receiver node),
+	 * so there is no node for that endpoint to point at.  The driver treats
+	 * an unresolvable remote as "not present", not as an error, which is
+	 * what lets this node build and probe on a board with no sensor wired.
+	 	 * When a sensor lands, its source endpoint will resolve and the link up
+	 * to the receiver will be created with no change to this file.
+	 *
+	 * dtc emits two "graph connection ... is not bidirectional" warnings for
+	 * the endpoints below.  They are expected and are not suppressed.  The
+	 * four endpoints the three hardware nodes declare ARE mutually
+	 * bidirectional (seninf_out_ep <-> scam_in_ep and scam_out_ep <->
+	 * cam_in_ep), but these two belong to a node that is not part of the
+	 * image path: it owns a media_device and a notifier, not pads, so
+	 * there is no peer endpoint on it for these to pair with.  Adding
+	 * back-pointing endpoints to silence the warning was tried and makes
+	 * things worse -- it adds a third warning for the new edge and
+	 * describes a connection that does not exist.  A node with no pads is
+	 * the normal way a graph owner is expressed; see the amlogic c3 "adap"
+	 * node for the same shape done with pads.  Nothing in this tree
+	 * suppresses this warning by name, so neither does this file.
+	 */
+	mtk-cam-graph {
+		compatible = "mediatek,mt6589-cam-graph";
+
+		ports {
+			graph_to_rx: port@0 {
+				graph_to_rx_ep: endpoint {
+					remote-endpoint = <&seninf_out_ep>;
+				};
+			};
+
+			graph_to_scam: port@1 {
+				graph_to_scam_ep: endpoint {
 					remote-endpoint = <&scam_out_ep>;
 				};
 			};

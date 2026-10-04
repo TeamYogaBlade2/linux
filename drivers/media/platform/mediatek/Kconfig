@@ -43,6 +43,10 @@ config VIDEO_MEDIATEK_VCODEC_MT6589
 	  To compile this driver as a module, choose M here: the module will
 	  be called mtk-vcodec-mt6589.
 
+# The graph owner has to be declared before the three camera drivers that
+# select it.
+source "drivers/media/platform/mediatek/mtk-cam-graph/Kconfig"
+
 source "drivers/media/platform/mediatek/mtk-csi2-rx/Kconfig"
 
 source "drivers/media/platform/mediatek/mtk-scam/Kconfig"

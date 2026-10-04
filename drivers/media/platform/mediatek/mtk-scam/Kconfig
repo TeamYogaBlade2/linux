@@ -4,6 +4,7 @@ config VIDEO_MTK_SCAM
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	select VIDEO_V4L2_SUBDEV_API
 	select V4L2_ASYNC
+	select VIDEO_MTK_CAM_GRAPH
 	help
 	  Say Y here if you want to use the MediaTek MT6589 sensor-CAM
 	  (SCAM) adaptor.

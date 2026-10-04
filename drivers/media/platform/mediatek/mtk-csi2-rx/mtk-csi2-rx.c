@@ -610,9 +610,29 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 			goto err_csi2_clk;
 	}
 
-	ret = reset_control_deassert(priv->seninf_rst);
-	if (ret)
-		goto err_tg_clk;
+	/*
+	 * Zero the return value first.  Every clock above returned early on its
+	 * own error, so on the path that reaches here the last assignment was
+	 * the tg_grp enable's success (or there was no tg_grp clock at all, in
+	 * which case ret still holds whatever the csi2 enable left).  Without
+	 * this, a board with no tg_grp clock would return that stale 0-or-error
+	 * from power_on() even on the path that goes on to succeed, and a board
+	 * whose last clock succeeded would return its 0 -- which happens to be
+	 * right, but only by accident.  Reset it so the value returned below
+	 * always belongs to the code that actually produced it.
+	 */
+	ret = 0;
+
+	/*
+	 * The reset is optional: see the long note on the
+	 * devm_reset_control_get_optional() call in probe.  Where it is absent
+	 * the block is simply brought up without one.
+	 */
+	if (priv->seninf_rst) {
+		ret = reset_control_deassert(priv->seninf_rst);
+		if (ret)
+			goto err_tg_clk;
+	}
 
 	/*
 	 * Power the D-PHY up.  It has to be on before the receiver is
@@ -632,7 +652,7 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 		if (ret) {
 			dev_err(priv->dev, "failed to power on D-PHY: %d\n",
 				ret);
-			goto err_rst;
+			goto err_deassert_rst;
 		}
 	}
 
@@ -670,8 +690,9 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 
 	return 0;
 
-err_rst:
-	reset_control_assert(priv->seninf_rst);
+err_deassert_rst:
+	if (priv->seninf_rst)
+		reset_control_assert(priv->seninf_rst);
 err_tg_clk:
 	if (priv->seninf_tg_clk)
 		clk_disable_unprepare(priv->seninf_tg_clk);
@@ -694,7 +715,8 @@ static void mtk_csi2_rx_power_off(struct mtk_csi2_rx *priv)
 	if (priv->phy)
 		phy_power_off(priv->phy);
 
-	reset_control_assert(priv->seninf_rst);
+	if (priv->seninf_rst)
+		reset_control_assert(priv->seninf_rst);
 	if (priv->seninf_tg_clk)
 		clk_disable_unprepare(priv->seninf_tg_clk);
 	if (priv->seninf_csi2_clk)
@@ -934,12 +956,61 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 					     "failed to init D-PHY\n");
 	}
 
-	priv->seninf_rst = devm_reset_control_get(dev, NULL);
+	/*
+	 * The sensor-front-end reset is OPTIONAL, deliberately.
+	 *
+	 * This used to be devm_reset_control_get(), which made the DT's
+	 * "resets" property mandatory and therefore made probe fail on the real
+	 * target: the camera dtsi has the reset commented out, because the
+	 * provider does not exist yet.  Requiring it produced a driver that
+	 * could not probe on its own board, which is a worse outcome than
+	 * bringing the block up without a reset.
+	 *
+	 * Why the property is still absent, rather than something to restore:
+	 * the data sheet places img_rst in WDT_SWSYSRST at bit 5, and that
+	 * register is at 0x10000000 + 0x18 (draft/ds/ovl.txt:55062 and
+	 * 55144 -- "img_rst, writes 1 to reset imgsys and its related pad
+	 * macro (cam, mipi_rx)").  The vendor tree agrees:
+	 * aquaris-5/mediatek/platform/mt6589/kernel/core/include/mach/mt_wdt.h:63
+	 *
+	 *	#define MTK_WDT_SWSYS_RST_IMG_RST	(0x0020)
+	 *
+	 * 0x0020 is bit 5 of the same register.  But WDT_SWSYSRST lives in the
+	 * WDT/AP_RGU block at 0xF0000000 (or 0x10000000 as mapped by the boot
+	 * ROM), NOT in topckgen.  The commented-out line named
+	 * "&topckgen MT6589_TOPRGU_IMG_RST", and topckgen in this tree is
+	 * syscon@10000100 -- a different node, which declares only
+	 * #clock-cells and no #reset-cells at all.  So the name the DTS used
+	 * was never going to resolve, and restoring it as written would not
+	 * build, let alone name the right reset.
+	 *
+	 * Guessing an index for topckgen on the strength of a bit position
+	 * documented for a different register is exactly the kind of invention
+	 * this driver refuses elsewhere (see the note on the seninf clocks
+	 * above).  So the contract is made consistent in the direction that
+	 * works today: the reset is optional here, the DT omits it, and the
+	 * binding says so.
+	 *
+	 * The honest trade-off: with no reset, whatever state the imgsys/mipi_rx
+	 * registers were left in is NOT cleared before this driver programs
+	 * them.  On a cold boot the block is already at its documented reset
+	 * values and this is harmless.  After a warm reboot, or if another
+	 * driver in imgsys ran first and left the receivers enabled, stale
+	 * state can survive, and mtk_csi2_rx_power_on() restores the registers
+	 * it cares about (CSI2_CTRL, CSI2_INTSTA) but cannot claim the rest are
+	 * clean.  Add the property once a reset provider for WDT_SWSYSRST bit 5
+	 * exists; this driver needs no change to pick it up.
+	 */
+	priv->seninf_rst = devm_reset_control_get_optional(dev, NULL);
 	if (IS_ERR(priv->seninf_rst)) {
 		ret = dev_err_probe(dev, PTR_ERR(priv->seninf_rst),
 				    "Failed to get reset control\n");
 		goto err_phy_exit;
 	}
+
+	if (!priv->seninf_rst)
+		dev_warn(dev,
+			 "no reset supplied, the receiver will be brought up without clearing imgsys reset state\n");
 
 	priv->sd.internal_ops = &mtk_csi2_rx_internal_ops;
 
@@ -978,6 +1049,17 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 	 */
 	v4l2_subdev_init(&priv->sd, &mtk_csi2_rx_subdev_ops);
 	strscpy(priv->sd.name, dev_name(dev), sizeof(priv->sd.name));
+
+	/*
+	 * sd.dev is what makes this subdev matchable.  See the note in
+	 * mtk-scam.c: v4l2_async_register_subdev() only derives sd->fwnode from
+	 * dev_fwnode(sd->dev) when sd->dev is set, so without it the fwnode
+	 * stays NULL and v4l2_async_find_match() skips this receiver
+	 * entirely.  For this node in particular that would silently cost the
+	 * receiver -> SCAM link, since the receiver is the source side of the
+	 * only endpoint the graph has wired up on this port.
+	 */
+	priv->sd.dev = dev;
 
 	/*
 	 * The pad ops run under this mutex (v4l2_subdev_init_finalize() makes
@@ -1147,12 +1229,25 @@ static void mtk_csi2_rx_remove(struct platform_device *pdev)
 	 * only runs once the device has been unbound and the last reference
 	 * dropped.  The subdev state allocated by v4l2_subdev_init_finalize()
 	 * is released here too, since it is not a devm allocation.
+	 *
+	 * This driver requests no IRQ, so there is no free_irq() to order
+	 * against; if one is added, it must be freed BEFORE the phy_exit() and
+	 * before runtime PM is disabled below, so that no handler can run
+	 * against a powered-down block.
 	 */
 	if (priv->phy)
 		phy_exit(priv->phy);
 
 	v4l2_async_unregister_subdev(&priv->sd);
 	v4l2_subdev_cleanup(&priv->sd);
+
+	/*
+	 * probe enabled runtime PM (pm_runtime_enable()).  Disable it before
+	 * the device disappears so the PM core is not left holding a state
+	 * machine for a device that no longer exists; the devm cleanup then runs
+	 * with PM off and cannot fire a resume.
+	 */
+	pm_runtime_disable(&pdev->dev);
 }
 
 static const struct of_device_id mtk_csi2_rx_of_match[] = {

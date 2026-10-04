@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-cam-graph.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 Camera Media Graph
+
+maintainers:
+  - Lenovo Linux Team
+
+description: |
+  The MT6589 camera path is a chain of three blocks, each of which is its own
+  platform device and its own subdev:
+
+    csi2-rx (MIPI CSI-2 receiver) -> scam (sensor-CAM adaptor) -> cam (ISP)
+
+  The blocks declare "remote-endpoint" properties pointing at each other, but
+  that is not enough to build a media graph.  A media graph is a runtime object:
+  something has to register the media_device and the v4l2_device, run the
+  v4l2_async_notifier that pulls the subdevs into that v4l2_device, and create
+  the media_links.
+
+  This binding describes the node that owns all of that.  The driver bound to
+  it maps no registers and programs no hardware; it is pure plumbing, and it
+  exists because none of the three hardware blocks can own the graph without
+  making its own probe order and unbind order decide the whole pipeline.
+
+  One node is expected per camera path.  It waits on one endpoint per block it
+  should wait for, and the links between the blocks are derived from the DT
+  endpoints by the driver, not listed here.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-cam-graph
+
+  ports:
+    description: |
+      The blocks this driver should wait for.  Each endpoint names a remote
+      endpoint belonging to one of the camera subdevs.
+
+      Choose a remote that sits on a SOURCE pad of a block, because that is
+      what makes the notifier's match resolve: for the chain above, seninf_out
+      (the receiver's output) and scam_out (SCAM's output).  Pointing at a sink
+      endpoint would work too, but it describes the link twice.
+
+      A block reached through another block's endpoint does not need an endpoint
+      here.  In the chain above, cam needs none: scam_out already names
+      cam_in as its remote, so once SCAM has bound the SCAM -> CAM link is
+      created from the DT without cam binding to this driver at all.
+
+      An endpoint whose remote does not resolve is not an error.  That is how
+      the sensor step, which has no node in this tree yet, shows up: the driver
+      counts what resolved, reports how many at probe, and carries on.  When the
+      sensor lands, its source endpoint will resolve and the link up to the
+      receiver will be created with no change here.
+    $ref: /schemas/graph/ports.yaml#
+
+    properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
+required:
+  - compatible
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    mtk-cam-graph {
+        compatible = "mediatek,mt6589-cam-graph";
+
+        /*
+         * Wait for the receiver's output and for SCAM's output.  Neither of
+         * these endpoints has a peer back on this node, so dtc reports them
+         * as not bidirectional; that is expected for a graph owner, which
+         * owns a media_device and a notifier rather than pads.
+         */
+        ports {
+            graph_to_rx: port@0 {
+                graph_to_rx_ep: endpoint {
+                    remote-endpoint = <&seninf_out_ep>;
+                };
+            };
+
+            graph_to_scam: port@1 {
+                graph_to_scam_ep: endpoint {
+                    remote-endpoint = <&scam_out_ep>;
+                };
+            };
+        };
+    };
+
+...

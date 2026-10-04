@@ -8,3 +8,4 @@ obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC_MT6589) += mtk-vcodec-mt6589.o
 obj-y += mtk-csi2-rx/
 obj-y += mtk-scam/
 obj-y += mtk-cam/
+obj-$(CONFIG_VIDEO_MTK_CAM_GRAPH) += mtk-cam-graph/
