@@ -27,7 +27,17 @@ properties:
     const: mediatek,mt6589-scam
 
   reg:
-    description: Register window of the sensor front end.
+    description: |
+      Register window of THIS PORT'S SCAM BLOCK ONLY.  Port 0 is SCAM1_CFG at
+      0x15008200 through SCAM1_STA at 0x15008240 plus its 32 bits, i.e.
+      0x44 bytes; port 1 is the same layout 0x80 further up at 0x15008280.
+
+      The window must NOT be widened.  It used to be documented as
+      <0x0 0x15008000 0x0 0x900>, which is byte-for-byte the window the
+      CSI-2 receiver claims: two platform devices cannot share one aperture,
+      and the SCAM driver computes its offsets from the start of its own
+      block, so pointing it at 0x15008000 made every SCAM1_CFG access land on
+      the receiver's SENINF_TOP_CTRL.
     maxItems: 1
 
   mediatek,scam-port:
@@ -35,6 +45,10 @@ properties:
       Which SCAM instance this node programs.  Port 0 is SCAM1 at
       0x15008200, port 1 is SCAM2 at 0x15008280.  On the Lenovo YOGA
       Tablet 8/10 port 0 is the main (rear) camera.
+
+      One node per port: the "reg" above is per-port, so a second receiver
+      needs a second node with mediatek,scam-port = <1> and reg =
+      <0x0 0x15008280 0x0 0x44>, not a wider window on the first node.
     enum: [0, 1]
     default: 0
 
@@ -44,6 +58,8 @@ properties:
   resets:
     maxItems: 1
 
+  # A sink pad fed by the CSI-2 receiver (the mediatek,mt6589-csi2-rx
+  # binding's seninf_out endpoint) and a source pad feeding the CAM/ISP.
   ports:
     $ref: /schemas/graph/ports.yaml#
 
@@ -59,13 +75,30 @@ examples:
   - |
     scam: scam@15008200 {
         compatible = "mediatek,mt6589-scam";
-        reg = <0x0 0x15008000 0x0 0x900>;
+        reg = <0x0 0x15008200 0x0 0x44>;
 
         mediatek,scam-port = <0>;
 
-        port {
-            endpoint {
-                remote-endpoint = <&cam_in>;
+        /*
+         * scam_in_ep is the receiver's source endpoint (seninf_out_ep in
+         * the mediatek,mt6589-csi2-rx binding) and cam_in_ep is the CAM/ISP
+         * node's sink endpoint (mediatek,mt6589-cam); both are defined in
+         * their own bindings.
+         *
+         * Port 1 would be a second, separate node at 0x15008280/0x44 with
+         * mediatek,scam-port = <1> - not a wider window on this one.
+         */
+        ports {
+            scam_in: port@0 {
+                scam_in_ep: endpoint {
+                    remote-endpoint = <&seninf_out_ep>;
+                };
+            };
+
+            scam_out: port@1 {
+                scam_out_ep: endpoint {
+                    remote-endpoint = <&cam_in_ep>;
+                };
             };
         };
     };
