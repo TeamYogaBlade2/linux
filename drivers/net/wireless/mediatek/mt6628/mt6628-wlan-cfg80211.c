@@ -506,58 +506,93 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
 	return mt6628_rcpi_to_dbm(rcpi) * 100;
 }
 
-static void mt6628_roc_expire(struct mt6628_wlan *wl, u64 cookie)
+/*
+ * Retire a listen window whose cookie the caller has already matched:
+ * hand the channel back, then drop the window's state, then tell cfg80211
+ * the window it was tracking is over.
+ *
+ * The ordering here is the fix for a stale cancel tearing down a newer ROC.
+ * cfg80211 hands our own cookie straight back to us and this counter is the
+ * only source of new ones, so dropping the cookie before the release finished
+ * would let a remain_on_channel() arriving during that release take the very
+ * same cookie -- and then have the cancel that was still in flight release
+ * that new window's channel and expire it.  Keeping the cookie across the
+ * release turns such a request into a plain -EBUSY, and it also keeps the
+ * firmware channel token from being aborted twice.
+ *
+ * The cookie is dropped only once the channel has actually been released, so a
+ * window is always retired exactly once and the timer that expires it is
+ * never left with nothing to expire.
+ */
+static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
+			      struct ieee80211_channel *chan)
 {
-	struct ieee80211_channel *chans[2];
-	unsigned int n_chans = 0;
-	unsigned int i;
-
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->roc_cookie != cookie) {
 		mutex_unlock(&wl->cfg_mutex);
 		return;
 	}
-	for (i = 0; i < wl->roc_n_chans; i++)
-		chans[n_chans++] = wl->roc_chans[i];
-	wl->roc_cookie = 0;
-	wl->roc_n_chans = 0;
-	wl->roc_duration = 0;
 	mutex_unlock(&wl->cfg_mutex);
 
 	/*
 	 * Give the channel back.  Without this the firmware would still be
 	 * holding the grant and the next remain_on_channel request, or a
-	 * reconnect, would be refused.
+	 * reconnect, would be refused.  The cookie stays set across this
+	 * firmware command on purpose, see above.
 	 */
 	mt6628_wlan_release_channel(wl);
 
-	cfg80211_remain_on_channel_expired(&wl->wdev, cookie,
-					   n_chans ? chans[0] : NULL,
-					   GFP_KERNEL);
-}
-
-static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
-{
-	bool active;
-
 	mutex_lock(&wl->cfg_mutex);
-	/*
-	 * cfg80211 passes back the cookie it was given.  Only release the
-	 * channel if it still matches the live request, so a stale cancel
-	 * cannot tear down a newer listen window.
-	 */
-	active = wl->roc_cookie && wl->roc_cookie == cookie;
-	if (active) {
+	if (wl->roc_cookie == cookie) {
 		wl->roc_cookie = 0;
 		wl->roc_n_chans = 0;
 		wl->roc_duration = 0;
 	}
 	mutex_unlock(&wl->cfg_mutex);
 
+	cfg80211_remain_on_channel_expired(&wl->wdev, cookie, chan,
+					   GFP_KERNEL);
+}
+
+static void mt6628_roc_expire(struct mt6628_wlan *wl, u64 cookie)
+{
+	struct ieee80211_channel *chan = NULL;
+
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->roc_cookie != cookie) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+	if (wl->roc_n_chans)
+		chan = wl->roc_chans[0];
+	mutex_unlock(&wl->cfg_mutex);
+
+	mt6628_roc_finish(wl, cookie, chan);
+}
+
+static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
+{
+	struct ieee80211_channel *chan = NULL;
+	bool active;
+
+	mutex_lock(&wl->cfg_mutex);
+	/*
+	 * cfg80211 passes back the cookie it was given, so retire the window
+	 * only if that cookie is still the live one: a stale cancel must not
+	 * tear down a newer listen window.  The state is deliberately left
+	 * alone here and dropped by mt6628_roc_finish() once the channel has
+	 * been handed back, which is what keeps this cookie from being handed
+	 * out again while the cancel is still in flight.
+	 */
+	active = wl->roc_cookie && wl->roc_cookie == cookie;
+	if (active && wl->roc_n_chans)
+		chan = wl->roc_chans[0];
+	mutex_unlock(&wl->cfg_mutex);
+
 	if (!active)
 		return -ENOENT;
 
-	mt6628_wlan_release_channel(wl);
+	mt6628_roc_finish(wl, cookie, chan);
 	return 0;
 }
 
@@ -568,6 +603,17 @@ static void mt6628_roc_work(struct work_struct *work)
 	u64 cookie;
 
 	mutex_lock(&wl->cfg_mutex);
+	/*
+	 * Nothing to do if the window has already been handed back.  Copying
+	 * the cookie out here and matching it again later would race a cancel
+	 * that is between its match and its release; dropping the event is
+	 * safe because that window is fully retired by then either way.
+	 */
+	if (!wl->roc_cookie) {
+		mutex_unlock(&wl->cfg_mutex);
+		return;
+	}
+
 	cookie = wl->roc_cookie;
 	mutex_unlock(&wl->cfg_mutex);
 
@@ -593,18 +639,21 @@ static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
 
 	/*
 	 * Only one listen-class channel can be granted at a time on this
-	 * hardware; cfg80211 only ever asks for one.
+	 * hardware; cfg80211 only ever asks for one.  The check and the cookie
+	 * allocation are both under cfg_mutex, so two requests racing through
+	 * nl80211 cannot observe the same free cookie value and hand it out
+	 * twice.
 	 */
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->roc_cookie) {
 		mutex_unlock(&wl->cfg_mutex);
 		return -EBUSY;
 	}
-	mutex_unlock(&wl->cfg_mutex);
 
 	new_cookie = wl->roc_cookie + 1;
 	if (!new_cookie)
 		new_cookie = 1;
+	mutex_unlock(&wl->cfg_mutex);
 
 	ret = mt6628_wlan_ch_privilege(wl, chan, NULL,
 					MT6628_CH_REQ_TYPE_P2P_LISTEN, true);

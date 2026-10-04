@@ -232,7 +232,11 @@ static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
 			return -ENOMEM;
 
 		/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-		mt6628_wlan_pm_busy(wl);
+		ret = mt6628_wlan_pm_busy(wl);
+		if (ret) {
+			kfree(resp);
+			return ret;
+		}
 
 		sdio_claim_host(wl->func);
 		ret = sdio_readsb(wl->func, resp, MT6628_MCR_WRDR0, rx_len);
@@ -308,12 +312,15 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 		memcpy(pkt + hdr_len + extra_len, data, data_len);
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		goto out_free;
 
 	sdio_claim_host(func);
 	ret = sdio_writesb(func, MT6628_MCR_WTDR0, pkt, tx_len);
 	sdio_release_host(func);
 
+out_free:
 	kfree(pkt);
 
 	if (ret)
@@ -724,7 +731,10 @@ static int mt6628_wlan_resume(struct device *dev)
 	/*
 	 * Reclaim Driver Own before anything else touches the chip.  A
 	 * failure here is not fatal: the driver stays with the firmware, and
-	 * the first register access retries through mt6628_wlan_pm_busy().
+	 * the first register access retries through mt6628_wlan_pm_busy(),
+	 * which reports the failure to its caller rather than touching a chip
+	 * the firmware owns.  pm_idle is deliberately left set so that retry
+	 * is actually attempted.
 	 */
 	mt6628_wlan_pm_resume(wl);
 

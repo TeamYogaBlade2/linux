@@ -66,9 +66,12 @@ static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 	/*
 	 * Every register access goes through here, so this is the single
 	 * place that has to take Driver Own back when the firmware has been
-	 * allowed to power the chip down.
+	 * allowed to power the chip down.  A failed reclaim aborts the
+	 * transfer: issuing it anyway would poke a chip the firmware owns.
 	 */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		return ret;
 
 	ret = sdio_memcpy_fromio(wl->func, &tmp, reg, sizeof(tmp));
 	if (!ret)
@@ -80,8 +83,11 @@ static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 static int mt6628_runtime_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 {
 	__le32 tmp = cpu_to_le32(val);
+	int ret;
 
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		return ret;
 
 	return sdio_memcpy_toio(wl->func, reg, &tmp, sizeof(tmp));
 }
@@ -366,7 +372,9 @@ int ret;
 		return -ENOMEM;
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		goto out_free;
 
 	ret = sdio_readsb(wl->func, buf,
 			  port ? MT6628_MCR_WRDR1 : MT6628_MCR_WRDR0,
@@ -586,7 +594,11 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	memcpy(buf + sizeof(hdr), skb->data, skb->len);
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret) {
+		kfree(buf);
+		goto err_resource;
+	}
 
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR0, buf, xfer_len);
@@ -804,6 +816,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 static void mt6628_runtime_irq(struct sdio_func *func)
 {
 	struct mt6628_wlan *wl = sdio_get_drvdata(func);
+	int ret;
 
 	if (!wl || !wl->runtime_started)
 		return;
@@ -814,8 +827,19 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 	 * is deferred to the work handler.  Mask the interrupt first so the
 	 * ownership transition and the register reads that follow in the
 	 * work handler are not re-entered.
+	 *
+	 * If a reclaim is still owed the firmware owns the chip, so this
+	 * driver must not write to it at all -- and it could not reclaim
+	 * ownership here even if it wanted to, since that call sleeps.  The
+	 * masking write is therefore skipped rather than forced through.
+	 * irq_work re-arms the interrupt as the last thing it does after the
+	 * reclaim succeeds, so the chip still ends up masked by exactly the
+	 * same code as in every other path.
 	 */
-	mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
+	ret = mt6628_wlan_pm_busy_irq(wl);
+	if (!ret)
+		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
+				       MT6628_INT_EN_CLR);
 	schedule_work(&wl->irq_work);
 }
 
@@ -1103,19 +1127,27 @@ int mt6628_wlan_pm_resume(struct mt6628_wlan *wl)
 		return 0;
 
 	/*
-	 * Clear the idle flag first: a failed reclaim must leave the
-	 * driver owning the chip rather than pretending it is asleep.
+	 * pm_idle means "the firmware owns the chip and the driver still owes
+	 * a reclaim".  It is cleared only once the reclaim has actually
+	 * succeeded.
+	 *
+	 * Invariant: pm_idle == false means the driver owns the chip and may
+	 * touch it; pm_idle == true means the chip must not be touched at all
+	 * until a reclaim has succeeded.  Keeping the flag set across a
+	 * failure is what makes a retry possible -- clearing it first would
+	 * turn the first failure into a permanent one, because the early
+	 * return above keys off the same flag.
 	 */
-	wl->pm_idle = false;
-
 	ret = mt6628_wlan_take_driver_own(wl);
 	if (ret) {
 		dev_warn_ratelimited(&wl->func->dev,
 				     "failed to reclaim driver ownership: %d\n",
 				     ret);
+		/* pm_idle deliberately untouched: the next access retries. */
 		return ret;
 	}
 
+	wl->pm_idle = false;
 	wl->driver_owned = true;
 	return 0;
 }
@@ -1145,13 +1177,49 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 				     ret);
 }
 
-void mt6628_wlan_pm_busy(struct mt6628_wlan *wl)
+/*
+ * True while a Driver Own reclaim is still owed, i.e. while every register
+ * and bulk transfer has to be refused.  Exists so the ownership bookkeeping
+ * can be kept consistent when a reclaim fails.
+ */
+static bool mt6628_pm_own_pending(struct mt6628_wlan *wl)
+{
+	return wl->pm_idle;
+}
+
+/*
+ * Claim the chip ahead of a register or bulk transfer.
+ *
+ * Returns 0 when the caller may proceed and -EAGAIN when the reclaim failed:
+ * the firmware still owns the chip, so the caller must abort without issuing
+ * any SDIO transaction.  A non-zero return must never be ignored.
+ *
+ * Process context only -- the reclaim polls the LP engine and sleeps.  The
+ * hard IRQ path uses mt6628_wlan_pm_busy_irq() instead.
+ */
+int mt6628_wlan_pm_busy(struct mt6628_wlan *wl)
 {
 	if (!wl || !wl->runtime_started)
-		return;
+		return 0;
 
 	/* Any register access starts by taking Driver Own back. */
-	mt6628_wlan_pm_resume(wl);
+	return mt6628_wlan_pm_resume(wl);
+}
+
+/*
+ * Hard IRQ context variant.  Attempting the reclaim here would be fatal,
+ * because mt6628_wlan_take_driver_own() calls usleep_range() in its poll
+ * loop, so all this can do is report whether a reclaim is still owed.  The
+ * IRQ fires exactly because the firmware woke us, so the answer is normally
+ * yes; the one caller that cannot tolerate a sleep needs to be able to see
+ * that rather than infer it.
+ */
+int mt6628_wlan_pm_busy_irq(struct mt6628_wlan *wl)
+{
+	if (!wl || !wl->runtime_started)
+		return 0;
+
+	return mt6628_pm_own_pending(wl) ? -EAGAIN : 0;
 }
 
 void mt6628_wlan_pm_idle(struct mt6628_wlan *wl)
@@ -1160,8 +1228,17 @@ void mt6628_wlan_pm_idle(struct mt6628_wlan *wl)
 		return;
 
 	/*
-	 * The firmware woke us, or a transfer just drained: reclaim
-	 * ownership before arming the countdown again.
+	 * The firmware woke us, or a transfer just drained: reclaim ownership
+	 * before arming the countdown again.  This is deliberately void and
+	 * the reclaim result is dropped.  pm_idle() only schedules the
+	 * countdown; if the reclaim fails there is nothing this function can
+	 * usefully do about it, and pm_idle is left set so the retry happens.
+	 * The next actual access reports the failure through pm_busy() and
+	 * aborts, which is where it can be acted on.
+	 *
+	 * The safest response to a failure here is to leave the handoff armed
+	 * anyway: pm_work finds pm_idle already set and returns 0 without
+	 * touching the chip, so ownership cannot drift.
 	 */
 	if (wl->pm_idle)
 		mt6628_wlan_pm_resume(wl);

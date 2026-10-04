@@ -119,7 +119,20 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 	}
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret) {
+		kfree(buf);
+		/*
+		 * Nothing was written, so no CMD_RESULT can arrive for this
+		 * command: drop the pending state here too, exactly as the
+		 * transfer-failure path below does, or the next command would
+		 * wait on a completion that will never come.
+		 */
+		spin_lock_irqsave(&wl->cmd_lock, flags);
+		wl->cmd_pending = false;
+		spin_unlock_irqrestore(&wl->cmd_lock, flags);
+		goto err_resource;
+	}
 
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);

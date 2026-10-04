@@ -849,27 +849,64 @@ static bool mt6628_deauth_rate_limit(struct mt6628_wlan *wl, const u8 *da)
 
 	for (i = 0; i < MT6628_MAX_DEAUTH_INFO_COUNT; i++) {
 		struct mt6628_deauth_info *info = &wl->deauth_info[i];
+		unsigned long deadline;
 
 		if (is_zero_ether_addr(info->da))
 			continue;
 
-		if (time_after_eq(now, info->last_send +
-				 msecs_to_jiffies(MT6628_MIN_DEAUTH_INTERVAL_MS))) {
-			ether_addr_copy(info->da, da);
-			info->last_send = now;
-			mutex_unlock(&wl->cfg_mutex);
-			return true;
-		}
+		/*
+		 * The peer has to be matched before anything else, and the ring
+		 * slot it occupies has to be the one that gates it.  Checking the
+		 * expiry of an unrelated peer's entry first would let that other
+		 * peer's slot decide this peer's reply, so this peer could answer
+		 * again inside its own cooldown -- exactly the deauth storm the
+		 * ring exists to stop.
+		 */
+		if (!ether_addr_equal(info->da, da))
+			continue;
 
-		if (ether_addr_equal(info->da, da)) {
+		deadline = info->last_send +
+			   msecs_to_jiffies(MT6628_MIN_DEAUTH_INTERVAL_MS);
+		if (!time_after_eq(now, deadline)) {
 			mutex_unlock(&wl->cfg_mutex);
 			return false;
 		}
+
+		/* Our own slot, past its cooldown: refresh it and reply. */
+		info->last_send = now;
+		mutex_unlock(&wl->cfg_mutex);
+		return true;
 	}
 
-	/* Ring full: answer rather than stay silent. */
+	/*
+	 * No entry for this peer yet: take a slot that is either free or past
+	 * its own cooldown.  An expired entry belonging to a different peer
+	 * still counts as a usable slot here, exactly as the downstream ring
+	 * does, because this peer's cooldown is what gates it and this peer
+	 * has none yet.
+	 */
+	for (i = 0; i < MT6628_MAX_DEAUTH_INFO_COUNT; i++) {
+		struct mt6628_deauth_info *info = &wl->deauth_info[i];
+
+		if (!is_zero_ether_addr(info->da) &&
+		    !time_after_eq(now, info->last_send +
+				    msecs_to_jiffies(MT6628_MIN_DEAUTH_INTERVAL_MS)))
+			continue;
+
+		ether_addr_copy(info->da, da);
+		info->last_send = now;
+		mutex_unlock(&wl->cfg_mutex);
+		return true;
+	}
+
+	/*
+	 * Every slot belongs to a different peer and all four are inside their
+	 * cooldowns.  Answering would let one misbehaving peer evict another
+	 * peer's cooldown, so stay silent and let its next event through once
+	 * a slot expires.
+	 */
 	mutex_unlock(&wl->cfg_mutex);
-	return true;
+	return false;
 }
 
 static int mt6628_send_deauth(struct mt6628_wlan *wl, u16 reason)

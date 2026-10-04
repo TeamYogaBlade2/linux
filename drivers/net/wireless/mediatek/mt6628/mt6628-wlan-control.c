@@ -806,7 +806,27 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	memcpy(buf + sizeof(hdr), frame, frame_len);
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	mt6628_wlan_pm_busy(wl);
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret) {
+		/*
+		 * Nothing was written, so no EVENT_ID_TX_DONE will arrive.
+		 * Retire the wait the same way the transfer-failure path
+		 * below does; leaving mgmt_tx_pending set would make every
+		 * later mgmt_tx with wait_for_status refuse forever.
+		 */
+		if (wait_for_status) {
+			spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+			if (wl->mgmt_tx_pending &&
+			    wl->mgmt_tx_packet_seq == packet_seq) {
+				wl->mgmt_tx_status = ret;
+				wl->mgmt_tx_pending = false;
+				complete(&wl->mgmt_tx_done);
+			}
+			spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+		}
+		kfree(buf);
+		goto err_resource;
+	}
 
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);

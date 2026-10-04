@@ -185,7 +185,8 @@ int mt6628_wlan_take_driver_own(struct mt6628_wlan *wl);
 int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl);
 int mt6628_wlan_pm_resume(struct mt6628_wlan *wl);
 void mt6628_wlan_pm_idle(struct mt6628_wlan *wl);
-void mt6628_wlan_pm_busy(struct mt6628_wlan *wl);
+int mt6628_wlan_pm_busy(struct mt6628_wlan *wl);
+int mt6628_wlan_pm_busy_irq(struct mt6628_wlan *wl);
 int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl);
 
 int mt6628_wlan_ch_privilege(struct mt6628_wlan *wl,
