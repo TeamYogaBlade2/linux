@@ -1142,7 +1142,22 @@ static struct snd_soc_dai_driver mt6320_dai_driver[] = {
 		.name = "mt6320-snd-codec-aif1",
 		.ops = &mt6320_dai_ops,
 		.playback = {
-			.stream_name = "AIF1 Playback",
+			/*
+			 * Named for the AFE playback DAI's memory interface,
+			 * which is also the machine dai_link's stream_name
+			 * ("DL1 Playback" in both mt6589-afe-pcm.c and
+			 * mt6589-mt6320.c).  It has to be this exact string:
+			 * it names the DAI widget the routes connect to, and
+			 * only equal stream names pair up in
+			 * snd_soc_dapm_link_dai_widgets().
+			 *
+			 * This was "AIF1 Playback", which matched nothing:
+			 * the route below connects "DL1 Playback" to the DAC,
+			 * so the DAC had no path from the DAI and playback ran
+			 * with the analog path powered but no data reaching it
+			 * - one pop as the outputs settled, then silence.
+			 */
+			.stream_name = "DL1 Playback",
 			.channels_min = 1,
 			.channels_max = 2,
 			.rates = MT6320_CODEC_RATES,
