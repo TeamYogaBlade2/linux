@@ -845,6 +845,39 @@ static void mtk_cam_vb2_return_buffers(struct mtk_cam *cam,
 }
 
 /*
+ * Return one buffer that userspace actually queued, or NULL if there is none.
+ *
+ * The set of queued buffers is what VB2_BUF_STATE_ACTIVE means: vb2_core_qbuf()
+ * puts a QBUF'd buffer in that state and the core hands it to the driver in
+ * buf_queue(), which is only reached for buffers userspace queued.  So this is
+ * the list of QBUF'd indices, maintained by the core itself, and the driver does
+ * not need to keep a second one.
+ *
+ * The scan cannot fail at STREAMON time: vb2_start_streaming() moves every
+ * buffer on the queue's queued_list into the driver (via __enqueue_in_driver())
+ * before calling us, and min_queued_buffers is 1, so at least one buffer is
+ * ACTIVE whenever this runs.
+ */
+static struct vb2_buffer *mtk_cam_vb2_get_queued(struct vb2_queue *vq)
+{
+	struct mtk_cam *cam = vq->drv_priv;
+	unsigned int num, i;
+
+	lockdep_assert_held(&cam->lock);
+
+	num = vb2_get_num_buffers(vq);
+
+	for (i = 0; i < num; i++) {
+		struct vb2_buffer *vb = vb2_get_buffer(vq, i);
+
+		if (vb && vb->state == VB2_BUF_STATE_ACTIVE)
+			return vb;
+	}
+
+	return NULL;
+}
+
+/*
  * Program the engine for the first queued buffer and mark the pipeline
  * streaming.
  *
@@ -870,7 +903,18 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
 	if (!count)
 		return -ENODEV;
 
-	vb = vq->bufs[0];
+	/*
+	 * Take a buffer the engine is allowed to write into, i.e. one userspace
+	 * queued.  It used to be vq->bufs[0], which is the first *allocated*
+	 * buffer, not the first *queued* one: VB2 only guarantees that some buffer
+	 * is queued before STREAMON, so with REQBUFS 4 / QBUF 2 / STREAMON,
+	 * bufs[0] may be a buffer userspace is still holding, and the DMA would
+	 * land in memory that is not even mapped for the engine.
+	 */
+	vb = mtk_cam_vb2_get_queued(vq);
+	if (!vb)
+		return -ENODEV;
+
 	mtk_cam_vb2_to_buf(vb)->dma_addr =
 		vb2_dma_contig_plane_dma_addr(vb, 0);
 
@@ -951,12 +995,19 @@ static void mtk_cam_vb2_stop_streaming(struct vb2_queue *vq)
 	mtk_cam_stop(cam);
 
 	/*
-	 * Return the in-flight buffer as DONE rather than ERROR.  It is DONE
-	 * because nothing went wrong: the engine simply never finished, because
-	 * there is no sensor feeding this board.  ERROR would tell userspace the
-	 * frame is corrupt, which is a claim this driver cannot support.
+	 * Return the unfinished buffers as ERROR, not DONE.  No frame completed
+	 * -- mtk_cam_irq() is the only thing that marks a buffer DONE and with no
+	 * sensor feeding this board it never runs -- so DONE here would hand
+	 * userspace a buffer it would read as a complete, valid picture when it
+	 * holds a partial or empty DMA.  ERROR is the honest report: the operation
+	 * on this buffer ended without producing a frame, and V4L2 says as much.
+	 *
+	 * It used to be DONE, on the reasoning that nothing had gone wrong so ERROR
+	 * would wrongly claim corruption.  But DONE is equally a claim about the
+	 * frame's contents (vb2 fills bytesused/flags and userspace is expected to
+	 * consume it), and that claim is the one that is actually false.
 	 */
-	mtk_cam_vb2_return_buffers(cam, VB2_BUF_STATE_DONE);
+	mtk_cam_vb2_return_buffers(cam, VB2_BUF_STATE_ERROR);
 
 	v4l2_subdev_disable_streams(&cam->sd, CAM_PAD_SINK, BIT(0));
 
@@ -978,10 +1029,31 @@ static void mtk_cam_vb2_stop_streaming(struct vb2_queue *vq)
 /*
  * A buffer reached the engine.
  *
- * Called from VB2's QBUF path, i.e. when userspace offers a buffer.  With no
- * sensor the engine is never mid-transfer, so this only records the address, and
- * re-programs the destination if a buffer arrives while already streaming --
- * the geometry is unchanged in that case, so only the address moves.
+ * Called from VB2's QBUF path, i.e. when userspace offers a buffer.  All this
+ * does is cache the DMA address; the registers are not touched.
+ *
+ * The destination is deliberately NOT reprogrammed here while streaming.
+ * This used to be
+ *
+ *	if (cam->streaming)
+ *		mtk_cam_config_imgo(cam, cam_buf->dma_addr, ...);
+ *
+ * which rewrites CAM_IMGO_BASE_ADDR from a QBUF, i.e. in the middle of a frame,
+ * with nothing establishing that the engine is not mid-transfer into the old
+ * address.  A buffer arriving there may belong to a frame already in flight,
+ * and moving the destination under it splits one frame across two buffers with
+ * no way for userspace to know.
+ *
+ * Deferring the reprogram to the frame-end path instead was considered and
+ * rejected: mtk_cam_irq() runs in atomic context, while mtk_cam_config_imgo()
+ * asserts cam->lock (a mutex) and can call dev_err(), so programming from there
+ * would need a second, lock-free variant of the function and a next-buffer
+ * selection policy the driver does not otherwise have.  Not programming at all
+ * is both smaller and correct for this driver: the engine is programmed once,
+ * from start_streaming(), for the single buffer that stream uses (see the note
+ * there), and that buffer is retained until STREAMOFF, so the destination stays
+ * valid and in-range for the whole stream.  A later QBUF simply replaces what
+ * would have been used after the next frame.
  */
 static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 {
@@ -992,10 +1064,6 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 	lockdep_assert_held(&cam->lock);
 
 	cam_buf->dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
-
-	if (cam->streaming)
-		mtk_cam_config_imgo(cam, cam_buf->dma_addr, cam->src_fmt.width,
-				    cam->src_fmt.height);
 }
 
 static const struct vb2_ops mtk_cam_vb2_ops = {
@@ -1225,7 +1293,8 @@ static void mtk_cam_irq(struct mtk_cam *cam)
 	 * :252); the frame counter a DQBUF reports lives in vb2_buffer.timestamp,
 	 * which vb2 fills from the queue's timestamp_flags.  The buffer address
 	 * is read here only to keep the programmed destination visible in a
-	 * debugger; the register was already written by buf_queue/start_streaming.
+	 * debugger; the register was already written by start_streaming(), and
+	 * nothing rewrites it while the stream runs.
 	 */
 	(void)dma_addr;
 
@@ -1349,8 +1418,13 @@ static int mtk_cam_register(struct v4l2_subdev *sd)
 	cam->vdev_dev.minor = -1;
 	cam->vdev_dev.lock = &cam->lock;
 	cam->vdev_dev.v4l2_dev = cam->sd.v4l2_dev;
+	/*
+	 * No V4L2_CAP_READWRITE: there is no .read in mtk_cam_v4l2_fops and no
+	 * vidioc_read in the ioctl ops, so read() on this node returns an error
+	 * from the core rather than frames.  Advertising it is a false claim -
+	 * userspace reads that bit as "streaming readback is available".
+	 */
 	cam->vdev_dev.device_caps = V4L2_CAP_VIDEO_CAPTURE |
-				     V4L2_CAP_READWRITE |
 				     V4L2_CAP_STREAMING |
 				     V4L2_CAP_IO_MC;
 	video_set_drvdata(&cam->vdev_dev, cam);
