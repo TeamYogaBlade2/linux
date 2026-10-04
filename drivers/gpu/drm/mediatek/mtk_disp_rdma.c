@@ -39,6 +39,7 @@
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
 #define DISP_RDMA_MEM_CON			0x0024
+#define DISP_REG_RDMA_MEM_SRC_PITCH		0x002c
 
 #define MEM_MODE_INPUT_FORMAT_RGB565_MT65XX		(0x004 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGB888_MT65XX		(0x008 << 4)
@@ -285,6 +286,28 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,
 			   DISP_REG_RDMA_SIZE_CON_1, rdma->data->size_con1);
+
+	/*
+	 * Source pitch, in pixels per line - the same conversion the layer
+	 * path does, because the field is scaled by a line index rather than
+	 * by bytes-per-pixel.
+	 *
+	 * This has to be written here as well as in mtk_rdma_layer_config():
+	 * the layer hook never runs on this path, since no plane is ever
+	 * attached to RDMA0, and the stock driver programs the pitch from
+	 * RDMAConfig() in direct-link mode too - ddp_path.c passes the real
+	 * pitch with address 0 when it selects RDMA_MODE_DIRECT_LINK. Leaving
+	 * the pitch at reset is what left RDMA0 raising EOF_ABNORMAL while
+	 * the overlay completed frames around it.
+	 *
+	 * The start address is zero in direct-link mode for the same reason
+	 * the stock driver passes 0: there is no memory ring to read from.
+	 */
+	mtk_ddp_write_relaxed(cmdq_pkt, (width & GENMASK(15, 0)),
+			      &rdma->cmdq_reg, rdma->regs,
+			      DISP_REG_RDMA_MEM_SRC_PITCH);
+	mtk_ddp_write_relaxed(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
+			      rdma->data->mem_start_addr_reg);
 
 	if (rdma->fifo_size)
 		rdma_fifo_size = rdma->fifo_size;
