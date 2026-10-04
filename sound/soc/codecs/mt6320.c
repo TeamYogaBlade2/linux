@@ -837,6 +837,15 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	 * interfaces DL1 and VUL), so the codec matches them end to end rather
 	 * than imposing "AIF1 ...", and the analog front ends hang off the
 	 * matching widget just as "DAC" hangs off "DL1 Playback" above.
+	 *
+	 * A route is { sink, control, source }: the signal flows source ->
+	 * sink, and the widget that consumes the audio is the sink.  So the
+	 * mic front end is the SOURCE feeding "Mic Bias", and the capture DAI
+	 * widget is the SINK the front end feeds.  Compare the playback pair
+	 * just above, { "DAC", NULL, "DL1 Playback" }, where "DL1 Playback" is
+	 * the sink.  This matches upstream sound/soc/codecs/mt6357.c, which has
+	 * the same { "ADC", NULL, ... } shape with the ADC as the sink of its
+	 * supply route.
 	 */
 	{ "DAC", NULL, "DL1 Playback" },
 	{ "HP Driver", NULL, "DAC" },
@@ -846,7 +855,7 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker Driver", NULL, "Analog" },
 	{ "Speaker", NULL, "Speaker Driver" },
 	{ "Mic Bias", NULL, "ADC" },
-	{ "ADC", NULL, "VUL Capture" },
+	{ "VUL Capture", NULL, "ADC" },
 };
 
 /* Output volume: -4dB .. +8dB in 1dB steps. */
