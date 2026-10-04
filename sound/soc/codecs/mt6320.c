@@ -573,10 +573,12 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		 * *and* held the headphone amplifiers in their disabled, input-
 		 * and output-reset state: the path settled hard enough to make
 		 * one pop as the bias ramped, and then nothing came out.
-		 * 0x6010 differs only in bit 13, so power-down cleared two of
-		 * the three HS disable bits and left RG_AUDHSSCDISABLE asserted,
-		 * which would have kept the headphone silent on every stream
-		 * after the first even once power-up was right.
+		 * 0x6010 differs from 0x7010 only in bit 12, so power-down
+		 * cleared two of the three HS disable bits while leaving
+		 * RG_AUDHSSCDISABLE (bit 13) asserted, which would have kept
+		 * the headphone silent on every stream after the first even
+		 * once power-up was right.  (Bit 12 is not named in the
+		 * VAUDP12 group in upmu_hw.h.)
 		 *
 		 * Written as an explicit full value, not a bit update: the
 		 * surrounding sequence clears the HP power-up bits (bit 0) and
