@@ -242,18 +242,22 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	if (rate_code < 0)
 		return rate_code;
 
-	priv->rate_code = rate_code;
-
-	/*
-	 * The capture SRC has its own encoding and its own rate ladder, so
-	 * resolve and validate it here as well.  mt6320_mic_event() re-derives
-	 * the uplink code from priv->ul_rate_code for its UL_SRC_CON0_H write.
-	 */
 	ul_rate_code = mt6320_ul_src_rate_code(rate);
 	if (ul_rate_code < 0)
 		return ul_rate_code;
 
-	priv->ul_rate_code = ul_rate_code;
+	/*
+	 * Store only the code this stream uses.  This DAI driver declares both
+	 * a playback and a capture stream, so presence of a stream_name is not
+	 * what distinguishes them - the substream direction is.  Deriving the
+	 * direction from params rather than from the DAI matters because a
+	 * single shared pair of fields let capture's hw_params overwrite the
+	 * downlink code the running playback stream was using, and vice versa.
+	 */
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		priv->rate_code = rate_code;
+	else
+		priv->ul_rate_code = ul_rate_code;
 
 	/*
 	 * Write the whole register rather than updating only the rate field.
@@ -263,11 +267,16 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	 * PMIC downlink SRC disabled.  A plain write is what the stock driver
 	 * effectively does, and what the comment above this call describes.
 	 *
-	 * Only the downlink SRC is programmed from here: the uplink SRC is
-	 * written by mt6320_mic_event() during stream start, because the
-	 * vendor sequences it there (it needs the mic path powered first, and
-	 * writes the rate, clears it, then writes it back).
+	 * Only the downlink SRC is programmed from here, and only for a
+	 * playback stream: it is the playback SRC2 rate register, so a capture
+	 * hw_params writing it would reprogram the running playback stream's
+	 * rate.  The uplink SRC is written by mt6320_mic_event() during stream
+	 * start, because the vendor sequences it there - it needs the mic path
+	 * powered first, and writes the rate, clears it, then writes it back.
 	 */
+	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
+		return 0;
+
 	return regmap_write(priv->regmap, MT6320_ABB_AFE_DL_SRC2_CON0_H,
 			    MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
 			    (rate_code << 12));
