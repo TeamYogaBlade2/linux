@@ -12,6 +12,9 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 
 #include "../../../pwm/mt6589-bls-ddp.h"
@@ -391,6 +394,20 @@ static const struct mtk_ddp_comp_funcs ddp_postmask = {
 	.stop = mtk_postmask_stop,
 };
 
+/*
+ * The RDMA funcs are shared by every SoC in this driver, so they carry
+ * .layer_config (and .layer_nr) for RDMA0/1/2/4 alike.  No SoC actually
+ * routes a plane to RDMA today, so mtk_rdma_layer_config() is dead code on all
+ * of them: a plane is only ever attached to path index 0 or 1 (see
+ * mtk_crtc_num_comp_planes() and mtk_ddp_comp_for_plane() in mtk_crtc.c), and
+ * in every per-SoC path array in mtk_drm_drv.c the RDMA sits at index >= 2 -
+ * on MT6589, for instance, the main path is OVL0, COLOR0, BLS, RDMA0, DSI0.
+ * The hook is kept because an RDMA-first display path is plausible future
+ * hardware; do not assume it runs today.  Note that
+ * mtk_ddp_comp_supports_plane() reports true for RDMA, since it only asks
+ * whether the layer hooks exist - the CRTC, not the funcs table, is what
+ * keeps RDMA from ever receiving a plane.
+ */
 static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.clk_enable = mtk_rdma_clk_enable,
 	.clk_disable = mtk_rdma_clk_disable,
@@ -402,7 +419,6 @@ static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.enable_vblank = mtk_rdma_enable_vblank,
 	.disable_vblank = mtk_rdma_disable_vblank,
 	.layer_nr = mtk_rdma_layer_nr,
-	.config = mtk_rdma_config,
 	.layer_config = mtk_rdma_layer_config,
 	.get_formats = mtk_rdma_get_formats,
 	.get_num_formats = mtk_rdma_get_num_formats,
@@ -730,6 +746,59 @@ int mtk_ddp_comp_init(struct device *dev, struct device_node *node, struct mtk_d
 #endif
 
 	platform_set_drvdata(comp_pdev, priv);
+
+	return 0;
+}
+
+/**
+ * mtk_ddp_comp_fb_dma_addr - fetch the DMA address of a single-plane framebuffer
+ * @fb: the framebuffer to inspect
+ * @addr: output, the DMA address of the backing buffer on success
+ *
+ * Every DDP block programs a single starting address per layer, and this
+ * driver only ever creates single-plane framebuffers (mtk_drm_mode_fb_create()
+ * rejects anything else).  Callers - the plane code that fills
+ * &mtk_plane_pending_state, and any offload component that copies from or to a
+ * plane - should use this instead of indexing @fb->obj[] and calling
+ * to_drm_gem_dma_obj() directly, which turns a bad framebuffer into a NULL
+ * dereference inside container_of().
+ *
+ * The GEM object must be a DMA-helper object, because that is the only layout
+ * this driver allocates and imports (the driver sets DRM_GEM_DMA_DRIVER_OPS).
+ * Reading dma_addr out of any other object layout would be garbage.
+ *
+ * Return: 0 and the address in @addr on success, or a negative errno if @fb is
+ * NULL, is not a single-plane framebuffer, has no GEM object, or is not backed
+ * by a DMA-helper GEM object.
+ */
+int mtk_ddp_comp_fb_dma_addr(struct drm_framebuffer *fb, dma_addr_t *addr)
+{
+	struct drm_gem_object *gem;
+
+	if (!fb || !addr)
+		return -EINVAL;
+
+	if (fb->format->num_planes != 1)
+		return -EINVAL;
+
+	/*
+	 * drm_gem_fb_get_obj() is the accessor that validates the plane index
+	 * and warns on a missing obj[]; using it keeps a bad framebuffer from
+	 * turning into a NULL dereference inside container_of() below.
+	 */
+	gem = drm_gem_fb_get_obj(fb, 0);
+	if (!gem)
+		return -EINVAL;
+
+	/*
+	 * This driver only ever creates GEM objects through the DMA helper, so
+	 * every object it can hand us must be a struct drm_gem_dma_object.  The
+	 * core has no generic "is this a DMA object" predicate, so that contract
+	 * is what makes the container_of() below safe: DRM_GEM_DMA_DRIVER_OPS in
+	 * mtk_drm_drv.c allocates and imports only DMA-helper objects, and
+	 * mtk_drm_mode_fb_create() only accepts single-plane formats.
+	 */
+	*addr = to_drm_gem_dma_obj(gem)->dma_addr;
 
 	return 0;
 }

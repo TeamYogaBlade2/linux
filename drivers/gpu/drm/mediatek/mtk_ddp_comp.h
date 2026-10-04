@@ -18,6 +18,7 @@ struct device;
 struct device_node;
 struct drm_crtc;
 struct drm_device;
+struct drm_framebuffer;
 struct mtk_plane_state;
 struct drm_crtc_state;
 
@@ -101,18 +102,48 @@ struct mtk_ddp_comp {
 	const struct mtk_ddp_comp_funcs *funcs;
 };
 
+/**
+ * mtk_ddp_comp_supports_plane - can a DRM plane be attached to this component?
+ * @comp: the DDP component
+ *
+ * A component owns a plane if and only if it implements the layer hooks that
+ * the CRTC drives: &mtk_ddp_comp_funcs.layer_nr to advertise how many planes it
+ * can take, and &mtk_ddp_comp_funcs.layer_config to program them.  Both are
+ * required: @layer_nr alone only claims the planes, and @layer_config alone
+ * claims to program planes the CRTC would never have allocated.
+ *
+ * This answers "does this component implement the plane hooks at all?", which
+ * is what distinguishes a component that can never take a plane (COLOR, DSI,
+ * BLS, ... and PWM/WDMA, which have no funcs pointer at all) from one that
+ * does.  It deliberately says nothing about *where* in a pipeline the component
+ * sits: that is the CRTC's business, and no SoC currently wires a plane to
+ * anything but path index 0 or 1.
+ *
+ * Note that RDMA reports true here even though no SoC currently routes a
+ * plane to it - see the comment on ddp_rdma in mtk_ddp_comp.c.
+ *
+ * Return: true if @comp implements both layer hooks, false otherwise
+ * (including @comp being NULL or having no funcs at all).
+ */
+static inline bool mtk_ddp_comp_supports_plane(struct mtk_ddp_comp *comp)
+{
+	if (!comp || !comp->funcs)
+		return false;
+
+	return comp->funcs->layer_nr && comp->funcs->layer_config;
+}
+
 static inline int mtk_ddp_comp_power_on(struct mtk_ddp_comp *comp)
 {
-	if (comp->funcs && comp->funcs->power_on)
+	if (comp && comp->funcs && comp->funcs->power_on)
 		return comp->funcs->power_on(comp->dev);
 	else
 		return pm_runtime_resume_and_get(comp->dev);
-	return 0;
 }
 
 static inline void mtk_ddp_comp_power_off(struct mtk_ddp_comp *comp)
 {
-	if (comp->funcs && comp->funcs->power_off)
+	if (comp && comp->funcs && comp->funcs->power_off)
 		comp->funcs->power_off(comp->dev);
 	else
 		pm_runtime_put(comp->dev);
@@ -346,6 +377,16 @@ static inline void mtk_ddp_comp_encoder_index_set(struct mtk_ddp_comp *comp)
 {
 	if (comp->funcs && comp->funcs->encoder_index)
 		comp->encoder_index = (int)comp->funcs->encoder_index(comp->dev);
+	else
+		/*
+		 * Without the hook this component cannot be an encoder.  Say so
+		 * explicitly: mtk_crtc_connector_change() only skips a route
+		 * component whose encoder_index is negative, so leaving the
+		 * zero-initialised default in place would make a hook-less
+		 * component spuriously match encoder 0 and be appended to the
+		 * CRTC path.
+		 */
+		comp->encoder_index = -1;
 }
 
 int mtk_ddp_comp_get_id(struct device_node *node,
@@ -354,6 +395,7 @@ int mtk_find_possible_crtcs(struct drm_device *drm, struct device *dev);
 int mtk_ddp_comp_init(struct device *dev, struct device_node *comp_node, struct mtk_ddp_comp *comp,
 		      unsigned int comp_id);
 enum mtk_ddp_comp_type mtk_ddp_comp_get_type(unsigned int comp_id);
+int mtk_ddp_comp_fb_dma_addr(struct drm_framebuffer *fb, dma_addr_t *addr);
 void mtk_ddp_write(struct cmdq_pkt *cmdq_pkt, unsigned int value,
 		   struct cmdq_client_reg *cmdq_reg, void __iomem *regs,
 		   unsigned int offset);
