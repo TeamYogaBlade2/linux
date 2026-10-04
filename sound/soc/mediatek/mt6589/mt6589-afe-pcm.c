@@ -755,6 +755,17 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
+	/*
+	 * Mirror the playback-side check in mt6589_afe_pcm_prepare(): that
+	 * function returns to vul_prepare() before its own check, so without
+	 * this a negative code reaches FIELD_PREP().  FIELD_PREP only masks
+	 * the field, it does not reject the value, so -EINVAL would be
+	 * truncated into the 4-bit VUL rate field and program a plausible
+	 * looking but wrong divider.
+	 */
+	if (rate_code < 0)
+		return -EINVAL;
+
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_VUL_RATE,
 				 FIELD_PREP(AFE_DAC_CON1_VUL_RATE, rate_code));
@@ -774,6 +785,10 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	u32 base = lower_32_bits(runtime->dma_addr);
 	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
+
+	/* Same guard as in vul_prepare(): this recomputes the code itself. */
+	if (rate_code < 0)
+		return -EINVAL;
 
 	afe->vul_substream = substream;
 
