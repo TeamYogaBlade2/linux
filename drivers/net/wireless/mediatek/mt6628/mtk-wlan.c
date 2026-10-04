@@ -729,16 +729,20 @@ static int mt6628_wlan_resume(struct device *dev)
 		return 0;
 
 	/*
-	 * Reclaim Driver Own before anything else touches the chip.  A
-	 * failure here is not fatal: the driver stays with the firmware, and
-	 * the first register access retries through mt6628_wlan_pm_busy(),
-	 * which reports the failure to its caller rather than touching a chip
-	 * the firmware owns.  pm_idle is deliberately left set so that retry
-	 * is actually attempted.
+	 * Reclaim Driver Own before anything else touches the chip.
+	 *
+	 * The failure is reported rather than swallowed: the driver stays with
+	 * the firmware, pm_idle is left set so that the next real access
+	 * retries through mt6628_wlan_pm_busy() (which aborts rather than
+	 * touching a chip the firmware owns), and the PM core leaves the
+	 * device suspended.  Returning 0 here told the upper layers that
+	 * resume had succeeded for a chip this driver still cannot use.
+	 *
+	 * There is deliberately no power_off() on the error path: the chip is
+	 * already running and owned by the firmware, and forcing it off would
+	 * tear down a working state that a later reclaim can recover.
 	 */
-	mt6628_wlan_pm_resume(wl);
-
-	return 0;
+	return mt6628_wlan_pm_resume(wl);
 }
 
 static const struct dev_pm_ops mt6628_wlan_pm_ops = {
