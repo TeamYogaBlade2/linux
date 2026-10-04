@@ -188,6 +188,14 @@ static const struct mfd_cell mt6320_devs[] = {
 	}, {
 		.name = "mt6320-sound",
 		.of_compatible = "mediatek,mt6320-sound",
+	}, {
+		/*
+		 * The vibrator is an LDO inside the PMIC with no resources of
+		 * its own: the driver takes the parent's regmap with
+		 * dev_get_regmap(), so it only needs to be instantiated.
+		 */
+		.name = "mt6320-vibrator",
+		.of_compatible = "mediatek,mt6320-vibrator",
 	},
 };
 

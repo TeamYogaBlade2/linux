@@ -304,6 +304,19 @@ config INPUT_MAX8997_HAPTIC
 	  To compile this driver as module, choose M here: the
 	  module will be called max8997-haptic.
 
+config INPUT_MT6320_VIBRATOR
+	tristate "MediaTek MT6320 PMIC vibrator support"
+	depends on LEDS_CLASS && REGULATOR
+	help
+	  This option enables the vibrator (haptics) driver for the
+	  MediaTek MT6320 PMIC, used by MediaTek MT6589 SoCs. The driver
+	  controls the PMIC's integrated VIBR LDO, whose output voltage
+	  acts as the vibration amplitude, and exposes it through the
+	  LED classdev so userspace can set a vibration pattern.
+
+	  To compile this driver as module, choose M here: the
+	  module will be called mt6320-vibrator.
+
 config INPUT_MC13783_PWRBUTTON
 	tristate "MC13783 ON buttons"
 	depends on MFD_MC13XXX
