@@ -1012,13 +1012,18 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	if (!ovl->layer_dbg_done) {
 		ovl->layer_dbg_done = true;
 		dev_info(dev,
-			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n",
+			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n"
+			 "ovl layer%d: rdma_ctrl=%#x rdma_gmc=%#x sta=%#x\n",
 			 idx,
 			 readl(ovl->regs + DISP_REG_OVL_ADDR(ovl, idx)),
 			 readl(ovl->regs + DISP_REG_OVL_PITCH(idx)),
 			 readl(ovl->regs + DISP_REG_OVL_SRC_SIZE(idx)),
 			 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
-			 readl(ovl->regs + DISP_REG_OVL_CON(idx)));
+			 readl(ovl->regs + DISP_REG_OVL_CON(idx)),
+			 idx,
+			 readl(ovl->regs + DISP_REG_OVL_RDMA_CTRL(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_RDMA_GMC(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_STA));
 	}
 }
 
