@@ -1386,8 +1386,36 @@
 			interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&infracfg CLK_INFRA_DEVAPC>;
 			clock-names = "devapc-infra-clock";
-			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			/*
+			 * No power-domains property: DEVAPC is not part of
+			 * any switchable SPM domain.
+			 *
+			 * Both register windows are listed in Table 3-2
+			 * "Infrastructure System Memory Map" - 0x1001_0000 is
+			 * "Device APC AO" and 0x1020_7000 is "device_apc
+			 * monitor module" - whereas the display blocks live
+			 * in the separate multimedia map.  The datasheet has
+			 * no DEVAPC entry among the SPM *_PWR_CON registers
+			 * (CPU, DBG, MD1, MD2, MFG, VDE, VEN, IFR, ISP, DIS,
+			 * DPY, FC0-3) and no devapc bit in PWR_STATUS, so no
+			 * power domain controls this block.
+			 *
+			 * That makes MT6589_POWER_DOMAIN_DIS not merely
+			 * redundant but wrong: it is a real switchable domain
+			 * (SPM_DIS_PWR_CON, display SRAM power-down in
+			 * GENMASK(11,8)).  Claiming it would tie the lifetime
+			 * of a security-monitoring block to the display with
+			 * no hardware relationship, and risks leaving DEVAPC
+			 * without register access if DIS is powered down.
+			 * Its only gate is the infracfg clock above, which is
+			 * what actually has to be enabled before any register
+			 * is touched.
+			 *
+			 * Upstream agrees: the MT6779 devapc node also carries
+			 * no power-domains property.
+			 */
 		};
+
 		mutex: mutex@14011000 {
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;

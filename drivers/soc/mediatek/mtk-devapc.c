@@ -483,6 +483,27 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 
 /*
  * mt6589_start - prepare every instance and apply the DT permission table.
+ *
+ * This runs exactly once, from probe.  There is deliberately no PM runtime
+ * suspend/resume callback, and that is a correctness decision rather than an
+ * oversight:
+ *
+ *  - The permission windows are in the always-on (AO) window and the violation
+ *    windows are in a separately clocked PD window, but neither is in a
+ *    switchable SPM power domain (see the devapc node in mt6589.dtsi), so
+ *    there is nothing that would drop the registers across a suspend.  The
+ *    only gate is the infracfg devapc clock, which the driver holds enabled
+ *    for its whole lifetime via devm_clk_get_enabled().
+ *
+ *  - Re-programming the permission windows from a resume callback would be
+ *    actively wrong while MT6589_DEVPAPC_APC_LOCK is unused: if that register
+ *    is ever found to lock the windows one way at first write, a resume that
+ *    rewrites them would silently fail to restore the policy it thought it
+ *    was restoring.  See the header for the full evidence that its polarity
+ *    is unknown.
+ *
+ * Violations therefore keep being reported across suspend/resume with the
+ * policy configured here, and nothing re-touches it.
  */
 static void mt6589_start(struct mtk_devapc_context *ctx)
 {
@@ -492,20 +513,40 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 	/*
 	 * Interrupt-monitoring policy, read from DT.  This is a boolean, not a
 	 * bitmask: VIO_MASK is per-slave and per-domain, so a scalar would
-	 * imply a precision this driver does not have.  Absent (the default)
-	 * interrupts stay unmasked so bring-up logs every violation.
+	 * imply a precision this driver does not have.
+	 *
+	 * Unmasked (the default) is the bring-up setting: every violation on
+	 * every slave raises an interrupt so an unexpected access shows up in
+	 * the log immediately.  That is the right choice while the slave
+	 * permission table is still being discovered, and the wrong choice for
+	 * production, where a denied access is expected traffic and would
+	 * otherwise turn into interrupt load.  Boards that have settled their
+	 * mediatek,devapc-forbid-slaves table should set
+	 * mediatek,vio-mask-interrupts to mask the notifications; the
+	 * permissions and the D<d>_VIO_STA status bits keep working either way,
+	 * so masking costs observability of a policy that is already settled
+	 * and nothing more.
 	 */
 	mask_irqs = of_property_read_bool(ctx->dev->of_node,
 					  "mediatek,vio-mask-interrupts");
 
-	dev_info(ctx->dev, "violation interrupts %s\n",
+	dev_info(ctx->dev, "violation interrupts %s%s\n",
 		 mask_irqs ? "masked for all slaves" :
-			     "unmasked for all slaves");
+			     "unmasked for all slaves",
+		 mask_irqs ? "" : " (bring-up default)");
 
 	for (i = 0; i < ctx->data->nr_instances; i++)
 		mt6589_prepare_inst(&ctx->inst[i], mask_irqs);
 
 	mt6589_apply_forbid(ctx);
+
+	/*
+	 * This is the one point where a policy lock would have to go, after
+	 * mt6589_apply_forbid() has programmed every permission window.  It is
+	 * deliberately not done: the polarity of APC_LOCK is undocumented, and
+	 * guessing it risks permanently freezing or widening the policy just
+	 * programmed.  See MT6589_DEVPAPC_APC_LOCK in mtk-devapc-mt6589.h.
+	 */
 }
 
 /*

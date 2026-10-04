@@ -64,6 +64,51 @@ enum mt6589_devapc_perm {
 #define MT6589_DEVPAPC_D3_APC_0		0x0018
 #define MT6589_DEVPAPC_D3_APC_1		0x001c
 #define MT6589_DEVPAPC_APC_CON		0x0090
+/*
+ * MT6589_DEVPAPC_APC_LOCK - deliberately NOT written by this driver.
+ *
+ * Locking the permission windows after programming them is the obvious thing
+ * to do here, and it is deliberately left undone because the polarity of this
+ * register could not be established from any reliable source.  Writing a
+ * guessed bit pattern to a security-policy register is worse than leaving the
+ * policy mutable, because a wrong guess can freeze a half-configured policy or
+ * widen access irreversibly.
+ *
+ * What the investigation actually found:
+ *
+ *  - The MT6589 datasheet has no Device APC register-definition chapter at
+ *    all.  It lists the windows in the memory map ("Device APC AO" at
+ *    0x1001_0000, "device_apc monitor module" at 0x1020_7000) and provides
+ *    the DEVAPC clock gate (devapc_pdn, SPM INFRA_PDN0 bit 6), but documents
+ *    none of the APC_* registers.  Every R<n>D<m>_APC / R<n>_LOCK field in
+ *    the text belongs to EMI_MPU (EMI_MPUI/J/K at 0x102031A0..0x102031B0), a
+ *    different block that happens to share the 3-bit APC encoding; its
+ *    R<n>_LOCK at bit 31 is NOT this register and must not be copied here.
+ *
+ *  - In the vendor tree, DEVAPC0..4_APC_LOCK (AO base + 0x0094) exists only
+ *    as an address macro in core/include/mach/mt_device_apc.h and in the
+ *    preloader header.  Nothing in the LK, the preloader or the kernel driver
+ *    ever writes it - not at probe, not at resume.
+ *
+ *  - The vendor driver argues against the "irreversible write-1-to-lock"
+ *    assumption outright: devapc_resume() calls start_devapc(), which re-runs
+ *    the full set_module_apc() L0/L3 loops.  If the register locked the windows
+ *    one way at first write, the vendor's own suspend/resume cycle would
+ *    silently stop re-applying its permission policy.  The vendor further
+ *    EXPORT_SYMBOLs start_usb_protection()/stop_usb_protection() and changes
+ *    permissions at runtime, so a hard lock at probe would break that
+ *    product feature.  Either way the register is not one-way in the way this
+ *    finding assumes.
+ *
+ * So the policy stays mutable, exactly as the vendor ships it, and the
+ * operational consequence is that lockdown for MT6589 has to happen in
+ * earlyboot (SMI/preloader) rather than from this driver.  If semantics
+ * later become available, the write belongs at the very end of
+ * mt6589_start(), after mt6589_apply_forbid() has programmed every window,
+ * and must be guarded so it runs exactly once: the register is in the
+ * always-on window, so it survives suspend, and re-writing it on a later
+ * probe or resume would be at best redundant and at worst destructive.
+ */
 #define MT6589_DEVPAPC_APC_LOCK		0x0094
 #define MT6589_DEVPAPC_MAS_DOM		0x00a0
 #define MT6589_DEVPAPC_MAS_SEC		0x00a4
