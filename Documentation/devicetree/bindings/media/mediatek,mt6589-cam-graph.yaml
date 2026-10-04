@@ -30,6 +30,15 @@ description: |
   should wait for, and the links between the blocks are derived from the DT
   endpoints by the driver, not listed here.
 
+  "One endpoint per block" is load-bearing, not a convention.  The only thing
+  that ever puts a v4l2_async_connection on notifier->waiting_list is an
+  endpoint on THIS node, and the only thing that registers a subdev into this
+  node's v4l2_device is such a connection matching that subdev.  A block that
+  declares no endpoint here never joins v4l2_device->subdevs, and the driver's
+  link creation walks only that list -- so the links that touch it are silently
+  never created, even when its pads and its "remote-endpoint" properties all
+  exist and point at the right peers.
+
 properties:
   compatible:
     const: mediatek,mt6589-cam-graph
@@ -39,21 +48,30 @@ properties:
       The blocks this driver should wait for.  Each endpoint names a remote
       endpoint belonging to one of the camera subdevs.
 
-      Choose a remote that sits on a SOURCE pad of a block, because that is
-      what makes the notifier's match resolve: for the chain above, seninf_out
-      (the receiver's output) and scam_out (SCAM's output).  Pointing at a sink
-      endpoint would work too, but it describes the link twice.
+      One endpoint per block in the chain, INCLUDING the last one.  For the
+      chain above that is three: seninf_out (the receiver's output), scam_out
+      (SCAM's output) and cam_in (CAM's input).
 
-      A block reached through another block's endpoint does not need an endpoint
-      here.  In the chain above, cam needs none: scam_out already names
-      cam_in as its remote, so once SCAM has bound the SCAM -> CAM link is
-      created from the DT without cam binding to this driver at all.
+      A remote may sit on either a source or a sink endpoint of its block; the
+      match is by fwnode, so both resolve.  Source endpoints read more
+      naturally, but the important thing is that a remote is named at all.
 
-      An endpoint whose remote does not resolve is not an error.  That is how
-      the sensor step, which has no node in this tree yet, shows up: the driver
-      counts what resolved, reports how many at probe, and carries on.  When the
-      sensor lands, its source endpoint will resolve and the link up to the
-      receiver will be created with no change here.
+      Naming cam_in as scam_out's remote does NOT substitute for an endpoint
+      here.  It describes the SCAM -> CAM wiring for link creation, but it
+      binds nothing: v4l2_async_find_match() only inspects descriptors taken
+      from this node's own endpoints, so cam would stay out of
+      v4l2_device->subdevs and the SCAM -> CAM link would never be created.
+
+      An endpoint whose remote does not resolve is not an error.  The driver
+      counts what resolved, reports how many at probe, and carries on, so a
+      graph_to_sensor endpoint can be declared ahead of the sensor node.
+
+      Note that adding a sensor is not a DT-only change on the sensor side: the
+      receiver has no sink endpoint for a sensor to point at (its ports carry
+      only seninf_out, port@1) and the MIPI CSI-2 D-PHY between the two is not
+      modelled.  Restoring the receiver's seninf_in endpoint and adding a
+      graph_to_sensor endpoint here are both required before the sensor ->
+      receiver link can exist.
     $ref: /schemas/graph/ports.yaml#
 
     properties:
@@ -75,10 +93,11 @@ examples:
         compatible = "mediatek,mt6589-cam-graph";
 
         /*
-         * Wait for the receiver's output and for SCAM's output.  Neither of
-         * these endpoints has a peer back on this node, so dtc reports them
-         * as not bidirectional; that is expected for a graph owner, which
-         * owns a media_device and a notifier rather than pads.
+         * Wait for the receiver's output, for SCAM's output and for CAM's
+         * input.  None of these endpoints has a peer back on this node, so
+         * dtc reports each of them as not bidirectional; that is expected for
+         * a graph owner, which owns a media_device and a notifier rather than
+         * pads.
          */
         ports {
             graph_to_rx: port@0 {
@@ -90,6 +109,12 @@ examples:
             graph_to_scam: port@1 {
                 graph_to_scam_ep: endpoint {
                     remote-endpoint = <&scam_out_ep>;
+                };
+            };
+
+            graph_to_cam: port@2 {
+                graph_to_cam_ep: endpoint {
+                    remote-endpoint = <&cam_in_ep>;
                 };
             };
         };

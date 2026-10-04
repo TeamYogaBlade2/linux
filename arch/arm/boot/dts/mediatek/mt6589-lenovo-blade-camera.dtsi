@@ -16,11 +16,12 @@
  *   - The CAM/ISP node registers as a subdev with a sink pad, so it is the
  *     downstream endpoint of the graph, but there is no video node and no
  *     DMA behind it: the link ends at a subdev that consumes nothing yet.
- *   - The sensor step is absent.  There is no D-PHY node and no sensor node,
- *     so the receiver's sink pad exists in the driver but has no peer in the
- *     graph.  The receiver -> SCAM -> CAM links do resolve, because the
- *     mtk-cam-graph node below owns the media_device and creates them from
- *     the remote-endpoint properties in this file.
+	 *   - The sensor step is absent.  There is no D-PHY node and no sensor node,
+	 *     so the receiver's sink pad exists in the driver but has no peer in the
+	 *     graph.  The receiver -> SCAM -> CAM links do resolve, because the
+	 *     mtk-cam-graph node below owns the media_device, waits on one endpoint
+	 *     per block -- all three of them, CAM included -- and creates the links
+	 *     from the remote-endpoint properties in this file.
  *
  * Address map of the sensor front end, from the data sheet:
  *
@@ -317,18 +318,46 @@
 	 *
 	 *   graph_to_rx   -> seninf_out_ep, i.e. the receiver's output
 	 *   graph_to_scam -> scam_out_ep,    i.e. SCAM's output
+	 *   graph_to_cam  -> cam_in_ep,      i.e. CAM's input
 	 *
-	 * Both are chosen to point at a *source* endpoint on a block that has
-	 * already been probed, because that is what makes the notifier's match
-	 * resolve: the receiver and SCAM are the two blocks with a source pad,
-	 * and they probe independently of this node.
+	 * There is ONE endpoint per block, and every block needs its own -- CAM
+	 * included.  An earlier version of this file had only the first two, on
+	 * the reasoning that CAM "is reached through scam_out_ep, whose remote is
+	 * cam_in_ep".  That reasoning is wrong about how the async core works,
+	 * and the graph it described did not exist:
 	 *
-	 * CAM needs no endpoint here.  It is reached through scam_out_ep, whose
-	 * remote is cam_in_ep: once SCAM has bound, that endpoint is already
-	 * known to the notifier as the remote of graph_to_scam, and the SCAM ->
-	 * CAM link is created from the DT without CAM needing to bind to this
-	 * driver at all.  Pointing an endpoint at cam_in_ep instead would only
-	 * add a second wait on a block that is already reachable.
+	 *   - v4l2_async_nf_add_fwnode_remote() adds a connection whose match
+	 *     descriptor is the *remote* endpoint fwnode.  That is the only way a
+	 *     subdev is ever pulled into a v4l2_device: when a subdev registers,
+	 *     v4l2_async_find_match() walks the notifier's waiting_list and
+	 *     match_fwnode_one() compares that subdev's own fwnode against each
+	 *     descriptor (or against fwnode_graph_get_port_parent() of it).  A
+	 *     connection that does not exist cannot match, so the subdev never
+	 *     binds.
+	 *
+	 *   - cam_in_ep being *named* as the remote of scam_out_ep tells the
+	 *     notifier nothing.  Only the endpoints on THIS node are scanned by
+	 *     mtk_cam_graph_add_endpoints(), so with no endpoint here pointing at
+	 *     cam_in_ep there was no connection to match against and CAM never
+	 *     bound.
+	 *
+	 *   - A subdev that never matched is never passed to
+	 *     __v4l2_device_register_subdev(), so it never lands on
+	 *     v4l2_dev->subdevs.  mtk_cam_graph_create_links() walks exactly that
+	 *     list, so with CAM absent from it the SCAM -> CAM link was never
+	 *     created even though both pads and both remote-endpoint properties
+	 *     existed and pointed at each other.
+	 *
+	 * So graph_to_cam is load-bearing, not a second spelling of
+	 * graph_to_scam: the latter gets SCAM into the v4l2_device, the former
+	 * gets CAM in, and only then does the cross-product in create_links()
+	 * have a (SCAM source, CAM sink) pair to resolve.
+	 *
+	 * Matching is per *endpoint* rather than per block, and one subdev
+	 * matching more than one of these connections is harmless:
+	 * v4l2_async_match_notify() calls __v4l2_device_register_subdev() only
+	 * when sd->asc_list is empty, and v4l2_create_fwnode_links_to_pad()
+	 * skips a link that already exists.
 	 *
 	 * Note there is deliberately no endpoint for the receiver's SINK pad.
 	 * That pad has no peer: the sensor step and the MIPI CSI-2 D-PHY are
@@ -336,22 +365,53 @@
 	 * so there is no node for that endpoint to point at.  The driver treats
 	 * an unresolvable remote as "not present", not as an error, which is
 	 * what lets this node build and probe on a board with no sensor wired.
-	 	 * When a sensor lands, its source endpoint will resolve and the link up
-	 * to the receiver will be created with no change to this file.
 	 *
-	 * dtc emits two "graph connection ... is not bidirectional" warnings for
-	 * the endpoints below.  They are expected and are not suppressed.  The
-	 * four endpoints the three hardware nodes declare ARE mutually
-	 * bidirectional (seninf_out_ep <-> scam_in_ep and scam_out_ep <->
-	 * cam_in_ep), but these two belong to a node that is not part of the
-	 * image path: it owns a media_device and a notifier, not pads, so
-	 * there is no peer endpoint on it for these to pair with.  Adding
+	 * What a sensor would ACTUALLY require, precisely, because "when a sensor
+	 * lands its source endpoint will resolve and the link will be created with
+	 * no change here" was a claim this code does not deliver.  There are two
+	 * separate obstacles, not one:
+	 *
+	 *   1. The receiver has no sink endpoint at all.  Its ports node above
+	 *      carries only seninf_out (port@1); the seninf_in sink port and its
+	 *      seninf_in_ep were removed together with the dead A5142 node.  A
+	 *      sensor has nothing to point its own remote-endpoint at, and the
+	 *      D-PHY that would sit between the two is not modelled either.
+	 *      Restoring
+	 *
+	 *	seninf_in: port@0 {
+	 *		seninf_in_ep: endpoint {
+	 *			remote-endpoint = <&dphy_out_ep>;
+	 *		};
+	 *	};
+	 *
+	 *      on the receiver, plus the PHY node's endpoint pointing back at the
+	 *      sensor, is the first half.
+	 *
+	 *   2. Nothing would wait for the sensor even then.  The notifier only
+	 *      ever binds subdevs named by an endpoint on THIS node, so a sensor
+	 *      that registered a subdev and a sensor_out_ep of its own would still
+	 *      be absent from v4l2_dev->subdevs, and
+	 *      mtk_cam_graph_create_links() -- which iterates that list and
+	 *      nothing else -- would never consider it as a link source.  A fourth
+	 *      endpoint here (graph_to_sensor -> sensor_out_ep) is what makes that
+	 *      work, and it is the second half.
+	 *
+	 * Until both exist, the receiver's sink pad stays unconnected and the
+	 * graph honestly begins at the receiver's source pad.
+	 *
+	 * dtc emits THREE "graph connection ... is not bidirectional" warnings
+	 * for the endpoints below -- one per endpoint.  They are expected and are
+	 * not suppressed.  The four endpoints the three hardware nodes declare
+	 * ARE mutually bidirectional (seninf_out_ep <-> scam_in_ep and
+	 * scam_out_ep <-> cam_in_ep), but these three belong to a node that is not
+	 * part of the image path: it owns a media_device and a notifier, not pads,
+	 * so there is no peer endpoint on it for these to pair with.  Adding
 	 * back-pointing endpoints to silence the warning was tried and makes
-	 * things worse -- it adds a third warning for the new edge and
-	 * describes a connection that does not exist.  A node with no pads is
-	 * the normal way a graph owner is expressed; see the amlogic c3 "adap"
-	 * node for the same shape done with pads.  Nothing in this tree
-	 * suppresses this warning by name, so neither does this file.
+	 * things worse -- it adds a further warning for the new edge and
+	 * describes a connection that does not exist.  A node with no pads is the
+	 * normal way a graph owner is expressed; see the amlogic c3 "adap" node for
+	 * the same shape done with pads.  Nothing in this tree suppresses this
+	 * warning by name, so neither does this file.
 	 */
 	mtk-cam-graph {
 		compatible = "mediatek,mt6589-cam-graph";
@@ -366,6 +426,18 @@
 			graph_to_scam: port@1 {
 				graph_to_scam_ep: endpoint {
 					remote-endpoint = <&scam_out_ep>;
+				};
+			};
+
+			/*
+			 * CAM has to be waited for like any other block.  See
+			 * the note above: without this endpoint CAM never
+			 * matched, never joined v4l2_dev->subdevs, and the
+			 * scam_out -> cam_in link was never created.
+			 */
+			graph_to_cam: port@2 {
+				graph_to_cam_ep: endpoint {
+					remote-endpoint = <&cam_in_ep>;
 				};
 			};
 		};

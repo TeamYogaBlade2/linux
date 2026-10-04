@@ -50,21 +50,54 @@
  * -------------------------
  * From the DT, via the endpoints.  v4l2_async_nf_add_fwnode_remote() is given
  * each of this driver's own local endpoints; for each one it resolves the
- * remote endpoint in the DT and waits for the subdev that owns it.  When that
- * subdev registers, .bound() fires with the matched subdev and calls
- * v4l2_create_fwnode_links_to_pad(), which walks the subdev's own endpoints
- * with fwnode_graph_for_each_endpoint(), resolves each to a source pad via
- * media_entity_get_fwnode_pad(), and creates the media_link.  No link is ever
- * hardcoded here: the wiring is exactly what the dtsi says.
+ * remote endpoint in the DT and registers a v4l2_async_connection whose match
+ * descriptor is that remote fwnode.
+ *
+ * THAT CONNECTION IS THE ONLY WAY A SUBDEV EVER JOINS THIS v4l2_device, and
+ * the consequence is easy to get wrong.  A subdev's DT declaring "my remote
+ * is somebody else's endpoint" -- scam_out_ep naming cam_in_ep, say -- binds
+ * nothing: v4l2_async_find_match() only ever looks at descriptors that were
+ * added to notifier->waiting_list, and those come from THIS node's own
+ * endpoints.  So every block that has to be in the graph needs an endpoint of
+ * its own here, CAM included.  With CAM's endpoint missing, nothing matched,
+ * __v4l2_device_register_subdev() was never called for it, and since
+ * mtk_cam_graph_create_links() below iterates v4l2_dev->subdevs -- the very
+ * list that call populates -- the SCAM -> CAM link was never created even
+ * though both pads and both remote-endpoint properties existed.
+ *
+ * Once a subdev HAS matched, the links are created in .complete() by
+ * v4l2_create_fwnode_links_to_pad(), which walks the source subdev's own
+ * endpoints with fwnode_graph_for_each_endpoint(), resolves each to a source
+ * pad via media_entity_get_fwnode_pad(), resolves that endpoint's remote in
+ * the DT, and creates the media_link when the remote turns out to be the sink
+ * pad offered to it.  No link is ever hardcoded here: the wiring is exactly
+ * what the dtsi says.
  *
  * The receiver's SINK pad is deliberately not handled and must not be.  There
  * is no sensor node and no D-PHY node in the tree, so that pad has no peer:
- * its remote endpoint does not resolve, v4l2_create_fwnode_links_to_pad()
- * finds no source endpoint for it and simply creates nothing.  This is
- * documented rather than treated as an error, because it is the documented
- * state of the DT (see the long note on the receiver node in
- * mt6589-lenovo-blade-camera.dtsi).  When a sensor lands, its source endpoint
- * will resolve and the link will be created with no change here.
+ * v4l2_create_fwnode_links_to_pad() finds no source endpoint pointing at it
+ * and simply creates nothing.  This is documented rather than treated as an
+ * error, because it is the documented state of the DT (see the long note on
+ * the receiver node in mt6589-lenovo-blade-camera.dtsi).
+ *
+ * An earlier version of this header claimed that "when a sensor lands, its
+ * source endpoint will resolve and the link will be created with no change
+ * here".  That was wrong, and it is worth recording why, because the same
+ * wrong reasoning is what had left CAM without an endpoint.  A sensor landing
+ * does NOT by itself produce this link.  Two things would have to change in
+ * the DT, and neither is in this driver:
+ *
+ *   1. The receiver has no sink endpoint for a sensor to point at.  Its ports
+ *      node carries only seninf_out (port@1); seninf_in and seninf_in_ep were
+ *      removed along with the dead A5142 node, and the D-PHY that would sit
+ *      between the sensor and the receiver is not modelled.
+ *   2. Nothing here waits for a sensor.  Even with (1) done, a sensor that
+ *      registered its own subdev would be absent from v4l2_dev->subdevs,
+ *      because the notifier only matches descriptors taken from this node's
+ *      own endpoints, and mtk_cam_graph_create_links() iterates that list and
+ *      nothing else.  A graph_to_sensor endpoint would be needed.
+ *
+ * Until both exist, the graph honestly begins at the receiver's source pad.
  *
  * WHY CAM's MISSING pad_ops AND VIDEO NODE DO NOT BREAK LINK CREATION
  * ------------------------------------------------------------------
@@ -73,11 +106,21 @@
  *  - media_create_pad_link() checks only the pad direction flags
  *    (MEDIA_PAD_FL_SOURCE on the source, MEDIA_PAD_FL_SINK on the sink).  It
  *    does not consult pad_ops, and it does not require a video node.
- *  - media_entity_get_fwnode_pad() needs entity->ops->get_fwnode_pad only if
- *    the entity set one; CAM sets none, so it falls back to "the first pad
- *    with the requested direction", which is the single sink pad.  That is
- *    correct for CAM precisely because it has exactly one pad of that
- *    direction.
+ *  - media_entity_get_fwnode_pad() (drivers/media/mc/mc-entity.c) needs
+ *    entity->ops->get_fwnode_pad only if the entity set one:
+ *
+ *	if (!entity->ops || !entity->ops->get_fwnode_pad) {
+ *		for (i = 0; i < entity->num_pads; i++)
+ *			if (entity->pads[i].flags & direction_flags)
+ *				return i;
+ *		return -ENXIO;
+ *	}
+ *
+ *    None of the three drivers sets entity.ops at all -- not v4l2_subdev_init()
+ *    and not v4l2_subdev_init_finalize() -- so for CAM this is the fallback,
+ *    and it returns pad 0, which is its single sink pad.  That is correct for
+ *    CAM precisely because it has exactly one pad of that direction.  It also
+ *    means the SCAM -> CAM link does not depend on CAM having pad_ops.
  *  - The .complete() callback calls v4l2_device_register_subdev_nodes(),
  *    which creates /dev/v4l-subdevN nodes.  Each of the three subdevs must
  *    therefore set V4L2_SUBDEV_FL_HAS_DEVNODE to get one.  None of them does,
@@ -142,11 +185,11 @@ static int mtk_cam_graph_bound(struct v4l2_async_notifier *notifier,
 
 	/*
 	 * The receiver's sink pad has no peer -- there is no sensor node and no
-	 * D-PHY node in the tree -- so an endpoint may well resolve to a subdev
-	 * whose own remote endpoint does not resolve back to anything.  That is
-	 * the documented state of the DT, not a failure: report it and move on,
-	 * because the links are derived from the DT in .complete() and a missing
-	 * peer simply yields no link.
+	 * D-PHY node in the tree -- so the receiver binds with a connection (to
+	 * seninf_out_ep) yet has an endpoint whose remote does not resolve.  That
+	 * is the documented state of the DT, not a failure: report it and move
+	 * on, because the links are derived from the DT in .complete() and a
+	 * missing peer simply yields no link.
 	 */
 	if (list_empty(&sd->asc_list))
 		dev_dbg(cam->dev, "%s bound with no connections\n", sd->name);
@@ -179,6 +222,17 @@ static int mtk_cam_graph_bound(struct v4l2_async_notifier *notifier,
  * per-pair form is what amlogic/c3/isp and nxp/imx8mq-mipi-csi2 use).  It is
  * also idempotent: the core skips a link that already exists, so A/B and B/A
  * both being tried does not create anything twice.
+ *
+ * CAM is the sink side of the scam_out -> cam_in pair and needs nothing extra
+ * here: scam has a SOURCE pad (scam_out) and CAM has a SINK pad (cam_in), so
+ * the pair (src = scam, sink_sd = cam) is visited by this loop, CAM's pad 0
+ * passes the MEDIA_PAD_FL_SINK test above, and
+ * v4l2_create_fwnode_links_to_pad(scam, cam_in_pad) resolves scam_out_ep's
+ * remote to cam_in_ep and calls media_create_pad_link().  CAM having no
+ * pad_ops does not interfere: media_entity_get_fwnode_pad() falls back to
+ * "first pad with this direction", and pad 0 is CAM's only sink.  The one
+ * thing CAM did need was to be ON this list, which is exactly what the graph
+ * node's own cam_in_ep endpoint buys; see the file header.
  *
  * A source whose remote endpoint does not resolve -- the receiver's unconnected
  * sink pad is the one that exists today -- simply yields no link.  That is
@@ -251,11 +305,20 @@ static const struct v4l2_async_notifier_operations mtk_cam_graph_notifier_ops = 
  * Walk this node's own endpoints and ask the notifier to wait for whatever
  * each one points at.
  *
+ * These are OUR OWN endpoints, and this scan is the ONLY thing that puts a
+ * match descriptor into notifier->waiting_list.  So a block that has no
+ * endpoint here is a block that never binds, regardless of what its own DT
+ * says its remote is: naming cam_in_ep as scam_out_ep's remote does not pull
+ * CAM in, because v4l2_async_find_match() never looks at scam_out_ep.  The
+ * dtsi therefore declares one endpoint per block here, CAM included.
+ *
  * Returning -ENOTCONN from v4l2_async_nf_add_fwnode_remote() for an endpoint
- * whose remote does not resolve is expected here and must not fail probe: it
- * is how the receiver's unconnected sink pad shows up, and the DT documents
- * that the sensor step is deliberately absent.  So count what resolved and
- * carry on.
+ * whose remote does not resolve is expected here and must not fail probe,
+ * and the DT currently declares no such endpoint -- all three remotes
+ * resolve.  The path is kept because it is what lets a future
+ * graph_to_sensor endpoint be added while the sensor node is still absent,
+ * and because an unresolvable remote means "not present", not "broken".
+ * Count what resolved and carry on.
  */
 static int mtk_cam_graph_add_endpoints(struct mtk_cam_graph *cam)
 {

@@ -1220,34 +1220,46 @@ static void mtk_csi2_rx_remove(struct platform_device *pdev)
 	struct mtk_csi2_rx *priv = dev_get_drvdata(&pdev->dev);
 
 	/*
-	 * Close the PHY lifetime that probe opened with phy_init().  Without
-	 * this the PHY was initialised at probe and never released; see the
-	 * long note on the phy_init() call above.
-	 *
-	 * The receiver must not be streaming at this point, so there is no
-	 * power_off() to do here: runtime PM owns the power state, and remove
-	 * only runs once the device has been unbound and the last reference
-	 * dropped.  The subdev state allocated by v4l2_subdev_init_finalize()
-	 * is released here too, since it is not a devm allocation.
-	 *
-	 * This driver requests no IRQ, so there is no free_irq() to order
-	 * against; if one is added, it must be freed BEFORE the phy_exit() and
-	 * before runtime PM is disabled below, so that no handler can run
-	 * against a powered-down block.
+	 * Take the subdev out of the async core first, so nothing can start a
+	 * new stream and therefore nothing can take a new runtime-PM reference
+	 * after this point.  The subdev state allocated by
+	 * v4l2_subdev_init_finalize() is released here too, since it is not a
+	 * devm allocation.
 	 */
-	if (priv->phy)
-		phy_exit(priv->phy);
-
 	v4l2_async_unregister_subdev(&priv->sd);
 	v4l2_subdev_cleanup(&priv->sd);
 
 	/*
-	 * probe enabled runtime PM (pm_runtime_enable()).  Disable it before
-	 * the device disappears so the PM core is not left holding a state
-	 * machine for a device that no longer exists; the devm cleanup then runs
-	 * with PM off and cannot fire a resume.
+	 * probe enabled runtime PM (pm_runtime_enable()).  Disable it now,
+	 * before the PHY goes away, and that order is the point: the PM core
+	 * waits for a resume that is already in flight and refuses any new
+	 * pm_runtime_resume_and_get(), so mtk_csi2_rx_power_on() can no longer
+	 * touch the D-PHY after phy_exit() has run.  Disabling it afterwards, as
+	 * this used to, left a window in which a resume could call phy_power_on()
+	 * on a PHY that was being exited.  It also stops the PM core being left
+	 * holding a state machine for a device that no longer exists, so the
+	 * devm cleanup runs with PM off and cannot fire a resume.
+	 *
+	 * There is no power_off() to do here: remove only runs once the device
+	 * has been unbound and the last reference dropped, so runtime PM owns
+	 * the power state and has already taken it down.
 	 */
 	pm_runtime_disable(&pdev->dev);
+
+	/*
+	 * Close the PHY lifetime that probe opened with phy_init().  Without
+	 * this the PHY was initialised at probe and never released; see the
+	 * long note on the phy_init() call above.  This is last because it is
+	 * the step that makes the PHY unusable, and everything above has to
+	 * have stopped touching it first.
+	 *
+	 * This driver requests no IRQ, so there is no free_irq() to order
+	 * against; if one is added, it must be freed at the very top, before
+	 * the subdev is unregistered, so that no handler can run against a
+	 * powered-down block.
+	 */
+	if (priv->phy)
+		phy_exit(priv->phy);
 }
 
 static const struct of_device_id mtk_csi2_rx_of_match[] = {
