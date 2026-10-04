@@ -215,6 +215,8 @@
  * @current_brightness:	cached level, 0 when the sink is off
  * @blink_active:	a hardware blink pattern is programmed and running
  * @boost_ref:	this sink holds a reference on the shared boost clock
+ * @dim_steady:	the dimming counter and its clock select are programmed in
+ *		the steady (non-blink) configuration
  * @blink_on:	last programmed hardware blink on-time in ms
  * @blink_off:	last programmed hardware blink off-time in ms
  *
@@ -238,6 +240,18 @@
  * lit one.  Using a flag rather than "is the brightness non-zero" is what keeps
  * a blink, which deliberately leaves @current_brightness alone, from losing
  * track of the reference it took.
+ *
+ * @boost_ref is NOT the same thing as "this sink is lit": a boost release whose
+ * regmap access fails leaves @boost_ref set, because bst_users was rolled back
+ * with it, so a dark sink can still hold a reference.  @dim_steady exists
+ * because of that.  The dimming counter is programmed from exactly one of two
+ * places - mt6320_led_set_steady(), or the blink pair mt6320_led_set_blink()
+ * and mt6320_led_set_blink_clksel() - so what it holds cannot be inferred
+ * from @blink_active (false for a sink that has simply never blinked) nor
+ * from @boost_ref (true for a dark sink whose release failed).  This flag
+ * records which of the two is actually in the register, and the first dimming
+ * program to fail clears it, so mt6320_led_hw_on() re-establishes the steady
+ * configuration after any error rather than skipping it.
  */
 struct mt6320_kpled;
 
@@ -248,6 +262,7 @@ struct mt6320_led {
 	enum led_brightness		current_brightness;
 	bool				blink_active;
 	bool				boost_ref;
+	bool				dim_steady;
 	unsigned long			blink_on;
 	unsigned long			blink_off;
 };
@@ -371,12 +386,24 @@ err_count:
 /*
  * Take and drop this sink's reference on the shared boost clock.
  *
- * Both wrappers are the only places that mutate led->boost_ref, and each
- * mutation sits immediately next to the mt6320_led_bst_clk() call it belongs
- * to, so the flag cannot drift out of step with the counter.  That matters
- * because the counter no longer follows led->current_brightness: a hardware
- * blink deliberately leaves the brightness alone, so "is the brightness
- * non-zero" would no longer answer "does this sink hold a reference".
+ * Both wrappers are the only places that mutate led->boost_ref, and both do
+ * so only on the real edge, so the flag cannot drift out of step with the
+ * counter.  That matters because the counter no longer follows
+ * led->current_brightness: a hardware blink deliberately leaves the
+ * brightness alone, so "is the brightness non-zero" would no longer answer
+ * "does this sink hold a reference".
+ *
+ * The release is transactional in exactly the same way the take is, and for
+ * the same reason: mt6320_led_bst_clk() rolls bst_users back when the regmap
+ * access fails, so it leaves the counter on its pre-call value and reports the
+ * error.  Clearing boost_ref regardless of that error would be a half-applied
+ * release - the flag says this sink holds nothing while the controller still
+ * counts it - and the next take would then add a second reference for one lit
+ * sink, running bst_users permanently one high and parking the rail forever.
+ * So a failed release keeps boost_ref set: the two pieces of state still agree
+ * that a reference is held, and the release is retried on the next transition
+ * to this sink (see mt6320_led_hw_off(), which calls this unconditionally on
+ * the enable-bit path) rather than being silently forgotten.
  *
  * Taking is idempotent, so after a successful mt6320_led_take_boost() the
  * caller cannot tell whether it just acquired the reference or found one that
@@ -410,6 +437,17 @@ static int mt6320_led_take_boost(struct mt6320_led *led, bool *acquired)
 	return ret;
 }
 
+/*
+ * Release this sink's reference on the shared boost clock.
+ *
+ * Mirrors mt6320_led_take_boost(): the flag moves only if the release really
+ * happened.  Returning is deliberately void - every caller already has an
+ * error to report or an outcome already decided, and the LED core cannot act
+ * on a boost-clock release that failed (it only sees brightness_set()'s return
+ * value, and the sink is dark either way at this point).  Keeping boost_ref
+ * set on failure is what makes the retry possible: the state stays consistent,
+ * the rail stays counted as held, and the next hw_off() drains it.
+ */
 static void mt6320_led_drop_boost(struct mt6320_led *led)
 {
 	struct mt6320_leds *leds = led->parent;
@@ -417,8 +455,10 @@ static void mt6320_led_drop_boost(struct mt6320_led *led)
 	if (!led->boost_ref)
 		return;
 
+	if (mt6320_led_bst_clk(leds, false))
+		return;
+
 	led->boost_ref = false;
-	mt6320_led_bst_clk(leds, false);
 }
 
 /*
@@ -511,12 +551,27 @@ static int mt6320_led_set_steady(struct mt6320_led *led)
 				 FIELD_PREP(MT6320_ISINK_TRF_SEL_MASK,
 					    MT6320_STEADY_TRF_SEL));
 	if (ret)
-		return ret;
+		goto err_steady;
 
-	return regmap_update_bits(leds->regmap,
+	ret = regmap_update_bits(leds->regmap,
 				 mt6320_isink_dim_reg[led->channel],
 				 MT6320_ISINK_DIM_DUTY_MASK |
 				 MT6320_ISINK_DIM_FSEL_MASK, dim);
+
+	if (!ret)
+		led->dim_steady = true;
+
+	return ret;
+
+err_steady:
+	/*
+	 * A partially applied steady configuration is not the steady
+	 * configuration, so the flag is cleared rather than left set: the next
+	 * mt6320_led_hw_on() has to program the counter again from scratch.
+	 */
+	led->dim_steady = false;
+
+	return ret;
 }
 
 /*
@@ -599,17 +654,31 @@ static int mt6320_led_blink_timings(struct mt6320_led *led,
  * enable, and needs to program the step before this one and the clock select
  * after it, exactly the way the BSP orders them (see
  * mt6320_led_hw_blink_set()).
+ *
+ * This also clears @dim_steady, since programming a pattern and programming the
+ * steady configuration are mutually exclusive claims on the same register.
  */
 static int mt6320_led_set_blink(struct mt6320_led *led, unsigned int duty,
 				unsigned int fsel)
 {
 	struct mt6320_leds *leds = led->parent;
+	int ret;
 
-	return regmap_update_bits(leds->regmap,
+	ret = regmap_update_bits(leds->regmap,
 				 mt6320_isink_dim_reg[led->channel],
 				 MT6320_ISINK_DIM_DUTY_MASK | MT6320_ISINK_DIM_FSEL_MASK,
 				 FIELD_PREP(MT6320_ISINK_DIM_DUTY_MASK, duty) |
 				 FIELD_PREP(MT6320_ISINK_DIM_FSEL_MASK, fsel));
+
+	/*
+	 * Once a blink pattern is in the counter the steady configuration is
+	 * gone, so the flag is dropped whether the write succeeded or not.  On
+	 * failure nothing is known about the counter, which is exactly the
+	 * state "not steady" describes.
+	 */
+	led->dim_steady = false;
+
+	return ret;
 }
 
 /*
@@ -621,11 +690,17 @@ static int mt6320_led_set_blink_clksel(struct mt6320_led *led,
 				       unsigned int clksel)
 {
 	struct mt6320_leds *leds = led->parent;
+	int ret;
 
-	return regmap_update_bits(leds->regmap,
+	ret = regmap_update_bits(leds->regmap,
 				 mt6320_isink_trf_reg[led->channel],
 				 MT6320_ISINK_TRF_SEL_MASK,
 				 FIELD_PREP(MT6320_ISINK_TRF_SEL_MASK, clksel));
+
+	/* Same mutual exclusion with the steady configuration; see above. */
+	led->dim_steady = false;
+
+	return ret;
 }
 
 /*
@@ -674,6 +749,13 @@ static int mt6320_led_hw_enable(struct mt6320_led *led)
  * one reference and releases it once; without the edge test the count would
  * grow with every level change and the rail would stay up forever after the
  * sink goes dark.
+ *
+ * @dim_steady, not @boost_ref, is what decides whether the dimming counter
+ * has to be programmed again here.  A sink coming up from dark has no steady
+ * configuration in the register, but neither does one whose steady program
+ * failed, and neither does one that has been left holding a boost reference
+ * by a failed release - all three are "boost_ref may or may not be set,
+ * dim_steady is false".
  */
 static int mt6320_led_hw_on(struct mt6320_led *led,
 			    enum led_brightness brightness)
@@ -688,7 +770,7 @@ static int mt6320_led_hw_on(struct mt6320_led *led,
 	 * steady level the counter is already in that configuration and is
 	 * left alone.
 	 */
-	if (!led->boost_ref || led->blink_active) {
+	if (!led->dim_steady) {
 		ret = mt6320_led_set_steady(led);
 		if (ret)
 			return ret;
@@ -739,7 +821,7 @@ err_unref:
  * blink armed here would mean a later brightness write re-enabled the sink
  * into the old pattern, since the enable bit is all the hardware needs to
  * resume it.  mt6320_led_hw_on() also re-programs the steady configuration
- * whenever it sees blink_active, so neither of the two paths can leave a
+ * whenever it sees dim_steady clear, so neither of the two paths can leave a
  * stale pattern behind.
  *
  * The boost reference is dropped last, and only if one is actually held, so a
@@ -750,6 +832,13 @@ err_unref:
  * the rail.  A failed enable write therefore returns early and keeps both the
  * blink state and the reference, which is consistent rather than a leak - the
  * next write to this LED drains it.
+ *
+ * mt6320_led_drop_boost() is called unconditionally here rather than on a
+ * brightness edge, because it is the release path that has to be able to
+ * retry: if the boost release itself failed last time, boost_ref is still set
+ * and this is the call that finishes the job.  A sink that never held a
+ * reference returns immediately, so calling this for an already-dark LED
+ * still cannot release anything it never took.
  */
 static int mt6320_led_hw_off(struct mt6320_led *led)
 {
@@ -763,9 +852,12 @@ static int mt6320_led_hw_off(struct mt6320_led *led)
 	/*
 	 * The enable bit is clear, so whatever pattern was armed cannot run:
 	 * drop the blink state here, before the sink is ever enabled again, so
-	 * no later brightness write can resume it.
+	 * no later brightness write can resume it.  dim_steady goes with it: a
+	 * dark sink's dimming registers are whatever the last attempt left
+	 * there, so the next mt6320_led_hw_on() programs them again.
 	 */
 	led->blink_active = false;
+	led->dim_steady = false;
 
 	/*
 	 * Drop the shared boost rail once the last sink is dark.  This is the
@@ -775,6 +867,14 @@ static int mt6320_led_hw_off(struct mt6320_led *led)
 	 * mt6320_led_drop_boost() checks led->boost_ref, which
 	 * mt6320_led_bst_clk() also clamps at zero, so a duplicate release
 	 * cannot wrap the unsigned counter.
+	 *
+	 * If this release fails its regmap access, mt6320_led_drop_boost()
+	 * keeps boost_ref set to match the bst_users it rolled back, so the
+	 * rail stays counted as held rather than the two pieces of state
+	 * disagreeing.  The rail is then left on for a dark sink, which is a
+	 * power cost and not a correctness problem: the state is coherent and
+	 * the next brightness 0 on this sink - or mt6320_led_remove() - drains
+	 * it.
 	 */
 	mt6320_led_drop_boost(led);
 
