@@ -256,7 +256,8 @@ void prismrv_recovery_work(struct work_struct *work)
 	 * teardown of CCB/MMU memory cannot race live GPU accesses.
 	 */
 	prismrv_devfreq_pause(pv);
-	prismrv_soft_reset(pv);
+	prismrv_soft_reset(pv, true);
+	pv->hw_recovery = true;
 
 	/*
 	 * Step 3: invalidate all BO GPU VAs under mmu_lock.
@@ -431,6 +432,7 @@ int prismrv_hw_reinit(struct prismrv_device *pv)
 		mutex_unlock(&pv->mmu_lock);
 		prismrv_devfreq_pause(pv);
 		prismrv_hw_fini(pv);
+		pv->hw_recovery = true;
 		ret = prismrv_hw_init(pv);
 		if (!ret)
 			prismrv_devfreq_resume(pv);

@@ -9,6 +9,7 @@
  */
 #include <linux/dma-mapping.h>
 #include <linux/dma-direct.h>
+#include <linux/iopoll.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 
@@ -30,11 +31,25 @@
  */
 static void prismrv_mmu_invalidate(struct prismrv_device *pv)
 {
+	u32 v;
+
 	writel(EUR_CR_BIF_CTRL_INVALDC_MASK | EUR_CR_BIF_CTRL_FLUSH_MASK,
 	       pv->regs + EUR_CR_BIF_CTRL);
 	readl(pv->regs + EUR_CR_BIF_CTRL);
 	writel(0, pv->regs + EUR_CR_BIF_CTRL);
 	readl(pv->regs + EUR_CR_BIF_CTRL);
+
+	/*
+	 * Vendor SGXResetInvalDC(): the invalidate is complete only once the
+	 * BIF has no read requests outstanding.  Without the wait a
+	 * following page-table teardown (recovery, unmap of a BO the GPU
+	 * was just reading) can race a walk that is still in flight.
+	 */
+	if (readl_poll_timeout_atomic(pv->regs + EUR_CR_BIF_MEM_REQ_STAT, v,
+				      !(v & EUR_CR_BIF_MEM_REQ_STAT_READS_MASK),
+				      1, 10000))
+		dev_warn_ratelimited(pv->drm.dev,
+				     "BIF still has outstanding reads after invalidate\n");
 }
 
 int prismrv_mmu_init(struct prismrv_device *pv)

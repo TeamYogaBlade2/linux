@@ -67,7 +67,32 @@ static int name##_guarded(struct drm_device *dev, void *data,			\
 
 PRISMRV_GUARDED_IOCTL(prismrv_gem_create_ioctl)
 PRISMRV_GUARDED_IOCTL(prismrv_gem_mmap_offset_ioctl)
-PRISMRV_GUARDED_IOCTL(prismrv_submit_ioctl)
+/*
+ * submit is different: its explicit in-fences belong to other drivers and
+ * other processes and can take arbitrarily long.  Waiting for them needs
+ * no device resource, so it is done BEFORE entering the drm_dev_enter()
+ * section; otherwise drm_dev_unplug() would block on whatever fence an
+ * unrelated client handed in.  (The waits that remain inside the section
+ * are on this driver's own fences, which hw_fini()/recovery retire.)
+ */
+static int prismrv_submit_ioctl_guarded(struct drm_device *dev, void *data,
+					struct drm_file *file)
+{
+	struct drm_prismrv_submit *args = data;
+	int idx, ret;
+
+	ret = prismrv_wait_in_fences(args->num_in_fences,
+				     u64_to_user_ptr(args->in_fences));
+	if (ret)
+		return ret;
+	args->num_in_fences = 0;	/* done; the handler must not wait again */
+
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+	ret = prismrv_submit_ioctl(dev, data, file);
+	drm_dev_exit(idx);
+	return ret;
+}
 PRISMRV_GUARDED_IOCTL(prismrv_get_param_ioctl)
 
 static const struct drm_ioctl_desc prismrv_ioctls[] = {
@@ -251,10 +276,16 @@ static int prismrv_probe(struct platform_device *pdev)
 		pm_runtime_put_autosuspend(&pdev->dev);
 	}
 
+	/*
+	 * prismrv_devfreq_init() already turns "no OPP table" into success
+	 * (DVFS is optional); everything else - -EPROBE_DEFER, -ENOMEM,
+	 * -EINVAL from a bad OPP table, a failed devfreq registration - is a
+	 * real failure and must not leave a half-configured device bound.
+	 */
 	ret = prismrv_devfreq_init(pv);
-	if (ret == -EPROBE_DEFER) {
+	if (ret) {
 		prismrv_teardown(pdev);
-		return ret;
+		return dev_err_probe(&pdev->dev, ret, "devfreq setup failed\n");
 	}
 
 	dev_info(&pdev->dev, "%s probed\n", pv->info->name);
@@ -379,7 +410,12 @@ static int prismrv_runtime_resume(struct device *dev)
 		return ret;
 
 	/* release the G3D block from reset (vendor EnableSGXClocks order) */
-	reset_control_deassert(pv->rstc);
+	ret = reset_control_deassert(pv->rstc);
+	if (ret) {
+		dev_err(dev, "cannot release the GPU from reset (%d)\n", ret);
+		prismrv_clks_off(pv, pv->nr_clocks);
+		return ret;
+	}
 	udelay(2);
 	WRITE_ONCE(pv->hw_powered, true);
 

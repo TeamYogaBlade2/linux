@@ -11,21 +11,6 @@
  */
 #include "prismrv_device.h"
 
-/* BRN bit assignments */
-#define PRISMRV_BRN_29954	BIT(0)	/* disable regbank split */
-#define PRISMRV_BRN_31093	BIT(1)
-#define PRISMRV_BRN_31195	BIT(2)
-#define PRISMRV_BRN_31272	BIT(3)
-#define PRISMRV_BRN_31542	BIT(4)
-#define PRISMRV_BRN_31620	BIT(5)
-#define PRISMRV_BRN_31671	BIT(6)
-#define PRISMRV_BRN_31780	BIT(7)	/* PTLA write-back workaround */
-#define PRISMRV_BRN_32044	BIT(8)
-#define PRISMRV_BRN_32085	BIT(9)
-#define PRISMRV_BRN_33920	BIT(10)
-#define PRISMRV_BRN_36513	BIT(11)	/* clear-clip WA: extra buffers */
-#define PRISMRV_BRN_31542_BIT	BIT(12)	/* internal: clear-clip family marker */
-
 struct prismrv_errata_entry {
 	u32 core_id;
 	u32 rev;		/* EUR_CR_CORE_REVISION major value */

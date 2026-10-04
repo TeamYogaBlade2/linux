@@ -34,46 +34,89 @@
 
 #include "prismrv_device.h"
 
-void prismrv_soft_reset(struct prismrv_device *pv)
+/* vendor SGXResetSleep(): wait ~100 core clocks and let posted writes land */
+static void prismrv_reset_sleep(struct prismrv_device *pv)
 {
-	u32 v;
+	readl(pv->regs + EUR_CR_MASTER_SOFT_RESET);
+	udelay(20);
+}
 
-	/* pause the BIF and clear any pending fault first */
-	writel(EUR_CR_BIF_CTRL_PAUSE_MASK, pv->regs + EUR_CR_BIF_CTRL);
-	udelay(10);
-	v = readl(pv->regs + EUR_CR_BIF_INT_STAT);
-	if (v & EUR_CR_BIF_INT_STAT_FAULT_REQ_MASK) {
-		writel(EUR_CR_BIF_CTRL_PAUSE_MASK | EUR_CR_BIF_CTRL_CLEAR_FAULT_MASK,
-		       pv->regs + EUR_CR_BIF_CTRL);
-		udelay(10);
-		writel(EUR_CR_BIF_CTRL_PAUSE_MASK, pv->regs + EUR_CR_BIF_CTRL);
+/*
+ * SGXInitClocks(): program the clock gating before anything else.
+ */
+void prismrv_init_clocks(struct prismrv_device *pv)
+{
+	writel(PRISMRV_CLKGATECTL_DEFAULT, pv->regs + EUR_CR_CLKGATECTL);
+	readl(pv->regs + EUR_CR_CLKGATECTL);
+	writel(PRISMRV_CLKGATECTL2_DEFAULT, pv->regs + EUR_CR_CLKGATECTL2);
+	readl(pv->regs + EUR_CR_CLKGATECTL2);
+}
+
+/*
+ * SGXReset() for SGX_FEATURE_MP (vendor sgxreset.c).  The single-core
+ * EUR_CR_SOFT_RESET register that an earlier revision used is not what
+ * resets an MP-built SGX544:
+ *
+ *   1. master soft reset: BIF, IPF, DPM, VDM (+MCI on recovery / first
+ *      power-up), SLC (the system cache is present), and a hard reset of
+ *      all four core slots even though only core 0 exists;
+ *   2. master BIF control cleared;
+ *   3. system-level cache setup (SLC_CTRL / SLC_CTRL_BYPASS, with the BRN
+ *      31620 / 31195 bypass bits);
+ *   4. resets released;
+ *   5. MMU control: with BRN 32085 (prefetch) and 31620/31671 (DC TLB)
+ *      present on this core revision the value is just the hash mode,
+ *      written to the master and to every core.
+ */
+void prismrv_soft_reset(struct prismrv_device *pv, bool hw_recovery)
+{
+	const u32 brn = pv->errata;
+	u32 v, mmu;
+
+	v = MASTER_SOFT_RESET_BIF | MASTER_SOFT_RESET_IPF |
+	    MASTER_SOFT_RESET_DPM | MASTER_SOFT_RESET_VDM |
+	    MASTER_SOFT_RESET_SLC |
+	    MASTER_SOFT_RESET_CORE(0) | MASTER_SOFT_RESET_CORE(1) |
+	    MASTER_SOFT_RESET_CORE(2) | MASTER_SOFT_RESET_CORE(3);
+	if (hw_recovery || !pv->hw_inited_once)
+		v |= MASTER_SOFT_RESET_MCI;
+	writel(v, pv->regs + EUR_CR_MASTER_SOFT_RESET);
+	prismrv_reset_sleep(pv);
+
+	writel(0, pv->regs + EUR_CR_MASTER_BIF_CTRL);
+	readl(pv->regs + EUR_CR_MASTER_BIF_CTRL);
+	prismrv_reset_sleep(pv);
+
+	writel(MASTER_SLC_CTRL_USSE_INVAL_REQ0 |
+	       (0xc << MASTER_SLC_CTRL_ARB_PAGE_SIZE_SHIFT),
+	       pv->regs + EUR_CR_MASTER_SLC_CTRL);
+	readl(pv->regs + EUR_CR_MASTER_SLC_CTRL);
+
+	v = MASTER_SLC_BYPASS_BYP_CC;
+	if (brn & PRISMRV_BRN_31620)
+		v |= MASTER_SLC_BYPASS_REQ_MMU;
+	if (brn & PRISMRV_BRN_31195)
+		v |= MASTER_SLC_BYPASS_REQ_USE0 | MASTER_SLC_BYPASS_REQ_USE1 |
+		     MASTER_SLC_BYPASS_REQ_USE2 | MASTER_SLC_BYPASS_REQ_USE3 |
+		     MASTER_SLC_BYPASS_REQ_TA;
+	writel(v, pv->regs + EUR_CR_MASTER_SLC_CTRL_BYPASS);
+	readl(pv->regs + EUR_CR_MASTER_SLC_CTRL_BYPASS);
+	prismrv_reset_sleep(pv);
+
+	writel(0, pv->regs + EUR_CR_MASTER_SOFT_RESET);
+	prismrv_reset_sleep(pv);
+
+	if (brn & (PRISMRV_BRN_31620 | PRISMRV_BRN_31671 | PRISMRV_BRN_32085)) {
+		mmu = 1U << BIF_MMU_CTRL_ADDR_HASH_MODE_SHIFT;
+		if (!(brn & PRISMRV_BRN_32085))	/* (31278 also disables it) */
+			mmu |= BIF_MMU_CTRL_PREFETCHING_ON;
+		if (!(brn & (PRISMRV_BRN_31620 | PRISMRV_BRN_31671)))
+			mmu |= BIF_MMU_CTRL_ENABLE_DC_TLB;
+		writel(mmu, pv->regs + EUR_CR_MASTER_BIF_MMU_CTRL);
+		readl(pv->regs + EUR_CR_MASTER_BIF_MMU_CTRL);
+		writel(mmu, pv->regs + PRISMRV_MP_CORE_SELECT(EUR_CR_BIF_MMU_CTRL, 0));
+		readl(pv->regs + PRISMRV_MP_CORE_SELECT(EUR_CR_BIF_MMU_CTRL, 0));
 	}
-
-	v = EUR_CR_SOFT_RESET_DPM_RESET_MASK |
-	    EUR_CR_SOFT_RESET_TA_RESET_MASK |
-	    EUR_CR_SOFT_RESET_USE_RESET_MASK |
-	    EUR_CR_SOFT_RESET_ISP_RESET_MASK |
-	    EUR_CR_SOFT_RESET_ISP2_RESET_MASK |
-	    EUR_CR_SOFT_RESET_TSP_RESET_MASK |
-	    EUR_CR_SOFT_RESET_PDS_RESET_MASK |
-	    EUR_CR_SOFT_RESET_PBE_RESET_MASK |
-	    EUR_CR_SOFT_RESET_MTE_RESET_MASK |
-	    EUR_CR_SOFT_RESET_TE_RESET_MASK |
-	    EUR_CR_SOFT_RESET_TCU_L2_RESET_MASK |
-	    EUR_CR_SOFT_RESET_UCACHEL2_RESET_MASK |
-	    EUR_CR_SOFT_RESET_TEX_RESET_MASK |
-	    EUR_CR_SOFT_RESET_IDXFIFO_RESET_MASK |
-	    EUR_CR_SOFT_RESET_VDM_RESET_MASK |
-	    EUR_CR_SOFT_RESET_DCU_L2_RESET_MASK |
-	    EUR_CR_SOFT_RESET_DCU_L0L1_RESET_MASK |
-	    EUR_CR_SOFT_RESET_ITR_RESET_MASK |
-	    /* BIF reset: the dir-list base and bank registers are cleared
-	     * by prismrv_bif_reset() and reprogrammed by prismrv_mmu_init()
-	     * right after the reset */
-	    EUR_CR_SOFT_RESET_BIF_RESET_MASK;
-	writel(v, pv->regs + EUR_CR_SOFT_RESET);
-	writel(0, pv->regs + EUR_CR_SOFT_RESET);
-	udelay(100);
 }
 
 void prismrv_bif_reset(struct prismrv_device *pv)
@@ -163,6 +206,9 @@ int prismrv_hw_init(struct prismrv_device *pv)
 		return -EINVAL;
 	}
 
+	/* vendor SGXInitClocks() precedes everything else */
+	prismrv_init_clocks(pv);
+
 	/* part 1: pre-reset (identity check).  Ends at the first HALT. */
 	next = prismrv_run_script_range(pv, fw, 0);
 	if (next < 0) {
@@ -174,7 +220,7 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	prismrv_read_revision(pv);	/* revision stable after clocks on */
 	prismrv_errata_init(pv);	/* sets pv->errata bitmask only */
 
-	prismrv_soft_reset(pv);
+	prismrv_soft_reset(pv, pv->hw_recovery);
 
 	/* default pipe count: all pipes fully enabled */
 	writel(0, pv->regs + EUR_CR_POWER);
@@ -247,6 +293,8 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	for (i = 0; i < 500; i++) {
 		if (le32_to_cpu(READ_ONCE(pv->hostctl->ui32InitStatus)) &
 		    PRISMRV_EDM_INIT_COMPLETE) {
+			pv->hw_inited_once = true;
+			pv->hw_recovery = false;
 			pv->hw_ready = true;
 			dev_info(pv->drm.dev,
 				 "uKernel initialised after %d polls\n", i);

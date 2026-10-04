@@ -297,7 +297,7 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 	return 0;
 }
 
-static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
+int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
 {
 	u32 *fds;
 	unsigned int i;
@@ -305,6 +305,8 @@ static int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds)
 
 	if (!num_fds)
 		return 0;
+	if (num_fds > PRISMRV_MAX_IN_FENCES)
+		return -EINVAL;
 
 	fds = kmalloc_array(num_fds, sizeof(*fds), GFP_KERNEL);
 	if (!fds)
