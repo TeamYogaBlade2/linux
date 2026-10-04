@@ -94,6 +94,18 @@
 #define MT6320_ADCCLK_ENABLE		BIT(1)
 
 /*
+ * AUD_NCP0 (0x071A) carries the audio LDO enables in bits [14:13]:
+ * DA_HCLDO_EN_VA33 and DA_LCLDO_EN_VA33 (upmu_hw.h:4328-4331).  These are
+ * the supplies the DAC cores and the headphone amplifiers run from, and the
+ * vendor writes 0xe000 with mask 0xe000 at the top of every AnalogOpen case
+ * (AudioMachineDevice.cpp:711/:632/:223) and clears bits [14:13] on
+ * AnalogClose (:1184).  Bit 15 is NCP_REMOTE_SENSE_VA18 and bit 11 is
+ * DA_VBATPREREG_EN_VBAT - neither is part of the playback enable, so name
+ * just the two bits that are.
+ */
+#define MT6320_AUD_NCP0_LDO_ENABLE	(GENMASK(14, 13))
+
+/*
  * AFUNC_AUD_CON2 is the analog mute (bit 7), kept by name because the
  * pre/post-PMU handlers below use it for both directions.
  */
@@ -355,6 +367,37 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0000);
 		if (ret)
 			return ret;
+		/*
+		 * AUD_NCP0 (0x071A) - the audio LDO enables.  Bits [15:11]
+		 * are NCP_REMOTE_SENSE_VA18 | DA_HCLDO_EN_VA33 |
+		 * DA_LCLDO_EN_VA33 | DA_LCLDO_ENC_EN_VA28 |
+		 * DA_VBATPREREG_EN_VBAT (upmu_hw.h:4326-4335), i.e. the
+		 * high- and low-current audio LDO enable pair the DAC cores
+		 * and the headphone amplifiers are supplied from.
+		 *
+		 * The vendor writes 0xe000 with mask 0xe000 at this exact
+		 * point in the sequence, at the top of every AnalogOpen
+		 * case (AudioMachineDevice.cpp:711 for the speaker, :632 for
+		 * the headset, :223 for the earphone), and clears bits
+		 * [14:13] again on AnalogClose (:1184).  This path did not
+		 * write the register at all on power-up, and the power-down
+		 * below wrote it wholesale as 0x8000/0x9000 - a value whose
+		 * bit 15 is set but whose DA_HCLDO/DA_LCLDO bits [14:13] are
+		 * clear.  So the first power-down cleared the audio LDO
+		 * enables and no playback stream ever put them back: the
+		 * bias ramp produced one pop as the rails collapsed and
+		 * nothing was amplified afterwards, on the speaker and on
+		 * the headphones alike.
+		 *
+		 * Set only the two enable bits and leave the rest of the
+		 * register as it is, so this cannot disturb bit 15 or the
+		 * VBAT pre-regulator bit that power_init() left behind.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AUD_NCP0,
+					 MT6320_AUD_NCP0_LDO_ENABLE,
+					 MT6320_AUD_NCP0_LDO_ENABLE);
+		if (ret)
+			return ret;
 
 		usleep_range(900, 1100);
 
@@ -386,6 +429,15 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		/*
 		 * Return NCP to the documented idle value for this silicon
 		 * revision, which is also what power_init() leaves behind.
+		 *
+		 * Write the whole word rather than just the idle bits, as the
+		 * vendor's power_init() does (AudDrv_Kernel.c:286 writes
+		 * 0x8000, :292 writes 0x9000).  These values differ only in
+		 * bit 15 and both leave bits [14:13] clear, which is the
+		 * point: those are DA_HCLDO_EN_VA33 / DA_LCLDO_EN_VA33
+		 * (upmu_hw.h:4328-4331) and the analog supplies have to be
+		 * released once the path is down.  power_init() is what
+		 * re-asserts them, via the PRE_PMU branch above.
 		 */
 		ret = regmap_write(priv->regmap, MT6320_AUD_NCP0,
 				   cid >= MT6320_E2_CID ? 0x8000 : 0x9000);
