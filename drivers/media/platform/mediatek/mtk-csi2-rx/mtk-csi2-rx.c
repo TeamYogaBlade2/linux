@@ -24,12 +24,14 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_graph.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
 #include <linux/phy/phy.h>
 #include <media/v4l2-device.h>
+#include <media/v4l2-fwnode.h>
 #include <media/v4l2-mediabus.h>
 #include <media/v4l2-subdev.h>
 
@@ -79,6 +81,15 @@ struct mutex lock;
 	u32 width;
 	u32 height;
 	u32 code;
+
+	/*
+	 * How many MIPI CSI-2 data lanes this receiver is programmed for, and
+	 * the CSI2_CTRL[3:1] D-Lane enable word derived from it.  Both come
+	 * from the DT, never from a register readback; see the long comment on
+	 * mtk_csi2_rx_parse_lanes() for why there is no register to ask.
+	 */
+	u32 num_data_lanes;
+	u32 dlane_bits;
 };
 
 static inline struct mtk_csi2_rx *sd_to_csi2rx(struct v4l2_subdev *sd)
@@ -108,6 +119,156 @@ static inline void csi2_update_bits(struct mtk_csi2_rx *priv, u32 reg,
 	u32 tmp = csi2_read(priv, reg);
 
 	writel((tmp & ~mask) | (val & mask), priv->regs + csi2_ofs(priv, reg));
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane configuration                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Map a lane count onto the CSI2_CTRL D-Lane enable bits.
+ *
+ * DLANE{1,2,3}_EN are one bit per data lane at CSI2_CTRL[3:1] ("Enables CSI2 N
+ * data lane", draft/ds/mipi.txt:2925-2927), so N lanes means the low N of those
+ * three bits:
+ *
+ *	1 lane -> DLANE1_EN                        == BIT(1)
+ *	2 lanes-> DLANE2_EN | DLANE1_EN             == BIT(2) | BIT(1)
+ *	3 lanes-> DLANE3_EN | DLANE2_EN | DLANE1_EN == BIT(3) | BIT(2) | BIT(1)
+ *
+ * which is literally ((1 << lanes) - 1) << 1 -- the same expression the vendor
+ * uses at seninf_drv.cpp:1287.  It is written out lane by lane rather than as
+ * that shift so that each bit in the result can be read against its documented
+ * name; a count outside 1..CSI2_MAX_DATA_LANES is rejected here rather than
+ * silently masking down to something else (0, which would enable no data lane
+ * at all, or 4+, which this register cannot express).
+ */
+static u32 mtk_csi2_rx_lane_bits(unsigned int lanes)
+{
+	switch (lanes) {
+	case 1:
+		return CSI2_DLANE1_EN;
+	case 2:
+		return CSI2_DLANE2_EN | CSI2_DLANE1_EN;
+	case 3:
+		return CSI2_DLANE3_EN | CSI2_DLANE2_EN | CSI2_DLANE1_EN;
+	default:
+		return 0;
+	}
+}
+
+/*
+ * Work out how many data lanes this receiver is programmed for.
+ *
+ * The lane count is a property of the sensor and the D-PHY between it and this
+ * block, so the only honest source is the sensor-facing endpoint of the media
+ * graph: the "data-lanes" array on this subdev's own sink endpoint, parsed the
+ * standard way with v4l2_fwnode_endpoint_parse() so the count is exactly the
+ * one the media framework would use for that endpoint.
+ *
+ * This used to be read out of CSI2_DBG & 0xE and written back into
+ * CSI2_CTRL & 0xE.  That was meaningless twice over:
+ *
+ *   - CSI2_DBG is the debug register.  Its bits 31:22 are the
+ *     LN{3,2,1,0,C}_{HSRXDB,LPRXDB}_EN "for test only" overrides
+ *     (draft/ds/mipi.txt:3350-3386), and nothing at bits 3:1 is a lane
+ *     enable, so the read produced a number with no relationship to the lanes
+ *     in use;
+ *   - when it happened to read 0, the code left the D-Lane enables cleared
+ *     entirely and still set CSI2_EN, i.e. it enabled a receiver with no
+ *     data lane enabled, which cannot receive anything.  The lane enables
+ *     are not optional on this block: CSI2_EN gates the receiver and
+ *     DLANE*_EN are what let the data lanes through it.
+ *
+ * Neither the data sheet nor the vendor offers a register holding the
+ * configured lane count, so there is nothing to read back: it has to come from
+ * the DT.
+ *
+ * There is currently no such endpoint in this tree.  The sensor (A5142) and the
+ * MIPI D-PHY node were both removed -- commit b048dc62423c "media: i2c: drop
+ * the A5142 sensor driver" took out the A5142's ports node and with it the
+ * receiver's sink endpoint, because the DT describes the sensor side of the
+ * link and there is nothing left to point it at (see the note on the receiver
+ * node in mt6589-lenovo-blade-camera.dtsi).  The removed A5142 was itself
+ * documented as a "5 megapixel RAW sensor, 2-lane MIPI CSI-2" (a5142.c header
+ * comment), so two lanes is what this board's camera drove.
+ *
+ * So: parse the endpoint when there is one and use what it says; when there is
+ * not, fall back to that documented two-lane figure, loudly, rather than to a
+ * debug-register read that means nothing or to enabling no lanes at all.  The
+ * fallback is a warning rather than an error on purpose: this is the one piece
+ * of the configuration that genuinely cannot be derived on this board, and
+ * failing probe over it would take the receiver, SCAM and CAM -- all of which
+ * probe independently of the sensor -- out of the media graph, making the
+ * graph harder to inspect and not more correct.  When a sensor or D-PHY node
+ * comes back, the endpoint parse below picks up the real count unchanged.
+ */
+static u32 mtk_csi2_rx_lane_count(struct device *dev)
+{
+	struct device_node *ep __free(device_node) = NULL;
+	struct v4l2_fwnode_endpoint v4l2_ep = {
+		.bus_type = V4L2_MBUS_CSI2_DPHY,
+	};
+	unsigned int lanes;
+
+	/*
+	 * port@0 is this subdev's sink pad under the core's default 1:1 pad
+	 * mapping (v4l2_subdev_get_fwnode_pad_1_to_1()), which is the same
+	 * mapping CSI2_PAD_SINK == 0 already assumes.
+	 */
+	ep = of_graph_get_endpoint_by_regs(dev->of_node, 0, 0);
+	if (ep) {
+		if (!v4l2_fwnode_endpoint_parse(of_fwnode_handle(ep), &v4l2_ep) &&
+		    v4l2_ep.bus_type == V4L2_MBUS_CSI2_DPHY) {
+			lanes = v4l2_ep.bus.mipi_csi2.num_data_lanes;
+			if (lanes && lanes <= CSI2_MAX_DATA_LANES)
+				return lanes;
+
+			dev_warn(dev,
+				 "sink endpoint declares %u data lanes, which CSI2_CTRL cannot enable (1..%u)\n",
+				 lanes, CSI2_MAX_DATA_LANES);
+		} else {
+			dev_warn(dev,
+				 "sink endpoint is not a usable MIPI CSI-2 D-PHY endpoint\n");
+		}
+	}
+
+	/*
+	 * No usable endpoint: the sensor and D-PHY nodes are absent from this
+	 * tree, so nothing in the DT states a lane count.  Fall back to the
+	 * removed A5142's documented two-lane interface, which is what this
+	 * board's rear camera drove, and say so rather than deciding silently.
+	 */
+	lanes = 2;
+	dev_warn(dev,
+		 "no data-lanes in the DT (no sensor or D-PHY node on this board); assuming %u data lanes\n",
+		 lanes);
+
+	return lanes;
+}
+
+/*
+ * Read the lane count and precompute the register word for it, refusing any
+ * count this block cannot enable.
+ */
+static int mtk_csi2_rx_parse_lanes(struct mtk_csi2_rx *priv)
+{
+	u32 bits;
+
+	priv->num_data_lanes = mtk_csi2_rx_lane_count(priv->dev);
+
+	bits = mtk_csi2_rx_lane_bits(priv->num_data_lanes);
+	if (!bits)
+		return dev_err_probe(priv->dev, -EINVAL,
+				     "%u data lanes cannot be enabled: CSI2_CTRL has DLANE1_EN..DLANE3_EN only\n",
+				     priv->num_data_lanes);
+
+	priv->dlane_bits = bits;
+
+	dev_info(priv->dev, "%u data lane(s), DLANE enables 0x%x\n",
+		 priv->num_data_lanes, bits);
+
+	return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -203,9 +364,15 @@ static int mtk_csi2_rx_init_state(struct v4l2_subdev *sd,
 		fmt->xfer_func = V4L2_XFER_FUNC_DEFAULT;
 	}
 
-	/* Remember the negotiated size; s_stream() has no other source. */
+	/*
+	 * Remember the negotiated size; s_stream() has no other source.  Seeding
+	 * the code too keeps the whole cache defined, so a stream started
+	 * without any ACTIVE S_FMT programs from this documented default rather
+	 * than from a partly-uninitialised value.
+	 */
 	priv->width = CSI2_RX_DEFAULT_WIDTH;
 	priv->height = CSI2_RX_DEFAULT_HEIGHT;
+	priv->code = mtk_csi2_rx_codes[0];
 
 	return 0;
 }
@@ -327,12 +494,41 @@ static int mtk_csi2_rx_get_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
+/*
+ * Apply a proposed format.
+ *
+ * TRY and ACTIVE are different operations and are kept apart here:
+ *
+ *   V4L2_SUBDEV_FORMAT_TRY     a proposal.  Nothing has been accepted by the
+ *                              pipeline, so the receiver must not touch the
+ *                              hardware and must not adopt the geometry as
+ *                              its current one.  It is validated and stored in
+ *                              the caller's TRY state only.
+ *   V4L2_SUBDEV_FORMAT_ACTIVE  the pipeline has accepted it.  The geometry is
+ *                              cached for s_stream() to program from.
+ *
+ * The state object is always updated, because that is the whole point of the
+ * state: it is what a later get_fmt() on the same state reports back.
+ *
+ * The cache below is NOT updated for a TRY format, and that is the one part of
+ * this function that has to be right.  priv->width/height/code is what
+ * mtk_csi2_rx_start_stream() reads to program the block, and the core calls
+ * s_stream() with the subdev only -- there is no state object in that path --
+ * so the cache is the streaming path's entire view of the negotiated format.
+ * Updating it unconditionally meant a TRY S_FMT followed by no ACTIVE S_FMT
+ * (a perfectly ordinary negotiation sequence: probe with TRY, then stream
+ * only if something upstream accepts) left the hardware programmed for a
+ * geometry the pipeline never accepted.  init_state() seeds the cache, so an
+ * ACTIVE-less stream still starts from the documented default rather than
+ * from uninitialised memory.
+ */
 static int mtk_csi2_rx_set_fmt(struct v4l2_subdev *sd,
 			       struct v4l2_subdev_state *state,
 			       struct v4l2_subdev_format *fmt)
 {
 	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
 	struct v4l2_mbus_framefmt *sink, *src;
+	bool try_fmt = fmt->which == V4L2_SUBDEV_FORMAT_TRY;
 
 	lockdep_assert_held(&priv->lock);
 
@@ -355,12 +551,16 @@ static int mtk_csi2_rx_set_fmt(struct v4l2_subdev *sd,
 	*src = *sink;
 
 	/*
-	 * Cache it: s_stream() has no access to the subdev state, and the
-	 * block's own size registers are programmed from here.
+	 * Cache it, but only for an accepted format: s_stream() has no access
+	 * to the subdev state, and the block's own size registers are
+	 * programmed from here.  A TRY format is confined to the state object
+	 * above.
 	 */
-	priv->width = sink->width;
-	priv->height = sink->height;
-	priv->code = sink->code;
+	if (!try_fmt) {
+		priv->width = sink->width;
+		priv->height = sink->height;
+		priv->code = sink->code;
+	}
 
 	fmt->format = *sink;
 
@@ -389,7 +589,6 @@ static const struct v4l2_subdev_pad_ops mtk_csi2_rx_pad_ops = {
  */
 static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 {
-	u32 lanes;
 	int ret;
 
 	/* Each of these may be absent; see the note at the clk_get calls. */
@@ -442,15 +641,27 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 
 	/*
 	 * Restore CSI2_CTRL to its documented reset value, then clear the
-	 * read-only status bits back to zero and set the lane enables and
-	 * the receiver enable.  The upper half of CSI2_CTRL is read-only
-	 * status, so only the lower half is written.
+	 * read-only status bits back to zero, set the D-Lane enables for this
+	 * receiver's configured lane count, and only then set CSI2_EN.  The
+	 * upper half of CSI2_CTRL is read-only status, so only the lower half
+	 * is written.
+	 *
+	 * The order matters: the lanes are enabled before the receiver that
+	 * uses them, and both come from priv->dlane_bits, which was resolved
+	 * from the DT in probe.  The documented reset value 0x2d80 has
+	 * LP11_RST_EN (bit 7) and SYNC_RST_EN (bit 8) set and every DLANE*_EN
+	 * (bits 3:1) and CSI2_EN (bit 0) clear, so the lane and receiver bits
+	 * are set by this driver rather than inherited from reset.
+	 *
+	 * This used to derive the lane word from a CSI2_DBG readback instead,
+	 * which produced a meaningless value and, at zero, left the receiver
+	 * enabled with no data lane enabled at all.  See the note on
+	 * mtk_csi2_rx_lane_bits() for the bit positions and why there is
+	 * nothing here that can be read back.
 	 */
 	csi2_write(priv, CSI2_CTRL, CSI2_CTRL_RESET & CSI2_CTRL_RW);
 
-	lanes = csi2_read(priv, CSI2_DBG) & CSI2_LANE_MASK;
-	if (lanes)
-		csi2_update_bits(priv, CSI2_CTRL, CSI2_LANE_MASK, lanes);
+	csi2_update_bits(priv, CSI2_CTRL, CSI2_LANE_MASK, priv->dlane_bits);
 
 	csi2_update_bits(priv, CSI2_CTRL, CSI2_EN, CSI2_EN);
 
@@ -564,18 +775,37 @@ static void mtk_csi2_rx_stop_stream(struct mtk_csi2_rx *priv)
 	pm_runtime_put_autosuspend(priv->dev);
 }
 
+/*
+ * Streaming entry point.
+ *
+ * The lock is taken here, not assumed.  The pad ops run under the state lock
+ * through the core's v4l2_subdev_call wrappers, but call_s_stream() in
+ * v4l2-subdev.c calls the driver callback directly with no state object and so
+ * no lock of any kind; the lockdep_assert_held() further down used to assert a
+ * mutex nobody held, which would fire the moment anything called this from a
+ * context that had not taken it, and meanwhile left the cached format and the
+ * register programming unserialised against a concurrent S_FMT.  Both use
+ * priv->lock, so taking it here makes format changes and stream changes
+ * mutually exclusive, which is what the assert below claims.
+ *
+ * A plain mutex is right: this path programs registers and calls
+ * pm_runtime_resume_and_get(), so it sleeps and must not be in atomic context.
+ */
 static int mtk_csi2_rx_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
+	int ret = 0;
 
-	lockdep_assert_held(&priv->lock);
+	mutex_lock(&priv->lock);
 
 	if (enable)
-		return mtk_csi2_rx_start_stream(priv);
+		ret = mtk_csi2_rx_start_stream(priv);
+	else
+		mtk_csi2_rx_stop_stream(priv);
 
-	mtk_csi2_rx_stop_stream(priv);
+	mutex_unlock(&priv->lock);
 
-	return 0;
+	return ret;
 }
 
 static const struct v4l2_subdev_video_ops mtk_csi2_rx_video_ops = {
@@ -623,6 +853,18 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, -EINVAL,
 				     "mediatek,seninf-port %u out of range (max %u)\n",
 				     priv->port, SENINF_MAX_PORTS - 1);
+
+	/*
+	 * Resolve the data-lane count and its CSI2_CTRL[3:1] enable word now,
+	 * before anything can program the receiver: power_on() runs at the end
+	 * of probe and on every resume, and it needs the word to be valid.  A
+	 * count this block cannot enable is a hard probe failure rather than a
+	 * silently wrong programming; see mtk_csi2_rx_lane_count() for why
+	 * there is no register that could be read back instead.
+	 */
+	ret = mtk_csi2_rx_parse_lanes(priv);
+	if (ret)
+		return ret;
 
 	/*
 	 * These three gates have no entry in the MT6589 clock bindings: the
@@ -699,11 +941,52 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 		goto err_phy_exit;
 	}
 
-	priv->sd.state_lock = &priv->lock;
-	priv->sd.ops = &mtk_csi2_rx_subdev_ops;
 	priv->sd.internal_ops = &mtk_csi2_rx_internal_ops;
-	priv->sd.entity.name = dev_name(dev);
-	priv->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+
+	/*
+	 * v4l2_subdev_init() first, then everything it leaves to the driver.
+	 *
+	 * It has to come first because it is the only thing that initialises
+	 * sd.name, and __v4l2_device_register_subdev() in
+	 * drivers/media/v4l2-core/v4l2-device.c rejects any subdev whose name
+	 * is empty:
+	 *
+	 *	if (!v4l2_dev || !sd || sd->v4l2_dev || !sd->name[0])
+	 *		return -EINVAL;
+	 *
+	 * so a subdev registered without it never joins the V4L2 device, and
+	 * because that is the async notifier's path the media graph would
+	 * never see this node either -- whatever else was fixed in probe.
+	 * Assigning the subdev fields by hand, as this used to, left
+	 * sd.name all zeroes because none of those fields alias sd.name.
+	 *
+	 * What v4l2_subdev_init() already does, and so must not be repeated:
+	 * it zeroes sd.name, points sd.ops at the ops passed here, sets
+	 * sd.v4l2_dev = NULL, resets sd.flags and sd.grp_id, clears
+	 * dev_priv/host_priv/privacy_led, initialises sd.list and
+	 * sd.async_subdev_endpoint_list, and -- because CONFIG_MEDIA_CONTROLLER
+	 * is set -- makes sd.entity.name *point at* sd.name and sets
+	 * sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV and
+	 * sd.entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN.
+	 *
+	 * Note in particular that entity.name is not a separate copy: it is the
+	 * same array as sd.name, so writing dev_name() into entity.name is
+	 * exactly what fills sd.name in, which is why this used to appear to
+	 * work right up until registration refused it.  Setting sd.name
+	 * explicitly below and leaving entity.name alone is therefore both
+	 * sufficient and non-duplicative.
+	 */
+	v4l2_subdev_init(&priv->sd, &mtk_csi2_rx_subdev_ops);
+	strscpy(priv->sd.name, dev_name(dev), sizeof(priv->sd.name));
+
+	/*
+	 * The pad ops run under this mutex (v4l2_subdev_init_finalize() makes
+	 * the active state use it as its own lock), so every lockdep_assert_held()
+	 * in them is about the lock taken here.  v4l2_subdev_init() does not
+	 * touch state_lock, so this is still the driver's to set.
+	 */
+	priv->sd.state_lock = &priv->lock;
+
 	/*
 	 * The receiver unpacks packets and repasses them unchanged, so in the
 	 * media graph it is an interface bridge, not an ISP or a sensor.  Every

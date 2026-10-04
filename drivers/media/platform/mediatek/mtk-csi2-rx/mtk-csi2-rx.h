@@ -139,12 +139,29 @@ enum {
 #define CSI2_CTRL_RESET				0x00002d80
 
 /*
- * LANE count -> the three one-hot DLANE{1,2,3}_EN bits.  The data sheet
- * describes the field as "enables CSI2 N data lane", one bit per lane.
+ * The D-Lane enables are the three one-hot bits DLANE3_EN / DLANE2_EN /
+ * DLANE1_EN at CSI2_CTRL[3:1], and CSI2_EN is at [0].  The data sheet (SENINF1_
+ * CSI2_CTRL field table, draft/ds/mipi.txt:2925-2928, repeated for SENINF2 at
+ * 4223-4226) gives their descriptions verbatim as "Enables CSI2 3 data lane",
+ * "Enables CSI2 2 data lane", "Enables CSI2 1 data lane" and "Enables CSI2".
+ * The vendor tree agrees with the bit order: seninf_reg.h:382-385 declares
+ * CSI2_EN followed by DLANE1_EN, DLANE2_EN, DLANE3_EN as one-bit fields from
+ * bit 0 up, and seninf_drv.cpp:1287 programs them as
+ *
+ *	(((1 << dlane_num) - 1) << 1) | (csi2_en << 0)
+ *
+ * i.e. lane N is "the low N of the DLANE bits, shifted up past CSI2_EN", which
+ * is exactly the mapping spelled out in mtk-csi2_rx_lane_bits() below.
+ *
+ * There are only three data-lane bits, so this receiver cannot represent more
+ * than three lanes; a four-lane configuration is not expressible on it.
  */
 #define CSI2_LANE_MASK				(CSI2_DLANE1_EN | \
 						 CSI2_DLANE2_EN | \
 						 CSI2_DLANE3_EN)
+
+/* The most data lanes CSI2_CTRL can enable: DLANE3_EN is the top one. */
+#define CSI2_MAX_DATA_LANES			3
 
 /* CSI2_DELAY */
 #define CSI2_LP2HS_DATA_TERM_DELAY		GENMASK(31, 24)

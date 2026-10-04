@@ -443,17 +443,20 @@ static bool mtk_scam_size_valid(const struct v4l2_mbus_framefmt *fmt)
  * caller's buffer was zeroed, and a successful "query" would program a
  * hardware register as a side effect.
  *
- * The answer comes from the cached active state rather than from the state
- * object.  scam->size is what was last programmed into SCAM_SIZE, so it is the
+ * The answer comes from the cached active state for an ACTIVE query and from
+ * the state object for a TRY one; see the comment on which below.  scam->size
+ * is what was last programmed into SCAM_SIZE, so for the ACTIVE case it is the
  * truth about the hardware; the subdev state is seeded from the same source in
  * mtk_scam_init_state() and kept in step by mtk_scam_set_pad().  Reading the
- * cache also means G_FMT cannot fail for want of a state object: the core
- * passes state == NULL for an ACTIVE query when the driver is not
+ * cache also means an ACTIVE G_FMT cannot fail for want of a state object: the
+ * core passes state == NULL for an ACTIVE query when the driver is not
  * media-controller-managed, and this driver does not depend on one.
  *
- * format->which and format->pad are left exactly as the caller set them.  The
- * two mean different things to the core and must not be papered over: TRY means
- * "tell me what you would propose", ACTIVE means "tell me what is running".
+ * format->which is honoured rather than papered over: the two mean different
+ * things to the core.  TRY means "tell me what you would propose", ACTIVE
+ * means "tell me what is running", and reporting the same cached geometry for
+ * both is what used to stop a userspace negotiation loop from converging.
+ * format->pad is left exactly as the caller set it.
  */
 static int mtk_scam_get_pad(struct v4l2_subdev *sd,
 			    struct v4l2_subdev_state *state,
@@ -467,11 +470,46 @@ static int mtk_scam_get_pad(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	/*
- * Both pads carry the same frame: SCAM is a bridge and does not change it.
- * Using the cached active geometry rather than the state object means this
- * works whether or not a state was passed in, and means the two pads cannot
- * disagree with each other or with SCAM_SIZE.
- */
+	 * A TRY query is about what this driver would propose, so the answer
+	 * has to come from the state object -- that is where
+	 * mtk_scam_set_pad() put a TRY format.  Returning the active cache for
+	 * it meant a TRY S_FMT(1920x1080) followed by a TRY G_FMT on the same
+	 * state still reported the pre-negotiation 1280x960: the proposal was
+	 * accepted into the state and then ignored on the way back out, so a
+	 * userspace negotiation loop could never converge on what it had just
+	 * proposed.
+	 *
+	 * state == NULL is checked rather than dereferenced: check_state() in
+	 * v4l2-subdev.c already returns -EINVAL for a TRY with no state, but a
+	 * direct call from another in-tree driver must not become a NULL
+	 * dereference either.  Such a call falls through to the active cache
+	 * below, which is the honest answer when there is nothing else to read.
+	 */
+	if (format->which == V4L2_SUBDEV_FORMAT_TRY && state) {
+		struct v4l2_mbus_framefmt *state_fmt;
+
+		/*
+		 * SCAM is a bridge and does not change the frame, so both pads
+		 * hold the same one.  The pad that was asked about is read
+		 * rather than assumed, so a caller that somehow got the two out
+		 * of step sees the real answer instead of a substituted one.
+		 */
+		state_fmt = v4l2_subdev_state_get_format(state, format->pad);
+		if (!state_fmt)
+			return -EINVAL;
+
+		format->format = *state_fmt;
+		mtk_scam_complete_fmt(&format->format);
+
+		return 0;
+	}
+
+	/*
+	 * ACTIVE, or a TRY with no state to read: report the cached active
+	 * geometry.  That is what was last programmed into SCAM_SIZE, so it is
+	 * the truth about the hardware, and it means the two pads cannot
+	 * disagree with each other or with SCAM_SIZE.
+	 */
 	format->format.width = scam->size.width;
 	format->format.height = scam->size.height;
 	format->format.code = scam->size.code;
@@ -778,19 +816,53 @@ static const struct v4l2_subdev_pad_ops mtk_scam_pad_ops = {
 /* ------------------------------------------------------------------ */
 
 /*
- * Bring the block out of reset, clear any latched interrupt, and start it.
+ * Bring the block out of reset, tell it what frame to expect, clear any latched
+ * interrupt, and start it.
  *
  * SCAM_CON.ENA must be set only after SCAM_CON.RST has been released (data
  * sheet page 2269: "clear RST before setting ENA = 1"), and SCAM itself must
- * be triggered before the image sensor is (same page).
+ * be triggered before the image sensor is (same page).  SCAM_SIZE is written
+ * between the reset and the enable, while the block is halted and before
+ * anything can capture a line against a stale size.
  */
 static int mtk_scam_start_stream(struct mtk_scam *scam)
 {
+	struct v4l2_mbus_framefmt fmt;
+
 	lockdep_assert_held(&scam->lock);
+
+	/*
+	 * The cached active size, checked rather than trusted.  init_state()
+	 * seeds it from SCAM_DEFAULT_* and only an ACTIVE S_FMT replaces it, so
+	 * it is normally in range; a zero here would mean the cache was never
+	 * seeded at all, which would tell the block to expect a frame of no
+	 * pixels.  Both fields are 12 bits, so an out-of-range value would be
+	 * silently truncated into a different picture.  Refuse to start rather
+	 * than program either.
+	 */
+	fmt.width = scam->size.width;
+	fmt.height = scam->size.height;
+
+	if (!mtk_scam_size_valid(&fmt))
+		return dev_err_probe(scam->dev, -EINVAL,
+				     "cached size %ux%u is not encodable in SCAM_SIZE\n",
+				     fmt.width, fmt.height);
 
 	/* Reset, then release, leaving the block halted. */
 	scam_write(scam, SCAM_CON, SCAM_CON_RST);
 	scam_write(scam, SCAM_CON, 0);
+
+	/*
+	 * Program the frame size from the same cached geometry mtk_scam_set_pad()
+	 * programs it from.  This used not to be written at all here: only
+	 * set_pad() did it, so if no ACTIVE S_FMT had ever been issued the block
+	 * was told to expect whatever SCAM_SIZE happened to hold (its reset
+	 * value) while the software believed it was streaming scam->size, and
+	 * the two silently disagreed.
+	 */
+	scam_write(scam, SCAM_SIZE,
+		   FIELD_PREP(SCAM_SIZE_HEIGHT, fmt.height) |
+		   FIELD_PREP(SCAM_SIZE_WIDTH, fmt.width));
 
 	/* Clear any stale status from a previous run (INT* are write-1-clear). */
 	scam_write(scam, SCAM_INT, SCAM_INT_MASK);
@@ -827,12 +899,29 @@ static void mtk_scam_stop_stream(struct mtk_scam *scam)
 	scam_write(scam, SCAM_CON, SCAM_CON_RST);
 }
 
+/*
+ * Streaming entry point.
+ *
+ * The lock is taken here, not assumed.  The pad ops run under the state lock
+ * through the core's v4l2_subdev_call wrappers, but call_s_stream() in
+ * v4l2-subdev.c calls the driver callback directly with no state object and so
+ * no lock of any kind; the lockdep_assert_held() further down used to assert a
+ * mutex nobody held, which would fire the moment anything called this from a
+ * context that had not taken it, and meanwhile left the cached geometry and the
+ * register programming unserialised against a concurrent S_FMT.  Both use
+ * scam->lock, so taking it here makes format changes and stream changes
+ * mutually exclusive, which is what the assert below claims.
+ *
+ * A plain mutex is right: this path programs registers, so it sleeps and must
+ * not be in atomic context.  Nothing else is taken in this path, so the
+ * ordering question does not arise.
+ */
 static int mtk_scam_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct mtk_scam *scam = to_mtk_scam(sd);
 	int ret = 0;
 
-	lockdep_assert_held(&scam->lock);
+	mutex_lock(&scam->lock);
 
 	if (on == scam->streaming)
 		goto out_unlock;
@@ -843,6 +932,7 @@ static int mtk_scam_s_stream(struct v4l2_subdev *sd, int on)
 		mtk_scam_stop_stream(scam);
 
 out_unlock:
+	mutex_unlock(&scam->lock);
 	return ret;
 }
 
@@ -909,11 +999,52 @@ static int mtk_scam_probe(struct platform_device *pdev)
 				     "mediatek,scam-port %u out of range (max %u)\n",
 				     scam->port, SCAM_MAX_PORTS - 1);
 
-	scam->sd.state_lock = &scam->lock;
-	scam->sd.ops = &mtk_scam_subdev_ops;
 	scam->sd.internal_ops = &mtk_scam_internal_ops;
-	scam->sd.entity.name = dev_name(dev);
-	scam->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+
+	/*
+	 * v4l2_subdev_init() first, then everything it leaves to the driver.
+	 *
+	 * It has to come first because it is the only thing that initialises
+	 * sd.name, and __v4l2_device_register_subdev() in
+	 * drivers/media/v4l2-core/v4l2-device.c rejects any subdev whose name
+	 * is empty:
+	 *
+	 *	if (!v4l2_dev || !sd || sd->v4l2_dev || !sd->name[0])
+	 *		return -EINVAL;
+	 *
+	 * so a subdev registered without it never joins the V4L2 device, and
+	 * because that is the async notifier's path the media graph would
+	 * never see this node either -- whatever else was fixed in probe.
+	 * Assigning the subdev fields by hand, as this used to, left
+	 * sd.name all zeroes because none of those fields alias sd.name.
+	 *
+	 * What v4l2_subdev_init() already does, and so must not be repeated:
+	 * it zeroes sd.name, points sd.ops at the ops passed here, sets
+	 * sd.v4l2_dev = NULL, resets sd.flags and sd.grp_id, clears
+	 * dev_priv/host_priv/privacy_led, initialises sd.list and
+	 * sd.async_subdev_endpoint_list, and -- because CONFIG_MEDIA_CONTROLLER
+	 * is set -- makes sd.entity.name *point at* sd.name and sets
+	 * sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV and
+	 * sd.entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN.
+	 *
+	 * Note in particular that entity.name is not a separate copy: it is the
+	 * same array as sd.name, so writing dev_name() into entity.name is
+	 * exactly what fills sd.name in, which is why this used to appear to
+	 * work right up until registration refused it.  Setting sd.name
+	 * explicitly below and leaving entity.name alone is therefore both
+	 * sufficient and non-duplicative.
+	 */
+	v4l2_subdev_init(&scam->sd, &mtk_scam_subdev_ops);
+	strscpy(scam->sd.name, dev_name(dev), sizeof(scam->sd.name));
+
+	/*
+	 * The pad ops run under this mutex (v4l2_subdev_init_finalize() makes
+	 * the active state use it as its own lock), so every lockdep_assert_held()
+	 * in them is about the lock taken here.  v4l2_subdev_init() does not
+	 * touch state_lock, so this is still the driver's to set.
+	 */
+	scam->sd.state_lock = &scam->lock;
+
 	/*
 	 * SCAM sits between the receiver and the CAM/ISP and converts nothing,
 	 * so it is the video-interface bridge of this chain.  That is the same

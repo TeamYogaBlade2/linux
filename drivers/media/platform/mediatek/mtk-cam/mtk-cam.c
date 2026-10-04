@@ -218,12 +218,26 @@ static int mtk_cam_stop(struct mtk_cam *cam)
 	return 0;
 }
 
+/*
+ * Streaming entry point.
+ *
+ * The lock is taken here, not assumed.  call_s_stream() in v4l2-subdev.c calls
+ * the driver callback directly, with no state object and so no lock of any
+ * kind, so the lockdep_assert_held() in mtk_cam_sw_reset() -- which is what
+ * protects the reset handshake and the enable writes below -- used to assert a
+ * mutex nobody held.  Taking cam->lock here is what makes that assert true, and
+ * it also serialises the CAM control strobes against any other path that
+ * reaches them.
+ *
+ * A plain mutex is right: mtk_cam_sw_reset() busy-waits with udelay() over up
+ * to 100 ms, so this path both sleeps and must not be in atomic context.
+ */
 static int mtk_cam_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct mtk_cam *cam = to_mtk_cam(sd);
 	int ret = 0;
 
-	lockdep_assert_held(&cam->lock);
+	mutex_lock(&cam->lock);
 
 	if (on == cam->streaming)
 		goto out_unlock;
@@ -234,6 +248,7 @@ static int mtk_cam_s_stream(struct v4l2_subdev *sd, int on)
 		ret = mtk_cam_stop(cam);
 
 out_unlock:
+	mutex_unlock(&cam->lock);
 	return ret;
 }
 
@@ -263,10 +278,56 @@ static int mtk_cam_probe(struct platform_device *pdev)
 	if (IS_ERR(cam->regs))
 		return PTR_ERR(cam->regs);
 
+	/*
+	 * v4l2_subdev_init() first, then everything it leaves to the driver.
+	 *
+	 * It has to come first because it is the only thing that initialises
+	 * sd.name, and __v4l2_device_register_subdev() in
+	 * drivers/media/v4l2-core/v4l2-device.c rejects any subdev whose name
+	 * is empty:
+	 *
+	 *	if (!v4l2_dev || !sd || sd->v4l2_dev || !sd->name[0])
+	 *		return -EINVAL;
+	 *
+	 * so a subdev registered without it never joins the V4L2 device, and
+	 * because that is the async notifier's path the media graph would
+	 * never see this node either -- whatever else was fixed in probe.
+	 * Assigning the subdev fields by hand, as this used to, left
+	 * sd.name all zeroes because none of those fields alias sd.name.
+	 *
+	 * What v4l2_subdev_init() already does, and so must not be repeated:
+	 * it zeroes sd.name, points sd.ops at the ops passed here, sets
+	 * sd.v4l2_dev = NULL, resets sd.flags and sd.grp_id, clears
+	 * dev_priv/host_priv/privacy_led, initialises sd.list and
+	 * sd.async_subdev_endpoint_list, and -- because CONFIG_MEDIA_CONTROLLER
+	 * is set -- makes sd.entity.name *point at* sd.name and sets
+	 * sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV and
+	 * sd.entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN.
+	 *
+	 * Note in particular that entity.name is not a separate copy: it is the
+	 * same array as sd.name, so writing dev_name() into entity.name is
+	 * exactly what fills sd.name in, which is why this used to appear to
+	 * work right up until registration refused it.  Setting sd.name
+	 * explicitly below and leaving entity.name alone is therefore both
+	 * sufficient and non-duplicative.
+	 *
+	 * There is no internal_ops here: CAM has no pad_ops and no format to
+	 * seed, so there is no subdev state for init_state() to populate.  That
+	 * line is spelled out only because the other two drivers in this chain
+	 * do set one; v4l2_subdev_init() itself does not touch internal_ops,
+	 * and the devm allocation already zeroed it.
+	 */
+	v4l2_subdev_init(&cam->sd, &mtk_cam_subdev_ops);
+	strscpy(cam->sd.name, dev_name(dev), sizeof(cam->sd.name));
+
+	/*
+	 * CAM has no pad_ops, so no pad operation runs under this lock; the
+	 * assert in mtk_cam_sw_reset() is nonetheless about the mutex taken by
+	 * mtk_cam_s_stream() below, which is this same one.  v4l2_subdev_init()
+	 * does not touch state_lock, so this is still the driver's to set.
+	 */
 	cam->sd.state_lock = &cam->lock;
-	cam->sd.ops = &mtk_cam_subdev_ops;
-	cam->sd.entity.name = dev_name(dev);
-	cam->sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV;
+
 	/*
 	 * CAM is the ISP: it is where the sensor's frames are meant to be
 	 * processed, so MEDIA_ENT_F_PROC_VIDEO_ISP is the honest description,
