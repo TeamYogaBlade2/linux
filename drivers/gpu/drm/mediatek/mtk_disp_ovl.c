@@ -348,17 +348,21 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	 * pstore entirely.  Print the first few, then stay quiet unless the
 	 * status changes, saying how many were dropped.
 	 */
-	if (reg != priv->last_intsta)
-		priv->intsta_reported = 0;
-
-	if (priv->intsta_reported < 4) {
+	if (priv->intsta_reported < 8) {
 		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
+		bool last = priv->intsta_reported == 7;
 
-		pr_err("OVL: underflow intsta=%#x sta=%#x (run=%d rdma0_idle=%d)%s\n",
+		/*
+		 * Note this counts total reports, not runs of one value: the
+		 * status alternates between two values here, so a per-value
+		 * counter never reached its limit.
+		 */
+		pr_err("OVL: intsta=%#x sta=%#x (run=%d rdma0_idle=%d)%s\n",
 		       reg, sta, !!(sta & 1), !!(sta & 0x2),
-		       priv->intsta_reported == 3 ?
-		       " (further messages suppressed)" : "");
+		       last ? " (further messages suppressed)" : "");
 
+		if (reg & priv->data->fme_cpl_bit)
+			pr_err("OVL: frame complete\n");
 		if (reg & priv->data->fme_und_bit)
 			pr_err("OVL: OVL frame underflow\n");
 		if (reg & priv->data->rdma0_eof_abn_bit)
@@ -371,7 +375,6 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 			pr_err("OVL: RDMA1 FIFO underflow\n");
 
 		priv->intsta_reported++;
-		priv->last_intsta = reg;
 	}
 
 	/*
