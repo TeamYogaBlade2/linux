@@ -67,6 +67,9 @@
 #define MT6589_OVL_MOUT_EN_COLOR	BIT(2)
 #define MT6589_OVL_MOUT_EN_WDMA1_MASK	BIT(0)
 #define MT6589_OVL_MOUT_EN_COLOR_MASK	BIT(2)
+/* DISP_OVL_MOUT_EN bit 1 = "Output to BLS" (data sheet). */
+#define MT6589_OVL_MOUT_EN_BLS		BIT(1)
+#define MT6589_OVL_MOUT_EN_BLS_MASK	BIT(1)
 
 /* COLOR_MOUT_EN */
 #define MT6589_COLOR_MOUT_EN_BLS	BIT(3)
@@ -78,6 +81,8 @@
 
 /* BLS_SEL_IN */
 #define MT6589_BLS_SEL_IN_COLOR		0x1
+/* DISP_BLS_SEL: 0 = "From overlay", 1 = "From color engine" (data sheet). */
+#define MT6589_BLS_SEL_IN_OVL		0x0
 #define MT6589_BLS_SEL_IN_MASK		0x1
 
 /* RDMA0_SOUT_SEL */
@@ -101,28 +106,38 @@
 
 static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
 	/*
-	 * Main path step 1: OVL output → COLOR
-	 *   OVL_MOUT_EN selects COLOR as the downstream engine.
-	 *   COLOR_SEL_IN confirms OVL as the upstream source.
+	 * Main path step 1: OVL output -> BLS.
+	 *
+	 * The overlay goes straight to BLS, not via COLOR.  The bootloader
+	 * does exactly this (lk/ddp_path.c: for DISP_MODULE_DSI it writes
+	 * OVL_MOUT_EN = 0x2 and BLS_SEL = 0, commented "ovl_mout output to
+	 * bls" and "bls_sel from overlay"), and that is a path known to
+	 * drive this panel.
+	 *
+	 * The data sheet agrees on both encodings:
+	 *   DISP_OVL_MOUT_EN bit 1 = "Output to BLS", bit 2 = "Output to
+	 *   COLOR" - so the bootloader value 0x2 is bit 1, BLS.
+	 *   DISP_BLS_SEL 0 = "From overlay", 1 = "From color engine" - so
+	 *   the bootloader value 0 is the overlay.
+	 *
+	 * Routing through COLOR instead left OVL_RUN clear and the OVL
+	 * reporting FME_UND with the RDMA EOF aborts set: the overlay was
+	 * feeding an engine that was not in the path, so it never drained.
 	 */
-	MMSYS_ROUTE(OVL0, COLOR0,
+	MMSYS_ROUTE(OVL0, BLS,
 		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_COLOR_MASK, MT6589_OVL_MOUT_EN_COLOR),
+		    MT6589_OVL_MOUT_EN_BLS_MASK, MT6589_OVL_MOUT_EN_BLS),
+	MMSYS_ROUTE(OVL0, BLS,
+		    MT6589_DISP_BLS_SEL_IN,
+		    MT6589_BLS_SEL_IN_MASK, MT6589_BLS_SEL_IN_OVL),
+
+	/*
+	 * COLOR is kept in the path component list so its registers are still
+	 * clocked and configured, but it is not on the signal route.
+	 */
 	MMSYS_ROUTE(OVL0, COLOR0,
 		    MT6589_DISP_COLOR_SEL_IN,
 		    MT6589_COLOR_SEL_IN_MASK, MT6589_COLOR_SEL_IN_OVL),
-
-	/*
-	 * Main path step 2: COLOR output → BLS
-	 *   COLOR_MOUT_EN selects BLS as the downstream engine.
-	 *   BLS_SEL_IN confirms COLOR as the upstream source.
-	 */
-	MMSYS_ROUTE(COLOR0, BLS,
-		    MT6589_DISP_COLOR_MOUT_EN,
-		    MT6589_COLOR_MOUT_EN_MASK, MT6589_COLOR_MOUT_EN_BLS),
-	MMSYS_ROUTE(COLOR0, BLS,
-		    MT6589_DISP_BLS_SEL_IN,
-		    MT6589_BLS_SEL_IN_MASK, MT6589_BLS_SEL_IN_COLOR),
 
 	/*
 	 * Main path step 3: RDMA0 output → DSI0 / DBI / DPI0
