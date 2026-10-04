@@ -68,12 +68,38 @@
  *   - SPS/PPS.  They are separate one-shot bits of VENC_CODEC_CTRL and need a
  *     parameter-set buffer to point at, which the driver does not have, so no
  *     parameter set is ever emitted.
- *   - Decode.  The decoder window is mapped, its clock gated and its frame-end
- *     interrupt acknowledged, but there is no datapath programming at all.  An
- *     earlier revision pointed the decoder's v4l2_m2m_ops.device_run at the
- *     *encoder* routine; that cross-wiring has been removed rather than papered
- *     over, because a decoder node that programs the encoder cannot honestly be
- *     exposed at all.  Only the encoder gets a V4L2 node.
+ *   - Decode.  The decoder gets its own V4L2 node, mirroring the encoder's plumbing
+ *     exactly, and that node's device_run() reports -ENODEV.  This is a deliberate
+ *     statement about what this driver does, not an oversight, and the reason is
+ *     architectural rather than a matter of effort:
+ *
+ *     The vendor stack does NOT program the VDEC datapath from the kernel.  Its
+ *     kernel driver (videocodec_kernel_driver.c, 2391 lines) touches the decoder only
+ *     to power it up and to acknowledge the frame-end interrupt (:300-301); it never
+ *     writes a datapath register.  Userspace does, by assembling a queue of
+ *     WRITE_REG_CMD records (hal_api.h:33-41, :107-124) and shipping it over the
+ *     MFV_SET_CMD_CMD ioctl, where the driver's only job is to walk it:
+ *
+ *         case WRITE_REG_CMD:
+ *             VDO_HW_WRITE(cmd_queue->address + cmd_queue->offset,
+ *                          cmd_queue->value);   (videocodec_kernel_driver.c:1758)
+ *
+ *     The decode sequence therefore lives in the closed userspace libraries
+ *     (libvp8dec_sa.ca7.so and siblings), which are stripped and partly encrypted
+ *     blobs.  Porting it is a userspace reverse-engineering project, not a kernel one,
+ *     so the kernel-side scope is what it is here: clocks, reset, the interrupt, and a
+ *     node that is honest about the rest.
+ *
+ *     Two further reasons a decoder datapath could not be written from what is
+ *     available, both documented where they arise: the only readable register map is
+ *     the LDVT register-test harness, which is configured for MT8580 rather than
+ *     MT6589; and VP8 additionally requires its probability tables pushed bit-by-bit
+ *     into parser SRAM before any frame can decode.  See the VP8 note at the end of
+ *     mtk-vcodec-mt6589-reg.h.
+ *
+ *     An earlier revision pointed the decoder's v4l2_m2m_ops.device_run at the
+ *     *encoder* routine; that cross-wiring was removed rather than papered over, and
+ *     this revision keeps the two nodes separate.
  *   - MPEG-4 encoding.  The datapath's address programming is written
  *     (mtk_venc_set_mp4_frame_addr()) and its interrupt is handled, but it needs
  *     three distinct chroma planes plus a per-MB side information buffer at
@@ -214,6 +240,14 @@ struct mtk_vcodec_dev {
 	struct mutex enc_lock;
 	struct mutex dec_lock;
 	/*
+	 * The decoder's own lock.  Distinct from dec_lock, which guards the power
+	 * transition and is what runtime PM takes: this one serialises format
+	 * negotiation and open/teardown on the decoder node, which the framework already
+	 * serialises on vfd->lock.  It is declared so the decoder's locking story is the
+	 * same shape as the encoder's rather than relying on that coincidence.
+	 */
+	struct mutex dec_node_lock;
+	/*
 	 * Encoder user count, reserved for the power-management refcount scheme
 	 * below.
 	 *
@@ -228,6 +262,13 @@ struct mtk_vcodec_dev {
 	 * suspend from tearing the registers down underneath an open but idle stream.
 	 */
 	atomic_t enc_users;
+	/*
+	 * Open decoder file handles.  Incremented by mtk_vcodec_dec_open() and decremented
+	 * by mtk_vcodec_dec_release(), so the "dec_users == 0" tests in the runtime PM
+	 * paths are no longer vacuously true.  It does not hold off suspend for a frame
+	 * in flight -- no frame is ever in flight, because the decoder has no datapath --
+	 * it stops a system suspend from tearing down an open but idle node.
+	 */
 	atomic_t dec_users;
 
 	/*
@@ -271,15 +312,24 @@ struct mtk_vcodec_dev {
 	bool suspended;
 
 	/*
-	 * The V4L2 mem-to-mem node.
+	 * The V4L2 mem-to-mem nodes.
 	 *
-	 * Encoder only: the decoder window is mapped and its interrupt acknowledged,
-	 * but nothing programs its datapath, so it gets no video device and cannot
-	 * honestly be exposed (see the file header).
+	 * Two of them, one per direction, each with its own v4l2_device, m2m_dev and
+	 * video_device.  They cannot share a single v4l2_device because the decoder and
+	 * the encoder are separate character devices with separate open() lifecycles and
+	 * separate format negotiation, and a shared node would make a decoder client hold
+	 * the encoder's file operations.
+	 *
+	 * The decoder node's device_run() reports -ENODEV; see the file header and
+	 * mtk_vcodec_dec_device_run() for why that is the honest answer rather than a stub.
 	 */
 	struct video_device		vfd;
 	struct v4l2_m2m_dev		*m2m_dev;
 	struct v4l2_device		v4l2_dev;
+
+	struct video_device		dec_vfd;
+	struct v4l2_m2m_dev		*dec_m2m_dev;
+	struct v4l2_device		dec_v4l2_dev;
 
 	/*
 	 * Whether the frame that just retired failed, recorded separately from bs_bytes
@@ -326,6 +376,14 @@ struct mtk_vcodec_dev {
 	 * graph that was never built would corrupt the media device.
 	 */
 	bool				mc_registered;
+
+	/*
+	 * The decoder node's media-controller registration state, tracked separately
+	 * for the same reason as mc_registered: v4l2_m2m_register_media_controller() is a
+	 * no-op returning 0 when there is no media controller, and unregistering a graph
+	 * that was never built would corrupt the media device.
+	 */
+	bool				mc_dec_registered;
 };
 
 /*
@@ -901,13 +959,29 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 
 /*
  * Decoder interrupt.  There is no status/ack register pair: frame end is bit 16
- * of MISC word 41 and is cleared by setting bits 0 and 4 then writing the
- * original value back, a two-step sequence the vendor code relies on
- * (vdec_hal_if_avs.c:1104-1106 and videocodec_kernel_driver.c:346-360 both
- * do exactly this).
+ * of MISC word 41, and the interrupt is cleared by setting bits 0 and 4 and
+ * then driving bit 4 low again, a two-step sequence on the same word.
+ *
+ * The second write RE-READS the register and clears bit 4.  This follows the
+ * production driver, videocodec_kernel_driver.c:300-301:
+ *
+ *     VDO_HW_WRITE(VDEC_MISC_BASE + 41*4,
+ *                  VDO_HW_READ(VDEC_MISC_BASE + 41*4) | 0x11);
+ *     VDO_HW_WRITE(VDEC_MISC_BASE + 41*4,
+ *                  VDO_HW_READ(VDEC_MISC_BASE + 41*4) & ~0x10);
+ *
+ * An earlier revision of this file wrote the value SAVED BEFORE the first write
+ * instead, which is what the LDVT harness does at vdec_hal_if_avs.c:1105-1106
+ * (u4VDEC_HAL_AVS_VDec_ClearInt writes back u4Reg).  The two vendor sources
+ * genuinely disagree; the driver's form is used here because that is the code
+ * whose behaviour was observed on silicon.  See the frame-end comment in
+ * mtk-vcodec-mt6589-reg.h, which records both.
  *
  * The decoder datapath itself is not programmed by this driver; see the file
- * header.
+ * header.  The interrupt is still handled because the block can and does raise
+ * it -- the register window and its clocks exist whether or not this driver
+ * starts anything -- and an unacknowledged level-high interrupt would wedge the
+ * line permanently.
  */
 static irqreturn_t mtk_vdec_isr(int irq, void *data)
 {
@@ -933,7 +1007,9 @@ static irqreturn_t mtk_vdec_isr(int irq, void *data)
 	if (val & VDEC_FRAME_END_BIT) {
 		mtk_vdec_write(vcodec, VDEC_MISC_FRAME_END, val |
 			       VDEC_FRAME_END_SET | VDEC_FRAME_END_ACK);
-		mtk_vdec_write(vcodec, VDEC_MISC_FRAME_END, val);
+		mtk_vdec_write(vcodec, VDEC_MISC_FRAME_END,
+			       mtk_vdec_read(vcodec, VDEC_MISC_FRAME_END) &
+			       ~VDEC_FRAME_END_ACK_CLR);
 		vcodec->irq_count++;
 	}
 
@@ -2849,6 +2925,663 @@ static void mtk_vcodec_enc_vf_deinit(struct mtk_vcodec_dev *vcodec)
 	v4l2_device_unregister(&vcodec->v4l2_dev);
 }
 
+/* ------------------------------------------------------------------ */
+/* Decoder node							      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * WHY THIS SECTION IS WHAT IT IS
+ * ==============================
+ * Read the file header first; this is the implementation of what it describes.
+ *
+ * What is here is the V4L2 plumbing and nothing else: a second video_device with
+ * its own v4l2_device and m2m_dev, the format negotiation the node needs to be
+ * usable at all, and a device_run() that reports -ENODEV.
+ *
+ * The -ENODEV is the substantive part, and it is deliberate.  The vendor stack
+ * programs the VDEC datapath from userspace, not from the kernel: the driver
+ * walks a WRITE_REG_CMD queue that closed libraries assemble
+ * (videocodec_kernel_driver.c:1758, hal_api.h:33-41).  There is therefore no
+ * kernel-side register sequence to reproduce here, and inventing one from the
+ * LDVT harness -- which is configured for MT8580, not this chip -- would produce
+ * a driver that appears to decode and does not.
+ *
+ * Returning -ENODEV from device_run() says exactly that, at the point where a
+ * caller finds out, instead of leaving a node that accepts buffers and silently
+ * never fills them.  The rest of the node is real: a client can open it, query
+ * its capabilities, negotiate formats and inspect them.  What it cannot do is
+ * decode, and it says so.
+ */
+
+#define file2dectx(f) ((struct mtk_vcodec_dec_ctx *)(f)->private_data)
+
+/*
+ * Decoder formats.  A decoder's format roles are the encoder's inverted: the
+ * OUTPUT queue carries the compressed bitstream that goes IN, and the CAPTURE
+ * queue carries the raw picture that comes OUT.
+ *
+ * One codec is declared, VP8, and the declaration is deliberately narrow.  The
+ * hardware block is multi-standard -- the vendor harness carries per-codec
+ * tables for MPEG-1/2, MPEG-4, H.263, H.264, WMV, VC-1, RM, VP6, VP8 and AVS --
+ * but every one of those needs a bitstream parser bring-up this driver does not
+ * have, so advertising the whole list would advertise nine codecs of which none
+ * can decode.  VP8 is named because it is the one whose register map and buffer
+ * requirements have been read closely enough to document in
+ * mtk-vcodec-mt6589-reg.h; naming it is a statement about available
+ * documentation, not about working decode.
+ */
+
+/*
+ * Bitstream buffer bounds for the decoder's compressed input.
+ *
+ * These are bounds on what a client may hand the node, not on any hardware
+ * register: the decoder's bitstream FIFO (V_FIFO_SZ, vdec_drv_fileio.h:23) is
+ * an internal DRAM buffer the datapath owns, and this driver allocates none of
+ * it.  The window below is simply the range of elementary-stream buffer sizes
+ * that makes sense for the formats the block takes, used to validate negotiation
+ * so a client cannot negotiate a zero-sized or unbounded compressed buffer.
+ */
+#define MTK_VDEC_BS_SIZE_MIN		(4 * 1024)
+#define MTK_VDEC_BS_SIZE_MAX		(4 * 1024 * 1024)
+#define MTK_VDEC_BS_SIZE_DEFAULT	(256 * 1024)
+
+/*
+ * Plane geometry for a raw NV12 picture, identical in shape to the encoder's
+ * mtk_venc_enc_plane_size(): both dimensions rounded up to a whole macroblock
+ * before the planes are divided, because the datapath is macroblock based.
+ */
+static void mtk_vdec_plane_size(unsigned int w, unsigned int h,
+				unsigned long *y_size)
+{
+	w = round_up(w, MTK_VDEC_MB_SIZE);
+	h = round_up(h, MTK_VDEC_MB_SIZE);
+
+	*y_size = (unsigned long)w * h;
+}
+
+static void mtk_vcodec_dec_src_setup(struct v4l2_format *f)
+{
+	unsigned long y_size;
+
+	mtk_vdec_plane_size(f->fmt.pix.width, f->fmt.pix.height, &y_size);
+
+	f->fmt.pix.bytesperline = f->fmt.pix.width;
+	f->fmt.pix.sizeimage = y_size + y_size / 2;
+}
+
+static int mtk_vcodec_dec_check_size(unsigned int w, unsigned int h)
+{
+	if (!w || !h)
+		return -EINVAL;
+
+	if (w % 2 || h % 2)
+		return -EINVAL;
+
+	if (w > MTK_VDEC_MAX_WIDTH || h > MTK_VDEC_MAX_HEIGHT)
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * ENUMFMT.  Exactly one format per queue, as with the encoder: index 0 is it and
+ * anything else does not exist.  Offering a second index the hardware cannot do
+ * would be worse than not offering it.
+ */
+static int mtk_vcodec_dec_enum_fmt_cap(struct file *file, void *priv,
+				       struct v4l2_fmtdesc *d)
+{
+	if (d->index)
+		return -EINVAL;
+
+	d->flags = 0;
+	strscpy(d->description, "NV12", sizeof(d->description));
+	d->pixelformat = V4L2_PIX_FMT_NV12;
+	return 0;
+}
+
+static int mtk_vcodec_dec_enum_fmt_out(struct file *file, void *priv,
+				       struct v4l2_fmtdesc *d)
+{
+	if (d->index)
+		return -EINVAL;
+
+	d->flags = V4L2_FMT_FLAG_COMPRESSED;
+	strscpy(d->description, "VP8 bitstream", sizeof(d->description));
+	d->pixelformat = V4L2_PIX_FMT_VP8;
+	return 0;
+}
+
+static int mtk_vcodec_dec_g_fmt_cap(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_dec_ctx *ctx = file2dectx(file);
+
+	*f = ctx->dst_fmt;
+
+	return 0;
+}
+
+static int mtk_vcodec_dec_g_fmt_out(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_dec_ctx *ctx = file2dectx(file);
+
+	*f = ctx->src_fmt;
+
+	return 0;
+}
+
+/*
+ * TRYFMT for the raw picture out (CAPTURE queue).
+ *
+ * This is the decoder's counterpart to the encoder's NV12 source, and it has
+ * real geometry: width and height are the picture being decoded, validated by
+ * mtk_vcodec_dec_check_size() against the block's ceiling and rounded up to whole
+ * macroblocks by mtk_vcodec_dec_src_setup() before the planes are divided.
+ */
+static int mtk_vcodec_dec_try_fmt_cap(struct file *file, void *priv,
+				      struct v4l2_format *f)
+{
+	int ret;
+
+	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+
+	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_NV12)
+		return -EINVAL;
+
+	ret = mtk_vcodec_dec_check_size(f->fmt.pix.width, f->fmt.pix.height);
+	if (ret)
+		return ret;
+
+	f->fmt.pix.field = V4L2_FIELD_NONE;
+	mtk_vcodec_dec_src_setup(f);
+
+	return 0;
+}
+
+/*
+ * TRYFMT for the compressed input (OUTPUT queue).
+ *
+ * The bitstream is not a picture, so width and height are zeroed rather than
+ * echoed: the coded size is not known until the frame is decoded.  sizeimage is
+ * the buffer size and the only field with meaning here, bounded so a client
+ * cannot negotiate a zero-sized or unbounded compressed buffer.
+ */
+
+static int mtk_vcodec_dec_try_fmt_out(struct file *file, void *priv,
+				      struct v4l2_format *f)
+{
+	if (f->type != V4L2_BUF_TYPE_VIDEO_OUTPUT)
+		return -EINVAL;
+
+	if (f->fmt.pix.sizeimage < MTK_VDEC_BS_SIZE_MIN ||
+	    f->fmt.pix.sizeimage > MTK_VDEC_BS_SIZE_MAX)
+		return -EINVAL;
+
+	f->fmt.pix.width = 0;
+	f->fmt.pix.height = 0;
+	f->fmt.pix.pixelformat = V4L2_PIX_FMT_VP8;
+	f->fmt.pix.field = V4L2_FIELD_NONE;
+
+	return 0;
+}
+
+static int mtk_vcodec_dec_s_fmt_cap(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_dec_ctx *ctx = file2dectx(file);
+	int ret;
+
+	ret = mtk_vcodec_dec_try_fmt_cap(file, priv, f);
+	if (ret)
+		return ret;
+
+	ctx->dst_fmt = *f;
+
+	return 0;
+}
+
+static int mtk_vcodec_dec_s_fmt_out(struct file *file, void *priv,
+				    struct v4l2_format *f)
+{
+	struct mtk_vcodec_dec_ctx *ctx = file2dectx(file);
+	int ret;
+
+	ret = mtk_vcodec_dec_try_fmt_out(file, priv, f);
+	if (ret)
+		return ret;
+
+	ctx->src_fmt = *f;
+
+	return 0;
+}
+
+static int mtk_vcodec_dec_queue_setup(struct vb2_queue *vq,
+				      unsigned int *num_buffers,
+				      unsigned int *num_planes,
+				      unsigned int sizes[],
+				      struct device *alloc_devs[])
+{
+	struct mtk_vcodec_dec_ctx *ctx = vq->drv_priv;
+	struct device *dev = &ctx->dev->pdev->dev;
+	unsigned int min = 2;
+
+	if (vq->type != V4L2_BUF_TYPE_VIDEO_OUTPUT &&
+	    vq->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
+		WARN_ON(1);
+		return -EINVAL;
+	}
+
+	/*
+	 * No negotiated format means no geometry, and a queue sized against a zero
+	 * format would allocate zero bytes for every buffer.  Refuse rather than accept
+	 * a queue that cannot work: this is reachable by a REQBUFS with no preceding
+	 * S_FMT, and it is far easier to diagnose here than as an allocation failure
+	 * later.  open() seeds both formats with usable defaults, so this only fires if
+	 * a client has explicitly zeroed one.
+	 */
+	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT &&
+	    !ctx->src_fmt.fmt.pix.sizeimage)
+		return -EINVAL;
+
+	if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE &&
+	    !ctx->dst_fmt.fmt.pix.sizeimage)
+		return -EINVAL;
+
+	*num_planes = 1;
+	sizes[0] = vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT ?
+		ctx->src_fmt.fmt.pix.sizeimage : ctx->dst_fmt.fmt.pix.sizeimage;
+
+	if (*num_buffers < min)
+		*num_buffers = min;
+
+	alloc_devs[0] = dev;
+
+	return 0;
+}
+
+/*
+ * device_run - this driver cannot decode.
+ *
+ * The -ENODEV is the whole point of this node and is not a placeholder.  It is
+ * reported at the moment a client actually asks for a picture, which is the only
+ * place a caller can be told the truth, and it is accompanied by a message
+ * naming the reason so the failure is diagnosable from dmesg alone.
+ *
+ * What has deliberately NOT been done here, and would have been the alternative:
+ *
+ *   - Populating the VP8 motion-compensation registers.  Their offsets are known and
+ *     are recorded in mtk-vcodec-mt6589-reg.h, but they come from the LDVT
+ *     register-test harness, which is built as CONFIG_CHIP_VER_CURR 80 == MT8580
+ *     (vdec_info_common.h:125, :130) -- a different SoC -- and a wrong offset written
+ *     to a decoder does not fail loudly, it corrupts the block's state.
+ *   - Loading the VP8 probability tables.  Required before any frame can decode, and
+ *     they are only present in the harness as several hundred literal constants
+ *     pushed through an SRAM port (vdec_hal_if_vp8.c:1891ff).  One wrong entry yields a
+ *     decoder that emits plausible garbage.
+ *   - Allocating the decoder's planes.  Three reference planes plus current,
+ *     post-process and a 4 MiB bitstream FIFO (vdec_drv_fileio.h:23), all of which are
+ *     only meaningful to a datapath that does not exist here.
+ *
+ * Rather than any of those, this returns -ENODEV and says why.  See the VP8 note at
+ * the end of mtk-vcodec-mt6589-reg.h for the full argument.
+ */
+static void mtk_vcodec_dec_device_run(void *priv)
+{
+	struct mtk_vcodec_dec_ctx *ctx = priv;
+	struct mtk_vcodec_dev *vcodec = ctx->dev;
+
+	/*
+	 * A job can only have been queued if the framework believed this node could
+	 * run one.  Since it cannot, the buffers taken for it must be handed back as
+	 * failed rather than left owned: returning them is what stops a client that
+	 * ignored the earlier -ENODEV from waiting forever for a DQBUFS that will never
+	 * come.
+	 */
+	while (v4l2_m2m_num_src_bufs_ready(ctx->m2m)) {
+		struct vb2_v4l2_buffer *src_buf =
+			v4l2_m2m_src_buf_remove(ctx->m2m);
+
+		if (!src_buf)
+			break;
+
+		v4l2_m2m_buf_done(src_buf, VB2_BUF_STATE_ERROR);
+	}
+
+	while (v4l2_m2m_num_dst_bufs_ready(ctx->m2m)) {
+		struct vb2_v4l2_buffer *dst_buf =
+			v4l2_m2m_next_dst_buf(ctx->m2m);
+
+		if (!dst_buf)
+			break;
+
+		dst_buf->flags |= V4L2_BUF_FLAG_ERROR;
+		dst_buf->planes[0].bytesused = 0;
+		v4l2_m2m_buf_done(dst_buf, VB2_BUF_STATE_ERROR);
+	}
+
+	v4l2_err(&vcodec->dec_v4l2_dev,
+		 "decoder datapath not implemented in the kernel: the MT6589 VDEC register sequence lives in the vendor's closed userspace libraries, which program the block through MFV_SET_CMD_CMD\n");
+
+	v4l2_m2m_buf_done_and_job_finish(vcodec->dec_m2m_dev, ctx->m2m,
+					 VB2_BUF_STATE_ERROR);
+}
+
+/*
+ * job_ready - never.
+ *
+ * Reporting 0 unconditionally is what stops the framework calling device_run() at
+ * all, so the -ENODEV path above is a backstop rather than the normal outcome.  A
+ * client that fills both queues and waits for a picture blocks here, which is the
+ * intended and documented behaviour of this node.
+ */
+static int mtk_vcodec_dec_job_ready(void *priv)
+{
+	return 0;
+}
+
+/*
+ * job_abort - STREAMOFF with buffers still queued.
+ *
+ * Nothing is in flight and no hardware was started, so there is nothing to abandon.
+ * The buffers are the framework's to reclaim.
+ */
+static void mtk_vcodec_dec_job_abort(void *priv)
+{
+}
+
+static int mtk_vcodec_dec_start_streaming(struct vb2_queue *q,
+					  unsigned int count)
+{
+	return 0;
+}
+
+static void mtk_vcodec_dec_stop_streaming(struct vb2_queue *q)
+{
+}
+
+static const struct vb2_ops mtk_vcodec_dec_qops = {
+	.queue_setup		= mtk_vcodec_dec_queue_setup,
+	.start_streaming	= mtk_vcodec_dec_start_streaming,
+	.stop_streaming		= mtk_vcodec_dec_stop_streaming,
+};
+
+static const struct vb2_buf_ops mtk_vcodec_dec_buf_ops;
+
+static int mtk_vcodec_dec_queue_init(void *priv, struct vb2_queue *src_vq,
+				     struct vb2_queue *dst_vq)
+{
+	struct mtk_vcodec_dec_ctx *ctx = priv;
+	int ret;
+
+	src_vq->type		= V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	src_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
+	src_vq->drv_priv	= ctx;
+	src_vq->buf_struct_size	= sizeof(struct v4l2_m2m_buffer);
+	src_vq->ops		= &mtk_vcodec_dec_qops;
+	src_vq->buf_ops		= &mtk_vcodec_dec_buf_ops;
+	src_vq->mem_ops		= &vb2_dma_contig_memops;
+
+	ret = vb2_queue_init(src_vq);
+	if (ret)
+		return ret;
+
+	dst_vq->type		= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	dst_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
+	dst_vq->drv_priv	= ctx;
+	dst_vq->buf_struct_size	= sizeof(struct v4l2_m2m_buffer);
+	dst_vq->ops		= &mtk_vcodec_dec_qops;
+	dst_vq->buf_ops		= &mtk_vcodec_dec_buf_ops;
+	dst_vq->mem_ops		= &vb2_dma_contig_memops;
+
+	return vb2_queue_init(dst_vq);
+}
+
+/*
+ * open - a userspace client starts using the decoder.
+ *
+ * The per-instance context is created here and torn down in release().  It holds
+ * the negotiated formats and nothing else: unlike the encoder there are no
+ * driver-owned planes, because there is no datapath that would read or write them.
+ */
+static int mtk_vcodec_dec_open(struct file *file)
+{
+	struct mtk_vcodec_dev *vcodec = file2m2m(file);
+	struct mtk_vcodec_dec_ctx *ctx;
+	struct v4l2_format *fmt;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+
+	ctx->dev = vcodec;
+
+	/*
+	 * Defaults so a client that never negotiates gets something coherent.  The
+	 * capture format deliberately starts with no geometry: queue_setup() refuses a
+	 * queue sized against a zero format, so the failure lands where it is
+	 * diagnosable rather than as an allocation failure later.
+	 */
+	fmt = &ctx->src_fmt;
+	fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_VP8;
+	fmt->fmt.pix.sizeimage = MTK_VDEC_BS_SIZE_DEFAULT;
+
+	fmt = &ctx->dst_fmt;
+	fmt->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+	/*
+	 * 1920x1088 rather than 1920x1080: the decoder is macroblock based, so a
+	 * height that is not a whole number of 16-pixel macroblock rows describes a
+	 * plane size the datapath would walk past the end of.  This is the block's
+	 * documented full-HD working point (draft/ds/venc.txt:1423) at the macroblock
+	 * granularity this driver uses everywhere else.
+	 */
+	fmt->fmt.pix.width = MTK_VDEC_MAX_WIDTH;
+	fmt->fmt.pix.height = MTK_VDEC_MAX_HEIGHT;
+	mtk_vcodec_dec_src_setup(fmt);
+
+	file->private_data = ctx;
+
+	ctx->m2m = v4l2_m2m_ctx_init(vcodec->dec_m2m_dev, ctx,
+				     &mtk_vcodec_dec_queue_init);
+	if (IS_ERR(ctx->m2m)) {
+		int ret = PTR_ERR(ctx->m2m);
+
+		ctx->m2m = NULL;
+		file->private_data = NULL;
+		kfree(ctx);
+
+		return ret;
+	}
+
+	/*
+	 * dec_users keeps a system suspend from tearing down the decoder's registers
+	 * underneath an open but idle node.  Decremented in release().
+	 */
+	atomic_inc(&vcodec->dec_users);
+
+	return 0;
+}
+
+static int mtk_vcodec_dec_release(struct file *file)
+{
+	struct mtk_vcodec_dec_ctx *ctx = file->private_data;
+	struct mtk_vcodec_dev *vcodec = ctx->dev;
+
+	/*
+	 * No watchdog and no completion work, unlike the encoder: nothing is ever
+	 * started, so no path can still be holding a pointer to this context once the
+	 * queues are drained.
+	 */
+	v4l2_m2m_ctx_release(ctx->m2m);
+
+	kfree(ctx);
+
+	atomic_dec(&vcodec->dec_users);
+
+	return 0;
+}
+
+static const struct v4l2_file_operations mtk_vcodec_dec_fops = {
+	.owner		= THIS_MODULE,
+	.open		= mtk_vcodec_dec_open,
+	.release	= mtk_vcodec_dec_release,
+	.poll		= v4l2_m2m_fop_poll,
+	.mmap		= v4l2_m2m_fop_mmap,
+};
+
+static int mtk_vcodec_dec_querycap(struct file *file, void *priv,
+				   struct v4l2_capability *cap)
+{
+	strscpy(cap->driver, MTK_VCODEC_DRIVER_NAME, sizeof(cap->driver));
+	strscpy(cap->card, MTK_VCODEC_DRIVER_NAME, sizeof(cap->card));
+	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
+		 MTK_VCODEC_DRIVER_NAME);
+
+	cap->device_caps = cap->capabilities = V4L2_CAP_VIDEO_M2M |
+						  V4L2_CAP_STREAMING;
+
+	return 0;
+}
+
+static const struct v4l2_ioctl_ops mtk_vcodec_dec_ioctl_ops = {
+	.vidioc_querycap		= mtk_vcodec_dec_querycap,
+
+	.vidioc_enum_fmt_vid_cap	= mtk_vcodec_dec_enum_fmt_cap,
+	.vidioc_enum_fmt_vid_out	= mtk_vcodec_dec_enum_fmt_out,
+	.vidioc_g_fmt_vid_cap	= mtk_vcodec_dec_g_fmt_cap,
+	.vidioc_g_fmt_vid_out	= mtk_vcodec_dec_g_fmt_out,
+	.vidioc_try_fmt_vid_cap	= mtk_vcodec_dec_try_fmt_cap,
+	.vidioc_try_fmt_vid_out	= mtk_vcodec_dec_try_fmt_out,
+	.vidioc_s_fmt_vid_cap	= mtk_vcodec_dec_s_fmt_cap,
+	.vidioc_s_fmt_vid_out	= mtk_vcodec_dec_s_fmt_out,
+
+	.vidioc_reqbufs		= v4l2_m2m_ioctl_reqbufs,
+	.vidioc_querybuf	= v4l2_m2m_ioctl_querybuf,
+	.vidioc_qbuf		= v4l2_m2m_ioctl_qbuf,
+	.vidioc_dqbuf		= v4l2_m2m_ioctl_dqbuf,
+	.vidioc_prepare_buf	= v4l2_m2m_ioctl_prepare_buf,
+	.vidioc_create_bufs	= v4l2_m2m_ioctl_create_bufs,
+	.vidioc_remove_bufs	= v4l2_m2m_ioctl_remove_bufs,
+	.vidioc_expbuf		= v4l2_m2m_ioctl_expbuf,
+
+	.vidioc_streamon	= v4l2_m2m_ioctl_streamon,
+	.vidioc_streamoff	= v4l2_m2m_ioctl_streamoff,
+};
+
+static const struct v4l2_m2m_ops mtk_vcodec_dec_m2m_ops = {
+	.device_run	= mtk_vcodec_dec_device_run,
+	.job_ready	= mtk_vcodec_dec_job_ready,
+	.job_abort	= mtk_vcodec_dec_job_abort,
+};
+
+/*
+ * The video_device template, mirroring mtk_vcodec_enc_videodev exactly.
+ *
+ * A static instance is copied into the driver's own storage in vf_init() rather
+ * than allocated, because every field in it is a constant.  .vfl_dir = VFL_DIR_M2M
+ * makes it a mem-to-mem node, and .minor = -1 asks for an automatic minor.
+ */
+static struct video_device mtk_vcodec_dec_videodev = {
+	.name		= MTK_VCODEC_DRIVER_NAME,
+	.vfl_dir	= VFL_DIR_M2M,
+	.fops		= &mtk_vcodec_dec_fops,
+	.ioctl_ops	= &mtk_vcodec_dec_ioctl_ops,
+	.minor		= -1,
+	.release	= video_device_release,
+	.device_caps	= V4L2_CAP_STREAMING,
+};
+
+/*
+ * Bring up the decoder's video_device.
+ *
+ * Structurally identical to mtk_vcodec_enc_vf_init(), including its failure
+ * teardown in reverse order, because the two nodes own their registration in the
+ * same way: the v4l2_device is embedded in this driver's private state rather than
+ * devm-managed, so a partial failure has to be unwound by hand or the node is left
+ * half-built.
+ */
+static int mtk_vcodec_dec_vf_init(struct mtk_vcodec_dev *vcodec)
+{
+	struct v4l2_device *v4l2_dev = &vcodec->dec_v4l2_dev;
+	struct video_device *vfd;
+	int ret;
+
+	ret = v4l2_device_register(&vcodec->pdev->dev, v4l2_dev);
+	if (ret)
+		return ret;
+
+	vcodec->dec_vfd = mtk_vcodec_dec_videodev;
+	vfd = &vcodec->dec_vfd;
+
+	vfd->lock = &vcodec->dec_node_lock;
+	vfd->v4l2_dev = v4l2_dev;
+	vfd->device_caps |= V4L2_CAP_VIDEO_M2M;
+	video_set_drvdata(vfd, vcodec);
+
+	vcodec->dec_m2m_dev = v4l2_m2m_init(&mtk_vcodec_dec_m2m_ops);
+	if (IS_ERR(vcodec->dec_m2m_dev)) {
+		ret = PTR_ERR(vcodec->dec_m2m_dev);
+		vcodec->dec_m2m_dev = NULL;
+		goto err_unregister_dev;
+	}
+
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
+	if (ret)
+		goto err_release_m2m;
+
+	/*
+	 * A failure here is not fatal to the node: the video device is registered and
+	 * usable through the streaming ioctls regardless, it just has no graph
+	 * representation.  Reported rather than allowed to fail probe over something
+	 * userspace can still reach.  mc_registered tracks it so teardown matches setup.
+	 */
+	ret = v4l2_m2m_register_media_controller(vcodec->dec_m2m_dev, vfd,
+						MEDIA_ENT_F_PROC_VIDEO_DECODER);
+	if (ret) {
+		v4l2_warn(v4l2_dev,
+			  "failed to register m2m media controller: %d\n", ret);
+		vcodec->mc_dec_registered = false;
+	} else {
+		vcodec->mc_dec_registered = true;
+	}
+
+	v4l2_info(v4l2_dev, "decoder registered as /dev/video%d\n", vfd->num);
+
+	return 0;
+
+err_release_m2m:
+	v4l2_m2m_release(vcodec->dec_m2m_dev);
+	vcodec->dec_m2m_dev = NULL;
+err_unregister_dev:
+	v4l2_device_unregister(v4l2_dev);
+
+	return ret;
+}
+
+/*
+ * Undo mtk_vcodec_dec_vf_init(), in the same reverse order as the encoder's
+ * equivalent: node first so no new open can race the teardown, then the media
+ * controller, then the m2m context, then the v4l2_device.
+ */
+static void mtk_vcodec_dec_vf_deinit(struct mtk_vcodec_dev *vcodec)
+{
+	if (vcodec->dec_m2m_dev) {
+		if (vcodec->mc_dec_registered)
+			v4l2_m2m_unregister_media_controller(vcodec->dec_m2m_dev);
+		vcodec->mc_dec_registered = false;
+		video_unregister_device(&vcodec->dec_vfd);
+	}
+
+	v4l2_m2m_release(vcodec->dec_m2m_dev);
+	vcodec->dec_m2m_dev = NULL;
+
+	v4l2_device_unregister(&vcodec->dec_v4l2_dev);
+}
+
 static int mtk_vcodec_runtime_suspend(struct device *dev)
 {
 	struct mtk_vcodec_dev *vcodec = dev_get_drvdata(dev);
@@ -2935,6 +3668,7 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	mutex_init(&vcodec->lock);
 	mutex_init(&vcodec->enc_lock);
 	mutex_init(&vcodec->dec_lock);
+	mutex_init(&vcodec->dec_node_lock);
 	spin_lock_init(&vcodec->enc_state_lock);
 
 	/*
@@ -3001,6 +3735,21 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to register encoder video device\n");
 
+	/*
+	 * The decoder node is registered second and its failure is NOT fatal.
+	 *
+	 * That asymmetry is deliberate.  The encoder datapath is implemented, so a
+	 * failure to register its node loses a working feature and probe should fail
+	 * loudly.  The decoder node's device_run() reports -ENODEV anyway
+	 * (mtk_vcodec_dec_device_run()), so losing it costs userspace a /dev/videoX it
+	 * cannot decode through regardless.  Failing probe over it would take down the
+	 * encoder with it, which is a strictly worse outcome for no gain.
+	 */
+	ret = mtk_vcodec_dec_vf_init(vcodec);
+	if (ret)
+		dev_warn(&pdev->dev,
+			 "failed to register decoder video device: %d\n", ret);
+
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
@@ -3024,6 +3773,7 @@ static void mtk_vcodec_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&vcodec->venc_timeout_work);
 	cancel_work_sync(&vcodec->venc_complete_work);
 
+	mtk_vcodec_dec_vf_deinit(vcodec);
 	mtk_vcodec_enc_vf_deinit(vcodec);
 
 	pm_runtime_disable(&pdev->dev);

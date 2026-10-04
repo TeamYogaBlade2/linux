@@ -398,11 +398,45 @@
  *
  * The data sheet has NO register-definition section for the decoder (chapter 59
  * stops at the block diagram, and "16000000" does not appear anywhere in it).
- * These offsets come from the vendor LDVT register-level test harness,
- * kernel/drivers/ldvt/vdec/hal/vdec_hw_common.h, which is 27k lines of real
- * per-codec register definitions.  The base is mt_reg_base.h VDEC_BASE
- * 0xF6020000, which is 0x16020000 after the +0xE0000000 remap - note this is NOT
- * 0x16000000, which is the vdecsys clock controller.
+ * The base is mt_reg_base.h VDEC_BASE 0xF6020000 (drivers/met/platform/mt6589/
+ * mt_reg_base.h:158), which is 0x16020000 after the +0xE0000000 remap -- note this
+ * is NOT 0x16000000, which is the vdecsys clock controller.
+ *
+ * THE OFFSETS BELOW ARE NOT FROM A PRODUCTION DRIVER.  Read this before using any of
+ * them.  They are transcribed from the vendor LDVT register-level TEST harness
+ * (kernel/drivers/ldvt/vdec/hal/vdec_hw_common.h), and two properties of that harness
+ * make it a source for offsets and nothing else:
+ *
+ *   1. It is not the path the product takes.  The vendor *driver*
+ *      (drivers/videocodec/videocodec_kernel_driver.c) never programs the VDEC
+ *      datapath at all: its only VDEC register writes in 2391 lines are power-up and
+ *      the frame-end interrupt ack (:300-301).  The datapath is programmed by CLOSED
+ *      USERSPACE, which builds a queue of WRITE_REG_CMD records
+ *      (include/linux/vcodec/hal_api.h:33-41 ADD_QUEUE, :107-124 the enum) and ships
+ *      it to the kernel over the MFV_SET_CMD_CMD ioctl, where the driver does nothing
+ *      but walk it:
+ *
+ *          case WRITE_REG_CMD:
+ *              VDO_HW_WRITE(cmd_queue->address + cmd_queue->offset,
+ *                           cmd_queue->value);   (videocodec_kernel_driver.c:1758)
+ *
+ *      So the register SEQUENCE for decoding a frame lives in a stripped, partly
+ *      encrypted ARM blob, not in any C source available.  What the kernel
+ *      legitimately owns is the resource layer -- clocks, reset, the interrupt --
+ *      plus the V4L2 node.
+ *
+ *   2. The harness is configured for the WRONG CHIP.  Its
+ *      include/vdec_info_common.h:125 sets CONFIG_CHIP_VER_CURR 80, and that same
+ *      header defines 80 as CONFIG_CHIP_VER_MT8580 (:130) -- a different SoC.  Much of
+ *      vdec_hw_common.h and all of vdec_hal_if_*.c is gated behind
+ *      `#if (CONFIG_CHIP_VER_CURR >= CONFIG_CHIP_VER_MT8580)`, so those paths describe
+ *      MT8580 silicon, not this one.  The only MT6589-specific switch in that header is
+ *      VDEC_6589_SUPPORT 1 (:136).
+ *
+ * Consequence, which is why this driver programs almost none of it: an offset read
+ * out of the harness is unverified against MT6589, and in any case a frame cannot be
+ * decoded by writing registers alone -- see the VP8 note at the end of this file.
+ * Everything below is recorded with its source; only the interrupt ack is written.
  */
 
 /* Sub-block bases, relative to the decoder base. */
@@ -413,16 +447,43 @@
 #define VDEC_AVC_MV_BASE		0x4000	/* H.264 motion vector */
 
 /*
- * Frame completion.  The decoder has no status/ack register pair: frame end is
- * bit 16 of MISC word 41, and the interrupt is cleared by setting bits 0 and 4
- * then writing the original value back.  This is confirmed twice, by the vendor
- * LDVT harness (vdec_hal_if_avs.c:1098-1106) and by the vendor driver
- * (videocodec_kernel_driver.c:346-360).
+ * Frame completion -- the ONLY decoder register this driver writes.
+ *
+ * The decoder has no status/ack register pair.  Frame end is bit 16 of MISC word 41
+ * (VDEC_MISC_BASE + 41*4 == 0x0A4), and the interrupt is cleared by a two-step write
+ * sequence on that same word:
+ *
+ *     v = READ(MISC + 41*4);
+ *     if (v & BIT(16)) {
+ *         WRITE(MISC + 41*4, v | 0x11);
+ *         WRITE(MISC + 41*4, READ(MISC + 41*4) & ~0x10);
+ *     }
+ *
+ * The two available sources DIFFER in the second write, and the difference matters:
+ *
+ *   - The production driver (videocodec_kernel_driver.c:300-301) re-reads the register
+ *     and clears bit 4: READ() & ~0x10.  That is the form that ships.
+ *   - The LDVT harness (vdec_hal_if_avs.c:1105-1106,
+ *     u4VDEC_HAL_AVS_VDec_ClearInt) instead writes back the value SAVED BEFORE the
+ *     first write, u4Reg.
+ *
+ * Both are the vendor's own code and they are not the same instruction.  This driver
+ * follows the production driver, because that is the one whose behaviour was observed
+ * on real silicon; the harness form is recorded here so a future reader does not
+ * "fix" the driver's version into the harness version by mistake.
+ *
+ * Note that the second write CLEARS bit 4 rather than setting it, which is why the
+ * comment above does not describe this as write-1-to-clear.  Bit 0 is a set strobe and
+ * bit 4 the acknowledge; the word is a command register rather than a status word, and
+ * the ack is a rising then falling edge on bit 4.  This is a different convention
+ * from VENC_IRQ_ACK, where each bit is individually write-1-to-clear.
  */
 #define VDEC_MISC_FRAME_END		(41 * 4)
 #define VDEC_FRAME_END_BIT		BIT(16)
 #define VDEC_FRAME_END_SET		BIT(4)
 #define VDEC_FRAME_END_ACK		BIT(0)
+/* Mask for the acknowledge half of the sequence: bit 4 is driven LOW. */
+#define VDEC_FRAME_END_ACK_CLR	BIT(4)
 
 /* H.264 prediction weight table, MT6589 specific (vdec_hal_if_h264.c:568). */
 #define VDEC_MISC_WEIGHT_TABLE		(60 * 4)
@@ -431,5 +492,142 @@
 /* Bitstream parser top-level status (vdec_hw_common.h:162). */
 #define VDEC_VLD_BARL			0x00
 #define VDEC_VLD_TOP_BASE		(VLD_REG_OFFSET0 + 0x800)
+
+/*
+ * Bank layout, relative to the decoder base.  Source: vdec_hw_common.h:33-112.
+ *
+ * The window contains several parser and compensation engines at fixed sub-bases,
+ * plus a second copy of most of them at high offsets for a second hardware instance.
+ * Only the _0 offsets can ever be live here: vVDecWriteVP8MC() and vVDecWriteVLD()
+ * force the instance id to 0 unconditionally under
+ * `#if CONFIG_CHIP_VER_CURR >= CONFIG_CHIP_VER_MT8560` (vdec_hw_vp8.c:26,
+ * vdec_hw_common.c:118), so VLD_REG_OFFSET1 (0x2E000), MC_REG_OFFSET1 (0x2F000) and
+ * their siblings are dead on this configuration.
+ */
+#define VDEC_VLD2_BASE			0x1800	/* second VP8/VP6 parser */
+#define VDEC_PP_BASE			0x5000	/* post-processor / deblock */
+#define VDEC_AVS_VLD_BASE		0x6000	/* AVS parser */
+#define VDEC_VP6_VLD_BASE		0x7000	/* VP6 parser */
+#define VDEC_VP8_VLD_BASE		0x6800	/* VP8 parser: AVS + 0x800 */
+#define VDEC_CRC_BASE			0x0000	/* checksum block, shares DV */
+
+/*
+ * The shared "DV" control bank at offset 0, which is also where the frame-end status
+ * word and the CRC block live.  Source: vdec_hw_common.h:114-115, :74-78.
+ */
+#define VDEC_DV_PDN_CTRL		0x000
+#define VDEC_DV_SYS_CLK_SEL		0x084
+
+/*
+ * Software reset of the shared bitstream parser.  Source: vdec_hw_common.h:314
+ * (WO_VLD_SRST), used by vVDecResetHW() at vdec_hw_common.c:505-542.
+ *
+ * vVDecResetHW() writes 0x101 under `#if CONFIG_CHIP_VER_CURR >= MT8580` and plain 1
+ * otherwise.  Because the harness is built as MT8580 that is the 0x101 form, but
+ * MT8580 IS NOT THIS CHIP, so which of the two applies to MT6589 is UNKNOWN and
+ * nothing here settles it.  Recorded, deliberately not written: the wrong reset value
+ * handed to a parser that is then given work hangs it silently.
+ */
+#define VDEC_VLD_SRST			0x108
+
+/* VP8 parser control and start trigger.  Source: vdec_hw_common.h:1379-1384, :1412. */
+#define VDEC_VP8_CTRL			0x0a4
+#define VDEC_VP8_CTRL_VP8FLAG		BIT(0)
+/*
+ * RW_VP8_HDR bit 0 is "0 bit triger start decode" (vdec_hw_common.h:1412); the vendor
+ * pulses it by writing 1 then 0 (vdec_hal_if_vp8.c:756-757).  Recorded, deliberately
+ * not written -- see the VP8 note at the end of this file.
+ */
+#define VDEC_VP8_HDR			0x0b8
+
+/*
+ * VP8 motion-compensation registers.  Sources: vdec_hw_common.h:1379-1499, programmed
+ * by i4VDEC_HAL_VP8_DecStart() at vdec_hal_if_vp8.c:386ff.
+ *
+ * These are the registers a VP8 decode would program.  They are recorded rather than
+ * written, for the reasons in the VP8 note at the end of this file.
+ */
+#define VDEC_MC_PIC1Y_ADD		0x3e0	/* last reference luma */
+#define VDEC_MC_PIC2Y_ADD		0x3e4	/* golden reference luma */
+#define VDEC_MC_PIC3Y_ADD		0x3e8	/* alternate reference luma */
+#define VDEC_MC_LUMA_SIZE		0x934	/* programmed with curC - curY */
+#define VDEC_MC_VP8SETTING		0x97c
+#define VDEC_MC_UMV_PIC_WIDTH		0x208
+#define VDEC_MC_UMV_PIC_HEIGHT		0x20c
+#define VDEC_MC_PP_ENABLE		0x220
+#define VDEC_MC_PP_Y_ADDR		0x224	/* luma out, >> 9 */
+#define VDEC_MC_PP_C_ADDR		0x228	/* chroma out, >> 8 */
+#define VDEC_MC_PP_MB_WIDTH		0x22c
+#define VDEC_MC_PP_DBLK_MODE		0x238
+#define VDEC_MC_PP_WB_BY_POST		0x250
+#define VDEC_MC_PP_X_RANGE		0x260
+#define VDEC_MC_PP_Y_RANGE		0x264
+#define VDEC_MC_WRAPPER_SWITCH		0x57c
+#define VDEC_MC_VP8RANDOMERRSET		0x9f8
+
+/*
+ * VP8 buffer geometry -- why a decoder needs far more than the encoder's ping-pong.
+ * Sources: verify/vdec_verify_mm_map.h:289-315, include/vdec_info_common.h:75-92,
+ * vdec_hal_if_vp8.c:423-426.
+ *
+ * The encoder needs two frame planes.  The VP8 decoder wants, per the HAL's own frame
+ * header: THREE reference planes (last / golden / alternate, at MC_PIC*Y_ADD above), a
+ * current output plane, a post-process plane, and a SEPARATE PP chroma plane -- the
+ * layout puts DEC_PP_C_SA after DEC_PP_Y_SA rather than contiguous -- plus a 4 MiB
+ * bitstream FIFO for the elementary stream:
+ *
+ *     #define V_FIFO_SZ 0x00400000    (include/vdec_drv_fileio.h:23)
+ *
+ * The HAL asserts the alignment each plane needs as it programs them
+ * (vdec_hal_if_vp8.c:423-426):
+ *
+ *     ASSERT(((curCAddr - curYAddr) & 0x7F) == 0);
+ *     ASSERT((gldYAddr  & 0x1FF) == 0);
+ *     ASSERT((alfYAddr  & 0x1FF) == 0);
+ *     ASSERT((lstYAddr  & 0x1FF) == 0);
+ *
+ * i.e. 512-byte aligned reference planes, and the value written to MC_LUMA_SIZE is
+ * the luma plane size, which must be a multiple of 128.
+ *
+ * Recorded as requirements the hardware imposes.  This driver allocates none of them,
+ * because with no datapath there is nothing to point them at.
+ */
+#define VDEC_VFIFO_SIZE			0x400000
+#define VDEC_REF_PLANE_ALIGN		0x200	/* 512, per the HAL's ASSERTs */
+#define VDEC_LUMA_SIZE_ALIGN		0x80	/* 128, per MC_LUMA_SIZE */
+
+/*
+ * WHY THERE IS NO VP8 DECODE PATH IN THIS DRIVER.  Two blockers, either of which is
+ * sufficient on its own.
+ *
+ * 1. It is not register programming.  Before a single VP8 frame can decode, the codec's
+ *    probability tables and loop-filter coefficients must be pushed into the parser's
+ *    SRAM, one bit at a time through the barrel shifter, by walking a probability tree
+ *    that the bitstream parser then walks in lockstep:
+ *
+ *      u4VDEC_HAL_VP8_Default_Models_Init()     vdec_hal_if_vp8.c:925
+ *      u4VDEC_HAL_VP8_Parse_Mb_Type_Models()  vdec_hal_if_vp8.c:1345
+ *      u4VDEC_HAL_VP8_Load_QMatrix()            vdec_hal_if_vp8.c:1588
+ *      u4VDEC_HAL_VP8_Load_Filter_Coef()        vdec_hal_if_vp8.c:1667
+ *
+ *    Those probability trees ARE the codec.  Their values are VP8's default
+ *    coefficient probabilities, which the harness holds only as long literal tables
+ *    pushed through the BSASET/BSDASET SRAM port at words 4*50..4*54
+ *    (vdec_hal_if_vp8.c:1891ff).  The data is standard and knowable, but reproducing
+ *    it here would mean transcribing a several-hundred-entry table out of a vendor
+ *    source into a kernel driver, where a single wrong entry produces a decoder that
+ *    silently emits garbage rather than failing.
+ *
+ * 2. Barrel-shifter priming is interactive.  VLD_PROC takes VLD_INIFET then
+ *    VLD_INIBR (vdec_hal_if_vp8.c:180-260) and the caller must then SPIN on
+ *    RO_VLD_FETCHOK / RO_VLD_VWPTR until the fetch lands, and read the shifter back to
+ *    byte-align it by stepping 8 bits at a time.  There is no description of that
+ *    handshake in any source available here beyond the harness itself.
+ *
+ * Given both, a kernel-side VP8 decode would be a reimplementation of the vendor's
+ * userspace blob, sourced from a harness compiled for MT8580, untestable without
+ * hardware.  The honest kernel-side scope is what this driver does: clocks, reset, the
+ * frame-end interrupt, and a node that reports the block as unimplemented.
+ */
 
 #endif /* _MTK_VCODEC_MT6589_REG_H */

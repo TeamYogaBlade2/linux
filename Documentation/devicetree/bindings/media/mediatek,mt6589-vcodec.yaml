@@ -38,13 +38,29 @@ description: |
     wedged engine cannot pin a clock reference forever.
   - Exposes the H.264 datapath as one V4L2 memory-to-memory codec node (NV12
     in, bitstream out).
+  - Registers a second V4L2 memory-to-memory node for the decoder (bitstream
+    in, NV12 out).  The node is real and supports capability query and format
+    negotiation, but its device_run() reports -ENODEV: see "Decode" below.
+    It exists so that a decoder client can discover the block and be told
+    plainly that it cannot use it, rather than finding no node at all.
 
   What it does NOT do:
 
   - Decode.  The VDEC window is mapped, its clock is gated and its frame-end
     interrupt is acknowledged, but the decoder datapath is not programmed at
-    all and there is no decode userspace interface: no decoder V4L2 node
-    exists.  Everything above about VDEC is resource management only.
+    all.  This is architectural, not an omission: the vendor stack programs
+    the decoder from userspace, not from the kernel.  Its kernel driver
+    touches the block only to power it up and acknowledge the frame-end
+    interrupt, while the register sequence itself is shipped to it as a queue
+    of WRITE_REG_CMD records that closed userspace libraries assemble and pass
+    over the MFV_SET_CMD_CMD ioctl, and the driver merely walks that queue.
+    The decode sequence therefore lives in stripped, partly encrypted ARM
+    blobs.  Two further obstacles are documented in the driver's register
+    header: the only readable register map is the vendor LDVT register-test
+    harness, which is configured for MT8580 rather than MT6589, and VP8
+    additionally requires its probability tables pushed bit-by-bit into parser
+    SRAM before any frame can decode.  Userspace of this driver must not expect
+    a decoded picture.
   - Conformant bitstreams.  Entropy coding, motion estimation and the
     coefficient buffer exist only in the vendor's closed userspace libraries
     and were not ported, and the bitrate algorithm behind the RC registers is
