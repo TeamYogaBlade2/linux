@@ -107,6 +107,27 @@ struct dma_iommu_mapping {
 #define REG_MMUg_INVLD_EA			0x0C
 #define REG_MMUg_PT_BASE			0x10
 #define F_MMUg_PT_VA_MSK			0xffff0000
+/*
+ * REG_MMUg_PT_BASE is documented by its own field mask: both this tree and
+ * the vendor tree define F_MMUg_PT_VA_MSK as 0xffff0000 for this register
+ * group, i.e. only bits [31:16] of the address are carried.  The base must
+ * therefore be 64 KiB aligned, or the low 16 bits are dropped and the M4U
+ * walks memory that is not the page table.
+ *
+ * The vendor driver does not assume this; in
+ * aquaris-5 .../mt6589/kernel/drivers/m4u/m4u.c:
+ *
+ *	#define M4U_PAGE_TABLE_ALIGN (PT_TOTAL_ENTRY_NUM*sizeof(unsigned int) - 1)
+ *	// page table addr should (2^16)x align
+ *
+ * and m4u_struct_init() frees and re-allocates the table whenever
+ * dma_alloc_coherent() returns one that violates it.
+ *
+ * M2701_IOMMU_PGT_SIZE (4 MiB) is a multiple of 64 KiB and dma_alloc_coherent()
+ * returns page aligned memory, so the requirement holds in practice.  Assert
+ * it instead of trusting the allocator to keep meeting it.
+ */
+#define MTK_IOMMU_PT_BASE_ALIGN		SZ_64K
 
 #define REG_MMUg_L2_SEL				0x18
 #define F_MMUg_L2_SEL_FLUSH_EN(en)		((en) ? BIT(3) : 0)
@@ -437,13 +458,22 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 	data->soc->get_fault_larb_port(regval, &fault_larb, &fault_port);
 
 	/*
-	 * MTK v1 iommu HW could not determine whether the fault is read or
-	 * write fault, report as read fault.
+	 * M4U v1 hardware does not record the direction of the faulting
+	 * access: the MT6589 fault status register (REG_MMU_FAULT_ST) only
+	 * carries the fault type bits, and REG_MMU_INT_ID only the LARB and
+	 * port.  There is no read/write bit to report, so the direction is
+	 * genuinely unknown here rather than known to be a read.
+	 *
+	 * report_iommu_fault() takes one of the two directions the API
+	 * defines (IOMMU_FAULT_READ / IOMMU_FAULT_WRITE -- there is no
+	 * "unknown" value in this tree), so keep passing the read value and
+	 * say so explicitly in the message below rather than letting the
+	 * tracepoint alone imply that the access was a read.
 	 */
 	if (report_iommu_fault(&dom->domain, data->dev, fault_iova,
 			IOMMU_FAULT_READ))
 		dev_err_ratelimited(data->dev,
-			"fault type=0x%x iova=0x%x pa=0x%x larb=%d port=%d core=%d\n",
+			"fault type=0x%x iova=0x%x pa=0x%x larb=%d port=%d core=%d dir=unknown\n",
 			int_state, fault_iova, fault_pa,
 			fault_larb, fault_port, core->id);
 
@@ -480,6 +510,27 @@ static void mtk_iommu_v1_config(struct mtk_iommu_v1_data *data,
 
 }
 
+static int mtk_iommu_v1_write_pt_base(struct mtk_iommu_v1_data *data,
+				      dma_addr_t pgt_pa)
+{
+	void __iomem *base;
+
+	/*
+	 * Only the MT6589 register format is known to drop the low bits
+	 * (see MTK_IOMMU_PT_BASE_ALIGN above); the MT2701 core register is
+	 * left alone rather than guessing its field width.
+	 */
+	if (WARN_ON_ONCE(data->soc->pt_base_in_global &&
+			 !IS_ALIGNED(pgt_pa, MTK_IOMMU_PT_BASE_ALIGN)))
+		return -EINVAL;
+
+	base = data->soc->pt_base_in_global ? data->global_base :
+					      data->cores[0].base;
+	writel(pgt_pa, base + data->soc->pt_base_reg_offset);
+
+	return 0;
+}
+
 static int mtk_iommu_v1_domain_finalise(struct mtk_iommu_v1_data *data)
 {
 	struct mtk_iommu_v1_domain *dom = data->m4u_dom;
@@ -491,10 +542,13 @@ static int mtk_iommu_v1_domain_finalise(struct mtk_iommu_v1_data *data)
 	if (!dom->pgt_va)
 		return -ENOMEM;
 
-	if (data->soc->pt_base_in_global)
-		writel(dom->pgt_pa, data->global_base + data->soc->pt_base_reg_offset);
-	else
-		writel(dom->pgt_pa, data->cores[0].base + data->soc->pt_base_reg_offset);
+	/*
+	 * A misaligned base cannot be worked around here: the register
+	 * simply has no bits to store it in.  Fail the attach rather than
+	 * enable translation on top of a base the M4U will misread.
+	 */
+	if (mtk_iommu_v1_write_pt_base(data, dom->pgt_pa))
+		return -EINVAL;
 
 	/*
 	 * Now that a valid page table is in place and all ports are in
@@ -1182,12 +1236,13 @@ static int __maybe_unused mtk_iommu_v1_resume(struct device *dev)
 		writel_relaxed(reg->dcm_dis, base + REG_MMU_DCM);
 	}
 
-	if (data->m4u_dom && data->m4u_dom->pgt_pa) {
-		if (data->soc->pt_base_in_global)
-			writel_relaxed(data->m4u_dom->pgt_pa, data->global_base + data->soc->pt_base_reg_offset);
-		else
-			writel_relaxed(data->m4u_dom->pgt_pa, data->cores[0].base + data->soc->pt_base_reg_offset);
-	}
+	/*
+	 * The saved mmug_pt_base was asserted to be aligned when it was
+	 * programmed, but restore the live domain base through the same
+	 * helper so the assertion covers this programming site too.
+	 */
+	if (data->m4u_dom && data->m4u_dom->pgt_pa)
+		mtk_iommu_v1_write_pt_base(data, data->m4u_dom->pgt_pa);
 
 	return 0;
 }
