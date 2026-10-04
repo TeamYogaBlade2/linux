@@ -6,16 +6,65 @@ $schema: http://devicetree.org/schemas/bindings.yaml#
 
 title: MediaTek MT6589 Video Codec (VENC and VDEC)
 
-description: >
+description: |
   The MT6589 video codec is a hardwired RTL accelerator with two register
   blocks: an H.264/VP8 video encoder (VENC) and a multi-standard video decoder
   (VDEC).  Unlike the later MediaTek VPU/IPI generations there is no
-  coprocessor and no firmware: both blocks are programmed through MMIO by the
-  driver, and power is a plain clock gate in the VEN and VDE power domains.
+  coprocessor and no firmware: both blocks are programmed through MMIO, and
+  power is a plain clock gate in the VEN and VDE power domains.
 
   This binding describes a single node covering both blocks, mirroring the
-  vendor topology where one /dev/vcodec serves both the encoder and the
-  decoder.
+  vendor topology where one device serves both the encoder and the decoder.
+
+  DRAFT DRIVER - SCOPE OF WHAT ACTUALLY WORKS
+  ------------------------------------------
+  This driver is a resource layer plus a partial H.264 encode front end.  Read
+  this before assuming a conformant codec is present.
+
+  What it does do:
+
+  - Probes the two register windows, the three clocks and the two IRQ lines.
+  - Brings both engines out of reset and gates their clocks through runtime
+    PM, and serialises the per-engine operations with a mutex.
+  - Programs the chapter-60 H.264 datapath: the bitstream, source, reference
+    and reconstruction address registers, and the quantiser triple, target bit
+    rate, CBR/initial-QP mode bits, frame rate and P/B QP adjust limiters,
+    rejecting quantisers outside the documented 0..51 range.
+  - Allocates and owns the bitstream, reference, reconstruction and rate
+    control scratch buffers those address registers need.
+  - Acknowledges the encoder frame-done interrupt, handles a bitstream-buffer
+    overflow, and reports the coded bitstream length; a watchdog
+    (MTK_VENC_TIMEOUT_MS) retires a frame the hardware never completes, so a
+    wedged engine cannot pin a clock reference forever.
+  - Exposes the H.264 datapath as one V4L2 memory-to-memory codec node (NV12
+    in, bitstream out).
+
+  What it does NOT do:
+
+  - Decode.  The VDEC window is mapped, its clock is gated and its frame-end
+    interrupt is acknowledged, but the decoder datapath is not programmed at
+    all and there is no decode userspace interface: no decoder V4L2 node
+    exists.  Everything above about VDEC is resource management only.
+  - Conformant bitstreams.  Entropy coding, motion estimation and the
+    coefficient buffer exist only in the vendor's closed userspace libraries
+    and were not ported, and the bitrate algorithm behind the RC registers is
+    the vendor's.  The registers are programmed; the codec is not implemented.
+    Userspace must treat the output as opaque.
+  - Slice control (a frame larger than one MB row is never split into slices),
+    and SPS/PPS emission (no parameter-set buffer is allocated).
+  - MPEG-4 encoding: its address programming and interrupt exist, but the three
+    chroma planes and the per-MB side-information buffer at VENC_MP4_SIDE_ADDR
+    are not allocated, so a submit is rejected with -ENODEV.
+  - VP8 beyond what mtk_venc_bitstream_size() restricts it to.
+
+  There is no hardware to test against, so none of this is claimed to work end
+  to end.
+
+  Note on power-domains: the property is accepted and described below, but the
+  driver as it stands does not itself call dev_pm_domain_get() or run the SCM
+  power-on sequence.  A node providing them is not wrong - the clocks are taken
+  through them by the clock driver - but do not read the driver's presence as
+  evidence that it drives the domains itself.
 
 maintainers:
   - Akari Tsuyukusa <akkun11.open@gmail.com>

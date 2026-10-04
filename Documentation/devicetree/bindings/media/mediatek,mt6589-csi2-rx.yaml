@@ -20,6 +20,30 @@ description: |
   One DT node describes the window; mediatek,seninf-port selects which of
   the two receivers the node programs.
 
+  DRAFT DRIVER - NO MIPI CSI-2 D-PHY EXISTS FOR THIS SOC
+  ------------------------------------------------------
+  This receiver driver programs the seninf/csi2 registers.  It does not
+  program any MIPI PHY, because on the MT6589 there is no such PHY to
+  program:
+
+  - The MT6589 data sheet maps the imgsys aperture in full and documents no
+    MIPI RX PHY registers at all.  The PHY appears only as the word
+    "mipi_rx" in the img_rst description of WDT_SWSYSRST.
+  - There is no vendor PHY driver for this SoC to derive a register map from.
+
+  An earlier revision of this tree carried a D-PHY binding and a stub
+  driver whose power_on() returned success without touching the hardware.  Both
+  were removed rather than kept as a placeholder.  A "phys" reference here
+  therefore names a PHY that this tree provides no driver for: the receiver
+  does the full phy_init()/phy_power_on()/phy_power_off()/phy_exit() lifecycle
+  on it and a missing reference is non-fatal, but no lanes will be driven.
+  Expect no frames from this receiver until a real D-PHY driver exists.
+
+  In the same spirit, the three clocks below are optional and the reset is
+  optional, for reasons documented on each property.  A node with neither
+  clocks nor resets probes and its registers are programmed; that is all that
+  is being claimed.
+
 properties:
   compatible:
     const: mediatek,mt6589-csi2-rx
@@ -87,8 +111,12 @@ properties:
     description: |
       The MIPI CSI-2 D-PHY this receiver sits on top of.  The driver
       initialises and powers it on with the receiver and releases it on
-      power-off.  Optional: a node without it still probes, but its lanes
-      stay idle.
+      power-off.
+
+      There is no in-tree D-PHY driver for the MT6589 - see the description at
+      the top of this file - so this property cannot currently name anything
+      that drives lanes.  It is not required: a node without it still probes
+      and still programs the receiver's registers.
     maxItems: 1
 
   phy-names:
