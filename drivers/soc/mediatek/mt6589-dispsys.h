@@ -190,6 +190,17 @@
 #define MT6589_DISP_BLS_SEL		0x054		/* BLS input pick	 */
 #define MT6589_DISP_DBI_SEL		0x058		/* DBI input pick	 */
 #define MT6589_DISP_DPI0_SEL		0x05c		/* DPI0 input pick	 */
+/*
+ * DISP_MISC is not a routing register: it is the DPI/DBI pin-mode mux.
+ * Bit 0 is DPI0_I, and the downstream BSP sets this bit whenever it puts
+ * RDMA1 on DPI0 (ddp_path.c, "set DPI IO for DPI usage"), which the two
+ * SEL registers alone do not accomplish - they choose the engine, not
+ * whether the pins are in DPI mode.  Defined so the RDMA1 -> DPI0 route
+ * below is implementable as written; harmless on a board that does not
+ * clock DPI0, and not written on this one.
+ */
+#define MT6589_DISP_MISC			0x060		/* DPI/DBI pin-mode mux	 */
+#define MT6589_DISP_MISC_DPI0_I_MASK	BIT(0)
 
 /*
  * DISP_SCL_MOUT_EN, bits [3:0], data sheet draft/ds/ovl.txt:192740-192750.
@@ -585,6 +596,14 @@ static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
 	MMSYS_ROUTE(RDMA1, DPI0,
 		    MT6589_DISP_DPI0_SEL,
 		    MT6589_DPI0_SEL_MASK, MT6589_DPI0_SEL_RDMA1),
+	/* The SEL registers pick the engine; this bit puts the pins in DPI
+	 * mode.  The BSP writes it with the same pair, so keep them together -
+	 * the two SEL registers alone leave the pins as DBI.
+	 */
+	MMSYS_ROUTE(RDMA1, DPI0,
+		    MT6589_DISP_MISC,
+		    MT6589_DISP_MISC_DPI0_I_MASK,
+		    MT6589_DISP_MISC_DPI0_I_MASK),
 
 	/* RDMA1 -> DPI1 */
 	MMSYS_ROUTE(RDMA1,  DPI1,
