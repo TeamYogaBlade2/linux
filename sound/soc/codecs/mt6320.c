@@ -38,6 +38,33 @@
 #define MT6320_ABB_AFE_BASE		0x4000
 #define MT6320_ABB_AFE_CON(n)		(MT6320_ABB_AFE_BASE + (n) * 2)
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H	(MT6320_ABB_AFE_CON(1))
+
+/*
+ * Register names for the 0x4xxx window, all derived from
+ * MT6320_ABB_AFE_CON() so the 0x4000 base is written down exactly once.
+ *
+ * The vendor names are AudioAnalogReg.h (AFE_PMICDIG_AUDIO_BASE == 0x4000).
+ * Deriving them here rather than spelling out 0x4000/0x4002/... is the whole
+ * point: the 0x04xx block is a *different* window, holding the PMIC
+ * regulator/power registers (ANALDO_CON*, DIGLDO_CON*, VPROC_CON*, ...), and
+ * the two differ only in the high byte.  A raw 0x4xxx literal is therefore
+ * the single easiest way to reintroduce this bug, so every AFE address in
+ * this file goes through the helper.
+ */
+#define MT6320_AFE_UL_DL_CON0		(MT6320_ABB_AFE_CON(0x00))
+#define MT6320_AFE_DL_SRC2_CON0_L	(MT6320_ABB_AFE_CON(0x02))
+#define MT6320_AFE_DL_SRC2_CON1_H	(MT6320_ABB_AFE_CON(0x03))
+#define MT6320_AFE_DL_SDM_CON1		(MT6320_ABB_AFE_CON(0x06))
+#define MT6320_AFE_UL_SRC_CON0_H	(MT6320_ABB_AFE_CON(0x07))
+#define MT6320_AFE_UL_SRC_CON0_L	(MT6320_ABB_AFE_CON(0x08))
+#define MT6320_AFE_UL_SRC_CON1_H	(MT6320_ABB_AFE_CON(0x09))
+#define MT6320_AFE_I2S_FIFO_UL_CFG0	(MT6320_ABB_AFE_CON(0x10))
+#define MT6320_AFE_I2S_FIFO_DL_CFG0	(MT6320_ABB_AFE_CON(0x11))
+#define MT6320_AFE_ANA_AFE_TOP_CON0	(MT6320_ABB_AFE_CON(0x12))
+#define MT6320_AFE_ANA_AUDIO_TOP_CON0	(MT6320_ABB_AFE_CON(0x13))
+#define MT6320_AFE_AFUNC_AUD_CON0	(MT6320_ABB_AFE_CON(0x1a))
+#define MT6320_AFE_AFUNC_AUD_CON1	(MT6320_ABB_AFE_CON(0x1b))
+#define MT6320_AFE_AFUNC_AUD_CON2	(MT6320_ABB_AFE_CON(0x1c))
 /*
  * The sample rate lives in bits [15:12], not a low nibble. The stock
  * driver sets this register as 0x0300 | GetDLFrequency(rate), where
@@ -47,7 +74,31 @@
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H_RATE	GENMASK(15, 12)
 #define MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE	0x0300
 
-#define MT6320_AFUNC_AUD_CON2		(MT6320_ABB_AFE_CON(0x1a))
+/*
+ * Capture (uplink) rate lives in UL_SRC_CON0_H at [4:1], which is a
+ * different position and a different encoding from the downlink one above:
+ * the vendor's GetULFrequency() returns the *unshifted* code and the
+ * sequence itself does the "<< 1", so 8 kHz (code 0x0) reaches the register
+ * as 0x00 and 48 kHz (code 0xf) as 0x1e.  The field therefore needs bit 4
+ * as well, not just [3:1].  Note also that GetULFrequency() only decodes
+ * 8/16/32/48 kHz and warns on anything else, so a rate it does not know
+ * silently programs 0 - which is why mt6320_ul_src_rate_code() rejects
+ * unsupported rates instead of reproducing that behaviour.
+ */
+#define MT6320_ABB_AFE_UL_SRC_CON0_H_RATE	GENMASK(4, 1)
+
+/*
+ * AUDCLKGEN_CFG0 bit 1 gates the ADC clock.  The vendor reaches this
+ * register as 0x0712 with mask 0x0002, so it only ever touches that one bit
+ * even though the register is shared with the SRC gate in bit 0.
+ */
+#define MT6320_ADCCLK_ENABLE		BIT(1)
+
+/*
+ * AFUNC_AUD_CON2 is the analog mute (bit 7), kept by name because the
+ * pre/post-PMU handlers below use it for both directions.
+ */
+#define MT6320_AFUNC_AUD_CON2		MT6320_AFE_AFUNC_AUD_CON2
 
 /*
  * AUXADC channel select is CHSEL[10:7] (upmu_hw.h: RG_AUXADC_CHSEL mask 0xF,
@@ -109,6 +160,21 @@ struct mt6320_codec_priv {
 	struct device *dev;
 	struct regmap *regmap;		/* borrowed from the parent MFD */
 	struct clk *clk_aud26m;		/* codec master clock via CCF */
+	/*
+	 * Sample rate code for the current stream, saved by hw_params() and
+	 * read by the DAC and ADC power-up handlers.  Those run from the
+	 * DAPM stream events, which ASoC issues after hw_params() for the
+	 * same substream, so the value is already valid by then.  The vendor
+	 * instead keeps the rate in mBlockSampleRate[] and consults it from
+	 * AnalogOpen(); this is the equivalent for a codec that does not
+	 * implement hw_params() before its widgets power up.
+	 */
+	unsigned int rate_code;
+	/*
+	 * Same, for the capture (uplink) SRC, whose rate encoding is a
+	 * different one from the downlink - see mt6320_ul_src_rate_code().
+	 */
+	unsigned int ul_rate_code;
 };
 
 static int mt6320_dl_src_rate_code(unsigned int rate)
@@ -137,6 +203,32 @@ static int mt6320_dl_src_rate_code(unsigned int rate)
 	}
 }
 
+/*
+ * Uplink rate code for the capture SRC, i.e. the vendor's GetULFrequency().
+ *
+ * This is deliberately *not* mt6320_dl_src_rate_code(): the uplink uses a
+ * different encoding (see MT6320_ABB_AFE_UL_SRC_CON0_H_RATE) and the vendor
+ * only decodes 8/16/32/48 kHz, warning - and programming 0 - for anything
+ * else.  The codec's capture DAI advertises the full 8k..48k ladder via
+ * MT6320_CODEC_RATES, so a rate outside this set can legitimately arrive
+ * here; return an error instead of silently recording at the wrong rate.
+ */
+static int mt6320_ul_src_rate_code(unsigned int rate)
+{
+	switch (rate) {
+	case 8000:
+		return 0x0;
+	case 16000:
+		return 0x5;
+	case 32000:
+		return 0xa;
+	case 48000:
+		return 0xf;
+	default:
+		return -EINVAL;
+	}
+}
+
 static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_pcm_hw_params *params,
 				  struct snd_soc_dai *dai)
@@ -144,11 +236,24 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(dai->component);
 	unsigned int rate = params_rate(params);
-	int rate_code;
+	int rate_code, ul_rate_code;
 
 	rate_code = mt6320_dl_src_rate_code(rate);
 	if (rate_code < 0)
 		return rate_code;
+
+	priv->rate_code = rate_code;
+
+	/*
+	 * The capture SRC has its own encoding and its own rate ladder, so
+	 * resolve and validate it here as well.  mt6320_mic_event() re-derives
+	 * the uplink code from priv->ul_rate_code for its UL_SRC_CON0_H write.
+	 */
+	ul_rate_code = mt6320_ul_src_rate_code(rate);
+	if (ul_rate_code < 0)
+		return ul_rate_code;
+
+	priv->ul_rate_code = ul_rate_code;
 
 	/*
 	 * Write the whole register rather than updating only the rate field.
@@ -157,6 +262,11 @@ static int mt6320_codec_hw_params(struct snd_pcm_substream *substream,
 	 * (0x0300) was ANDed away and never reached the register, leaving the
 	 * PMIC downlink SRC disabled.  A plain write is what the stock driver
 	 * effectively does, and what the comment above this call describes.
+	 *
+	 * Only the downlink SRC is programmed from here: the uplink SRC is
+	 * written by mt6320_mic_event() during stream start, because the
+	 * vendor sequences it there (it needs the mic path powered first, and
+	 * writes the rate, clears it, then writes it back).
 	 */
 	return regmap_write(priv->regmap, MT6320_ABB_AFE_DL_SRC2_CON0_H,
 			    MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
@@ -334,57 +444,75 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 
 		/*
 		 * The digital path registers, following
-		 * AudioPlatformDevice::AnalogOpen() for DEVICE_OUT_DAC.  The
-		 * addresses are the vendor's, so each entry names its
-		 * register explicitly: MT6320_ABB_AFE_CON(n) computes
-		 * 0x4000 + n * 2, which lands elsewhere for some of these.
+		 * AudioPlatformDevice::AnalogOpen() for DEVICE_OUT_DAC
+		 * (AudioPlatformDevice.cpp, the DEVICE_OUT_EARPIECE case).
 		 *
-		 * 0x4000 (ANALDO_CON0) is the register that enables the
-		 * digital path.  DAPM used to set only BIT(0) of it; the stock
-		 * driver writes 0x007f, and the rest is what the chip needs to
-		 * pass samples at all.
+		 * Every address here is derived from MT6320_ABB_AFE_CON(), so
+		 * they all land in the 0x4000 AFE window.  They used to be
+		 * spelled with the MT6320_ANALDO_CON and MT6320_DIGLDO_CON
+		 * macros, which are *not* the same registers: those live at
+		 * 0x0400.., the PMIC regulator block, and only the low byte
+		 * agreed, so 0x4034 became 0x0434, 0x4022 became 0x0422, and so
+		 * on.  Every microphone power-up was then overwriting
+		 * power-management registers - VGP6, VSIM2, VMC1, VUSB - and
+		 * disabling rails the rest of the system depends on.  The values
+		 * themselves were right; only the addresses were wrong.
+		 *
+		 * Note on 0x4000 (AFE_UL_DL_CON0, written 0x007f): this is an
+		 * ABB/AFE register reached through the PMIC digital-audio
+		 * bridge at base 0x4000 - not the regulator register that the
+		 * MT6320_ANALDO_CON0 macro names at 0x0400.  It is the register
+		 * that enables the shared digital audio path for both
+		 * directions, and the full 0x007f is what the vendor writes;
+		 * a partial write of just BIT(0) does not get samples through.
 		 */
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON12, 0xc3a1);
+		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON0, 0xc3a1);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x0006);
+		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x0006);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x0003);
+		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x0003);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON14, 0x000b);
+		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x000b);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON6, 0x001e);
+		ret = regmap_write(priv->regmap, MT6320_AFE_DL_SDM_CON1, 0x001e);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON0, 0x007f);
+		ret = regmap_write(priv->regmap, MT6320_ABB_AFE_DL_SRC2_CON0_H,
+				   MT6320_ABB_AFE_DL_SRC2_CON0_H_BASE |
+				   (priv->rate_code << 12));
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON2, 0x1801);
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_DL_CON0, 0x007f);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON1, 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_AFE_DL_SRC2_CON0_L, 0x1801);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_ANALDO_CON9, 0x00e1);
+		ret = regmap_write(priv->regmap, MT6320_AFE_DL_SRC2_CON1_H, 0x0000);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON3, 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON1_H, 0x00e1);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_DIGLDO_CON2, 0x004f);
+		ret = regmap_write(priv->regmap, MT6320_AFE_ANA_AFE_TOP_CON0, 0x0000);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AFE_I2S_FIFO_DL_CFG0, 0x004f);
 		if (ret)
 			return ret;
 
@@ -755,6 +883,21 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		/*
+		 * Mic bias / accessory-detect switch first, then the vendor's
+		 * capture power-up sequence, following
+		 * AudioPlatformDevice::AnalogOpen() for
+		 * DEVICE_IN_ADC1/DEVICE_IN_ADC2.
+		 *
+		 * The order and the usleep(600) gaps are load-bearing, not
+		 * cosmetic: after enabling the UL FIFO the vendor writes the
+		 * uplink SRC rate, clears it, waits, writes the rate back,
+		 * clears the SRC, and re-enables it.  That clear/reload cycle
+		 * is what latches the sample rate into the SRC after its clock
+		 * domain has just been started; collapsing the sequence into a
+		 * single write leaves the uplink SRC running on whatever rate
+		 * was previously latched, i.e. on the wrong rate or not at all.
+		 */
 		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON0,
 					 MT6320_AUXADC_CON0_CHSEL,
 					 FIELD_PREP(MT6320_AUXADC_CON0_CHSEL,
@@ -762,15 +905,122 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
-				    MT6320_ACCDET_MICBIAS_ENABLE);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_ENABLE);
+		if (ret)
+			return ret;
+
+		/*
+		 * 0x0712: AUDCLKGEN_CFG0, bit 1 - the ADC clock gate.  The
+		 * vendor writes this register with mask 0x0002, i.e. it only
+		 * touches bit 1, so update just that bit rather than the whole
+		 * word: bit 0 of the same register is the SRC gate that
+		 * mt6320_hp_event() and mt6320_speaker_event() set, and a full
+		 * write here would clear it out from under a concurrently
+		 * active output path.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
+					 MT6320_ADCCLK_ENABLE, 0);
+		if (ret)
+			return ret;
+
+		/* 0x4010: AFE_UL_SRC_CON0_L - low half of the UL SRC. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
+				   0x0000);
+		if (ret)
+			return ret;
+
+		/* 0x0712, bit 1 back on: enable the ADC clock. */
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
+					 MT6320_ADCCLK_ENABLE,
+					 MT6320_ADCCLK_ENABLE);
+		if (ret)
+			return ret;
+
+		/* 0x4026: ANA_AUDIO_TOP_CON0. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_ANA_AUDIO_TOP_CON0,
+				   0x0000);
+		if (ret)
+			return ret;
+
+		/* 0x400e: AFE_UL_SRC_CON0_H - UL SRC high half, with rate. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_H,
+				   FIELD_PREP(MT6320_ABB_AFE_UL_SRC_CON0_H_RATE,
+					      priv->ul_rate_code));
+		if (ret)
+			return ret;
+
+		/* 0x4000: AFE_UL_DL_CON0 - enable the shared digital path. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_DL_CON0, 0x007f);
+		if (ret)
+			return ret;
+
+		/*
+		 * 0x4010: AFE_UL_SRC_CON0_L again.  0x0201 because this board
+		 * is built with MTK_AUDIO_HD_REC_SUPPORT (it appears in
+		 * eastaeon89_wet_td/ProjectConfig.mk), which is the branch the
+		 * vendor takes here; the non-HD build would use 0x0601.
+		 */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
+				   0x0201);
+		if (ret)
+			return ret;
+
+		/* 0x4020: AFE_I2S_FIFO_UL_CFG0 - UL FIFO enable. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_I2S_FIFO_UL_CFG0,
+				   0x004f);
+		if (ret)
+			return ret;
+
+		usleep_range(600, 600);
+
+		/* Clear the UL SRC rate, then let it settle. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_H,
+				   0x0000);
+		if (ret)
+			return ret;
+
+		usleep_range(600, 600);
+
+		/* Reload the rate into the freshly cleared UL SRC. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_H,
+				   FIELD_PREP(MT6320_ABB_AFE_UL_SRC_CON0_H_RATE,
+					      priv->ul_rate_code));
+		if (ret)
+			return ret;
+
+		usleep_range(600, 600);
+
+		/* Drop the UL SRC, then bring it back up around the reload. */
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
+				   0x0000);
+		if (ret)
+			return ret;
+
+		usleep_range(600, 600);
+
+		return regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
+				    0x0201);
 	case SND_SOC_DAPM_POST_PMD:
+		/*
+		 * The vendor has no explicit capture power-down in this file,
+		 * so this only undoes what the pre-PMU path asserted: the mic
+		 * bias switch, the AUXADC channel select, and the ADC clock
+		 * that the pre-PMU sequence enabled via AUDCLKGEN_CFG0 bit 1.
+		 * Leaving that clock on would hold the ADC domain powered
+		 * between streams.
+		 */
 		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
 				   MT6320_ACCDET_MICBIAS_DISABLE);
 		if (ret)
 			return ret;
 
-		return regmap_write(priv->regmap, MT6320_AUXADC_CON0, 0);
+		ret = regmap_write(priv->regmap, MT6320_AUXADC_CON0, 0);
+		if (ret)
+			return ret;
+
+		return regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
+					 MT6320_ADCCLK_ENABLE);
 	}
 
 	return 0;
