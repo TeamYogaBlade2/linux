@@ -85,6 +85,7 @@
 #define DSI_SIZE_CON		0x38
 #define DSI_HEIGHT				GENMASK(30, 16)
 #define DSI_WIDTH				GENMASK(14, 0)
+/* Only present on parts that set has_mem_conti; upstream programs none. */
 #define DSI_MEM_CONTI		0x90
 #define DSI_WMEM_CONTI			0x3c
 #define DSI_HSA_WC		0x50
@@ -207,6 +208,12 @@ struct mtk_dsi_driver_data {
 	 * The real CONT_DET field is at [7:0].
 	 */
 	bool timcon2_no_da_hs_sync;
+	/*
+	 * Whether DSI_MEM_CONTI (0x90) exists and holds the read/write memory
+	 * continue command.  Upstream never programs this register on any
+	 * SoC, so it must stay off unless a part is known to have it.
+	 */
+	bool has_mem_conti;
 };
 
 struct mtk_dsi {
@@ -775,14 +782,13 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	mtk_dsi_reset_engine(dsi);
 	mtk_dsi_phy_timconfig(dsi);
 
-	writel(DSI_WMEM_CONTI, dsi->regs + DSI_MEM_CONTI);
+	if (dsi->driver_data->has_mem_conti)
+		writel(DSI_WMEM_CONTI, dsi->regs + DSI_MEM_CONTI);
 
 	mtk_dsi_ps_control(dsi, true);
 	mtk_dsi_set_vm_cmd(dsi);
 	mtk_dsi_config_vdo_timing(dsi);
 	mtk_dsi_set_interrupt_enable(dsi);
-	mtk_dsi_lane_ready(dsi);
-	mtk_dsi_clk_hs_mode(dsi, 1);
 
 	return 0;
 err_disable_engine_clk:
@@ -895,6 +901,9 @@ static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
 	ret = mtk_dsi_poweron(dsi);
 	if (ret < 0)
 		DRM_ERROR("failed to power on dsi\n");
+
+	mtk_dsi_lane_ready(dsi);
+	mtk_dsi_clk_hs_mode(dsi, 1);
 }
 
 static void mtk_dsi_bridge_atomic_post_disable(struct drm_bridge *bridge,
@@ -1091,7 +1100,7 @@ static u32 mtk_dsi_recv_cnt(u8 type, u8 *read_data)
 		return 2;
 	case MIPI_DSI_RX_GENERIC_LONG_READ_RESPONSE:
 	case MIPI_DSI_RX_DCS_LONG_READ_RESPONSE:
-		return read_data[1] + read_data[2] * 256;
+		return read_data[1] + read_data[2] * 16;
 	case MIPI_DSI_RX_ACKNOWLEDGE_AND_ERROR_REPORT:
 		DRM_INFO("type is 0x02, try again\n");
 		break;
@@ -1325,6 +1334,7 @@ static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.reg_cmdq_off = 0x180,
 	.reg_vm_cmd_off = 0x130,
 	.timcon2_no_da_hs_sync = true,
+	.has_mem_conti = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
@@ -1356,6 +1366,7 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 static const struct of_device_id mtk_dsi_of_match[] = {
 	{ .compatible = "mediatek,mt2701-dsi", .data = &mt2701_dsi_driver_data },
 	{ .compatible = "mediatek,mt6589-dsi", .data = &mt6589_dsi_driver_data },
+	{ .compatible = "mediatek,mt8167-dsi", .data = &mt2701_dsi_driver_data },
 	{ .compatible = "mediatek,mt8173-dsi", .data = &mt8173_dsi_driver_data },
 	{ .compatible = "mediatek,mt8183-dsi", .data = &mt8183_dsi_driver_data },
 	{ .compatible = "mediatek,mt8186-dsi", .data = &mt8186_dsi_driver_data },

@@ -45,6 +45,16 @@ static void mtk_plane_reset(struct drm_plane *plane)
 	state->base.plane = plane;
 	state->pending.format = DRM_FORMAT_RGB565;
 	state->pending.modifier = DRM_FORMAT_MOD_LINEAR;
+	/*
+	 * pending->pitch is in bytes while the OVL and RDMA pitch registers
+	 * count pixels, so mtk_disp_ovl.c and mtk_disp_rdma.c divide by cpp to
+	 * convert.  A freshly reset plane has cpp == 0 until the first
+	 * mtk_plane_update_new_state(), and mtk_crtc_ddp_hw_init() calls
+	 * layer_config() for every layer on its way up.  Keep the divisor
+	 * non-zero; 1 is the neutral value, since a plane with no framebuffer
+	 * has no meaningful pitch to convert anyway.
+	 */
+	state->pending.cpp = 1;
 }
 
 static struct drm_plane_state *mtk_plane_duplicate_state(struct drm_plane *plane)
