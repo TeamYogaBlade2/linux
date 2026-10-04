@@ -518,7 +518,8 @@
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
 	/* FIXME: always 1.8V? */
-	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	//vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
 	bus-width = <4>;
