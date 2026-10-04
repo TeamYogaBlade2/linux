@@ -41,9 +41,6 @@
 #define DISP_RDMA_MEM_CON			0x0024
 #define DISP_REG_RDMA_MEM_SRC_PITCH		0x002c
 
-#define MEM_MODE_INPUT_FORMAT_RGB565_MT65XX		(0x004 << 4)
-#define MEM_MODE_INPUT_FORMAT_RGB888_MT65XX		(0x008 << 4)
-
 #define MEM_MODE_INPUT_FORMAT_RGB565			(0x000 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGB888			(0x001 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGBA8888			(0x002 << 4)
@@ -347,25 +344,24 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 				      DISP_RDMA_MEM_CON);
 
 		/*
-		 * Source pitch, in pixels per line - the same conversion the
-		 * layer path does, because the field is scaled by a line
-		 * index rather than by bytes-per-pixel.
+		 * Source pitch, in bytes per line.  RDMA_MAX_WIDTH is a pixel
+		 * count but this register holds bytes, and the stock driver
+		 * programs the pitch from RDMAConfig() in direct-link mode
+		 * too - ddp_path.c passes the real pitch with address 0 when
+		 * it selects RDMA_MODE_DIRECT_LINK.  The main path is RGB888,
+		 * which is three bytes per pixel.
 		 *
-		 * This has to be written here as well as in
-		 * mtk_rdma_layer_config(): the layer hook never runs on this
-		 * path, since no plane is ever attached to RDMA0, and the
-		 * stock driver programs the pitch from RDMAConfig() in
-		 * direct-link mode too - ddp_path.c passes the real pitch
-		 * with address 0 when it selects RDMA_MODE_DIRECT_LINK.
-		 * Leaving the pitch at reset is what left RDMA0 raising
-		 * EOF_ABNORMAL while the overlay completed frames around
-		 * it.
+		 * This has to be written here and not in layer_config: the
+		 * layer hook never runs on this path, since no plane is ever
+		 * attached to RDMA0.  Leaving the pitch at reset is what left
+		 * RDMA0 raising EOF_ABNORMAL while the overlay completed
+		 * frames around it.
 		 *
 		 * The start address is zero in direct-link mode for the same
 		 * reason the stock driver passes 0: there is no memory ring
 		 * to read from.
 		 */
-		mtk_ddp_write_relaxed(cmdq_pkt, (width & GENMASK(15, 0)),
+		mtk_ddp_write_relaxed(cmdq_pkt, (width * 3) & GENMASK(15, 0),
 				      &rdma->cmdq_reg, rdma->regs,
 				      DISP_REG_RDMA_MEM_SRC_PITCH);
 		mtk_ddp_write_relaxed(cmdq_pkt, 0, &rdma->cmdq_reg,
@@ -402,7 +398,18 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	 * actually latched so a stuck RDMA0 can be placed rather than
 	 * guessed at.  Guarded by a flag so a per-frame failure cannot flood.
 	 */
-	if (!rdma->dbg_done) {
+	/*
+	 * Only when the writes above went straight to the hardware.
+	 * With a command packet they are still queued in the GCE
+	 * buffer and have not been executed, so the shadow registers
+	 * read back here are the previous mode's values - exactly the
+	 * misleading output this dump is meant to rule out.  MT6589
+	 * sets shadow_register and uses CMDQ, so the interesting case
+	 * is the one where this would be wrong; the first config runs
+	 * with cmdq_pkt == NULL from mtk_crtc_ddp_hw_init(), which is
+	 * where a real dump is wanted anyway.
+	 */
+	if (!cmdq_pkt && !rdma->dbg_done) {
 		rdma->dbg_done = true;
 		dev_info(dev,
 			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n"
@@ -416,42 +423,6 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 			 readl(rdma->regs + rdma->data->mem_start_addr_reg),
 			 readl(rdma->regs + DISP_REG_RDMA_MEM_GMC_SETTING_1),
 			 readl(rdma->regs + DISP_REG_RDMA_FIFO_CON));
-	}
-}
-
-static unsigned int rdma_fmt_convert_mt65xx(unsigned int fmt)
-{
-	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
-	 * is defined in mediatek HW data sheet.
-	 * The alphabet order in XXX is no relation to data
-	 * arrangement in memory.
-	 */
-	switch (fmt) {
-	default:
-	case DRM_FORMAT_RGB565:
-		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX;
-	case DRM_FORMAT_BGR565:
-		return MEM_MODE_INPUT_FORMAT_RGB565_MT65XX | MEM_MODE_INPUT_SWAP;
-	case DRM_FORMAT_RGB888:
-		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX;
-	case DRM_FORMAT_BGR888:
-		return MEM_MODE_INPUT_FORMAT_RGB888_MT65XX | MEM_MODE_INPUT_SWAP;
-	case DRM_FORMAT_RGBX8888:
-	case DRM_FORMAT_RGBA8888:
-		return MEM_MODE_INPUT_FORMAT_ARGB8888;
-	case DRM_FORMAT_BGRX8888:
-	case DRM_FORMAT_BGRA8888:
-		return MEM_MODE_INPUT_FORMAT_ARGB8888 | MEM_MODE_INPUT_SWAP;
-	case DRM_FORMAT_XRGB8888:
-	case DRM_FORMAT_ARGB8888:
-		return MEM_MODE_INPUT_FORMAT_RGBA8888;
-	case DRM_FORMAT_XBGR8888:
-	case DRM_FORMAT_ABGR8888:
-		return MEM_MODE_INPUT_FORMAT_RGBA8888 | MEM_MODE_INPUT_SWAP;
-	case DRM_FORMAT_UYVY:
-		return MEM_MODE_INPUT_FORMAT_UYVY;
-	case DRM_FORMAT_YUYV:
-		return MEM_MODE_INPUT_FORMAT_YUYV;
 	}
 }
 
@@ -553,14 +524,27 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	struct mtk_plane_pending_state *pending = &state->pending;
 	unsigned int addr = pending->addr;
 	/*
-	 * MEM_MODE_SRC_PITCH counts pixels per line: the data sheet says to
-	 * set it to the width of the source frame, and the stock driver
-	 * scales it by a line index when computing the layer address
-	 * (addr + src_x * bpp + src_y * src_pitch).  pending->pitch is drm's
-	 * fb->pitches[0], in bytes, so convert before masking to 16 bits -
-	 * a byte pitch of 3840 would otherwise not even fit.
+	 * MEM_MODE_SRC_PITCH counts *bytes* per line, not pixels.  The field
+	 * is 16 bits wide, so an aligned 1080p frame at four bytes per pixel
+	 * fits (8640), but a wider one would not - which is why this stays
+	 * the byte pitch that mainline hands us.  pending->pitch is already
+	 * drm's fb->pitches[0] in bytes; do not divide it by cpp here.
+	 *
+	 * Evidence that the register takes bytes, despite ddp_path.c's
+	 * "pitch, pixel number" comment being used for the *OVL* config
+	 * struct: every stock call site that feeds RDMAConfig() scales by
+	 * the pixel size, while every site that feeds the OVL layer config
+	 * does not.  hdmitx.c:539 passes src_pitch * 4 for ARGB and
+	 * disp_drv_dsi.c:404 passes width * 2 for RGB565; disp_drv.c:1807
+	 * passes width * 3 for the RGB888 OVL dump, where the OVL path takes
+	 * the value unscaled.  RDMAConfig() itself prints width*bpp in the
+	 * same argument list it is handed the unscaled "pitch" in.
+	 *
+	 * Dividing by cpp here (as this driver briefly did) made RDMA fetch
+	 * every line a third to a quarter of the way too early and sheared
+	 * the frame diagonally.
 	 */
-	unsigned int pitch = (pending->pitch / pending->cpp) & 0xffff;
+	unsigned int pitch = pending->pitch & 0xffff;
 	unsigned int fmt = pending->format;
 	unsigned int con;
 
