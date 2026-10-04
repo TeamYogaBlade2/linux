@@ -1048,7 +1048,16 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	 * overlay's own RDMA does not finish by EOF.  If L0_ADDR is zero or
 	 * the pitch is wrong, that is the reason.
 	 */
-	if (!ovl->layer_dbg_done) {
+	/*
+	 * Only meaningful when there is no command packet.  With CMDQ - which
+	 * MT6589 uses - mtk_ovl_layer_on() and the rest of this function queue
+	 * their writes into the GCE buffer, so a readl() taken here would show
+	 * the *previous* commit's shadow values rather than what was just
+	 * programmed.  That is not a harmless artefact: RDMA_CTRL reads back
+	 * 0x03ff0001 when the driver actually wrote 0x1, which looks like a
+	 * hardware fault in the log and is not one.
+	 */
+	if (!cmdq_pkt && !ovl->layer_dbg_done) {
 		ovl->layer_dbg_done = true;
 		dev_info(dev,
 			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n"
