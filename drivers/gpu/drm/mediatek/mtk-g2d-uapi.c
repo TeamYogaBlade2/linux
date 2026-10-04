@@ -287,7 +287,18 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 		ret = -EINVAL;
 		goto err_put;
 	}
-	if (start % addr_align) {
+	/*
+	 * Narrow before the modulo.  start is u64 so that the offset arithmetic
+	 * below cannot wrap on the way to the range check, but ARM's EABI has no
+	 * 64-bit divide helper (__aeabi_uldivmod), so a 64-bit % here is an
+	 * unresolved external symbol at link time.  Narrowing is not a
+	 * truncation of the value being checked: check 5 above has already
+	 * bounded (y + rect_h) * pitch by out->size, and check 7 below rejects
+	 * any address that does not fit dma_addr_t, which is 32-bit in this
+	 * configuration.  So at this point start fits in dma_addr_t by
+	 * construction, and testing the low 32 bits is the whole test.
+	 */
+	if ((dma_addr_t)start % addr_align) {
 		ret = -EINVAL;
 		goto err_put;
 	}
