@@ -272,6 +272,8 @@ struct mtk_fm {
 	struct completion cmd_done;
 	struct mutex cmd_lock;
 	struct mutex power_lock;
+	struct v4l2_ctrl *ctrl_mute;	/* V4L2_CID_AUDIO_MUTE */
+	struct v4l2_ctrl *ctrl_deemph;	/* V4L2_CID_TUNE_DEEMPHASIS */
 	struct v4l2_ctrl *rds_ps;	/* V4L2_CID_RDS_RX_PS_NAME */
 	struct v4l2_ctrl *rds_rt;	/* V4L2_CID_RDS_RX_RADIO_TEXT */
 	struct v4l2_ctrl *rds_pty;	/* V4L2_CID_RDS_RX_PTY */
@@ -281,6 +283,7 @@ struct mtk_fm {
 	struct mtk_fm_rds rds;
 	bool mute;			/* cached V4L2_CID_AUDIO_MUTE value */
 	bool deemph_75us;		/* cached V4L2_CID_TUNE_DEEMPHASIS */
+	bool force_mono;		/* cached V4L2_TUNER_MODE_MONO request */
 	bool rds_on;			/* cached V4L2_CID_RDS_RECEPTION */
 	unsigned int volume;		/* cached V4L2_CID_AUDIO_VOLUME */
 	struct mtk_fm_cqi cqi;		/* last CQI read, in 1/16 dB */
@@ -420,6 +423,40 @@ static bool mtk_fm_rds_ps_segment(struct mtk_fm *fm, unsigned int seg, u8 hi,
 }
 
 /*
+ * Extract the characters of one radio text segment from block C and block D.
+ *
+ * A 2A segment carries four characters, two in block C and two in block D; a
+ * 2B segment carries two characters, both in block D.  Each block's high byte
+ * is the earlier character: the vendor writes them out as
+ *
+ *	buf[idx]     = blkC >> 8;		core/fm_rds_parser.c:801
+ *	buf[idx + 1] = blkC & 0xFF;		core/fm_rds_parser.c:802
+ *	buf[idx + 2] = blkD >> 8;		core/fm_rds_parser.c:803
+ *	buf[idx + 3] = blkD & 0xFF;		core/fm_rds_parser.c:804
+ *
+ * and, for 2B,
+ *
+ *	buf[idx]     = blkD >> 8;		core/fm_rds_parser.c:816
+ *	buf[idx + 1] = blkD & 0xFF;		core/fm_rds_parser.c:817
+ *
+ * so the bytes must be assembled explicitly rather than taken from the address
+ * of the block, whose in-memory order is the other way round on a little-endian
+ * host.
+ */
+static void mtk_fm_rds_rt_chars(u16 blk_c, u16 blk_d, bool version_b, u8 *chars)
+{
+	if (version_b) {
+		chars[0] = blk_d >> 8;
+		chars[1] = blk_d & 0xff;
+	} else {
+		chars[0] = blk_c >> 8;
+		chars[1] = blk_c & 0xff;
+		chars[2] = blk_d >> 8;
+		chars[3] = blk_d & 0xff;
+	}
+}
+
+/*
  * Record one radio text segment.  Returns true when the text is complete:
  * either a segment carried the 0x0d end marker, or every segment has been
  * received.  The vendor uses the same two conditions in rds_g2_rt_check_end()
@@ -556,6 +593,7 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 	u16 blk_d = g->blk[3];
 	unsigned int type;
 	bool version_b;
+	u8 chars[4];
 
 	/* Without a usable block B there is no group type, so nothing to do. */
 	if (!(g->crc & FM_RDS_GDBK_IND_B))
@@ -595,16 +633,17 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 			if (!(g->crc & FM_RDS_GDBK_IND_D))
 				return;
 
-			if (mtk_fm_rds_rt_segment(fm, blk_b & 0xf, 2,
-						  (const u8 *)&blk_d))
+			mtk_fm_rds_rt_chars(blk_c, blk_d, true, chars);
+			if (mtk_fm_rds_rt_segment(fm, blk_b & 0xf, 2, chars))
 				mtk_fm_rds_set_rt(fm);
 		} else {
 			/* 2A: blocks C and D, four characters. */
-			if (!(g->crc & (FM_RDS_GDBK_IND_C | FM_RDS_GDBK_IND_D)))
+			if (!(g->crc & (FM_RDS_GDBK_IND_C |
+					FM_RDS_GDBK_IND_D)))
 				return;
 
-			if (mtk_fm_rds_rt_segment(fm, blk_b & 0xf, 4,
-						  (const u8 *)&blk_c))
+			mtk_fm_rds_rt_chars(blk_c, blk_d, false, chars);
+			if (mtk_fm_rds_rt_segment(fm, blk_b & 0xf, 4, chars))
 				mtk_fm_rds_set_rt(fm);
 		}
 		break;
@@ -934,6 +973,42 @@ static int mtk_fm_set_deemphasis(struct mtk_fm *fm, bool deemph_75us)
 		val &= ~FM_DEEMPHASIS;
 
 	return mtk_fm_write_reg(fm, FM_REG_ROM_CTRL, val);
+}
+
+/*
+ * Set or clear FM_FORCE_MS, the force-mono request in register 0x75.
+ *
+ * FM_IOCTL_SETMONOSTERO reaches mt6628_SetMonoStereo()
+ * (aquaris-5/.../mt6628/pub/mt6628_fm_lib.c:1176-1192), which first writes
+ * 0x3007 to FM_MAIN_CG1_CTRL and then sets or clears bit 3 of 0x75 — the same
+ * two steps reproduced here.  Only bit 3 is touched, so the other bits of 0x75
+ * are preserved; the vendor's mt6628_set_bits() helper is the same
+ * read-modify-write.
+ *
+ * 0x75 is one of the registers the power-down sequence resets, so this has to
+ * be re-applied from the cached value on every open, exactly as mute, volume
+ * and de-emphasis are.
+ */
+static int mtk_fm_set_force_mono(struct mtk_fm *fm, bool force_mono)
+{
+	u16 val;
+	int ret;
+
+	/* Select the register window, as mt6628_SetMonoStereo() does. */
+	ret = mtk_fm_write_reg(fm, FM_REG_CG_CTRL, 0x3007);
+	if (ret)
+		return ret;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &val);
+	if (ret)
+		return ret;
+
+	if (force_mono)
+		val |= FM_FORCE_MS;
+	else
+		val &= ~FM_FORCE_MS;
+
+	return mtk_fm_write_reg(fm, FM_REG_FORCE_MS, val);
 }
 
 /*
@@ -1396,6 +1471,15 @@ static int mtk_fm_open(struct file *file)
 				   "de-emphasis");
 
 	/*
+	 * Force-mono lives in 0x75, which the power-down sequence resets along
+	 * with the rest of the receiver, so it is re-applied here for the same
+	 * reason as mute, volume and de-emphasis.
+	 */
+	if (fm->force_mono)
+		mtk_fm_warn_or_ret(fm, mtk_fm_set_force_mono(fm, true),
+				   "force-mono");
+
+	/*
 	 * RDS is re-enabled per open, because FM_MAIN_CTRL is a power-up
 	 * register and the mask is cleared by the reset the power-down
 	 * sequence performs.  The decoder state is cleared with it.
@@ -1564,8 +1648,7 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 	 * MT6628's FM event parser reports TUNE_DONE as a one-byte payload
 	 * whose value must be 1.
 	 */
-	if (fm->cmd_data_len != 1 || fm->cmd_data[0] != 1)
-	{
+	if (fm->cmd_data_len != 1 || fm->cmd_data[0] != 1) {
 		ret = -EIO;
 		goto restore_desense;
 	}
@@ -1918,7 +2001,55 @@ static int mtk_fm_s_ctrl(struct v4l2_ctrl *ctrl)
 	}
 }
 
+/*
+ * Read the de-emphasis and mute state back out of the hardware.
+ *
+ * Those two controls are the only ones whose value lives in a register rather
+ * than in the driver's own decode state, so they are marked volatile and read
+ * back here.  That way VIDIOC_G_CTRL reports what the chip is actually doing
+ * rather than the last value userspace asked for, which matters because the
+ * power-up sequence programs a default de-emphasis of 50 us
+ * (aquaris-5/.../mt6628/pub/mt6628_fm_cmd.c:295) behind the driver's back.
+ *
+ * With no user of the radio open the chip is powered down and no register can
+ * be read; the cached value is then the best answer available, so return
+ * success without touching it.
+ */
+static int mtk_fm_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct mtk_fm *fm =
+		container_of(ctrl->handler, struct mtk_fm, ctrl_handler);
+	u16 val;
+	int ret;
+
+	if (!mtk_fm_is_powered(fm))
+		return 0;
+
+	switch (ctrl->id) {
+	case V4L2_CID_TUNE_DEEMPHASIS:
+		ret = mtk_fm_read_reg(fm, FM_REG_ROM_CTRL, &val);
+		if (ret)
+			return ret;
+
+		ctrl->val = (val & FM_DEEMPHASIS) ?
+			V4L2_DEEMPHASIS_75_uS : V4L2_DEEMPHASIS_50_uS;
+		break;
+	case V4L2_CID_AUDIO_MUTE:
+		ret = mtk_fm_read_reg(fm, FM_REG_MAIN_CTRL, &val);
+		if (ret)
+			return ret;
+
+		ctrl->val = !!(val & FM_MUTE);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static const struct v4l2_ctrl_ops mtk_fm_ctrl_ops = {
+	.g_volatile_ctrl = mtk_fm_g_volatile_ctrl,
 	.s_ctrl = mtk_fm_s_ctrl,
 };
 
@@ -2036,8 +2167,6 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 			  const struct v4l2_tuner *tuner)
 {
 	struct mtk_fm *fm = video_drvdata(file);
-	u16 val;
-	int ret;
 
 	if (tuner->index)
 		return -EINVAL;
@@ -2051,27 +2180,16 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 	}
 
 	/*
-	 * MT6628's stereo/mono control register is accessed through the
-	 * same clock/control window used by the downstream driver.
+	 * Record the request first, so it survives the radio being closed and
+	 * powered down before mtk_fm_open() re-applies it.  See
+	 * mtk_fm_set_force_mono() for the vendor sequence this reproduces.
 	 */
-	ret = mtk_fm_write_reg(fm, FM_REG_CG_CTRL, 0x3007);
-	if (ret)
-		return ret;
+	fm->force_mono = tuner->audmode == V4L2_TUNER_MODE_MONO;
 
-	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &val);
-	if (ret)
-		return ret;
+	if (!mtk_fm_is_powered(fm))
+		return 0;
 
-	switch (tuner->audmode) {
-	case V4L2_TUNER_MODE_MONO:
-		val |= FM_FORCE_MS;
-		break;
-	case V4L2_TUNER_MODE_STEREO:
-		val &= ~FM_FORCE_MS;
-		break;
-	}
-
-	return mtk_fm_write_reg(fm, FM_REG_FORCE_MS, val);
+	return mtk_fm_set_force_mono(fm, fm->force_mono);
 }
 
 static int mtk_fm_g_frequency(struct file *file, void *priv,
@@ -2203,8 +2321,8 @@ static int mtk_fm_probe(struct platform_device *pdev)
 
 	v4l2_ctrl_handler_init(&fm->ctrl_handler, 1);
 	fm->vdev.ctrl_handler = &fm->ctrl_handler;
-	v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
-			  V4L2_CID_AUDIO_MUTE, 0, 1, 1, 0);
+	fm->ctrl_mute = v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+					  V4L2_CID_AUDIO_MUTE, 0, 1, 1, 0);
 	/*
 	 * Volume is the chip's output gain, selected by index into the
 	 * 16-entry table mtk_fm_set_volume() writes, so the maximum matches
@@ -2219,9 +2337,10 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	 * Only 50 and 75 us correspond to a hardware state, so "disabled"
 	 * leaves FM_MAIN_CG2_CTRL[12] as the power-up sequence left it.
 	 */
-	v4l2_ctrl_new_std_menu(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
-			       V4L2_CID_TUNE_DEEMPHASIS,
-			       V4L2_DEEMPHASIS_50_uS, 0, 0);
+	fm->ctrl_deemph = v4l2_ctrl_new_std_menu(&fm->ctrl_handler,
+						 &mtk_fm_ctrl_ops,
+						 V4L2_CID_TUNE_DEEMPHASIS,
+						 V4L2_DEEMPHASIS_50_uS, 0, 0);
 	/* RDS on/off, default off to match the power-up default. */
 	v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
 			  V4L2_CID_RDS_RECEPTION, 0, 1, 1, 0);
@@ -2250,6 +2369,15 @@ static int mtk_fm_probe(struct platform_device *pdev)
 		v4l2_err(&fm->v4l2_dev, "failed to init controls: %d\n", ret);
 		goto err_free_ctrls;
 	}
+	/*
+	 * Mute and de-emphasis are held in a register, so their controls are
+	 * volatile and read back from the chip on every VIDIOC_G_CTRL.  Volume
+	 * is not: the hardware holds a table value rather than the index, and
+	 * mapping it back would mean searching the table for an entry a failed
+	 * write may have left absent.
+	 */
+	fm->ctrl_mute->flags |= V4L2_CTRL_FLAG_VOLATILE;
+	fm->ctrl_deemph->flags |= V4L2_CTRL_FLAG_VOLATILE;
 	/* The decoded RDS fields are written by the driver, not by userspace. */
 	fm->rds_ps->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	fm->rds_rt->flags |= V4L2_CTRL_FLAG_READ_ONLY;
