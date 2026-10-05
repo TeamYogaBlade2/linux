@@ -440,6 +440,14 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
 	 * word is never disturbed.
 	 */
 	irq_reg = readl(g2d->regs + G2D_IRQ);
+	if (!(irq_reg & G2D_IRQ_IRQ_STA))
+		return IRQ_NONE;
+
+	/* Clear IRQ_STA without touching EN: the two fields share G2D_IRQ, and
+	 * writing 0 through EN would mute the line for good.  Write the read
+	 * value back with only IRQ_STA dropped, so an unnamed bit in the same
+	 * word is never disturbed.
+	 */
 	writel(irq_reg & ~G2D_IRQ_IRQ_STA, g2d->regs + G2D_IRQ);
 
 	complete(&g2d->done);
@@ -1029,6 +1037,7 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	g2d->irq = irq;
 
 	mutex_init(&g2d->lock);
+	init_completion(&g2d->done);
 
 	/* G2D_IRQ EN, bit 0: enables the 2D engine interrupt. */
 	writel(G2D_IRQ_EN, g2d->regs + G2D_IRQ);

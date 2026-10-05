@@ -141,8 +141,16 @@
 					 WDMA_CFG_UV_SWAP | \
 					 WDMA_CFG_DNSP_SEL)
 
-/* Shift count of WDMA_CFG_OUT_FORMAT, so a format value can be placed in it. */
-#define WDMA_CFG_OUT_FORMAT_SHIFT	__ffs(WDMA_CFG_OUT_FORMAT)
+/*
+ * Shift count of WDMA_CFG_OUT_FORMAT, so a format value can be placed in it.
+ *
+ * __ffs() is 1-based: it returns the one-based index of the lowest set bit, so
+ * for bits [7:4] it yields 5 where the shift count is 4.  Using it directly
+ * shifted the format one bit too far, which encoded Out_Format=4 (UYVY) for
+ * the ARGB value 2 - while the pitch and bytes-per-line programmed alongside it
+ * described a 4-bytes-per-pixel copy.  Subtract one.
+ */
+#define WDMA_CFG_OUT_FORMAT_SHIFT	(__ffs(WDMA_CFG_OUT_FORMAT) - 1)
 
 /*
  * The one output format this driver programs, WDMA_OUTPUT_FORMAT_ARGB from
@@ -692,8 +700,20 @@ void mtk_wdma_config(struct device *dev, unsigned int width,
 	 * caller that supplies a real address, and it must not be the path
 	 * that is untested.
 	 */
-	if (mtk_wdma_validate_frame(wdma, width, height, bpp, 0))
+	if (mtk_wdma_validate_frame(wdma, width, height, bpp, 0)) {
+		/*
+		 * Say so.  Silently leaving the previous WDMA_SRC_SIZE and
+		 * WDMA_DST_ADDR in place is how the engine would end up started
+		 * against stale configuration for a frame nobody configured,
+		 * and the caller has no way to tell that from a successful
+		 * config.  Rate limited so a caller looping on a too-large mode
+		 * cannot flood the console.
+		 */
+		dev_warn_ratelimited(wdma->dev,
+				     "refusing a %ux%u frame: WDMA accepts at most %ux%u\n",
+				     width, height, WDMA_MAX_WIDTH, WDMA_MAX_HEIGHT);
 		return;
+	}
 
 	/*
 	 * The input format is fixed, not a parameter.  On this tree the only
