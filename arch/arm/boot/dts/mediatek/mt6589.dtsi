@@ -1161,6 +1161,52 @@
 			      <0x10216000 0x2000>;
 		};
 
+		/*
+		 * AP_DMA: the general purpose half of the AP DMA block (data
+		 * sheet chapter 18).  It contains eighteen engines, of which
+		 * only G_DMA0 and G_DMA1 are generic - the rest belong to HIF,
+		 * IrDA, I2C and UART and are described by the "apdma" node
+		 * below.  These two sit at 0x11000080 and 0x11000100 and are
+		 * the only engines with their own interrupt (GIC SPI 57/58,
+		 * data sheet Table 7-1).
+		 *
+		 * The window is 0x180 bytes: the global control registers end
+		 * at 0x78, and the block belonging to the next engine (HIF0)
+		 * starts at 0x180.
+		 *
+		 * Note there is deliberately no iommus and no power-domains
+		 * here.  AP_DMA sits directly on the peripheral AXI fabric
+		 * (data sheet p.869), so unlike the display engines it is not
+		 * behind an M4U or a LARB.  The datasheet's AP_DMA_PD is
+		 * PERICFG PDN0 bit 12, which is the very same bit as the
+		 * CLK_PERI0_APDMA clock gate below - it is a clock gate wearing
+		 * a power-down name, not a separate power domain.
+		 *
+		 * The interrupts are declared at the polarity the data sheet
+		 * gives (Table 7-1: both "Positive"), which contradicts the
+		 * vendor driver (it uses IRQF_TRIGGER_LOW).  That is unresolved
+		 * and is spelled out in mtk-gdma.c; nothing here depends on it
+		 * yet.
+		 *
+		 * status = "disabled" because nothing consumes these channels
+		 * yet - no DMAENGINE client in the tree names them, and
+		 * mtk-gdma.c at this stage only proves the clock, reset and
+		 * interrupt wiring rather than moving data.  Enabling the node
+		 * would claim a working DMA controller where there is not one.
+		 */
+		gdma: dma-controller@11000000 {
+			compatible = "mediatek,mt6589-gdma";
+			reg = <0x11000000 0x180>;
+			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "gdma0", "gdma1";
+			clocks = <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main";
+			resets = <&pericfg MT6589_PERI_DMA_SW_RS_RST>;
+			#dma-cells = <1>;
+			status = "disabled";
+		};
+
 		apdma: dma-controller@11000680 {
 			compatible = "mediatek,mt6589-uart-dma",
 				     "mediatek,mt6577-uart-dma";
