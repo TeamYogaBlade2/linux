@@ -9,39 +9,75 @@ source "drivers/media/platform/mediatek/vpu/Kconfig"
 source "drivers/media/platform/mediatek/mdp3/Kconfig"
 
 
-config VIDEO_MEDIATEK_VCODEC_MT6589
-	tristate "MediaTek MT6589 video codec (VENC/VDEC)"
+config VIDEO_MEDIATEK_VCODEC_VENC_MT6589
+	tristate "MediaTek MT6589 H.264/VP8 video encoder (VENC)"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	depends on COMMON_CLK
 	depends on HAS_IOMEM
 	depends on MTK_SMI || (COMPILE_TEST && MTK_SMI=n)
 	help
 	  Say Y here if you want to use the MediaTek MT6589 hardware video
-	  encoder and decoder.
+	  encoder.
 
 	  The MT6589 codec is an RTL accelerator with no coprocessor and no
 	  firmware, unlike the later MediaTek VPU generations handled by
 	  CONFIG_VIDEO_MEDIATEK_VCODEC.  The encoder is a hardwired H.264 and
-	  VP8 block at 0x17002000, described in data sheet chapter 60, and
-	  the decoder is a multi-standard block (MPEG-1/2/4, DivX, Xvid,
-	  H.263, VC-1, WMV9, H.264 up to level 4.2, VP8) at 0x16000000.
+	  VP8 block at 0x17002000, described in data sheet chapter 60, with
+	  the MPEG-4 encoder (chapter 61) sharing the same window.
 
-	  This driver provides the hardware resource layer for those blocks:
-	  clock gating in the VEN and VDE domains, the two interrupt lines
-	  and the per-engine hardware mutex that lets several userspace
-	  instances share one engine.
+	  This driver exposes the chapter-60 H.264 datapath as a V4L2
+	  memory-to-memory node: it owns the bitstream, reference,
+	  reconstruction and rate control scratch buffers the address
+	  registers need, programs the quantiser triple, bit rate and frame
+	  rate terms the registers actually have, and retires a frame on the
+	  frame-done interrupt, on a bitstream overflow, or on a watchdog when
+	  the engine never signals completion at all.
 
-	  It does not implement bitstream parsing, rate control or any
-	  codec logic.  Those ship only as closed-source userspace
-	  libraries with no corresponding open kernel-side programming
-	  model, and the decoder has no register-definition section in the
-	  data sheet, so a V4L2 or V4L2-mem2mem interface cannot be built
-	  from the available documentation.  The recovered ABI and the parts
-	  that remain unknown are written up in RECOVERED-ABI.md in this
-	  directory.
+	  It does not implement entropy coding, motion estimation, slice
+	  control, SPS/PPS emission or the bitrate algorithm; those ship only
+	  as closed-source userspace libraries with no corresponding open
+	  kernel-side programming model.  Userspace must treat the encoded
+	  output as opaque.  MPEG-4 encoding is refused with -ENODEV until its
+	  per-MB side-information buffer is owned.
+
+	  VENC and VDEC are separate hardware blocks and are separate drivers:
+	  see CONFIG_VIDEO_MEDIATEK_VCODEC_VDEC_MT6589.  They were previously
+	  one node naming two power domains, which meant neither domain was
+	  attached at all; see drivers/pmdomain/mediatek/mt6589-power-domains.md.
 
 	  To compile this driver as a module, choose M here: the module will
-	  be called mtk-vcodec-mt6589.
+	  be called mtk-venc-mt6589.
+
+config VIDEO_MEDIATEK_VCODEC_VDEC_MT6589
+	tristate "MediaTek MT6589 video decoder (VDEC)"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on COMMON_CLK
+	depends on HAS_IOMEM
+	depends on MTK_SMI || (COMPILE_TEST && MTK_SMI=n)
+	help
+	  Say Y here if you want to use the MediaTek MT6589 hardware video
+	  decoder.
+
+	  The decoder is a multi-standard RTL block at 0x16020000 (data sheet
+	  chapter 59): MPEG-1/2, MPEG-4, DivX, Xvid, H.263, VC-1, WMV9, H.264
+	  up to level 4.2, VP8.  This driver provides the resource layer for
+	  it -- the two vdecsys clock gates, the frame-end interrupt and its
+	  acknowledgement, the VDE power domain through the standard one-domain
+	  attachment -- and a V4L2 memory-to-memory node.
+
+	  The node's device_run() reports -ENODEV, and that is deliberate.  The
+	  vendor stack does not program the VDEC datapath from the kernel: its
+	  kernel driver touches the decoder only to power it up and acknowledge
+	  the frame-end interrupt, while the register sequence itself is
+	  assembled by closed userspace libraries as a queue of WRITE_REG_CMD
+	  records and shipped to the driver over the MFV_SET_CMD_CMD ioctl.
+	  The decode sequence is therefore in stripped, partly encrypted blobs,
+	  and the data sheet has no register-definition section for this block
+	  at all.  A client can open the node, query it and negotiate formats;
+	  it cannot decode.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called mtk-vdec-mt6589.
 
 # The graph owner has to be declared before the three camera drivers that
 # select it.

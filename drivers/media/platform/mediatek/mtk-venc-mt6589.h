@@ -2,16 +2,22 @@
 /*
  * Copyright (c) 2026 Akari Tsuyukusa
  *
- * Private declarations for the MediaTek MT6589 video codec driver.
+ * Private declarations for the MediaTek MT6589 video ENCODER driver.
  *
  * Buffer geometry and per-instance state for the V4L2 mem-to-mem encoder node.
  * The register map is deliberately NOT here: it lives in mtk-vcodec-mt6589-reg.h
  * with its per-field sourcing, and this header is only the Linux plumbing around
  * it.
+ *
+ * This is the encoder half of the old merged mtk-vcodec-mt6589 header; the
+ * decoder's own declarations live in mtk-vdec-mt6589.h.  The two were never
+ * really related beyond having shared a file: VENC and VDEC are separate hardware
+ * blocks in separate register windows, with separate interrupts, clock
+ * controllers and power domains.
  */
 
-#ifndef _MTK_VCODEC_MT6589_H_
-#define _MTK_VCODEC_MT6589_H_
+#ifndef _MTK_VENC_MT6589_H_
+#define _MTK_VENC_MT6589_H_
 
 #include <linux/dma-mapping.h>
 #include <linux/types.h>
@@ -19,7 +25,7 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-mem2mem.h>
 
-struct mtk_vcodec_dev;
+struct mtk_venc_dev;
 
 /*
  * Picture geometry the encoder is driven at.
@@ -88,7 +94,7 @@ struct mtk_vcodec_dev;
  * One array indexed by the same parity is the same number of allocations and is
  * provably the frame the encoder last reconstructed.
  */
-#define MTK_VCODEC_FRAME_BUFFER			2
+#define MTK_VENC_FRAME_BUFFER			2
 
 /*
  * Per-instance encoder state.
@@ -97,7 +103,7 @@ struct mtk_vcodec_dev;
  * reference and reconstruction planes are picture-sized and belong to the stream
  * being encoded, so two independent encodes must not fight over them.
  */
-struct mtk_vcodec_enc_ctx {
+struct mtk_venc_ctx {
 	/*
 	 * The V4L2 file handle, and the first member for a reason: file->private_data
 	 * is the v4l2_fh, which is what v4l2_m2m_fop_poll(), v4l2_m2m_fop_mmap() and
@@ -107,14 +113,14 @@ struct mtk_vcodec_enc_ctx {
 	 */
 	struct v4l2_fh			fh;
 
-	struct mtk_vcodec_dev			*dev;
+	struct mtk_venc_dev		*dev;
 
 	/* The m2m context the framework allocated for this open. */
-	struct v4l2_m2m_ctx			*m2m;
+	struct v4l2_m2m_ctx		*m2m;
 
 	/* Raw NV12 frames in (OUTPUT queue), encoded H.264 out (CAPTURE queue). */
-	struct v4l2_format			src_fmt;
-	struct v4l2_format			dst_fmt;
+	struct v4l2_format		src_fmt;
+	struct v4l2_format		dst_fmt;
 
 	/*
 	 * The frame-buffer ping-pong.
@@ -134,8 +140,8 @@ struct mtk_vcodec_enc_ctx {
 	 * dma_alloc_coherent() gives 16-byte alignment as a side effect of its
 	 * page-aligned allocation, which is what the DIV16 address fields require.
 	 */
-	dma_addr_t				frame_addr[MTK_VCODEC_FRAME_BUFFER];
-	void					*frame_vaddr[MTK_VCODEC_FRAME_BUFFER];
+	dma_addr_t				frame_addr[MTK_VENC_FRAME_BUFFER];
+	void					*frame_vaddr[MTK_VENC_FRAME_BUFFER];
 
 	/* Luma plane size, rounded up to whole macroblocks; chroma follows it. */
 	unsigned long				frame_size;
@@ -182,54 +188,4 @@ struct mtk_vcodec_enc_ctx {
 	struct v4l2_ctrl			*ctrl_gop;
 };
 
-/*
- * Decoder picture geometry.
- *
- * The decoder's own ceiling is stated only indirectly.  The data sheet's ch.60
- * summary describes the sibling VDEC block as "full-HD 30fps"
- * (draft/ds/venc.txt:1423), which is the same 1920x1088 working point the encoder
- * half of this driver uses, so the same constants apply.  The vendor harness sizes
- * its picture planes as PIC_Y_SZ = 1920*1088 and DEC_PP_Y_SZ = 1920*1088
- * (verify/vdec_verify_mm_map.h:289, :308), which agrees.
- *
- * Decoding is macroblock based, exactly as encoding is, so the same 16-pixel
- * granularity applies to the picture height.
- */
-#define MTK_VDEC_MAX_WIDTH		1920
-#define MTK_VDEC_MAX_HEIGHT		1088
-
-/* One macroblock, the alignment every decoder plane address implies. */
-#define MTK_VDEC_MB_SIZE		16
-
-/*
- * Per-instance decoder state.
- *
- * Deliberately small, and that is the point rather than an omission.  Unlike the
- * encoder, this driver owns no decoder buffers at all: the reference, current,
- * post-process and 4 MiB bitstream FIFO planes all have to exist before a frame can
- * be decoded (see the VP8 note in mtk-vcodec-mt6589-reg.h), but they belong to the
- * datapath, and there is no datapath here to point them at.  Allocating several
- * picture-sized planes per open that nothing ever reads or writes would be tens of
- * megabytes of untouched memory presented as if it were working state.
- *
- * What IS per-instance is the negotiated format, because that is what the node
- * exposes to userspace and what makes the node usable for negotiation at all.
- */
-struct mtk_vcodec_dec_ctx {
-	/* First member, for the same file2dectx() reason as the encoder's fh. */
-	struct v4l2_fh			fh;
-
-	struct mtk_vcodec_dev			*dev;
-
-	/* The m2m context the framework allocated for this open. */
-	struct v4l2_m2m_ctx			*m2m;
-
-	/*
-	 * Compressed bitstream in (OUTPUT queue), raw NV12 out (CAPTURE queue) --
-	 * the mirror image of the encoder, which is why the format roles invert.
-	 */
-	struct v4l2_format			src_fmt;
-	struct v4l2_format			dst_fmt;
-};
-
-#endif /* _MTK_VCODEC_MT6589_H_ */
+#endif /* _MTK_VENC_MT6589_H_ */
