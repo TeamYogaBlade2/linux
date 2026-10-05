@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/gpu/mediatek,mt6589-g2d.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6589 2D Accelerator (G2D)
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+description: >
+  MT6589 contains a 2D graphics accelerator, G2D, that is a separate engine
+  from the display pipeline. It has its own MMIO block, its own interrupt, its
+  own clock gates, its own DMA master, and its own M4U (IOMMU) port, and it can
+  copy or fill rectangles between buffers.
+
+  It is driven as its own DRM render node rather than as part of the display
+  DRM device, because it is not a display-pipeline sub-block. Sharing the
+  display device's DRM GEM namespace would force both engines to use one DMA
+  address space, which only works while the M4U bypasses the port.
+
+  Buffers are shared with the display pipeline through dma-buf. The display
+  device exports a GEM handle with PRIME_HANDLE_TO_FD and this driver imports
+  it with PRIME_FD_TO_HANDLE, so each engine maps the buffer in its own DMA
+  address space.
+
+properties:
+  compatible:
+    enum:
+      - mediatek,mt6589-g2d
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    minItems: 2
+    maxItems: 2
+
+  clock-names:
+    items:
+      - engine
+      - smi
+
+  power-domains:
+    maxItems: 1
+
+  iommus:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+
+additionalProperties: false
+
+examples:
+  - |
+    g2d: g2d@14013000 {
+        compatible = "mediatek,mt6589-g2d";
+        reg = <0x14013000 0x1000>;
+        interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_LOW>;
+        clocks = <&dispsys CLK_DISP0_G2D_ENGINE>,
+                 <&dispsys CLK_DISP0_G2D_SMI>;
+        clock-names = "engine", "smi";
+        iommus = <&iommu MT6589_M4U_PORT_G2D>;
+        power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+        status = "okay";
+    };
