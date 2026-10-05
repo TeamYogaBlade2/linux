@@ -129,7 +129,31 @@
 #define AFE_IRQ_MCU_STATUS_IRQ2	BIT(1)
 #define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
 #define AFE_IRQ_MCU_CLR		0x03a8
-#define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | GENMASK(4, 0))
+/*
+ * The only two bits of AFE_IRQ_CLR this driver may touch: bit 0
+ * (IRQ1_MCU_CLR) clears the DL1 period status and bit 1 (IRQ2_MCU_CLR)
+ * clears the VUL period status (data sheet p.2498-2501).  IRQ1_MCU is the
+ * counter behind both the DL1 and VUL/DL2/AWB memory interfaces and IRQ2_MCU
+ * is the second counter (p.2497), and this driver owns exactly those two.
+ *
+ * The rest of the register belongs to interrupts nothing here drives, and
+ * must not be written:
+ *
+ *	bit 2 IRQ_MCU_DAI_SET_CLR  DAI reset 1 -> 0
+ *	bit 3 IRQ_MCU_DAI_RST_CLR  DAI reset 0 -> 1
+ *	bit 4 IRQ5_MCU_CLR         IRQ5_MCU, specialised for HDMI 8ch I2S
+ *	bit 5 IRQ6_MCU_CLR         IRQ6_MCU, specialised for SPDIF
+ *	bits 8-13 *_MCU_MISS_CLR   the per-IRQ "missed interrupt" flags
+ *
+ * There is deliberately no bit 6 here.  Bit 6 (IRQ_MCU_CLR) is documented
+ * as "Clears the MCU IRQ for AFE while all IRQ statuses are 0" (p.2500): a
+ * handshake that only takes effect once every status is already zero, so it
+ * cannot stand in for clearing bits 0/1 and means nothing as part of a mask.
+ * Parts that do have a status-less clear bit use a "no status" name for it;
+ * this one has no such bit, and the old NOSTATUS name here was an MT6797-era
+ * holdover that misdescribed what was being written.
+ */
+#define AFE_IRQ_MCU_CLR_OWNED	(BIT(0) | BIT(1))
 #define AFE_IRQ_MCU_CNT1	0x03ac	/* IRQ1 MCU counter */
 #define AFE_IRQ_MCU_CNT2	0x03b0	/* IRQ2 MCU counter */
 
@@ -623,7 +647,7 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	 * can see an xrun on the first buffer after a stop/start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_CLR_OWNED);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -879,7 +903,7 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	 * fire again on the next start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_CLR_OWNED);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -983,7 +1007,7 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 	status &= AFE_IRQ_MCU_STATUS_MASK;
 	if (!status) {
 		ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-				   AFE_IRQ_MCU_CLR_NOSTATUS);
+				   AFE_IRQ_MCU_CLR_OWNED);
 		if (ret)
 			dev_err_ratelimited(afe->dev,
 					    "failed to clear AFE IRQ: %d\n",
@@ -1078,7 +1102,7 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 				     "failed to mask AFE IRQs\n");
 
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_CLR_OWNED);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "failed to clear AFE IRQ status\n");
