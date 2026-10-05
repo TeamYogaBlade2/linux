@@ -1013,8 +1013,7 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	tuner->capability = V4L2_TUNER_CAP_LOW |
 			    V4L2_TUNER_CAP_STEREO |
 			    V4L2_TUNER_CAP_HWSEEK_BOUNDED |
-			    V4L2_TUNER_CAP_HWSEEK_WRAP |
-			    V4L2_TUNER_CAP_HWSEEK_PROG_LIM;
+			    V4L2_TUNER_CAP_HWSEEK_WRAP;
 	/*
 	 * With V4L2_TUNER_CAP_LOW, frequency units are 62.5 Hz.
 	 * MT6628 internally uses 10 kHz units.
@@ -1125,8 +1124,7 @@ static int mtk_fm_enum_freq_bands(struct file *file, void *priv,
 	band->capability = V4L2_TUNER_CAP_LOW |
 			   V4L2_TUNER_CAP_STEREO |
 			   V4L2_TUNER_CAP_HWSEEK_BOUNDED |
-			   V4L2_TUNER_CAP_HWSEEK_WRAP |
-			   V4L2_TUNER_CAP_HWSEEK_PROG_LIM;
+			   V4L2_TUNER_CAP_HWSEEK_WRAP;
 	band->rangelow = 76 * 16000;
 	band->rangehigh = 108 * 16000;
 	band->modulation = V4L2_BAND_MODULATION_FM;
