@@ -580,27 +580,44 @@ static void mtk_venc_complete_job(struct mtk_venc_dev *venc,
 			dst->flags |= V4L2_BUF_FLAG_ERROR;
 
 		/*
-		 * next_dst_buf() is a PEEK, not a remove, and that is exactly what
-		 * v4l2_m2m_buf_done_and_job_finish() needs to find: it removes the capture
-		 * buffer itself (drivers/media/v4l2-core/v4l2-mem2mem.c, the
-		 * v4l2_m2m_dst_buf_remove() under its !is_held test) and removes the source
-		 * buffer before WARN_ON(!src_buf || !dst_buf).
+		 * next_dst_buf() is a PEEK, not a remove, and that is what
+		 * v4l2_m2m_buf_done_and_job_finish() needs to find: device_run() left both
+		 * buffers on their ready lists, and it removes both itself -- the source
+		 * unconditionally, the destination under its !is_held test -- before
+		 * WARN_ON(!src_buf || !dst_buf).
 		 *
-		 * Removing the destination here first -- which an earlier revision did --
-		 * stole the only capture buffer from under that helper, so it saw NULL,
-		 * warned and returned without finishing the job.  The buffers were never
-		 * returned to userspace and TRANS_RUNNING was never cleared, which is worse
-		 * than a leak: the framework then refused to queue another job for this
-		 * context, so the encoder was dead for the rest of the stream.
+		 * The reason device_run() leaves them there is this function.  It is reached
+		 * asynchronously -- from the deferred interrupt work, from the watchdog, or
+		 * from job_abort() on STREAMOFF -- and it recovers the buffers by peeking the
+		 * ready lists again rather than by carrying pointers from the submit.  So the
+		 * source must still be on its ready list here, and removing it in device_run()
+		 * (which an earlier revision did) left this helper with a NULL source: it
+		 * warned, skipped _v4l2_m2m_job_finish() entirely, returned neither buffer,
+		 * and never cleared TRANS_RUNNING, which left job_abort() blocked forever in
+		 * v4l2_m2m_cancel_job()'s wait_event() and so hung STREAMOFF and close().
 		 */
 		v4l2_m2m_buf_done_and_job_finish(venc->m2m_dev, ctx->m2m,
 						 state);
+	} else {
+		/*
+		 * No capture buffer to return.  The buffers are already gone -- this
+		 * context's ready list was emptied under us, which STREAMOFF does before
+		 * vb2 reclaims them -- so there is nothing left to hand back, but the job
+		 * still has to be finished.  Skipping it would leave TRANS_RUNNING set, and
+		 * v4l2_m2m_cancel_job()'s wait_event() would never be woken: the same hang as
+		 * above, reached from the other direction.
+		 *
+		 * v4l2_m2m_job_finish() rather than buf_done_and_job_finish(), because there is
+		 * nothing for the latter to return and it would only WARN before doing the
+		 * same job_finish.
+		 */
+		v4l2_m2m_job_finish(venc->m2m_dev, ctx->m2m);
 	}
 
 	/*
 	 * Drop the reference the submit path took.  This happens on every path, including
-	 * the one where dst_buf_remove() found nothing, so a job can never release the
-	 * hardware with the usage count still held.
+	 * the one where the ready list was empty and no buffer could be found to return,
+	 * so a job can never release the hardware with the usage count still held.
 	 */
 	if (retire_pm)
 		pm_runtime_put_autosuspend(&venc->pdev->dev);
@@ -2248,11 +2265,18 @@ static int mtk_venc_job_ready(void *priv)
  *
  * The ordering is the correctness argument and it is not arbitrary:
  *
- *   1. Take the source buffer off the ready list and PEEK the destination, so the
- *      driver owns the source for the duration and userspace cannot requeue it
- *      underneath the encode.  The destination is deliberately NOT removed: it stays
- *      on the capture ready list until v4l2_m2m_buf_done_and_job_finish() takes it,
- *      and taking it here left that helper with nothing and killed the job.
+ *   1. PEEK both buffers, without removing either.  v4l2_m2m_next_src_buf() and
+ *      v4l2_m2m_next_dst_buf() only take the head of the ready list and leave it there;
+ *      the removal is left to the completion path, because
+ *      v4l2_m2m_buf_done_and_job_finish() removes both buffers itself and would find
+ *      nothing if this function had taken them off first.  That is not a detail: this
+ *      driver's completion runs later and from somewhere else (an ISR-deferred workqueue,
+ *      the watchdog, or job_abort()), and it recovers the buffers by peeking the ready
+ *      list again rather than by carrying pointers here -- so leaving them on the list is
+ *      what makes the buffers findable at all.  This is the convention the hantro
+ *      driver uses (hantro_drv.c: hantro_job_finish_no_pm()); the bdisp-style drivers
+ *      that remove in device_run() have no such deferral, because they complete the job
+ *      synchronously and can hold the pointers in their context.
  *   2. Take the runtime-PM reference, BEFORE any register programming.  This is the
  *      ordering that an earlier revision got wrong, and it matters because
  *      pm_runtime_resume_and_get() may run the resume callback, which enables clocks
@@ -2311,7 +2335,7 @@ static void mtk_venc_device_run(void *priv)
 	bool keyframe, pm_taken = false;
 	int ret;
 
-	src_buf = v4l2_m2m_src_buf_remove(ctx->m2m);
+	src_buf = v4l2_m2m_next_src_buf(ctx->m2m);
 	dst_buf = v4l2_m2m_next_dst_buf(ctx->m2m);
 	if (!src_buf || !dst_buf)
 		goto err_put;
@@ -2480,10 +2504,35 @@ err_job:
 	return;
 
 err_put:
-	if (src_buf)
-		v4l2_m2m_buf_done(src_buf, VB2_BUF_STATE_ERROR);
-	if (dst_buf)
-		v4l2_m2m_buf_done(dst_buf, VB2_BUF_STATE_ERROR);
+	/*
+	 * Reached only when the ready lists were empty, which job_ready() is supposed to
+	 * have prevented.  Whichever buffer does exist is still on its ready list and still
+	 * ACTIVE in vb2, because nothing below this point removed it, so the same helper
+	 * the completion path uses is the correct one: it removes what it finds and calls
+	 * v4l2_m2m_buf_done() on each, which is a no-op with a WARN_ON(vb->state !=
+	 * VB2_BUF_STATE_ACTIVE) for a buffer that is NOT active.
+	 *
+	 * The previous revision called v4l2_m2m_buf_done() directly on a buffer it had
+	 * only peeked, on the strength of the source having been removed -- but the
+	 * destination was never removed by anyone, so that one warned and returned without
+	 * doing anything, and the buffer was neither returned to userspace nor marked.
+	 *
+	 * This must be the helper rather than a bare v4l2_m2m_buf_done() pair, because the
+	 * job is still marked TRANS_RUNNING: device_run() returns to the framework without
+	 * a job_finish, so a STREAMOFF arriving now would block forever in
+	 * v4l2_m2m_cancel_job()'s wait_event().  buf_done_and_job_finish() reaches
+	 * _v4l2_m2m_job_finish() and clears it.
+	 *
+	 * Both lists empty is the same hang by another route -- there is nothing to return,
+	 * but the job still has to be finished -- so that case takes plain
+	 * v4l2_m2m_job_finish().  buf_done_and_job_finish() would only WARN before skipping
+	 * _v4l2_m2m_job_finish() and leaving TRANS_RUNNING set.
+	 */
+	if (src_buf || dst_buf)
+		v4l2_m2m_buf_done_and_job_finish(venc->m2m_dev, ctx->m2m,
+						 VB2_BUF_STATE_ERROR);
+	else
+		v4l2_m2m_job_finish(venc->m2m_dev, ctx->m2m);
 }
 
 /*
@@ -2596,6 +2645,18 @@ static int mtk_venc_queue_init(void *priv, struct vb2_queue *src_vq,
 {
 	struct mtk_venc_ctx *ctx = priv;
 	int ret;
+
+	/*
+	 * vb2_queue_init() requires each queue to carry a lock and does not
+	 * supply one, so without this every open() fails with -EINVAL before a
+	 * single format can be negotiated.  One mutex serves both queues, which
+	 * is what serialises a queue operation against the other side of a
+	 * frame.
+	 */
+	mutex_init(&ctx->vb_queue_lock);
+
+	src_vq->lock		= &ctx->vb_queue_lock;
+	dst_vq->lock		= &ctx->vb_queue_lock;
 
 	src_vq->type		= V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	src_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
@@ -2972,6 +3033,15 @@ static int mtk_venc_runtime_suspend(struct device *dev)
 	struct mtk_venc_dev *venc = dev_get_drvdata(dev);
 
 	mutex_lock(&venc->enc_lock);
+	/*
+	 * Power down only when nothing is open.  With a handle open the
+	 * encoder is in use and its clock has to stay on: the registers are
+	 * read and written throughout a frame, including from the interrupt
+	 * handler.  The test is inverted from what it was - `== 0` meant both
+	 * the suspend and the resume below skipped power_on() while any handle
+	 * was open, so the block ran with venc_clk off for the whole life of
+	 * the node.
+	 */
 	if (atomic_read(&venc->enc_users) == 0)
 		mtk_venc_power_off(venc);
 	mutex_unlock(&venc->enc_lock);
@@ -2986,14 +3056,23 @@ static int mtk_venc_runtime_resume(struct device *dev)
 	int ret;
 
 	mutex_lock(&venc->enc_lock);
-	if (atomic_read(&venc->enc_users) == 0) {
-		ret = mtk_venc_power_on(venc);
-		if (ret) {
-			mutex_unlock(&venc->enc_lock);
-			return ret;
-		}
-		mtk_venc_reset(venc);
+	/*
+	 * Always power on here.  This used to be conditional on there being no
+	 * open handle, which inverted the sense of the thing: with a handle
+	 * open the encoder was in use, and skipping power_on() left it running
+	 * with venc_clk off, so every register write in device_run and every
+	 * read in the interrupt handler touched a dark block.
+	 *
+	 * clk_prepare_enable() is reference counted, so doing this on every
+	 * resume is safe, and the matching power_off() in suspend only happens
+	 * when nothing is open - so the count cannot leak.
+	 */
+	ret = mtk_venc_power_on(venc);
+	if (ret) {
+		mutex_unlock(&venc->enc_lock);
+		return ret;
 	}
+	mtk_venc_reset(venc);
 	mutex_unlock(&venc->enc_lock);
 
 	venc->suspended = false;
