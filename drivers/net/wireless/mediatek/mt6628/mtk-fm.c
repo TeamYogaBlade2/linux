@@ -245,9 +245,13 @@ struct mtk_fm_rds {
 
 /*
  * One CQI record as the firmware reports it: struct mt6628_fm_cqi
- * (aquaris-5/.../mt6628/inc/mt6628_fm_lib.h:44-48), three 16-bit words.  A
- * read returns up to FM_CQI_BUF_SIZE (96) bytes of them, i.e. 8 records
- * (inc/fm_link.h:87).
+ * (aquaris-5/.../mt6628/inc/mt6628_fm_lib.h:44-48), three 16-bit words:
+ * ch, rssi and an unused reserve.  A read answers with FM_CQI_BUF_SIZE (96)
+ * bytes of them, which core/fm_link.c:354-355 copies whole and which
+ * mt6628_CQI_Get() then walks as 96 / 6 = 16 records
+ * (aquaris-5/.../mt6628/pub/mt6628_fm_lib.c:903-934).  The record has no
+ * valid flag and no index or sequence number; its ch field is what identifies
+ * the channel a reading belongs to.
  */
 #define FM_CQI_REC_SIZE			(3 * 2)
 #define FM_CQI_BUF_SIZE			96
@@ -290,7 +294,13 @@ struct mtk_fm {
 	bool cqi_valid;		/* whether @cqi holds a fresh reading */
 	u8 waiting_opcode;
 	int cmd_status;
-	u8 cmd_data[4];
+	/*
+	 * The longest reply this driver has to keep whole is a CQI read,
+	 * which answers with FM_CQI_BUF_SIZE (96) bytes.  Every other
+	 * command's answer is a couple of bytes, so this buffer is sized
+	 * for the worst case and mtk_fm_rx() truncates to it.
+	 */
+	u8 cmd_data[FM_CQI_BUF_SIZE];
 	size_t cmd_data_len;
 	u32 freq;			/* in 10 kHz units */
 	unsigned int users;
@@ -1707,6 +1717,7 @@ static u16 mtk_fm_seek_spacing_code(u32 spacing)
 static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 {
 	u8 buf[64] = {};
+	size_t recs;
 	unsigned int i;
 	u16 ctrl;
 	int pkt = 4;
@@ -1744,18 +1755,28 @@ static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 	/*
 	 * A short answer means the firmware had no CQI queued, which happens
 	 * on a channel with no signal.  That is not an error: it just leaves
-	 * the caller's figures untouched.
+	 * the caller's figures untouched.  mtk_fm_rx() has already truncated
+	 * the answer to sizeof(fm->cmd_data), which is exactly
+	 * FM_CQI_BUF_SIZE, so the record count below cannot run past the
+	 * buffer; walk whole records only, so a trailing partial record from
+	 * a short answer is ignored rather than read.
 	 */
-	if (fm->cmd_data_len < FM_CQI_REC_SIZE ||
-	    fm->cmd_data_len > sizeof(fm->cmd_data))
+	if (fm->cmd_data_len < FM_CQI_REC_SIZE)
 		return -ENODATA;
 
-	for (i = 0; i + FM_CQI_REC_SIZE <= fm->cmd_data_len;
-	     i += FM_CQI_REC_SIZE) {
-		u16 raw_ch = get_unaligned_le16(fm->cmd_data + i);
-		u16 raw_rssi = get_unaligned_le16(fm->cmd_data + i + 2);
-		s32 raw_rssi_s = (s16)raw_rssi;
+	recs = min_t(size_t, fm->cmd_data_len / FM_CQI_REC_SIZE,
+		     FM_CQI_MAX_RECS);
 
+	for (i = 0; i < recs; i++) {
+		const u8 *p = fm->cmd_data + i * FM_CQI_REC_SIZE;
+		u16 raw_ch = get_unaligned_le16(p);
+		s32 raw_rssi_s = (s16)get_unaligned_le16(p + 2);
+
+		/*
+		 * The record carries no index, so the channel field is what
+		 * identifies the reading; skip the others.  This is what lets a
+		 * reading sitting at any record index be found.
+		 */
 		if ((s32)(raw_ch * 10 / 2 + 6400) != (s32)freq)
 			continue;
 
@@ -2063,7 +2084,6 @@ static const struct v4l2_ctrl_ops mtk_fm_ctrl_ops = {
  * struct mtk_fm_rds.
  */
 static const struct v4l2_ctrl_config mtk_fm_rds_ps_cfg = {
-	.ops = &mtk_fm_ctrl_ops,
 	.id = V4L2_CID_RDS_RX_PS_NAME,
 	.type = V4L2_CTRL_TYPE_STRING,
 	.min = 0,
@@ -2072,7 +2092,6 @@ static const struct v4l2_ctrl_config mtk_fm_rds_ps_cfg = {
 };
 
 static const struct v4l2_ctrl_config mtk_fm_rds_rt_cfg = {
-	.ops = &mtk_fm_ctrl_ops,
 	.id = V4L2_CID_RDS_RX_RADIO_TEXT,
 	.type = V4L2_CTRL_TYPE_STRING,
 	.min = 0,
@@ -2348,20 +2367,36 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	/*
 	 * RDS data controls.  Their values come from the demodulator, never
 	 * from userspace, so they are created read-only.
+	 *
+	 * They also carry no &v4l2_ctrl_ops at all.  Publishing a decoded
+	 * value goes through v4l2_ctrl_s_ctrl(), which takes the control
+	 * handler's lock and then re-enters ops->s_ctrl()
+	 * (include/media/v4l2-ctrls.h:1133-1145, try_or_set_cluster() at
+	 * drivers/media/v4l2-core/v4l2-ctrls-core.c:2583).  Sharing
+	 * mtk_fm_ctrl_ops would send every one of these controls to the
+	 * default arm of mtk_fm_s_ctrl(), which returns -EINVAL for ids
+	 * that are not one of the four settings controls; try_or_set_cluster()
+	 * then bails out before new_to_cur(), so the value was never
+	 * committed and no V4L2_EVENT_CTRL_CH_VALUE was ever sent.  With
+	 * ops == NULL the same call_op() macro simply skips the operation
+	 * (drivers/media/v4l2-core/v4l2-ctrls-priv.h:19-20), which is the
+	 * correct behaviour for a control the driver itself writes: the
+	 * value is validated, stored and the event raised, with no hardware
+	 * write to make.
 	 */
 	fm->rds_ps = v4l2_ctrl_new_custom(&fm->ctrl_handler,
 					  &mtk_fm_rds_ps_cfg, fm);
 	fm->rds_rt = v4l2_ctrl_new_custom(&fm->ctrl_handler,
 					  &mtk_fm_rds_rt_cfg, fm);
-	fm->rds_pty = v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+	fm->rds_pty = v4l2_ctrl_new_std(&fm->ctrl_handler, NULL,
 					V4L2_CID_RDS_RX_PTY, 0, 31, 1, 0);
-	fm->rds_ta = v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+	fm->rds_ta = v4l2_ctrl_new_std(&fm->ctrl_handler, NULL,
 				       V4L2_CID_RDS_RX_TRAFFIC_ANNOUNCEMENT,
 				       0, 1, 1, 0);
-	fm->rds_tp = v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+	fm->rds_tp = v4l2_ctrl_new_std(&fm->ctrl_handler, NULL,
 				       V4L2_CID_RDS_RX_TRAFFIC_PROGRAM,
 				       0, 1, 1, 0);
-	fm->rds_ms = v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+	fm->rds_ms = v4l2_ctrl_new_std(&fm->ctrl_handler, NULL,
 				       V4L2_CID_RDS_RX_MUSIC_SPEECH,
 				       0, 1, 1, 0);
 	if (fm->ctrl_handler.error) {
