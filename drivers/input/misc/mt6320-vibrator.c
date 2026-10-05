@@ -32,6 +32,22 @@
  * exactly what dropping RG_VIBR_EN does, so the LED classdev's brightness 0
  * doubles as the mute.
  *
+ * Interface surface: this driver exposes the vibrator as an LED class device
+ * only.  It deliberately registers no input device and no FF_RUMBLE / EV_FF
+ * node, so there is no "haptic" event device and the usual on/off +
+ * "strong/medium/weak" ff effect set does not exist here.  Effects instead go
+ * through the classdev's pattern API (brightness plus delay-on/delay-off) and
+ * the driver drives the actuator itself from its hrtimer, which is also how
+ * the bounded one-shot pulse the BSP clamp implements is produced.
+ *
+ * That is a deliberate omission rather than a gap in the plumbing.  FF_RUMBLE
+ * would mean inventing a strength scale and an effect vocabulary on top of
+ * the 8-step VOSEL table and deciding the mapping to on/off pulses; no board
+ * in this tree has an haptics consumer expecting that, and the LED-haptics
+ * userspace path already drives the same hardware through the interface this
+ * driver does provide.  Adding an evdev node later is a self-contained
+ * change and needs no rework here.
+ *
  * Register / bit provenance, all from the vendor tree for this SoC.
  *
  * Addresses:
