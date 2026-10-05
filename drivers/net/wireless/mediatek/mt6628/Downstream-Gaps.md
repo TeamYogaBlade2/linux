@@ -255,7 +255,7 @@ u8 ucTid;
 ```
 
 Downstream feeds those into a bounded per-station/per-TID table
-(`RX_BA_ENTRY_T`, `include/nic/que_mgt.h:441`; `CFG_NUM_OF_RX_BA_AGREEMENTS`
+(`RX_BA_ENTRY_T`, `include/nic/que_mgt.h:440-456`; `CFG_NUM_OF_RX_BA_AGREEMENTS`
 = 8, `include/config.h:1154`) through `qmAddRxBaEntry()` (`nic/que_mgt.c:3468`)
 and `qmDelRxBaEntry()` (`:3550`).
 
@@ -299,24 +299,25 @@ and logs them at debug level, counting them in `wl->rx_addba_events` /
 downstream does (`nic/que_mgt.c:3363-3369`); the bound is `CFG_STA_REC_NUM` = 20
 (`include/nic/wlan_def.h:287`), which also rejects the two reserved indices
 `STA_REC_INDEX_BMCAST` / `STA_REC_INDEX_NOT_FOUND`, 0xff and 0xfe
-(`include/mgmt/cnm_mem.h:501-502`).
+(`include/nic/que_mgt.h:301-302`).
 
 If host-side reordering is ever wanted, a reorder *flag* has to be decoded out of
 the HIF RX header first. That is separate work, not an extension of this one.
 
 ### Station statistics: what the firmware actually returns
 
-`get_station()` reports signal, `tx_packets`, `tx_retries` and now `tx_failed`.
-That is the whole of what can honestly be published, and it is worth saying why,
-because each obvious candidate turned out to be unavailable:
+`get_station()` reports signal, `tx_packets`, `tx_retries`, `tx_failed` and
+`tx_bitrate`. That is the whole of what can honestly be published, and it is
+worth saying why, because each obvious candidate turned out to be unavailable:
 
 | Wanted | Available? | Why |
 |---|---|---|
 | `tx_failed` | **yes, now added** | `EVENT_ID_STA_STATISTICS.u4TxFailCount` |
+| `tx_bitrate` | **yes, now added** | `EVENT_ID_STA_STATISTICS.u2LinkSpeed`, see below |
 | `rx_bytes`, `tx_bytes` | no | the event carries no byte counter of any kind |
 | link quality | no | see below |
 | `connected_time` | no | not tracked host-side, and the event has no field for it |
-| tx/rx bitrate | no | no field to put it in, see below |
+| rx bitrate | no | the event is a transmit-side statistic; nothing reports the receive rate |
 
 **No byte counters exist.** `EVENT_ID_STA_STATISTICS_T`
 (`nic_cmd_event.h:1690-1724`) carries `u4TxCount`, `u4TxFailCount`,
@@ -359,11 +360,30 @@ score would mean inventing a packet-time threshold the vendor defines elsewhere.
 `ucPer` (base 128) and `u4PhyMode` are likewise reported verbatim to userspace by
 the vendor without ever being interpreted, so there is no scale to publish.
 
-**The bitrate has nowhere to go.** `u2LinkSpeed` is in units of 0.5 Mbit/s — the
-vendor multiplies by 5000 for bps (`nic_cmd_event.c:598`) — but this cfg80211
-vintage's `struct rate_info` (`include/net/cfg80211.h`) has no bitrate member, so
-there is no honest destination for it. Deriving a value from `u4PhyMode` would
-mean writing an MCS/BW-to-rate table the vendor does not ship.
+**The transmit bitrate is published, and this section previously said it could
+not be.** The earlier text claimed `struct rate_info` has no bitrate member.
+That was wrong: `include/net/cfg80211.h:2029-2032` has `u16 legacy`, documented
+at `:2016` as "bitrate in 100kbit/s for 802.11abg". The vendor fills precisely
+this field — `sinfo->filled |= STATION_INFO_TX_BITRATE` and
+`sinfo->txrate.legacy = u4Rate / 1000` (`gl_cfg80211.c:432-433`), where `u4Rate`
+arrived as `u2LinkSpeed * 5000` (`nic_cmd_event.c:598`). Since `u2LinkSpeed` is
+documented "unit is 0.5 Mbits" (`nic_cmd_event.h:1690`), the multiply and divide
+cancel and the net scale is 500 kbit/s per unit, which is what
+`mt6628_cfg80211_get_station()` now applies. A zero value is treated as "not
+reported" rather than published as a 0 Mbit/s link, and the result is clamped to
+`U16_MAX` because `legacy` is a `u16` — a guard against a corrupt firmware
+field, not a reachable limit.
+
+It is published as a plain 802.11abg rate with no MCS or bandwidth
+description, and that limitation is real rather than a shortcut: `u4PhyMode` is
+an index into `ENUM_PHY_MODE_T` (`wlan_lib.h:391-427`), but the vendor tree
+contains no code that turns that index into a rate — grepping every `.c` in
+`drv_wlan/mt6628/wlan` for `ENUM_PHY_` returns nothing outside the enum
+definition itself, and the vendor exports `u4PhyMode` verbatim as an opaque
+`U32` to userspace (`gl_cfg80211.c:1666`). So there is no MCS/BW description to
+publish, and inventing an MCS-to-rate table would be exactly the fiction the rest
+of this section refuses to write. `rxrate` is left unset because the event is a
+transmit-side statistic and nothing in it reports a receive rate.
 
 One caveat applies to all of it: `CMD_ID_GET_STA_STATISTICS` is only sent when
 the firmware advertises `COMPILE_FLAG0_GET_STA_LINK_STATUS`
@@ -384,9 +404,13 @@ the MT6628 downstream dispatch (`nic_rx.c:1636-2220`) and the MT6628-specific
   client list (`nic_rx.c:2070-2097` → `bssRemoveStaRecFromClientList()`,
   `bss.c:2037`), which requires a `rStaRecOfClientList` that the vendor itself
   documents as "For IBSS/AP Mode, all known STAs in current BSS"
-  (`adapter.h:774`). There is no client list to remove anything from, and the
-  event cannot fire: the only peer this firmware has is the AP it is associated
-  with, and from the AP's perspective that is not an aged client.
+  (`adapter.h:774`). There is no client list to remove anything from.
+  Note that the handler body *is* compiled in this configuration —
+  `CFG_ENABLE_WIFI_DIRECT` is 1 on Linux non-x86 (`config.h:1333-1340`) — so it
+  is not `#if`-dead; the argument is that the structure it operates on does not
+  exist here. In station mode the only peer this firmware has is the AP it is
+  associated with, and from the AP's perspective that is not an aged client, so
+  there is nothing for it to be reporting.
   It was also suggested this be delivered via `cfg80211_inform_bss_frame()`:
   that function takes a **beacon or probe response** (`net/wireless/scan.c:3253`),
   it has no station-timeout concept at all, and cfg80211 ages *BSS entries* purely
@@ -399,7 +423,7 @@ the MT6628 downstream dispatch (`nic_rx.c:1636-2220`) and the MT6628-specific
   be inventing it. Left unhandled.
 - **`EVENT_ID_UPDATE_NOA_PARAMS` (0x1C)** and **`EVENT_ID_AP_OBSS_STATUS` (0x1D)**
   are P2P/AP concepts. Both downstream handlers are behind `if
-  (prAdapter->fgIsP2PRegistered)` (`nic_rx.c:2052`, `:2105`), and the NOA body is
+  (prAdapter->fgIsP2PRegistered)` (`nic_rx.c:2053`, `:2105`), and the NOA body is
   only accepted when `ucNetTypeIndex == NETWORK_TYPE_P2P_INDEX`. This radio is
   STA-only; there is no P2P interface for them to describe. (Note that
   `CFG_ENABLE_WIFI_DIRECT` is 1 in this build — `config.h:1339` — but P2P is not
@@ -420,17 +444,85 @@ the MT6628 downstream dispatch (`nic_rx.c:1636-2220`) and the MT6628-specific
   is a transport concern, unaware of BSS presence — so mirroring the flag would
   add state nothing reads. Link loss is already handled directly, through
   `EVENT_ID_BSS_BEACON_TIMEOUT` and the driver-driven roam in §2.5.
-- **`EVENT_ID_SLEEPY_NOTIFY` (0x0e)** only sets `fgWiFiInSleepyState`, which the
-  vendor reads to gate its *own* power-management state machine
-  (`pwr_mgt.h:129`, `wlan_lib.c:5213`). This driver has no such state machine to
-  gate — its runtime idle path is driven by the WMT Driver Own/Firmware Own
-  handshake, and the firmware's sleepy flag has no equivalent host-side meaning.
-  Recording it would add state nothing reads.
+- **`EVENT_ID_SLEEPY_NOTIFY` (0x0e)** is the one entry in this list whose
+  "nothing to do here" reasoning does not hold up, and this entry previously
+  said it was inert. It is not. It looks inert because the handler
+  (`nic_rx.c:1931-1939`) only assigns
+  `prAdapter->fgWiFiInSleepyState = ucSleepyState`. But that flag is a gate on
+  the Driver Own / Firmware Own hand-off, and `CFG_ENABLE_FULL_PM` is 1 in this
+  configuration (`config.h:1188`), which is what activates the gate:
+
+  ```c
+  /* include/pwr_mgt.h:122-131 — RECLAIM_POWER_CONTROL_TO_PM */
+  GLUE_DEC_REF_CNT(_prAdapter->u4PwrCtrlBlockCnt);
+  if (_prAdapter->fgWiFiInSleepyState && (_prAdapter->u4PwrCtrlBlockCnt == 0)) {
+      nicpmSetFWOwn(prAdapter, _fgEnableGInt_in_IST);
+  }
+  ```
+
+  So with full power management compiled in, the vendor releases the chip to the
+  firmware *only* while the firmware has told it the radio is sleepy — and
+  `nicpmSetFWOwn()` (`nic/nic_pwr_mgt.c:265-301`) is the same
+  `MCR_WHLPCR` write / read-back / `FW_OWN_REQ_CLR` rollback sequence that
+  `mt6628_wlan_give_firmware_own()` already performs
+  (`mt6628-wlan-runtime.c:1093-1115`). The event body is a single byte,
+  `EVENT_SLEEPY_NOTIFY.ucSleepyState` (`nic_cmd_event.h:1176-1179`).
+
+  In other words the firmware's sleepy flag is precisely the "I have nothing to
+  do and you may have the radio" signal, and a driver that ignores it is
+  releasing ownership on its own timer rather than on the far end's readiness.
+  See the SLEEPY_NOTIFY subsection below for what this driver does about it and
+  why it is not yet a code change.
 - The remaining entries (debug, test and build-date paths: `SW_DBG_CTRL`,
   `DUMP_MEM`, `RX_ERR`, `UPDATE_RDD_STATUS`, `UPDATE_BWCS_STATUS`,
   `UPDATE_BCM_DEBUG`, `BUILD_DATE_CODE`, `STA_STATISTICS_UPDATE`) have either no
   downstream handler or handlers behind `CFG_SUPPORT_RDD_TEST_MODE`, which is `0`
   in this configuration (`config.h:1397`).
+
+#### SLEEPY_NOTIFY: identified as actionable, not yet wired up
+
+`EVENT_ID_SLEEPY_NOTIFY` is the entry above whose reasoning was found to be
+wrong, and it is recorded here separately because the fix is not a one-liner.
+
+**What the event is.** One byte, `ucSleepyState`
+(`nic_cmd_event.h:1176-1179`), set at `nic_rx.c:1931-1939`. It means the
+firmware has no work pending and the radio may be handed over.
+
+**What it should gate.** The Firmware Own hand-off. With
+`CFG_ENABLE_FULL_PM` = 1 (`config.h:1188`) the vendor releases the chip inside
+`RECLAIM_POWER_CONTROL_TO_PM` and only while this flag is set
+(`pwr_mgt.h:122-131`, quoted above). The corresponding driver-side action is
+`nicpmSetFWOwn()` (`nic/nic_pwr_mgt.c:265-301`), which is byte-for-byte the
+same sequence this driver already runs in
+`mt6628_wlan_give_firmware_own()`: assert `MCR_WHLPCR.FW_OWN_REQ_SET`, read the
+register back, and if the bit is still set — meaning the transition was refused —
+roll it back with `FW_OWN_REQ_CLR` and keep ownership (`nic_pwr_mgt.c:288-296`
+versus `mt6628-wlan-runtime.c:1093-1112`).
+
+**Why it is not yet implemented.** The gate needs one boolean of persistent
+state on `struct mt6628_wlan`: the flag is set by an event arriving at an
+arbitrary time, and read much later by the idle work that decides whether to
+release ownership. It cannot be a local, and there is no existing field on that
+struct that honestly means "the firmware says it is idle" — reusing, say, the
+`pm_idle` flag would conflate "the firmware *told* us it is idle" with "we have
+already *given* it the chip", which are different states and confusing them
+would make the ownership bookkeeping in §2.5 unreadable and wrong.
+
+`struct mt6628_wlan` is declared in `mtk-wlan.h`, which was outside the edit
+scope this pass worked under. Rather than smuggle the flag through an unrelated
+field, the finding is recorded here and the code left alone. **The change is one
+bool on the struct, one guard in `mt6628_wlan_give_firmware_own()`, and one
+handler in the event dispatcher; it is a small, well-specified piece of work
+once the header can be touched.**
+
+**What is lost until it is done.** `mt6628_wlan_give_firmware_own()` currently
+releases ownership on its own `MT6628_PM_IDLE_DELAY_MS` countdown and its
+outstanding-traffic checks, without asking the firmware. That is *more*
+permissive than the vendor on the timing (it may release while the firmware
+still has work) and does not exploit the one signal the firmware is volunteering.
+It is not unsafe in the way a missing ack would be: the read-back-and-rollback
+above is what actually makes a release safe, and this driver already does that.
+So this is a correctness-fidelity gap against the reference, not a live bug.
 
 So the driver now acts on the events that have a well-defined kernel-side meaning
 in station mode — beacon timeout, deauth, Block Ack notification, scan done — and
@@ -561,7 +653,7 @@ program transmit power to the firmware at all.
 | STA scan / connect / data path | complete |
 | WEP, WPA-PSK, WPA2-PSK | complete |
 | HT20/HT40, 2.4 + 5 GHz | complete |
-| Station statistics | complete (signal, TX packets, retries) |
+| Station statistics | complete (signal, TX packets, retries, failures, TX bitrate) |
 | Remain-on-channel | complete |
 | Ownership power management | complete |
 | System suspend / resume | complete (idle hand-off driven from `.drv.pm`) |
@@ -964,14 +1056,16 @@ worth being precise about what it does and does not buy:
   regenerating the table from the polynomial and comparing all 256 entries;
   `0xa001` reproduces it exactly and `0x8408` does not.
 - **The trailer covers the payload only**, matching the downstream BTIF/UART
-  write (`stp_core.c:948-951`: `crc = osal_crc16(buffer, length)` then
+  write (`stp_core.c:950-952`: `crc = osal_crc16(buffer, length)` then
   low byte, then high byte).
 - **Downstream does not do this over SDIO.** Its SDIO branch writes
-  `temp[0] = 0x00; temp[1] = 0x00;` (`stp_core.c:869-871`) and the SDIO RX
-  parser discards the trailing CRC bytes without reading them
-  (`stp_core.c:1873-1882`). Checking `stp_core.c` for `stp_check_crc()`
-  inside the SDIO parser branch returns zero hits — the verification at
-  `stp_core.c:2362-2380` is reached only from the BTIF/UART parser.
+  `temp[0] = 0x00; temp[1] = 0x00;` (`stp_core.c:898-899`) and the SDIO RX
+  parser steps straight over the two CRC bytes without reading them
+  (`MTKSTP_CRC1` → `MTKSTP_CRC2` → discard, `stp_core.c:1873-1877`, with the
+  alignment padding skipped at `:1877-1897`). Checking `stp_core.c` for
+  `stp_check_crc()`
+  inside the SDIO parser branch returns zero hits — the single call site
+  (`:2352`) is reached only from the BTIF/UART parser.
 - **So: does the chip validate the CRC over SDIO?** There is no evidence
   either way. The vendor's SDIO driver, which is the shipping configuration
   for this exact transport, neither computes nor checks it, so the MCU cannot
@@ -1015,28 +1109,55 @@ ACK frames (`stp_send_ack()`, `stp_core.c:809-857`), NAKs a sequence mismatch an
 re-synchronises through `stp_rest_ctx_state()` (`stp_core.c:318-347`).
 
 That machinery was ported as far as the evidence allowed, and the evidence says
-**the MT6628 does not use it over SDIO at all.** The sequence of checks:
+**the MT6628 does not use it over SDIO at all.** This conclusion was reached
+twice, independently, by grepping the vendor trees for the *assignments* rather
+than the reads: `parser.seq\s*=` and `parser.ack\s*=` across every STP
+implementation present. Both passes agree, and the evidence is:
 
 1. **Downstream's SDIO transmit branch ignores the sequence state.** It writes
-   `mtkstp_header[0] = 0x80;` unconditionally and never reads `sequence.txseq`
-   or `sequence.txack` (`stp_core.c:869-871`). Only the BTIF/UART branch builds
-   the `0x80 + (txseq << 3) + txack` form (`stp_core.c:901`).
+   `mtkstp_header[0] = 0x80;` unconditionally (`stp_core.c:886`) and never reads
+   `sequence.txseq` or `sequence.txack` — the branch runs `stp_core.c:881-920`.
+   Only the BTIF/UART branch builds the `0x80 + (txseq << 3) + txack` form
+   (`stp_core.c:930`).
 2. **Downstream's SDIO receive branch never parses sequence fields.**
    `parser.seq` and `parser.ack` are assigned at exactly one place in the whole
    file — `stp_core.c:2096-2097` — and that line sits inside the
-   `btif_fullset_mode` parser branch, which begins at `stp_core.c:2043`. The SDIO
-   branch runs from `stp_core.c:1684` to `stp_core.c:2042` and never assigns
-   either field.
+   `btif_fullset_mode` parser branch, which begins at `stp_core.c:2043`. The
+   debug string on the preceding line is literally `"rx (uart):"`
+   (`stp_core.c:2091`). The SDIO branch runs from `stp_core.c:1684` to
+   `stp_core.c:2042` and never assigns either field.
 3. **Consequently the whole acknowledgment machinery is unreachable in SDIO
    mode.** `stp_process_packet()`, `stp_process_rxack()` and `stp_send_ack()`
    are called only from the BTIF/UART parser and from the BTIF/UART send path.
    In SDIO mode nothing ever calls them, so `expected_rxseq`, `winspace`,
    `txseq` and `rxack` are dead state.
-4. **This is not an accident of one file.** The second, independent vendor STP
+4. **And the mode bits prove the branch is not merely unused but unreachable.**
+   The mode word is a bitmask — `MTKSTP_UART_FULL_MODE` bit 0, `UART_MAND` bit
+   1, `BTIF_FULL` bit 2, `BTIF_MAND` bit 3, `SDIO_MODE` bit 4
+   (`conn_soc/common/core/include/stp_core.h:53-58`) — and each parser branch
+   is guarded by one bit. On an SDIO HIF the vendor sets **only** bit 4:
+   `combo/common/core/wmt_core.c:738-739` assigns `MTKSTP_SDIO_MODE` and nothing
+   else. (`conn_soc/common/core/wmt_core.c:676-678` does not even set
+   `MTKSTP_SDIO_MODE` in its generic `wmt_core_stp_init()`; it sets only
+   `MTKSTP_BTIF_MAND_MODE`, and only for a BTIF HIF.) Either way no `*_FULL_MODE`
+   bit is set for SDIO, so `mtk_wcn_stp_is_btif_fullset_mode()`
+   (`stp_core.c:3214-3222`, the guard on the branch holding the only
+   `parser.seq` / `parser.ack` assignments) is false, and so is
+   `mtk_wcn_stp_is_uart_fullset_mode()`. The sequence/ACK code is not executed at
+   all on this transport; it is dead in the shipping driver.
+5. **This is not an accident of one file.** The second, independent vendor STP
    implementation (`combo/common/core/stp_core.c`) has the same split: its SDIO
-   parser branch contains no reference to `parser.seq`, `parser.ack`,
-   `stp_process_packet()`, `stp_send_ack()` or `stp_process_rxack()`, while the
-   UART branch does. Two trees, same conclusion.
+   parser branch opens at `:1622` and closes before the UART branch at `:2123`,
+   and `parser.seq` / `parser.ack` are assigned only at `:2176-2177`, inside the
+   latter — directly under that file's `"rx (uart):"` string at `:2171`. Its SDIO
+   transmit branch likewise writes `mtkstp_header[0] = 0x80;` (`:857`). Same
+   conclusion.
+6. **And a third confirms it.** `combo/common_mt6630/core/stp_core.c` — a
+   separate copy for an earlier chip — shows the identical pattern: SDIO transmit
+   writes `mtkstp_header[0] = 0x80;` (`:726` and again at `:2304`), and the only
+   `parser.seq` / `parser.ack` assignments are at `:1701-1702`, in the
+   full-set serial branch, not the SDIO one. Three independent copies of this
+   transport in one vendor tree, three identical answers.
 
 The SDIO `MTKSTP_NAK` state (`stp_core.c:1762-1785`) parses only the type and
 length nibbles — it reads no sequence bit either, and it is reached from
@@ -1258,7 +1379,7 @@ obtained and used, just not re-exposed to userspace.
 | STP seq/ack windowing | absent — the chip does not use it on SDIO; see the section for the evidence |
 | STP PSM / in-band reset / paged dump | not implemented |
 | STP optional DT properties | two set from the vendor antenna config, three deliberately absent |
-| Station statistics | signal, tx_packets, tx_retries, tx_failed — nothing more is available |
+| Station statistics | signal, tx_packets, tx_retries, tx_failed, tx_bitrate — nothing more is available |
 | GNSS raw relay | complete, and matches downstream (which is also just a pipe) |
 | GNSS suspend | releases the GPS function; resume does not re-enable it, as downstream |
 | GNSS `gps-sync` pinctrl state | dead code — the pin is inside the combo chip, not an SoC pinctrl |
