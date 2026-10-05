@@ -1283,6 +1283,26 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	if (ret)
 		goto out_sysfs_remove;
 
+	/*
+	 * An M4U with no usable LARB has nothing to aggregate, and
+	 * component_master_add_with_match() dereferences the match it is
+	 * handed without checking it - component_match_realloc() reads
+	 * match->alloc on entry - so passing the NULL an empty match list
+	 * leaves behind is a NULL dereference, not a tolerated case.
+	 *
+	 * That is reachable: the loop above skips a LARB that has no platform
+	 * device or no driver bound, and on this board every listed LARB sits
+	 * behind a power domain that will not switch on, so all of them can be
+	 * skipped.  Refuse the probe instead, which is also the truth - there is
+	 * nothing here that could translate an address.
+	 */
+	if (!match) {
+		dev_err(dev,
+			"no usable LARB: every listed one is unavailable, nothing to aggregate\n");
+		ret = -ENODEV;
+		goto out_dev_unreg;
+	}
+
 	ret = component_master_add_with_match(dev, &mtk_iommu_v1_com_ops, match);
 	if (ret)
 		goto out_dev_unreg;
