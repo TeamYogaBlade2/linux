@@ -1101,11 +1101,23 @@ static int mtk_scam_probe(struct platform_device *pdev)
 	 * SCAM_CFG_START would warn on every healthy device and would stop
 	 * being able to detect a wrong aperture at all.  This check asks only
 	 * "is this the SCAM block I think it is".
+	 *
+	 * Do not, however, read a mismatch as evidence that "reg" is wrong.
+	 * A hardware boot on the Lenovo Blade reads 0x00000000 here, and the
+	 * data sheet's own register table puts SCAM1_CFG at 0x15008200 -- the
+	 * address this node uses -- so the aperture is the documented one and
+	 * the read is a missing reset value, not a wrong one.  SCAM sits behind
+	 * the imgsys CAM clock gate, and a block whose gate is off does not
+	 * hold the reset value it would otherwise have; this node requests no
+	 * clock, so nothing turns that gate on before this read.
+	 *
+	 * So report what was seen and what it rules out, rather than pointing
+	 * at the one cause this check cannot actually distinguish.
 	 */
 	ret = scam_read(scam, SCAM_CFG);
 	if (ret != SCAM_CFG_RESET)
 		dev_warn(dev,
-			 "SCAM_CFG reads 0x%08x, expected the documented reset 0x%08x; check the reg property\n",
+			 "SCAM_CFG reads 0x%08x, not the documented reset 0x%08x; reg is the documented 0x15008200, so this reads as a clock-gated block rather than a wrong aperture\n",
 			 ret, SCAM_CFG_RESET);
 
 	/*
