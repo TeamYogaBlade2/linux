@@ -76,22 +76,43 @@
 		 * must be brought up by the SCM power sequence.  One phandle, so
 		 * genpd_dev_pm_attach() attaches it properly - see the note above.
 		 *
-		 * STATUS: this node is DISABLED, deliberately, and not merely out of
-		 * caution.  drivers/pmdomain/mediatek/mt6589-power-domains.md records
-		 * that the VEN power-on is undiagnosed: the domain waits on all four
-		 * SRAM acknowledge bits (VEN_SRAM_ACK, 0xf << 12, in the stock
-		 * aquaris-5 driver) and the data sheet names SRAM_PDN_ACK only as one
-		 * 15:12 field, so the width cannot be confirmed from documentation.
-		 * larb0, the VEN-side LARB, fails the same way and is disabled for the
-		 * same reason.
+		 * STATUS: this node is DISABLED, and the reasoning is the whole
+		 * point of splitting the node, so it is worth stating exactly.
 		 *
-		 * Enabling it anyway would be better than it looks: because this node
-		 * attaches its domain for real, a failed power-on becomes a visible
-		 * -EPROBE_DEFER naming this device, rather than the silent
-		 * probe-success-against-a-dark-domain that the merged node had.  It is
-		 * still left off because a deferred probe buys no functionality, and
-		 * the register window must not be mapped against a domain whose
-		 * isolation state is unknown.
+		 * Enabled is now genuinely an option that can be reasoned about
+		 * rather than a shrug, because this node attaches its domain for
+		 * real: a failed power-on becomes a visible -EPROBE_DEFER naming
+		 * this device, instead of the silent probe-success-against-a-dark-
+		 * domain the merged node had.  So the choice is between a deferred
+		 * probe that names the culprit, and no node at all.
+		 *
+		 * It is left off, and the evidence is the asymmetry between the two
+		 * domains in drivers/pmdomain/mediatek/mt6589-pm-domains.h:
+		 *
+		 *   VDE  .sram_pdn_ack_bits = BIT(12)          <- diagnosed, fixed
+		 *   VEN  .sram_pdn_ack_bits = GENMASK(15, 12)  <- undiagnosed
+		 *
+		 * VDE's power-on WAS understood and repaired: the stock driver waits
+		 * on VDE_SRAM_ACK = (0x1 << 12) while waiting on VEN_SRAM_ACK =
+		 * (0xf << 12), so polling all four VDE acknowledge bits spun until
+		 * MTK_POLL_TIMEOUT on three bits the hardware never asserts, and
+		 * genpd_power_on() then failed.  Since scpsys_sram_enable() polls
+		 * (ctl & sram_pdn_ack_bits) == 0, a narrower mask can only make the
+		 * wait easier to satisfy, never harder - so that fix is safe in the
+		 * direction that matters.
+		 *
+		 * VEN has no such fix.  Its four-bit poll is still in place, and the
+		 * data sheet names SRAM_PDN_ACK only as one 15:12 field, so the width
+		 * cannot be confirmed from documentation.  larb0, the VEN-side LARB,
+		 * fails the same way and is disabled in mt6589.dtsi for the same
+		 * reason.
+		 *
+		 * So the encoder's block is blocked on an undiagnosed failure with no
+		 * spare hardware to characterise it, while its decoder sibling is not
+		 * (see below).  Enabling it would produce a deferred probe, which
+		 * names the problem but delivers no functionality, and would map a
+		 * register window against a domain whose isolation state is unknown.
+		 * The honest state is off, with the reason recorded here.
 		 */
 		power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
 
@@ -137,21 +158,28 @@
 		 * VDEC lives in the VDE domain.  One phandle, so this one attaches for
 		 * real too.
 		 *
-		 * STATUS: enabled, unlike its encoder sibling.  The evidence is in
-		 * drivers/pmdomain/mediatek/mt6589-power-domains.md: VDE has ALREADY
-		 * been narrowed to BIT(12) from the stock VDE_SRAM_ACK width, precisely
-		 * because a narrower poll can only make scpsys_sram_enable()'s wait
-		 * easier to satisfy, never harder.  That removes the dependency on
-		 * three acknowledge bits that may never clear - the exact failure mode
-		 * VEN still has.  So VDE's power-on has a documented mitigation and
-		 * VEN's does not, and that asymmetry is why one is enabled and the
-		 * other is not.
+		 * STATUS: enabled, unlike its encoder sibling, and the asymmetry is
+		 * evidence-based rather than optimistic.  See the VEN comment above for
+		 * the full comparison; the short version is in
+		 * drivers/pmdomain/mediatek/mt6589-pm-domains.h:
 		 *
-		 * Note what this does and does not buy.  The node probes, attaches its
-		 * domain, registers and opens - and then refuses every buffer with
-		 * -ENODEV, because the MT6589 decode sequence lives in closed userspace
-		 * that programs the block over MFV_SET_CMD_CMD (see the Kconfig text
-		 * and mtk-vdec-mt6589.c).  A working resource layer is not a datapath.
+		 *   VDE  .sram_pdn_ack_bits = BIT(12)          <- diagnosed, fixed
+		 *   VEN  .sram_pdn_ack_bits = GENMASK(15, 12)  <- undiagnosed
+		 *
+		 * VDE's power-on failure was understood (polling three acknowledge
+		 * bits the hardware never asserts, until timeout) and fixed, and the
+		 * fix is safe in the only direction that matters because
+		 * scpsys_sram_enable() polls for the bits to CLEAR.  VEN has no
+		 * equivalent fix.  So this is the half whose domain can be expected to
+		 * come up, and this is the half that is enabled.
+		 *
+		 * Note what enabling it does and does not buy.  The node now probes,
+		 * attaches its domain, registers and opens - and then refuses every
+		 * buffer with -ENODEV, because the MT6589 decode sequence lives in
+		 * closed userspace that programs the block over MFV_SET_CMD_CMD (see
+		 * the Kconfig text and mtk-vdec-mt6589.c).  A correctly attached
+		 * resource layer is not a datapath, and this node does not pretend to
+		 * be one.
 		 */
 		power-domains = <&spm MT6589_POWER_DOMAIN_VDE>;
 
