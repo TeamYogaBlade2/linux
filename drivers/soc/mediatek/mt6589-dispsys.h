@@ -34,7 +34,51 @@
  *  DBI    0x1400c000 171 DBI_ENGINE/SMI/OUT   -           panel is DSI video mode; no DBI node
  *  DPI0   0x1400e000 173 CLK_DISP1_DPI0        -           no parallel-RGB output on this board
  *  DPI1   0x1400f000 174 CLK_DISP1_DPI1        -           no parallel-RGB output on this board
- *  CMDQ   0x14012000 176 CMDQ_ENGINE/SMI      -           no command-queue driver exists upstream
+ *  CMDQ   0x14012000 176 CMDQ_ENGINE/SMI      -           ISA-incompatible, see below
+ *
+ * CMDQ deserves its own note, because "there is no driver" is the wrong reason
+ * and it is the kind of wrong that makes the work look cheap.
+ *
+ * The mainline GCE mailbox driver DOES exist upstream and is in this tree:
+ * drivers/mailbox/mtk-cmdq-mailbox.c, byte-identical to upstream.  MT6589 is
+ * simply not in its cmdq_of_ids[] table.  So this is not a missing driver; it
+ * is a missing SoC entry, which sounds like a few lines of data and is not.
+ *
+ * MT6589's DISP_CMDQ is ISA- and submission-model-incompatible with it:
+ *
+ *  - MT6589 GCE has eight opcodes (data sheet table 39-1, p. 1466): 0x1 Read,
+ *    0x2 Move, 0x4 Write, 0x8 Poll, 0x10 Jump, 0x20 WFE, 0x40 EOC, 0x80 Lock.
+ *    The driver defines CMDQ_CODE_READ_S = 0x80 - which on this SoC is a
+ *    thread-group Lock, so every PA-mode read would execute a lock - plus
+ *    WRITE_S 0x90, WRITE_S_MASK 0x91 and LOGIC 0xa0, which do not exist here
+ *    at all.  mtk-cmdq-helper.c emits them, so the no-client-reg PA-mode
+ *    fallback every display block depends on cannot be expressed.
+ *  - There is no mailbox, no task slots and no priority: submission is
+ *    per-thread CMDQ_THRn_PC / END_ADDR / GROUP / EN, and scheduling is
+ *    round-robin by time slot.  0x48, where the driver writes GCE_GCTL, is
+ *    not a register on this part.  The CMDQ resets are DISP_SW_RST_B bits 12
+ *    and 13, which the in-tree MT6589_DISP_CMDQ_DISPCK_RST / SMICK_RST
+ *    already name correctly; MT6589_M4U_PORT_CMDQ is a LARB2 port id and is
+ *    not a reset at all.
+ *  - Worst of all, cmdq_init() at mtk-cmdq-mailbox.c:221-222 loops
+ *    `for (i = 0; i <= CMDQ_MAX_EVENT; i++)` with CMDQ_MAX_EVENT = 0x3ff and
+ *    writes each value to offset 0x68, which the data sheet names Command
+ *    Queue Thread Group 3 Mutex, whose OWNER and LOCK fields are read-only.
+ *    Merely probing would scribble 1024 values over a read-only register.  (The
+ *    highest real event on this SoC is 34.)
+ *
+ * So do NOT add a mediatek,mt6589-gce line to cmdq_of_ids[]: a wrong entry is
+ * worse than none, because probe alone is destructive here.  Doing it properly
+ * is roughly 600-700 lines of new logic - an MT6589-specific mailbox provider
+ * plus a cmdq_pkt_* shim restricted to the five valid opcodes - not the 130
+ * lines of table data it first appears to be.
+ *
+ * None of that is urgent: the display works today.  Every display block falls
+ * back to direct register writes through mtk_ddp_write(),
+ * mtk_ddp_write_relaxed() and mtk_ddp_write_mask() in mtk_ddp_comp.c, whose
+ * runtime discriminator is whether a cmdq_pkt was supplied rather than any
+ * Kconfig.  CMDQ is an ordering and performance optimisation, never a
+ * correctness fix, so leaving it off costs throughput and nothing else.
  *
  * Two of these deserve the detail, because the routing table does carry entries
  * for them and that is misleading on its own:
