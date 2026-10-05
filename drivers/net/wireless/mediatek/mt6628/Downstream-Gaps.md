@@ -623,9 +623,10 @@ applies to the WLAN section applies with equal force here.
 
 Tune, seek (bounded and wrapping, with 50/100/200 kHz spacing selection), stereo
 and mono selection, the frequency range and unit handling, mute
-(`V4L2_CID_AUDIO_MUTE`), and a reported signal level. Power-up follows the
-downstream sequence including the ROM-version probe, and the patch and
-coefficient download policy matches
+(`V4L2_CID_AUDIO_MUTE`), volume (`V4L2_CID_AUDIO_VOLUME`), runtime de-emphasis
+(`V4L2_CID_TUNE_DEEMPHASIS`), RDS decoding, and a reported signal level. Power-up
+follows the downstream sequence including the ROM-version probe, and the patch
+and coefficient download policy matches
 `mt6628/pub/mt6628_fm_lib.c:294-320`.
 
 Two things worth stating explicitly because they were defects:
@@ -644,44 +645,108 @@ Two things worth stating explicitly because they were defects:
 
 ## FM radio — gaps
 
-### No RDS, despite hardware support
+### RDS is decoded, but not every group type and not as raw blocks
 
-This is the largest functional gap. The hardware has RDS — ten registers in
-`inc/mt6628_fm_reg.h:20-27` and `:34-35`, plus the `RDS_MASK` bit in
-FM_MAIN_CTRL at `:64` — and downstream implements it in
+The hardware's RDS is now decoded and exposed as the standard V4L2 controls.
+`V4L2_TUNER_CAP_RDS` is advertised and `V4L2_CID_RDS_RECEPTION` enables the
+receiver; the decoded fields are published as `V4L2_CID_RDS_RX_PS_NAME`,
+`V4L2_CID_RDS_RX_RADIO_TEXT`, `V4L2_CID_RDS_RX_PTY`,
+`V4L2_CID_RDS_RX_TRAFFIC_ANNOUNCEMENT`, `V4L2_CID_RDS_RX_TRAFFIC_PROGRAM` and
+`V4L2_CID_RDS_RX_MUSIC_SPEECH`.
 
-- `mediatek/kernel/drivers/fmradio/mt6628/pub/mt6628_fm_rds.c` (317 lines)
-- `mediatek/kernel/drivers/fmradio/core/fm_rds_parser.c` (1920 lines)
+How the data arrives is worth recording, because it is not how the register
+list suggests. RDS groups are pushed to the host unsolicited as their own
+`RDS_RX_DATA_OPCODE` (0x0d) event packet
+(`core/inc/fm_link.h:35`, handled at `core/fm_link.c:389-409`), carrying up to
+`MAX_RDS_RX_GROUP_CNT` 12-byte records (`inc/fm_rds.h:15-32`). The register-level
+reader the vendor provides, `mt6628_RDS_GetData()` at
+`mt6628/pub/mt6628_fm_rds.c:157-219`, is `#if 0`'d out — it is dead code in the
+vendor tree as well. There is no "new group available" register to poll in this
+path, so the driver decodes in the STP receive workqueue that already exists,
+re-checking the power state on every packet because one can still be in flight
+when the radio is closed. No second thread was added.
 
-with `FM_IOCTL_RDS_ONOFF`, `FM_IOCTL_RDS_SUPPORT` and `FM_IOCTL_RDS_TX`
-(`core/inc/fm_ioctl.h:31-32`, `:36`). This tree implements none of it:
-`V4L2_TUNER_CAP_RDS` is not advertised and there is no `VIDIOC_G_RDS`/
-`VIDIOC_S_RDS` support. Porting it means the parser above plus a control and
-event design on top of it, which is far beyond what can be done safely without
-hardware — the group's block layout and error handling cannot be validated by
-inspection. Deliberately not attempted.
+Decoding follows the vendor parser rather than the RDS standard, because this
+demodulator does its own error correction and reports only which blocks
+survived. A block is usable only when the matching `FM_RDS_GDBK_IND_x` bit is
+set (`inc/fm_rds.h:5-8`, checked in `core/fm_rds_parser.c:124-133`), and PS/RT
+are reported only once a segment has been received twice identically, the rule
+in `rds_g0_ps_cmp()` at `core/fm_rds_parser.c:532-592` and `rds_g2_rt_cmp()` at
+`:857`. Every field bit position is cited at the point of use in `mtk-fm.c`.
+The segment logic was replayed on the host to check the two-repeat rule, the
+segment ordering and the 0x0d terminator.
 
-### No scan / CQI
+Two things are deliberately **not** there:
 
-Downstream has `FM_IOCTL_SCAN`, `FM_IOCTL_STOP_SCAN`, `FM_IOCTL_SCAN_NEW` and
-`FM_IOCTL_SCAN_GETRSSI` (`core/inc/fm_ioctl.h:17-18`, `:63`, `:82`) built on the
-full-CQI command (`mt6628_fm_lib.c:1382-1450`). This driver has no scan ioctl
-and does not issue the CQI read; `mtk_fm_tune()` uses only the single-channel
-tune command. A userspace can still find channels by stepping frequencies and
-reading `tuner->signal`, but there is no single-call channel search.
+- **Raw block access.** `V4L2_TUNER_CAP_RDS_BLOCK_IO` and the
+  `VIDIOC_G_RDS`/`VIDIOC_S_RDS` ioctls are not offered. This tree's
+  `include/uapi/linux/videodev2.h` has no such ioctls and no
+  `V4L2_EVENT_SUB_CTRL`, so the older draft API that would carry `RDS_RADIO_TEXT`
+  and `RDS_DATA_EE_GROUP` on an `EVENT_V4L2_CTRL` cannot be expressed without
+  editing the UAPI headers, which are outside this driver's scope. The control
+  route above is what this tree's UAPI does support, and it is the route the
+  in-tree vivid radio model uses (`drivers/media/test-drivers/vivid/
+  vivid-radio-common.c:93-94`).
+- **Group types 14, 15 and paging.** The vendor's TMC, EON and paging decoders
+  are not ported; only groups 0 (PS/TA/AF) and 2 (radio text) are interpreted.
+  The alternative-frequency list is parsed but not published, because this
+  tree's UAPI has no control for it.
 
-### No volume, antenna switch or de-emphasis controls
+None of this has been run against a chip.
 
-- Volume: `FM_IOCTL_SETVOL`/`FM_IOCTL_GETVOL` (`core/inc/fm_ioctl.h:13-14`) and a
-  16-entry volume table at `mt6628/pub/mt6628_fm_lib.c:1095-1099`. Not ported.
-- Antenna switch: `FM_IOCTL_ANA_SWITCH` (`core/inc/fm_ioctl.h:51`), with the
-  short/long antenna selection visible in
-  `mt6628_GetAntennaType()` at `mt6628/pub/mt6628_fm_lib.c:199-210`. Not ported.
-- De-emphasis: `mtk_fm_s_tuner()` (`mtk-fm.c`) hardcodes de-emphasis 0 in the
-  power-up sequence (`mtk-fm.c:472`, applied at `:489`). That matches the
-  downstream default `FM_RX_DEEMPHASIS_MT6628 = 0` (50 us, China Mainland) at
-  `mt6628/inc/mt6628_fm_cust_cfg.h:64`, so the default is right — but it is a
-  constant, not a user control, and cannot be changed at runtime.
+### Seek quality is read; a full band scan is not exposed
+
+The hardware CQI read is now issued after each seek
+(`mt6628_cqi_get()` at `mt6628/pub/mt6628_fm_cmd.c:859-876` for the request,
+`mt6628_CQI_Get()` at `mt6628/pub/mt6628_fm_lib.c:897-942` for the answer), and
+its result is what `VIDIOC_G_TUNER` reports as `tuner->signal`. The record
+layout and both per-field conversions follow the vendor: frequency
+`ch * 10 / 2 + 6400`, RSSI sign-extended from 16 bits then `* 6 / 16`
+(`mt6628_fm_lib.c:925-932`). That arithmetic was checked against the vendor's
+own expressions across the whole FM band and agrees exactly. The stereo flag in
+FM_RSSI_IND is bit 12 — `FM_BF_STEREO` in `mt6628_GetMonoStereo()` at
+`mt6628_fm_lib.c:1159-1165` — and is masked off before the signal conversion,
+which uses all of bits [9:0].
+
+What is still missing is the **full band scan**: `FM_IOCTL_SCAN`,
+`FM_IOCTL_STOP_SCAN`, `FM_IOCTL_SCAN_NEW` and `FM_IOCTL_SCAN_GETRSSI`
+(`core/inc/fm_ioctl.h:17-18`, `:63`, `:82`) are a multi-segment table walk
+(`mt6628_Scan()` at `mt6628_fm_lib.c:844-895`, segmented 250 channels at a time
+at `:947`) that needs a cancel path and its own state machine, and there is no
+V4L2 ioctl that fits it. A userspace can still search the band by seeking and
+reading `tuner->signal`.
+
+### Antenna switch and search threshold are still absent
+
+- **Volume is now implemented** as `V4L2_CID_AUDIO_VOLUME`. The hardware has no
+  linear gain field: the level is chosen by index into the same 16-entry table
+  the vendor applies, written to register 0x7d by `mt6628_SetVol()`
+  (`mt6628_fm_lib.c:1100-1119`, table at `:1095-1099`, read-back by
+  `mt6628_GetVol()` at `:1121-1143`). Values above 15 are clamped, as the
+  vendor's own `(vol > 15) ? 15 : vol` does.
+- **De-emphasis is now a control**, `V4L2_CID_TUNE_DEEMPHASIS`, setting
+  FM_MAIN_CG2_CTRL[12] — `DE_EMPHASIS` at
+  `mt6628/inc/mt6628_fm_reg.h:83`, "0x61 D12, 0:50us, 1:75 us". This is the
+  bit `mt6628_pwrup_clock_on()` programs at power-up
+  (`mt6628_fm_cmd.c:295`), which was previously hardcoded here. Note that the
+  vendor writes it *only* in the power-up sequence and has no runtime setter, so
+  the runtime read-modify-write is a small extension of the vendor sequence
+  rather than a port of one. The default remains 50 us, matching
+  `FM_RX_DEEMPHASIS_MT6628 = 0` at `mt6628/inc/mt6628_fm_cust_cfg.h:64`.
+- **Antenna switch is not implemented.** `FM_IOCTL_ANA_SWITCH`
+  (`core/inc/fm_ioctl.h:51`) maps to a real bit — `ANTENNA_TYPE` at
+  `mt6628_fm_lib.c:181-197` reads and writes FM_MAIN_CG2_CTRL[4], 0 for long and
+  1 for short, with `mt6628_GetAntennaType()` at `:199-210` — but the driver
+  selects the long antenna unconditionally during power-up
+  (`fm_bop_modify(0x61, 0xff63, 0x0000, ...)`). It is left alone rather than
+  exposed, because which antenna this board's FM path actually uses is a
+  board-layout fact that is not documented anywhere in either tree, and
+  offering the switch could silently select an unconnected antenna.
+- **Search threshold is not implemented.**
+  `FM_IOCTL_SET_SEARCH_THRESHOLD` only feeds the soft-mute validity decision in
+  `mt6628_soft_mute_tune()` (`mt6628_fm_lib.c:1382-1450`), and the threshold
+  register writer, `mt6628_set_RSSITh()`, is commented out at
+  `mt6628_fm_lib.c:231`. There is no live register path to port.
 
 ### No audio path
 
@@ -694,11 +759,14 @@ fm->vdev.device_caps = V4L2_CAP_RADIO |
                        V4L2_CAP_HW_FREQ_SEEK;
 ```
 
-with no `V4L2_CAP_AUDIO` and no PCM device. The `V4L2_CID_AUDIO_MUTE` control
-added here is therefore the **tuner-side** mute: it gates the chip's own mute bit
-in FM_MAIN_CTRL, which is the same bit the downstream `FM_IOCTL_MUTE` drove
-(`mt6628/pub/mt6628_fm_lib.c:212-229`). It silences the chip rather than
-attenuating a capture stream, because there is no stream to attenuate.
+with no `V4L2_CAP_AUDIO` and no PCM device. `V4L2_CID_AUDIO_MUTE` and
+`V4L2_CID_AUDIO_VOLUME` are therefore **tuner-side** controls: the mute gates the
+chip's own mute bit in FM_MAIN_CTRL, which is the same bit the downstream
+`FM_IOCTL_MUTE` drove (`mt6628/pub/mt6628_fm_lib.c:212-229`), and the volume
+writes the chip's output gain register. They silence and level the chip rather
+than attenuating a capture stream, because there is no stream to attenuate.
+Adding `V4L2_CAP_AUDIO` or a PCM device would advertise a path that does not
+exist.
 
 ## STP transport — what is implemented
 
