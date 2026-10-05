@@ -11,8 +11,14 @@ maintainers:
 
 description: |
   The audio front end of the MT6589 hosts the memory interfaces (DL1
-  playback), the ADDA downlink/uplink SRC blocks and the serial link to
-  the on-PMIC analog codec.  It lives as a child of the audsys syscon.
+  playback, VUL capture), the interconnect that routes between them, the
+  I2S input and output blocks, and the AFE<->PMIC serial link driven
+  through the audsys syscon it is a child of.
+
+  Note that there is no ADDA block on this part: no ADDA register is
+  documented for the MT6589, and chapter 63's register map has nothing
+  between AFE_MEMIF_MON4 (0x00e0) and AFE_FOC_CON (0x0170).  Sample-rate
+  conversion for the PMIC link is done in the MT6320 codec, not here.
 
 properties:
   compatible:
