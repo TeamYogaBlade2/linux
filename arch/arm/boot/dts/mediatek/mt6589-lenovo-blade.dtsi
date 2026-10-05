@@ -568,6 +568,47 @@
 */
 
 	/*
+	 * MT6628 combo chip power sequence.
+	 *
+	 * The chip is released out of reset the way the vendor DFT flow does
+	 * it: supply enable and reset lines are asserted low while the
+	 * boot-mode strap pins are moved to their strap pinmux, then reset is
+	 * released once the supply has settled.  See pwrseq_mt6628.c for the
+	 * sequence and where the delays come from.
+	 *
+	 * NOTE: this node is deliberately left status = "disabled", and
+	 * &mmc3 deliberately has no "mmc-pwrseq" property pointing at it,
+	 * until the pin assignment is filled in.  The pmu-gpios and
+	 * reset-gpios properties are intentionally ABSENT rather than filled
+	 * with a guess: no in-tree or downstream source documents which
+	 * MT6589 pins carry this board's MT6628 pmu and reset lines, and a
+	 * plausible-looking number here is indistinguishable from a confirmed
+	 * one to the next reader.  Turning the node on without them would
+	 * fail probe harmlessly; turning it on with invented numbers would
+	 * silently drive unrelated hardware (this board already uses GPIO57,
+	 * 115, 140 and 171 for other purposes).
+	 *
+	 * Leaving the node disabled is also the only safe option here: the mmc
+	 * core resolves "mmc-pwrseq" with of_parse_phandle(), which ignores
+	 * node status.  Pointing &mmc3 at this node while it is disabled
+	 * would make mmc_pwrseq_alloc() return -EPROBE_DEFER forever and
+	 * permanently break the whole SDIO bus.
+	 *
+	 * To enable: add pmu-gpios/reset-gpios confirmed against the Blade
+	 * schematics, set status = "okay", and add
+	 *	mmc-pwrseq = <&mt6628_pwrseq>;
+	 * to &mmc3.
+	 */
+	mt6628-pwrseq {
+		compatible = "mediatek,mt6628-pwrseq";
+		status = "disabled";
+
+		/* TODO: add pmu-gpios and reset-gpios once the Blade pin
+		 * assignment is confirmed. See the comment above.
+		 */
+	};
+
+	/*
 	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the
 	 * STP transport (Bluetooth/FM/GNSS) as function 2.  Both function
 	 * nodes have to exist for the hardware to be enumerated: without
