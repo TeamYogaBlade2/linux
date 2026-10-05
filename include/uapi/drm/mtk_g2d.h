@@ -72,10 +72,17 @@ extern "C" {
  * Synchronous execution
  *
  * Every ioctl here is *blocking*: it returns only once the engine has stopped.
- * The engine is polled for completion with a bounded budget (100 ms), so a call
- * cannot hang indefinitely.  There is consequently no fence, no async submit
- * and no queue - a caller that wants to batch work must serialise the calls
- * itself.
+ * The wait is bounded, so a call cannot hang indefinitely, and the destination
+ * is never left owned by an engine the driver has lost track of - see
+ * @mtk_g2d_blt's description of -ETIMEDOUT.  There is consequently no fence,
+ * no async submit and no queue - a caller that wants to batch work must
+ * serialise the calls itself.
+ *
+ * Being synchronous is also what keeps the buffers alive for the operation
+ * without any extra machinery: the driver holds a reference and the
+ * reservation lock on both operands from before the first register write
+ * until after the engine is idle, so there is no window in which the caller
+ * could unmap a buffer the hardware is still using.
  *
  * A 32-bit-on-ARM consideration: an imported buffer must be physically
  * contiguous, because the engine is given one base address and a pitch with

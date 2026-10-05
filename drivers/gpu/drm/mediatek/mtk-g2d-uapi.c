@@ -873,6 +873,16 @@ err_src:
  * mtk_g2d_ioctl_fill - DRM_IOCTL_MTK_G2D_FILL
  *
  * Blocking, with the same -ETIMEDOUT contract as @mtk_g2d_ioctl_blt.
+ *
+ * A fill has one operand rather than two, so it is also the only path in
+ * which the engine writes into a buffer the caller supplied alone.  The
+ * protection for that is the same as for a blit and lives in
+ * mtk_g2d_uapi_resolve(): the destination is checked against the *real*
+ * allocation size before a register is programmed, so a caller that
+ * overstates its width, height or pitch is -EINVAL and the engine is never
+ * pointed at memory the caller does not own.  Nothing here clips a request
+ * down to what the buffer can supply - silently filling less than was asked
+ * for would be a bug the caller cannot see.
  */
 static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
