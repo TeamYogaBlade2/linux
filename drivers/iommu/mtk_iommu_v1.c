@@ -615,14 +615,10 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 
 	/*
 	 * Only allow the domain created internally.  The mapping is fetched
-	 * rather than read straight out of @data because the core calls this
-	 * *before* .probe_finalize(): iommu_setup_default_domain() attaches the
-	 * group's default domain from inside __iommu_probe_device(), and
-	 * probe_finalize() is only reached after that returns.  Reading
-	 * @data->mapping here would therefore see NULL for the first client of
-	 * this M4U and dereference it.  Asking for the same getter
-	 * probe_finalize() uses keeps the one-mapping-for-all-clients invariant
-	 * in one place and hands every caller the identical pointer.
+	 * rather than read straight out of @data so that a missing mapping is
+	 * reported as an error instead of being dereferenced; it was built once
+	 * in .of_xlate() before the core ever got here, so by construction this
+	 * cannot be the first client of the M4U.
 	 */
 	mtk_mapping = mtk_iommu_v1_get_mapping(dev);
 	if (IS_ERR(mtk_mapping))
@@ -750,43 +746,43 @@ static const struct iommu_ops mtk_iommu_v1_ops;
  *
  * Returns the shared mapping, or an error pointer.
  */
+/*
+ * mtk_iommu_v1_get_mapping - return the M4U's one shared mapping.
+ * @dev: any client of this M4U
+ *
+ * Returns the shared mapping, or an error pointer.  This NEVER creates: the
+ * mapping is built once in .of_xlate and every later caller only reads it.
+ *
+ * The creation deliberately does not happen here.  .attach_dev is called from
+ * iommu_setup_default_domain() -> __iommu_group_set_domain() inside
+ * __iommu_probe_device() (drivers/iommu/iommu.c), which is strictly before
+ * .probe_finalize() (iommu.c:722).  So a lazy create in either of those
+ * callbacks runs too early for the first client of an M4U, and doing it there
+ * also means the first attach - rather than the first fwspec - decides when
+ * hardware state is programmed.
+ *
+ * Instead .of_xlate() creates it.  That runs once per client, early, with no
+ * group and no domain involved, and it is exactly where the M4U's private data
+ * is first resolved from the phandle - so this is the first point at which we
+ * can know which M4U we belong to.  arm_iommu_create_mapping() ending in
+ * iommu_paging_domain_alloc() is a problem for .attach_dev and .probe_finalize
+ * (no group yet) but not here, because it allocates the domain that the later
+ * attach will find and reuse.
+ */
 static struct dma_iommu_mapping *
 mtk_iommu_v1_get_mapping(struct device *dev)
 {
 	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
 	struct dma_iommu_mapping *mtk_mapping;
-	int ret;
 
 	mutex_lock(&data->mapping_lock);
-
 	mtk_mapping = data->mapping;
-	if (!mtk_mapping) {
-		/* MTK iommu support 4GB iova address space. */
-		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
-		if (IS_ERR(mtk_mapping) || !mtk_mapping) {
-			/*
-			 * A NULL is not an error pointer, so IS_ERR() alone would
-			 * let it through and store NULL in @mapping - which
-			 * mtk_iommu_v1_attach_device() then dereferences.  The
-			 * !CONFIG_ARM stub above expands to a plain NULL, so
-			 * both spellings have to be refused here.
-			 */
-			ret = IS_ERR(mtk_mapping) ? PTR_ERR(mtk_mapping) :
-						     -ENODEV;
-			goto err_unlock;
-		}
-
-		data->mapping = mtk_mapping;
-	}
-
 	mutex_unlock(&data->mapping_lock);
+
+	if (!mtk_mapping)
+		return ERR_PTR(-ENODEV);
 
 	return mtk_mapping;
-
-err_unlock:
-	mutex_unlock(&data->mapping_lock);
-
-	return ERR_PTR(ret);
 }
 
 /**
@@ -814,7 +810,9 @@ static int mtk_iommu_v1_of_xlate(struct device *dev,
 				const struct of_phandle_args *args)
 {
 	struct mtk_iommu_v1_data *data;
+	struct dma_iommu_mapping *mtk_mapping;
 	struct platform_device *m4updev;
+	int ret;
 
 	if (args->args_count != 1) {
 		dev_err(dev, "invalid #iommu-cells(%d) property for IOMMU\n",
@@ -834,6 +832,35 @@ static int mtk_iommu_v1_of_xlate(struct device *dev,
 	}
 
 	data = dev_iommu_priv_get(dev);
+
+	/*
+	 * Create the M4U's single mapping here, once, if the first client of
+	 * this M4U got here first.  See mtk_iommu_v1_get_mapping() for why this
+	 * is the only place it may happen: .attach_dev and .probe_finalize are
+	 * both too late to be the first, and .probe_device is too early to know
+	 * the M4U.  Later clients of the same M4U find it already set.
+	 */
+	mutex_lock(&data->mapping_lock);
+	if (!data->mapping) {
+		/* MTK iommu support 4GB iova address space. */
+		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
+		if (IS_ERR(mtk_mapping) || !mtk_mapping) {
+			/*
+			 * A NULL is not an error pointer, so IS_ERR() alone would
+			 * let it through and store NULL in @mapping - which both
+			 * .attach_dev and .probe_finalize would then hand to
+			 * arm_iommu_attach_device().  The !CONFIG_ARM stub above
+			 * expands to a plain NULL, so both spellings are refused.
+			 */
+			ret = IS_ERR(mtk_mapping) ? PTR_ERR(mtk_mapping) :
+						     -ENODEV;
+			mutex_unlock(&data->mapping_lock);
+			return ret;
+		}
+
+		data->mapping = mtk_mapping;
+	}
+	mutex_unlock(&data->mapping_lock);
 
 	return iommu_fwspec_add_ids(dev, args->args, 1);
 }
@@ -887,23 +914,17 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
  * mtk_iommu_v1_probe_finalize - attach the shared mapping to one client.
  * @dev: the client, now in a group and attached to the group's domain
  *
- * Mapping creation belongs here rather than in .probe_device or .of_xlate
- * because it cannot happen any earlier: arm_iommu_create_mapping() ends in
- * iommu_paging_domain_alloc(), which calls back into the core to allocate the
- * domain, and at the time .of_xlate() runs the device has no group and no
- * domain yet.  The core calls this once per device, after the group has been
- * set up and the default domain attached, which is the first point at which
- * both exist.
+ * The mapping is created in .of_xlate(), which is the only callback that runs
+ * early enough to be the first for a given M4U: .attach_dev and this both run
+ * from inside __iommu_probe_device() and its call to
+ * iommu_setup_default_domain(), whereas .of_xlate runs before the device has a
+ * group or a domain at all.
  *
- * So the shape is: of_xlate collects the master ids, probe_device validates
- * them and links the consumer to its LARB, and this creates the one mapping
- * the M4U has (under a lock, see mtk_iommu_v1_get_mapping()) and attaches it
- * to this device.  Every client ends up attached to the same mapping, which is
- * what "one page table, one IOVA space" requires.
- *
- * Both the create and the attach are void-context-and-sleeping operations
- * here, so taking data->mapping_lock inside the getter is safe; the core calls
- * this from probe_finalize with no lock of its own held.
+ * So the shape is: of_xlate collects the master ids and builds the one mapping
+ * the M4U has, probe_device validates the ids and links the consumer to its
+ * LARB, and this attaches that mapping to this device.  Every client ends up
+ * attached to the same mapping, which is what "one page table, one IOVA space"
+ * requires.
  */
 static void mtk_iommu_v1_probe_finalize(struct device *dev)
 {
