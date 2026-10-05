@@ -293,6 +293,31 @@
 		compatible = "mediatek,mt6589-cam";
 		reg = <0x15004000 0x400>;
 
+		/*
+		 * GIC SPI 151, Cam_irq_b - the CAM/ISP block's own interrupt,
+		 * level active low.
+		 *
+		 * The data sheet's interrupt table (Table 7-1) lists SPI 151 as
+		 * Cam_irq_b, and the vendor tree agrees:
+		 *
+		 *	#define CAMERA_ISP_IRQ0_ID (GIC_PRIVATE_SIGNALS + 151)
+		 *	// cam_irq_b
+		 *
+		 * with GIC_PRIVATE_SIGNALS == 32, and it is that one the ISP
+		 * driver requests (camera_isp.c:4053) and drives level-sensitive
+		 * (camera_isp.c:4198).  The other three are cam_irq1_b (150),
+		 * cam_irq2_b (149) and cam_irq3_b (144), which belong to the
+		 * TG1/TG2 and CQ stages rather than to this block's control
+		 * plane.
+		 *
+		 * The driver enables IMGO_DONE_EN in CAM_CTL_DMA_INT and keys
+		 * mtk_cam_irq() off IMGO_DONE_ST, so this is the interrupt it
+		 * actually needs: without it the node still probed, but the
+		 * error said "IRQ index 0 not found" and no frame could ever
+		 * complete.
+		 */
+		interrupts = <GIC_SPI 151 IRQ_TYPE_LEVEL_LOW>;
+
 		ports {
 			cam_in: port@0 {
 				cam_in_ep: endpoint {
