@@ -396,17 +396,22 @@ static const struct mtk_ddp_comp_funcs ddp_postmask = {
 
 /*
  * The RDMA funcs are shared by every SoC in this driver, so they carry
- * .layer_config (and .layer_nr) for RDMA0/1/2/4 alike.  No SoC actually
- * routes a plane to RDMA today, so mtk_rdma_layer_config() is dead code on all
- * of them: a plane is only ever attached to path index 0 or 1 (see
- * mtk_crtc_num_comp_planes() and mtk_ddp_comp_for_plane() in mtk_crtc.c), and
- * in every per-SoC path array in mtk_drm_drv.c the RDMA sits at index >= 2 -
- * on MT6589, for instance, the main path is OVL0, COLOR0, BLS, RDMA0, DSI0.
- * The hook is kept because an RDMA-first display path is plausible future
- * hardware; do not assume it runs today.  Note that
- * mtk_ddp_comp_supports_plane() reports true for RDMA, since it only asks
- * whether the layer hooks exist - the CRTC, not the funcs table, is what
- * keeps RDMA from ever receiving a plane.
+ * .layer_config (and .layer_nr) for RDMA0/1/2/4 alike.  A plane is only
+ * ever attached to path index 0 or 1 (see mtk_crtc_num_comp_planes() and
+ * mtk_ddp_comp_for_plane() in mtk_crtc.c), and index 1 only gets planes if
+ * the component supplies .bgclr_in_on, which only ddp_ovl does.  So an RDMA
+ * receives a plane only when it is the FIRST element of a path array.  On
+ * MT6589 the main path is OVL0, BLS, RDMA0, DSI0 (mtk_drm_drv.c:
+ * mt6589_mtk_ddp_main), so RDMA0 sits at index 2 and mtk_rdma_layer_config()
+ * is dead code there.
+ *
+ * It is not dead everywhere, though: mt2701_mtk_ddp_ext is RDMA1, DPI0 and
+ * mt7623_mtk_ddp_ext is RDMA1, DSI0, so on those SoCs RDMA1 is index 0 and
+ * does get a plane.  The hook is kept because an RDMA-first display path is
+ * plausible future hardware.  Note that mtk_ddp_comp_supports_plane()
+ * reports true for RDMA, since it only asks whether the layer hooks exist -
+ * the path array, not the funcs table, is what decides whether RDMA
+ * receives a plane.
  */
 static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.clk_enable = mtk_rdma_clk_enable,
