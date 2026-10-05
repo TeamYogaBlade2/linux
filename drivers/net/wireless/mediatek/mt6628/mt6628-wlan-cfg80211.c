@@ -563,6 +563,25 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
 }
 
 /*
+ * How long to wait before trying again to hand back a listen window's
+ * channel after the firmware refused the abort.  The abort is a plain
+ * command, so the ordinary command timeout already bounds each attempt.
+ */
+#define MT6628_ROC_RELEASE_RETRY_MS	1000
+
+/*
+ * A listen window that has been retired but whose channel the firmware has
+ * not released.  mt6628_roc_finish() has already dropped its cookie by the
+ * time this can be true, so cfg80211 can no longer ask for that window: only
+ * a retry of our own gives the grant back.
+ */
+static bool mt6628_roc_release_pending(struct mt6628_wlan *wl)
+{
+	return !wl->roc_cookie && wl->channel_token &&
+		wl->channel_req_type == MT6628_CH_REQ_TYPE_P2P_LISTEN;
+}
+
+/*
  * Retire a listen window whose cookie the caller has already matched:
  * hand the channel back, then drop the window's state, then tell cfg80211
  * the window it was tracking is over.
@@ -583,6 +602,9 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
 static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 			      struct ieee80211_channel *chan)
 {
+	unsigned long retry;
+	int ret;
+
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->roc_cookie != cookie) {
 		mutex_unlock(&wl->cfg_mutex);
@@ -596,15 +618,34 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 	 * reconnect, would be refused.  The cookie stays set across this
 	 * firmware command on purpose, see above.
 	 */
-	mt6628_wlan_release_channel(wl);
+	ret = mt6628_wlan_release_channel(wl);
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->roc_cookie == cookie) {
 		wl->roc_cookie = 0;
 		wl->roc_n_chans = 0;
 		wl->roc_duration = 0;
+
+		/*
+		 * mt6628_wlan_release_channel() only clears the firmware
+		 * token when the abort was accepted, so a failure here leaves
+		 * the grant live.  Re-arm the expiry so the window is retried
+		 * rather than waiting on a cfg80211 cancel that may never
+		 * arrive: the cookie is 0 again, so if that cancel does come it
+		 * is rejected with -ENOENT and this timer is what gives the
+		 * channel back.
+		 */
+		if (ret) {
+			retry = msecs_to_jiffies(MT6628_ROC_RELEASE_RETRY_MS);
+			mod_delayed_work(system_wq, &wl->roc_work, retry);
+		}
 	}
 	mutex_unlock(&wl->cfg_mutex);
+
+	if (ret)
+		dev_warn(&wl->func->dev,
+			 "remain-on-channel %llu still holds its channel: %d\n",
+			 cookie, ret);
 
 	cfg80211_remain_on_channel_expired(&wl->wdev, cookie, chan,
 					   GFP_KERNEL);
@@ -666,6 +707,29 @@ static void mt6628_roc_work(struct work_struct *work)
 	 * safe because that window is fully retired by then either way.
 	 */
 	if (!wl->roc_cookie) {
+		/*
+		 * The other reason to be here is the retry that
+		 * mt6628_roc_finish() armed because the firmware refused to
+		 * release the channel.  Its cookie is 0 already, so there is no
+		 * window left for cfg80211 to cancel and no other path back to
+		 * the abort.
+		 */
+		if (mt6628_roc_release_pending(wl)) {
+			unsigned long retry;
+
+			mutex_unlock(&wl->cfg_mutex);
+			mt6628_wlan_release_channel(wl);
+
+			mutex_lock(&wl->cfg_mutex);
+			if (mt6628_roc_release_pending(wl)) {
+				retry = msecs_to_jiffies(MT6628_ROC_RELEASE_RETRY_MS);
+				mod_delayed_work(system_wq, &wl->roc_work,
+						 retry);
+			}
+			mutex_unlock(&wl->cfg_mutex);
+			return;
+		}
+
 		mutex_unlock(&wl->cfg_mutex);
 		return;
 	}
