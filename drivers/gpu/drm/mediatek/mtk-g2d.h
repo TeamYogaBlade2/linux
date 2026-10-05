@@ -141,8 +141,12 @@ int mtk_g2d_addr_align(u32 format, u32 *align);
  * hardware may then still be writing the address last programmed and no
  * register write documented here can stop it.  A wedged engine refuses every
  * subsequent call with -ETIMEDOUT without programming a register or waiting on
- * the hardware, and the buffers of the operation that wedged it are not
- * released, so the memory they name is not reused underneath the engine.
+ * the hardware, and the caller - the ioctl layer - keeps its GEM references to
+ * the buffers of the operation that wedged the engine rather than releasing
+ * them, and drops their mmap offsets, so *this driver* will not free, unmap or
+ * re-map that memory.  It cannot stop another user of the same dma-buf, so
+ * mtk_g2d_wedged() is how the caller finds out, and the buffers must still be
+ * treated as belonging to the engine.
  * Every argument is validated before any register is programmed, so a request
  * rejected with -EINVAL leaves the engine untouched.  A NULL @g2d is -EINVAL
  * rather than a crash.

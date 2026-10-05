@@ -622,10 +622,14 @@ int mtk_g2d_addr_align(u32 format, u32 *align)
  * it, and for the destination that is a write into memory the caller never
  * handed over.
  *
- * @height is deliberately not bounded here.  The engine is only ever told a
- * starting address and a pitch, so it cannot walk more rows than the caller
- * actually owns; bounding the height is the caller's job, and
- * mtk_g2d_clip_rect() does it against the framebuffer's own height.
+ * @height is bounded, but only against the scan window, not against the
+ * allocation.  G2D_W2M_SIZE holds it as a 12-bit field documented as 1..2048,
+ * so anything larger is not describable in the register set at all and is
+ * -EINVAL.  What this cannot check is whether the buffer is that tall: the
+ * engine is told a starting address and a pitch and nothing else, so how many
+ * rows of it may be walked is the caller's claim, not the engine's.
+ * mtk_g2d_uapi_resolve() is what checks that, against both the surface's
+ * declared height and the real allocation size.
  */
 static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
 			  u32 width, u32 height)
@@ -635,13 +639,14 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
 	if (!height || height > G2D_MAX_HEIGHT)
 		return -EINVAL;
 
+	if (pitch > G2D_PITCH_MAX)
+		return -EINVAL;
+
 	/* The sum is widened before the add, not after: (u64)(x + width) would
 	 * evaluate x + width in u32 first and wrap there, so a large x passes a
 	 * check that exists to keep the rectangle inside the row.  Both are u32
 	 * from the caller, so that is reachable.
 	 */
-	if (pitch > G2D_PITCH_MAX)
-		return -EINVAL;
 	if (((u64)x + width) * bpp > pitch || pitch % bpp)
 		return -EINVAL;
 
