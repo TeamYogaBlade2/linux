@@ -719,23 +719,88 @@ matched here.
 Downstream can put the transport into power-save mode, force an in-band reset and
 request a paged memory dump for debug. None of that is ported.
 
-### Five optional DT properties are absent from every dts/dtsi
+### Two of five optional DT properties are set; three are deliberately absent
 
-`mtk_fm_probe`-time reads in `mtk-stp.c` pick up these properties when present:
+`mt6628_stp_probe()` picks up these when present. All five are optional, so a
+missing one is never a probe failure — it just means the driver uses its default.
 
-| Property | Line |
-|---|---|
-| `mediatek,coex-ant-mode` | `mtk-stp.c:1380` |
-| `mediatek,co-clock` | `mtk-stp.c:1386` |
-| `mediatek,sdio-driving-cfg` | `mtk-stp.c:1389` |
-| `mediatek,fm-strap-mode` | `mtk-stp.c:1395` |
-| `mediatek,crystal-trim` | `mtk-stp.c:1399` |
+| Property | State | Value / why |
+|---|---|---|
+| `mediatek,coex-ant-mode` | **set** | `<1>`, from the vendor board config |
+| `mediatek,sdio-driving-cfg` | **set** | `<0x00077777>`, from the vendor board config |
+| `mediatek,co-clock` | absent | vendor board config does not set it; absent means off, which is correct |
+| `mediatek,crystal-trim` | absent | per-board calibration, no data exists in this tree |
+| `mediatek,fm-strap-mode` | absent | no counterpart in the vendor tree at all |
 
-**None of them appear in any `.dts` or `.dtsi` in this tree.** They are all
-optional, so this is not a probe failure, but it means coex, the FM strap mode
-and the crystal trim all run on the driver's built-in defaults on this board.
-Since there is no hardware validation either, these defaults are untested as
-well. Recorded here rather than papered over by adding properties to the DTS.
+The two that are set come from the vendor antenna configuration for this combo
+chip. `CUSTOM_HAL_ANT=mt6628_ant_m1` is what every MT6628 project config in the
+vendor tree selects, and it is also the chip's own default
+(`mt6628.defAnt=mt6628_ant_m1.cfg` in `custom/common/hal/ant/WMT.cfg`). The
+selected file, `mediatek/custom/common/hal/ant/mt6628_ant_m1/mt6628_ant_m1.cfg`,
+contains exactly:
+
+```
+coex_wmt_ant_mode=1
+wmt_gps_lna_pin=0
+wmt_gps_lna_enable=0
+sdio_driving_cfg=0x00077777
+```
+
+The vendor driver passes those two through unchanged: `coex_wmt_ant_mode` becomes
+byte 5 of the WMT coex command (`wmt_ic_6628.c:1323`), and `sdio_driving_cfg` is
+split into the DAT0/1, DAT2/3 and CMD drive nibbles
+(`wmt_ic_6628.c:1405-1411`). `mtk-stp.c` already does the same thing at
+`mt6628_wmt_coex_init()` and `mt6628_wmt_set_sdio_driving()`, so the values arrive
+in the chip in the same encoding the vendor uses. Note the *meaning* of the
+antenna modes is documented nowhere in the vendor tree — only that every MT6628
+board it ships uses 1 — so the value is quoted from the configuration, not
+derived.
+
+**One caveat, because these two boards are not the one the vendor config can be
+tied to.** The only vendor project config identifiable as a specific board in
+this tree is `eastaeon89`, the bq Aquaris 5 — and `mt6589-aquaris5.dts` has no
+MT6628 node at all. The node these properties live on is in
+`mt6589-lenovo-blade.dtsi`, included only by the Lenovo B6000 and B8000. So for
+*these* boards the values rest on "every MT6628 board the vendor ships selects
+m1", not on a verified per-board antenna config. That is the strongest evidence
+available, and it is why they are set rather than omitted — but if a B6000 or
+B8000 antenna layout ever turns out to differ, this property is the thing to
+re-check.
+
+**Why the other three stay absent.** Each would be a guess, and a wrong guess is
+worse than the default:
+
+- **`mediatek,crystal-trim`** is a per-board calibration value. The vendor reads
+  it from NVRAM at offset `0x6D`, where bit 7 says whether the trim is enabled at
+  all (`wmt_ic_6628.c:1420-1470`). There is no NVRAM in this tree and no
+  calibration data for this board, so there is nothing to quote.
+- **`mediatek,co-clock`** is already correct by default. The vendor WMT.cfg for
+  this board never sets `co_clock_flag`, and `wmt_lib_co_clock_get()` falls back
+  to 0 when the config is absent (`wmt_lib.c:2039-2046`). An absent DT property
+  produces exactly the same outcome.
+- **`mediatek,fm-strap-mode`** has no vendor counterpart at all — nothing in the
+  downstream tree reads a strap mode. The driver's default of 2 is unchanged.
+
+
+
+### The optional `gps-sync` pinctrl state does not exist
+
+`gnss-mt6628.c` looks up a `gps-sync` pinctrl state and warns when it is absent.
+No device tree in this tree defines such a state, so that branch is dead code on
+this board, and it should stay that way.
+
+This was checked rather than assumed, because it is not obvious. The vendor GPS
+synchronisation pin is **not** an SoC pinctrl at all. `wmt_func.c:443-458` picks
+between the combo chip's own `EEDI` and `EEDO` pins (selected by
+`wmt_gps_lna_pin`, which is 0 on this board), and drives it either through the WMT
+chip-pin control interface or through `gCmbPinCtrl`, which programs the *combo
+chip's* registers with `wmt_core_reg_rw_raw()`. `WMT_IC_PIN_GSYNC` routes to
+`mtk_wcn_soc_gps_sync_ctrl()` (`wmt_ic_soc.c:1258-1260`) — a register write, not a
+pinmux change.
+
+The real synchronisation path is therefore the WMT register write already
+implemented in `mt6628_wmt_gps_sync_ctrl()`, which `mtk_gnss_open()` calls. There
+is no SoC pin to name, so there is no property to add.
 
 ## GNSS — what is implemented
 
@@ -756,13 +821,6 @@ the vendor userspace, which is out of scope.
 The driver defines neither a `reset` nor a `suspend`/`resume` hook, so the GPS
 function is simply left enabled across a system suspend. It is released on
 `.remove` only.
-
-### The optional `gps-sync` pinctrl state does not exist
-
-`gnss-mt6628.c` looks up a `gps-sync` pinctrl state and warns when it is absent.
-No device tree in this tree defines such a state, so that branch is dead code on
-this board. The real synchronisation path is the WMT register write in the STP
-driver, not the pinctrl state.
 
 ### The downstream GPS ioctls are gone, and the hw version is not as unused as it looks
 
@@ -801,7 +859,7 @@ obtained and used, just not re-exposed to userspace.
 | STP optional DT properties | all five absent from every DTS; defaults untested |
 | GNSS raw relay | complete, and matches downstream (which is also just a pipe) |
 | GNSS reset / suspend / resume | not implemented |
-| GNSS `gps-sync` pinctrl state | dead code — no DTS defines it |
+| GNSS `gps-sync` pinctrl state | dead code — the pin is inside the combo chip, not an SoC pinctrl |
 | GNSS ioctls (`GPS_HWVER` / `RTC_FLAG` / `CO_CLOCK_FLAG`) | absent — no ioctl hook in the generic framework |
 
 Nothing in this section has been run on hardware.

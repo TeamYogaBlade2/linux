@@ -621,6 +621,66 @@
 	mt6628-stp@2 {
 		reg = <2>;
 
+		/*
+		 * WiFi/BT/FM antenna multiplexing mode and SDIO output drive
+		 * strength.  The value is MT6628 family-wide rather than
+		 * per-board: it is the single antenna configuration the
+		 * vendor ships for this combo chip,
+		 * CUSTOM_HAL_ANT=mt6628_ant_m1, whose file
+		 * custom/common/hal/ant/mt6628_ant_m1/mt6628_ant_m1.cfg
+		 * contains
+		 *
+		 *   coex_wmt_ant_mode=1
+		 *   sdio_driving_cfg=0x00077777
+		 *
+		 * and it is also the chip's own default antenna selection
+		 * (mt6628.defAnt=mt6628_ant_m1.cfg in
+		 * custom/common/hal/ant/WMT.cfg).  Every MT6628 project config
+		 * in the vendor tree selects m1; no other mode is used by any
+		 * of them.  The vendor driver passes both values straight
+		 * through - coex_wmt_ant_mode becomes byte 5 of the WMT coex
+		 * command (wmt_ic_6628.c:1323), and sdio_driving_cfg is split
+		 * into the DAT0/1, DAT2/3 and CMD drive nibbles
+		 * (wmt_ic_6628.c:1405-1411).  mtk-stp.c encodes both the same
+		 * way, in mt6628_wmt_coex_init() and
+		 * mt6628_wmt_set_sdio_driving().
+		 *
+		 * Without these the driver skips both commands and the chip
+		 * keeps whatever it powered up with.
+		 *
+		 * Caveat worth stating plainly: the one project config that
+		 * can be tied to a specific board in this tree is eastaeon89
+		 * (the bq Aquaris 5), and that board has no MT6628 node at
+		 * all - this dtsi is included only by the Lenovo B6000 and
+		 * B8000.  So for these particular boards the values rest on
+		 * "every MT6628 board the vendor ships uses m1", not on a
+		 * verified per-board config.  If a B6000 or B8000 antenna
+		 * layout ever differs, this is the property to re-check.  The
+		 * numeric meaning of the antenna modes is not documented
+		 * anywhere in the vendor tree.
+		 */
+		mediatek,coex-ant-mode = <1>;
+		mediatek,sdio-driving-cfg = <0x00077777>;
+
+		/*
+		 * Deliberately absent, with reasons:
+		 *
+		 *  - mediatek,crystal-trim is a per-board calibration value.
+		 *    The vendor reads it from NVRAM at offset 0x6D and its
+		 *    high bit says whether the trim is even enabled
+		 *    (wmt_ic_6628.c:1420-1470).  There is no NVRAM in this
+		 *    tree and no calibration data for this board, so any
+		 *    value here would be invented.
+		 *
+		 *  - mediatek,co-clock defaults to off because the vendor
+		 *    WMT.cfg for this board does not set co_clock_flag
+		 *    (wmt_lib.c:2039-2046 falls back to 0).  Leaving the
+		 *    property out produces exactly that behaviour.
+		 *
+		 *  - mediatek,fm-strap-mode has no counterpart in the vendor
+		 *    tree at all; the driver's default of 2 is what it has
+		 *    always used here.
+		 */
 		bluetooth {
 			compatible = "mediatek,mt6628-bt";
 		};
