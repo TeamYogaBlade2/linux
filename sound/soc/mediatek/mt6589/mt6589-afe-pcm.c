@@ -110,14 +110,26 @@
  *	  false from its default branch for MEM_DL1 and MEM_DL2 alike.
  *
  * Its enable bit does exist (AFE_DAC_CON0, DL2_ON = bit 2,
- * AudDrv_Afe.h:574) and its rate lives in AFE_DAC_CON1[7:4], so a future
- * second-output path is possible, but it would be untestable dead code today.
+ * mediatek/platform/mt6589/kernel/drivers/sound/AudDrv_Afe.h:574 - the same
+ * 1 << (block + 1) encoding SetMemoryPathEnable() shifts into place at
+ * mt_soc_afe_control.c:1104) and its rate lives in AFE_DAC_CON1[7:4], so a
+ * future second-output path is possible, but it would be untestable dead code
+ * today.
  *
- * AWB (asynchronous write buffer, the FM/modem output interface) and DAI are
- * likewise absent.  The vendor FM radio path is kernel/sound/soc/__mediatek/
- * mt_soc_fm_i2s2.c, which has no mainline equivalent; wiring it up would need
- * a second AFE output, the 2nd I2S input and an MT6320 input, none of which
- * this card's DT or DAI links describe.  Left out on purpose.
+ * AWB (asynchronous write buffer) and DAI are likewise not driven.
+ *
+ * AWB is not unused in the vendor tree: mt_soc_pcm_awb.c does enable and
+ * disable it (SetMemoryPathEnable(MEM_AWB) at lines 219 and 195).  But that
+ * file registers its own snd_soc_platform rather than a dai_link, and no
+ * dai_link in mt_soc_machine.c names an AWB stream, so there is no PCM here
+ * to attach it to.  The path it serves is the FM/modem interface
+ * (mt_soc_fm_i2s2.c), which has no mainline equivalent, and wiring it up
+ * would need a second AFE output, the 2nd I2S input and an MT6320 input,
+ * none of which this card's DT or DAI links describe.  Left out on purpose.
+ *
+ * DAI has no driver-side use at all: nothing in the vendor _mediatek tree
+ * enables MEM_DAI, and it is only reachable over the DAI/BT pins
+ * (AFE_DAIBT_CON0, 0x001c) which this board does not wire up.
  */
 #define AFE_IRQ_MCU_CON		0x03a0
 #define AFE_IRQ_MCU_CON_IRQ1_ON		BIT(0)
