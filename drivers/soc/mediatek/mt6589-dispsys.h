@@ -163,8 +163,9 @@
  * output-port enable and an input selector, both registers are represented by
  * separate entries with the same (from, to) pair.
  *
- * The MT6589 datasheet path-debug registers show fixed links for ROT -> SCL,
- * BLS -> RDMA0 and GAMMA -> RDMA1; those links therefore need no route entry.
+ * The MT6589 datasheet path-debug registers show fixed links that therefore
+ * need no route entry (DISP_PATH_DEBUG0 p. 1446): bit 00 "rot -> scl" and bit
+ * 07 "bls -> rdma0"; plus DISP_PATH_DEBUG1 bit 02 "rdma1 -> gamma".
  */
 static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
 	/* SCL -> WDMA0 */
