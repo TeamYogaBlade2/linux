@@ -15,9 +15,9 @@
  * What is here is the V4L2 plumbing and the resource layer, and nothing else: one
  * video_device with its own v4l2_device and m2m_dev, the format negotiation the node
  * needs to be usable at all, the frame-end interrupt acknowledgement, and a
- * device_run() that reports -ENODEV.
+ * device_run() that refuses every job it is given.
  *
- * The -ENODEV is the substantive part, and it is deliberate.  The vendor stack
+ * The refusal is the substantive part, and it is deliberate.  The vendor stack
  * programs the VDEC datapath from userspace, not from the kernel: the driver
  * walks a WRITE_REG_CMD queue that closed libraries assemble
  * (videocodec_kernel_driver.c:1758, hal_api.h:33-41).  There is therefore no
@@ -49,10 +49,10 @@
  * into parser SRAM before any frame can decode.  See the VP8 note at the end of
  * mtk-vcodec-mt6589-reg.h.
  *
- * Returning -ENODEV from device_run() says exactly that, at the point where a
- * caller finds out, instead of leaving a node that accepts buffers and silently
- * never fills them.  The rest of the node is real: a client can open it, query
- * its capabilities, negotiate formats and inspect them.  What it cannot do is
+ * device_run() saying exactly that, at the point where a caller finds out,
+ * instead of leaving a node that accepts buffers and silently never fills them,
+ * is the point.  The rest of the node is real: a client can open it, query its
+ * capabilities, negotiate formats and inspect them.  What it cannot do is
  * decode, and it says so.
  *
  * Giving the decoder its own driver, its own power domain and its own DT node does
@@ -120,7 +120,7 @@ struct mtk_vdec_dev {
 	 * separate open() lifecycles and separate format negotiation, and sharing
 	 * would make a decoder client hold the encoder's file operations.
 	 *
-	 * Its device_run() reports -ENODEV; see the file header for why that is the
+	 * Its device_run() refuses every job; see the file header for why that is the
 	 * honest answer rather than a stub.
 	 */
 	struct video_device		vfd;
@@ -485,7 +485,7 @@ static int mtk_vdec_queue_setup(struct vb2_queue *vq,
 /*
  * device_run - this driver cannot decode.
  *
- * The -ENODEV is the whole point of this node and is not a placeholder.  It is
+ * Refusing the job is the whole point of this node and is not a placeholder.  It is
  * reported at the moment a client actually asks for a picture, which is the only
  * place a caller can be told the truth, and it is accompanied by a message
  * naming the reason so the failure is diagnosable from dmesg alone.
@@ -505,7 +505,8 @@ static int mtk_vdec_queue_setup(struct vb2_queue *vq,
  *     post-process and a 4 MiB bitstream FIFO (vdec_drv_fileio.h:23), all of which are
  *     only meaningful to a datapath that does not exist here.
  *
- * Rather than any of those, this returns -ENODEV and says why.  See the VP8 note at
+ * Rather than any of those, device_run() refuses the job instead: it hands the buffers
+ * back as failed and reports, in dmesg, that there is no datapath.  See the VP8 note at
  * the end of mtk-vdec-mt6589-reg.h for the full argument.
  */
 static void mtk_vdec_device_run(void *priv)
@@ -517,31 +518,21 @@ static void mtk_vdec_device_run(void *priv)
 	 * A job can only have been queued if the framework believed this node could
 	 * run one.  Since it cannot, the buffers taken for it must be handed back as
 	 * failed rather than left owned: returning them is what stops a client that
-	 * ignored the earlier -ENODEV from waiting forever for a DQBUFS that will never
-	 * come.
+	 * ignored that from waiting forever for a DQBUFS that will never come.
+	 *
+	 * One buffer per queue, and one done each.  Nothing here loops: v4l2_m2m_buf_done()
+	 * completes a vb2 buffer but does not touch the framework's ready list, so a loop
+	 * bounded by v4l2_m2m_num_dst_bufs_ready() would never see the count fall -- the
+	 * loop ran forever, warning on every pass because the same buffer was being
+	 * completed again.  The count only drops when a buffer is REMOVED, which is
+	 * v4l2_m2m_buf_done_and_job_finish()'s job below, one buffer at a time.
+	 *
+	 * That single job is also the reason this driver peeks rather than removes.  Both
+	 * buffers stay on their ready lists until that helper removes them, and it needs
+	 * to find both: it warns and skips _v4l2_m2m_job_finish() if either is missing,
+	 * which would leave TRANS_RUNNING set and hang STREAMOFF in
+	 * v4l2_m2m_cancel_job()'s wait_event().
 	 */
-	while (v4l2_m2m_num_src_bufs_ready(ctx->m2m)) {
-		struct vb2_v4l2_buffer *src_buf =
-			v4l2_m2m_src_buf_remove(ctx->m2m);
-
-		if (!src_buf)
-			break;
-
-		v4l2_m2m_buf_done(src_buf, VB2_BUF_STATE_ERROR);
-	}
-
-	while (v4l2_m2m_num_dst_bufs_ready(ctx->m2m)) {
-		struct vb2_v4l2_buffer *dst_buf =
-			v4l2_m2m_next_dst_buf(ctx->m2m);
-
-		if (!dst_buf)
-			break;
-
-		dst_buf->flags |= V4L2_BUF_FLAG_ERROR;
-		dst_buf->planes[0].bytesused = 0;
-		v4l2_m2m_buf_done(dst_buf, VB2_BUF_STATE_ERROR);
-	}
-
 	v4l2_err(&vdec->v4l2_dev,
 		 "decoder datapath not implemented in the kernel: the MT6589 VDEC register sequence lives in the vendor's closed userspace libraries, which program the block through MFV_SET_CMD_CMD\n");
 
@@ -553,9 +544,9 @@ static void mtk_vdec_device_run(void *priv)
  * job_ready - never.
  *
  * Reporting 0 unconditionally is what stops the framework calling device_run() at
- * all, so the -ENODEV path above is a backstop rather than the normal outcome.  A
- * client that fills both queues and waits for a picture blocks here, which is the
- * intended and documented behaviour of this node.
+ * all, so the refusal in device_run() above is a backstop rather than the normal
+ * outcome.  A client that fills both queues and waits for a picture blocks here,
+ * which is the intended and documented behaviour of this node.
  */
 static int mtk_vdec_job_ready(void *priv)
 {
@@ -578,8 +569,37 @@ static int mtk_vdec_start_streaming(struct vb2_queue *q,
 	return 0;
 }
 
+/*
+ * stop_streaming - STREAMOFF.
+ *
+ * Structurally the encoder's, and for the same reason.  Buffers a client queued but that
+ * no job ever consumed are still owned by the driver -- vb2 marks them ACTIVE in
+ * buf_queue() and only clears that on a buf_done() -- so returning them here is what
+ * keeps vb2's post-stop_streaming owned_by_drv_count check satisfied.  Without this,
+ * the most ordinary qbuf-then-streamoff sequence WARNs with "driver bug:
+ * stop_streaming operation is leaving buffer N in active state".
+ *
+ * There is never a job to worry about: job_ready() returns 0 unconditionally, so
+ * device_run() above cannot have run, and the framework calls v4l2_m2m_cancel_job()
+ * before this anyway.
+ */
 static void mtk_vdec_stop_streaming(struct vb2_queue *q)
 {
+	struct mtk_vdec_ctx *ctx = q->drv_priv;
+
+	for (;;) {
+		struct vb2_v4l2_buffer *vbuf;
+
+		if (V4L2_TYPE_IS_OUTPUT(q->type))
+			vbuf = v4l2_m2m_src_buf_remove(ctx->m2m);
+		else
+			vbuf = v4l2_m2m_dst_buf_remove(ctx->m2m);
+
+		if (!vbuf)
+			break;
+
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+	}
 }
 
 /*
@@ -592,8 +612,8 @@ static void mtk_vdec_stop_streaming(struct vb2_queue *q)
  *
  * The decoder's job_ready() returns 0 unconditionally, so those lists are read but
  * never acted on: this makes the node openable and its QBUF path functional, and
- * the -ENODEV in device_run() stays where it is.  It does not change what this node
- * can do, which is nothing.
+ * device_run() stays as the refusal it is.  It does not change what this node can
+ * do, which is nothing.
  */
 static void mtk_vdec_buf_queue(struct vb2_buffer *vb)
 {
@@ -618,6 +638,11 @@ static int mtk_vdec_queue_init(void *priv, struct vb2_queue *src_vq,
 {
 	struct mtk_vdec_ctx *ctx = priv;
 	int ret;
+
+	mutex_init(&ctx->vb_queue_lock);
+
+	src_vq->lock		= &ctx->vb_queue_lock;
+	dst_vq->lock		= &ctx->vb_queue_lock;
 
 	src_vq->type		= V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	src_vq->io_modes	= VB2_MMAP | VB2_DMABUF;
@@ -915,12 +940,18 @@ static int mtk_vdec_runtime_resume(struct device *dev)
 	int ret;
 
 	mutex_lock(&vdec->vdec_lock);
-	if (atomic_read(&vdec->dec_users) == 0) {
-		ret = mtk_vdec_power_on(vdec);
-		if (ret) {
-			mutex_unlock(&vdec->vdec_lock);
-			return ret;
-		}
+	/*
+	 * Always power on here, for the same reason as the encoder: gating this
+	 * on there being no open handle inverted the sense of it, leaving the
+	 * block running with its clock off for the whole life of the node - and
+	 * the interrupt handler reads those registers.  clk_prepare_enable() is
+	 * reference counted and suspend only powers off when nothing is open, so
+	 * the count cannot leak.
+	 */
+	ret = mtk_vdec_power_on(vdec);
+	if (ret) {
+		mutex_unlock(&vdec->vdec_lock);
+		return ret;
 	}
 	mutex_unlock(&vdec->vdec_lock);
 
@@ -980,7 +1011,7 @@ static int mtk_vdec_probe(struct platform_device *pdev)
 	 * Register the V4L2 node last, once every resource it depends on is in
 	 * place.  A /dev/videoX that exists while its clocks or IRQ are missing
 	 * would let userspace open a decoder that cannot decode -- which, given that
-	 * device_run() reports -ENODEV anyway, would be a node offering nothing at
+	 * device_run() refuses every job anyway, would be a node offering nothing at
 	 * all while appearing healthy.
 	 */
 	ret = mtk_vdec_vf_init(vdec);
