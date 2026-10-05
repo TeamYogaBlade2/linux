@@ -130,54 +130,93 @@ struct mtk_g2d_uapi_surf {
 };
 
 /**
- * mtk_g2d_uapi_map_format - map a @mtk_g2d_format onto a DRM fourcc.
- *
- * Returns a format the DRM side recognises, or NULL if there is none.
- *
- * The two directions are deliberately separate mappings rather than one
- * table walked backwards: the engine names its encodings, DRM names its own,
- * and the honest awkward case is MTK_G2D_PARGB8888 - the engine can encode a
- * pre-multiplied format and DRM has no fourcc for it, since
- * DRM_FORMAT_ARGB8888 names non-premultiplied alpha.  Rather than let the two
- * silently disagree about what the bytes mean, PARGB8888 is reported as
- * *unsupported* here and is excluded from the capability bitmap.  A caller
- * wanting pre-multiplied alpha has no representation for it yet; getting that
- * wrong would corrupt colours, which is a much worse outcome than a format
- * being unavailable.
+ * struct mtk_g2d_uapi_format - one fourcc, resolved
+ * @bpp: bytes per pixel, from &drm_format_info
+ * @index: @mtk_g2d_format_index this fourcc occupies, for the capability bitmap
  */
-static const struct drm_format_info *
-mtk_g2d_uapi_map_format(u32 format)
+struct mtk_g2d_uapi_format {
+	u32 bpp;
+	enum mtk_g2d_format_index index;
+};
+
+/**
+ * mtk_g2d_uapi_map_format - validate a DRM fourcc and report its properties.
+ * @format: a DRM fourcc, as userspace supplied it
+ * @out: format properties, written on success
+ *
+ * Returns 0, or -EINVAL if the engine cannot encode @format.
+ *
+ * The fourcc is the ABI; the engine's CLRFMT is not.  A caller describes a
+ * buffer the same way whichever device allocated it, and the driver picks the
+ * hardware encoding.  That is the reason the private enum is gone: it made
+ * every client carry a MediaTek-specific format number for something DRM
+ * already names.
+ *
+ * There is no mapping *table* here on purpose - the engine's five encodings
+ * include a pre-multiplied 8888 that DRM has no fourcc for, so the two sets
+ * are not the same size and an index-by-fourcc array would be the wrong shape.
+ * See mtk_g2d_uapi_to_clrfmt().
+ *
+ * On success @out->bpp is the format's bytes-per-pixel and @out->index is the
+ * @mtk_g2d_format_index this fourcc occupies in the capability bitmap, so the
+ * ioctl layer can report a format as supported without repeating the list.
+ */
+static int mtk_g2d_uapi_map_format(u32 format,
+				   struct mtk_g2d_uapi_format *out)
 {
+	const struct drm_format_info *info;
+	enum mtk_g2d_format_index index;
+
+	info = drm_format_info(format);
+	if (!info)
+		return -EINVAL;
+
 	switch (format) {
-	case MTK_G2D_RGB565:
-		return drm_format_info(DRM_FORMAT_RGB565);
-	case MTK_G2D_ARGB8888:
-		return drm_format_info(DRM_FORMAT_ARGB8888);
-	case MTK_G2D_RGB888:
-		return drm_format_info(DRM_FORMAT_RGB888);
-	case MTK_G2D_XRGB8888:
-		return drm_format_info(DRM_FORMAT_XRGB8888);
+	case DRM_FORMAT_RGB565:
+		index = MTK_G2D_FMT_RGB565;
+		break;
+	case DRM_FORMAT_ARGB8888:
+		index = MTK_G2D_FMT_ARGB8888;
+		break;
+	case DRM_FORMAT_RGB888:
+		index = MTK_G2D_FMT_RGB888;
+		break;
+	case DRM_FORMAT_XRGB8888:
+		index = MTK_G2D_FMT_XRGB8888;
+		break;
 	default:
-		/* Includes MTK_G2D_PARGB8888: see above. */
-		return NULL;
+		/*
+		 * Includes every format the engine could encode but DRM cannot
+		 * name - the pre-multiplied 8888 above all.  DRM_FORMAT_ARGB8888
+		 * names *non*-premultiplied alpha, so accepting it for a
+		 * premultiplied buffer would corrupt colours; refusing is the
+		 * only honest answer.  The UAPI header records why that format
+		 * is absent rather than working around it.
+		 */
+		return -EINVAL;
 	}
+
+	out->bpp = info->cpp[0];
+	out->index = index;
+
+	return 0;
 }
 
 /**
- * mtk_g2d_uapi_to_clrfmt - the DRM fourcc that came out of the mapping above,
- *	turned back into the engine's own CLRFMT encoding.
+ * mtk_g2d_uapi_to_clrfmt - a DRM fourcc turned into the engine's CLRFMT.
  * @format: a DRM fourcc
  * @out: CLRFMT, written on success
  *
- * The inverse of mtk_g2d_uapi_map_format().  It is a switch rather than an
- * index because the engine's enum is not dense - it has a hole where
- * PARGB8888 sits, and no fourcc to go with it - so walking an array of four
- * entries by fourcc would be the wrong shape.
+ * The engine-side half of mtk_g2d_uapi_map_format(), kept as a separate
+ * switch because the hardware encoding is what the rest of this file and all
+ * of mtk-g2d.c actually speak, and there is no reason to convert twice or to
+ * carry a fourcc down to the engine.
  *
  * The conversions are format-identities, not approximations: no swap bit
- * (RB_SWP, BYTE_SWP) or flip is programmed here, so a BGR variant of any of
- * these would be a different layout and is deliberately absent rather than
- * approximated.
+ * (RB_SWP, BYTE_SWP) and no flip is programmed for any of these, so a BGR or
+ * byte-swapped variant would be a different memory layout and is deliberately
+ * absent rather than approximated.  A caller that needs one must convert the
+ * buffer itself.
  *
  * Returns 0, or -EINVAL if @format has no CLRFMT encoding.
  */
@@ -215,8 +254,9 @@ static int mtk_g2d_uapi_to_clrfmt(u32 format, enum g2d_format *out)
  *
  * The checks, and why each one is here rather than left to the hardware:
  *
- *  1. @format must be one the engine can encode *and* that has a DRM fourcc
- *     (mtk_g2d_uapi_map_format()).  -EINVAL otherwise.
+ *  1. @format must be a DRM fourcc the engine can encode
+ *     (mtk_g2d_uapi_map_format(), then mtk_g2d_uapi_to_clrfmt() for the
+ *     hardware encoding).  -EINVAL otherwise.
  *
  *  2. @pitch must be 1..max_pitch and a whole number of pixels.  The pitch
  *     registers hold 14 bits, so an over-large pitch would be silently
@@ -258,8 +298,8 @@ static int mtk_g2d_uapi_resolve(struct drm_file *file_priv,
 				u32 rect_w, u32 rect_h,
 				struct mtk_g2d_uapi_surf *out)
 {
+	struct mtk_g2d_uapi_format fmt;
 	struct drm_gem_dma_object *dma_obj;
-	const struct drm_format_info *info;
 	u32 max_pitch, max_width, max_height, addr_align;
 	u64 row_end, last, start;
 	int ret;
@@ -267,15 +307,15 @@ static int mtk_g2d_uapi_resolve(struct drm_file *file_priv,
 	memset(out, 0, sizeof(*out));
 
 	/* 1. Format, before any arithmetic needs a bytes-per-pixel. */
-	info = mtk_g2d_uapi_map_format(s->format);
-	if (!info)
-		return -EINVAL;
-
-	ret = mtk_g2d_uapi_to_clrfmt(info->format, &out->fmt);
+	ret = mtk_g2d_uapi_map_format(s->format, &fmt);
 	if (ret)
 		return ret;
 
-	out->bpp = info->cpp[0];
+	ret = mtk_g2d_uapi_to_clrfmt(s->format, &out->fmt);
+	if (ret)
+		return ret;
+
+	out->bpp = fmt.bpp;
 	out->pitch = s->pitch;
 	out->width = s->width;
 	out->height = s->height;
@@ -376,8 +416,15 @@ static int mtk_g2d_uapi_resolve(struct drm_file *file_priv,
 
 	start = (u64)out->addr + (u64)s->y * s->pitch + (u64)s->x * out->bpp;
 
-	/* 6. Start-address alignment, per format. */
-	if (mtk_g2d_addr_align(s->format, &addr_align)) {
+	/*
+	 * 6. Start-address alignment, per format.  Keyed on the CLRFMT rather
+	 * than on the fourcc, because the alignment rule is a property of the
+	 * hardware encoding: the data sheet places no constraint on RGB888 and
+	 * requires 4 bytes for the 8888 formats.  Asking the engine by its own
+	 * enum keeps that rule in one place instead of restating it against
+	 * fourccs here.
+	 */
+	if (mtk_g2d_addr_align(out->fmt, &addr_align)) {
 		ret = -EINVAL;
 		goto err_put;
 	}
@@ -664,59 +711,63 @@ static void mtk_g2d_uapi_unlock_pair(struct mtk_g2d_uapi_surf *a,
 static int mtk_g2d_ioctl_get_cap(struct drm_device *dev, void *data,
 				 struct drm_file *file_priv)
 {
-	struct mtk_g2d_cap_info cap = {};
+	static const u32 g2d_fourccs[__MTK_G2D_FORMAT_COUNT] = {
+		[MTK_G2D_FMT_RGB565]	= DRM_FORMAT_RGB565,
+		[MTK_G2D_FMT_ARGB8888]	= DRM_FORMAT_ARGB8888,
+		[MTK_G2D_FMT_RGB888]	= DRM_FORMAT_RGB888,
+		[MTK_G2D_FMT_XRGB8888]	= DRM_FORMAT_XRGB8888,
+	};
+	struct mtk_g2d_uapi_format fmt;
 	struct mtk_g2d_get_cap *arg = data;
-	void __user *user_cap;
-	u32 fmt;
+	u32 i;
 
 	/*
-	 * drm_ioctl() has already copied the fixed-size argument in and will
-	 * copy it back out, so this only ever touches kernel memory.  The only
-	 * pointer to chase is the one inside the struct.
+	 * drm_ioctl() has already copied the argument in and copies it back out
+	 * after this returns, so the whole struct is kernel memory here and
+	 * there is no pointer to chase and nothing to copy by hand.
+	 *
+	 * There is deliberately no @size or @version: the ioctl number encodes
+	 * sizeof(struct mtk_g2d_get_cap), so a caller built against a
+	 * different layout does not reach this handler at all - it gets
+	 * -ENOTTY from the core's table lookup.  A version field could only
+	 * have pretended otherwise.
 	 */
-	if (arg->size < sizeof(*arg))
-		return -EINVAL;
-
-	user_cap = u64_to_user_ptr(arg->cap_info);
+	arg->cap_info.reserved = 0;
 
 	/*
-	 * No pointer, no copy: just report the size the caller should use.  This
-	 * is what lets a client size its buffer without knowing the layout.
+	 * Every format in the enum is supported by construction - the array
+	 * above is the same list the fourcc switch accepts, and a format the
+	 * engine cannot encode has no entry to name here - so the bitmap is
+	 * set from the table rather than re-derived by probing each fourcc.
+	 * The check is kept as a static_assert below because that identity is
+	 * the thing that could rot.
 	 */
-	if (!user_cap) {
-		arg->size = sizeof(cap);
-		return 0;
+	for (i = 0; i < __MTK_G2D_FORMAT_COUNT; i++) {
+		if (!g2d_fourccs[i])
+			continue;
+		if (mtk_g2d_uapi_map_format(g2d_fourccs[i], &fmt))
+			continue;
+		arg->cap_info.formats |= BIT(fmt.index);
 	}
 
-	/*
-	 * -E2BIG, not -EINVAL, when the caller's buffer cannot hold what the
-	 * driver would write.  It means "retry with a bigger buffer", which is
-	 * what makes the struct extensible in both directions.
-	 */
-	if (arg->size < sizeof(cap))
-		return -E2BIG;
-
-	cap.version = MTK_G2D_CAP_INFO_VERSION;
-	for (fmt = 0; fmt < __MTK_G2D_FORMAT_COUNT; fmt++) {
-		if (mtk_g2d_uapi_map_format(fmt))
-			cap.formats |= BIT(fmt);
-	}
-
-	cap.max_pitch = mtk_g2d_max_pitch();
-	cap.max_width = mtk_g2d_max_width();
-	cap.max_height = mtk_g2d_max_height();
-	cap.min_width = 1;
-	cap.min_height = 1;
-	cap.reserved = 0;
-
-	if (copy_to_user(user_cap, &cap, sizeof(cap)))
-		return -EFAULT;
-
-	/* Report what was actually written, so a future version can differ. */
-	arg->size = sizeof(cap);
+	arg->cap_info.max_pitch = mtk_g2d_max_pitch();
+	arg->cap_info.max_width = mtk_g2d_max_width();
+	arg->cap_info.max_height = mtk_g2d_max_height();
+	arg->cap_info.min_width = 1;
+	arg->cap_info.min_height = 1;
 
 	return 0;
 }
+
+/*
+ * The capability table above and the fourcc switch in
+ * mtk_g2d_uapi_map_format() have to agree, or GET_CAP would advertise a
+ * format the ioctls then reject.  Both lists are indexed by the same enum,
+ * and this pins the count so a fourth format cannot be added to one of them
+ * and forgotten in the other.
+ */
+static_assert(__MTK_G2D_FORMAT_COUNT == 4,
+	      "add the new format to g2d_fourccs and mtk_g2d_uapi_map_format()");
 
 /**
  * mtk_g2d_ioctl_blt - DRM_IOCTL_MTK_G2D_BLT
@@ -738,13 +789,13 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 	arg = *(struct mtk_g2d_blt *)data;
 
 	/*
-	 * Versioned.  The ioctl number's encoded size is fixed at the size this
-	 * driver knows, so @size can only be smaller (a caller passing a newer,
-	 * longer struct) - never larger - and a smaller one is refused rather
-	 * than read past.
+	 * No size or version check, and none is possible: the ioctl number
+	 * already encodes sizeof(struct mtk_g2d_blt), so a caller whose struct
+	 * differs in size has a number this driver's table does not contain and
+	 * was rejected by drm_ioctl() before this ran.  Everything below is
+	 * therefore kernel memory of exactly the layout this file was compiled
+	 * against.
 	 */
-	if (arg.size < MTK_G2D_BLT_MIN_SIZE)
-		return -E2BIG;
 
 	/* No flags are defined; a typo must not silently change behaviour. */
 	if (arg.flags)
@@ -833,8 +884,7 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 
 	arg = *(struct mtk_g2d_fill *)data;
 
-	if (arg.size < MTK_G2D_FILL_MIN_SIZE)
-		return -E2BIG;
+	/* As in mtk_g2d_ioctl_blt(): the ioctl number carries the size. */
 	if (arg.flags)
 		return -EINVAL;
 	if (!arg.rect_width || !arg.rect_height)
@@ -897,17 +947,6 @@ err_dst:
  */
 static_assert(MTK_G2D_NR_IOCTLS == 3,
 	      "MTK_G2D_NR_IOCTLS must match the mtk_g2d_ioctls table below");
-
-/*
- * A minimum-size constant larger than the struct it describes would reject
- * every call with -E2BIG, because a caller always passes the full struct.  This
- * caught exactly that once, when the minimum was computed by summing field
- * sizes in the wrong order and came out four bytes over.
- */
-static_assert(MTK_G2D_BLT_MIN_SIZE <= sizeof(struct mtk_g2d_blt),
-	      "MTK_G2D_BLT_MIN_SIZE exceeds sizeof(struct mtk_g2d_blt)");
-static_assert(MTK_G2D_FILL_MIN_SIZE <= sizeof(struct mtk_g2d_fill),
-	      "MTK_G2D_FILL_MIN_SIZE exceeds sizeof(struct mtk_g2d_fill)");
 
 const struct drm_ioctl_desc mtk_g2d_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(MTK_G2D_GET_CAP, mtk_g2d_ioctl_get_cap, 0),

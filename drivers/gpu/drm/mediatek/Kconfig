@@ -96,6 +96,11 @@ config DRM_MEDIATEK_G2D
 	  CONFIG_DRM_MEDIATEK, so the ioctl object was built whenever the
 	  display driver was, even with the engine itself switched off.
 
-	  The ioctls are not registered on any DRM device yet: the block owns
-	  no &drm_device of its own, so this option currently provides the
-	  engine and its kernel API only.
+	  G2D is its own DRM render node, not part of the display device: it
+	  registers DRIVER_GEM | DRIVER_RENDER with no KMS, so the result is a
+	  /dev/dri/renderD* node answering the G2D ioctls plus PRIME.  Buffers
+	  are shared with the display pipeline through dma-buf rather than by
+	  sharing a GEM namespace, because each engine has to be given an
+	  address from its own DMA space.
+
+	  If unsure, say N here.

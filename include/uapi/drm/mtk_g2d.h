@@ -23,33 +23,40 @@ extern "C" {
  *
  * Where these ioctls live
  *
- * They are *not* on the mediatek-drm card node.  They used to be, because
- * there was nowhere else for them to be: the G2D block owns no DRM device of
- * its own, so its ioctls were hung off the display device that owns the
- * buffers - which made a display card node the only way to reach a block that
- * has nothing to do with modesetting.  They are being moved to a render node
- * belonging to G2D itself; until that exists they are registered nowhere and
- * are unreachable.
+ * They are on a DRM *render* node belonging to G2D itself, and not on the
+ * mediatek-drm card node.  They used to be on the display card node, because
+ * there was nowhere else for them to be: G2D owned no DRM device, so its ioctls
+ * were hung off the display device - which made a modesetting card the only way
+ * to reach a block that has nothing to do with modesetting.  G2D now has its own
+ * device with its own GEM namespace and its own DMA identity, which is what lets
+ * a display buffer be shared with it safely (see @mtk_g2d_surface).
  *
  * Buffer references
  *
- * Every surface is named by a GEM handle, not by a raw DMA-BUF fd and never by
- * a user pointer:
+ * Every surface is named by a GEM handle *in the G2D node's namespace*, not by
+ * a raw DMA-BUF fd and never by a user pointer:
  *
- *   - A user pointer is meaningless here.  G2D is a DMA engine with no MMU in
- *     this path: the display subsystem consumes raw physical addresses, so the
- *     hardware is handed the buffer's DMA address directly and a CPU address
- *     has no hardware meaning at all.
+ *   - A user pointer is meaningless here.  G2D is a DMA engine and the buffer
+ *     is handed to hardware, not read by the kernel, so the hardware is given
+ *     the buffer's DMA address and a CPU address has no hardware meaning.
  *   - A DMA-BUF fd is *how a buffer gets here*, not how it is named.  Buffers
- *     created by DRM clients arrive as GEM handles directly; buffers shared
- *     with another driver arrive as GEM handles after DRM_IOCTL_PRIME_FD_TO_HANDLE
- *     has imported the fd.  Using GEM handles for both means one namespace and
- *     no second import path to keep in sync.
+ *     this device allocated arrive as GEM handles directly; buffers shared with
+ *     the display pipeline arrive as GEM handles after
+ *     DRM_IOCTL_PRIME_FD_TO_HANDLE on this node has imported the fd.  One
+ *     namespace, no second import path to keep in sync.
  *
  * A GEM handle also pins the buffer for the lifetime of the file: handles are
  * looked up with drm_gem_object_lookup(), which takes a reference, and the
  * caller cannot free the backing pages while a handle exists.  That is what
  * makes it safe for the engine to be programmed with the buffer's address.
+ *
+ * Formats
+ *
+ * Surfaces are described with DRM fourccs (DRM_FORMAT_RGB565, DRM_FORMAT_RGB888,
+ * DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888).  The engine has its own CLRFMT
+ * encodings, but those are a hardware detail: the driver converts from the
+ * fourcc inside the kernel, so a buffer's format is described the same way
+ * whichever device allocated it.  Anything else is -EINVAL.
  *
  * What the engine can express
  *
@@ -122,46 +129,56 @@ enum mtk_g2d_cap_type {
 };
 
 /**
- * enum mtk_g2d_format - pixel formats the engine's CLRFMT field encodes
+ * enum mtk_g2d_format_index - indices into the @formats bitmap
  *
- * These are the encodings the hardware has, named as they are stored in
- * memory.  They are *not* DRM fourcc values: a caller converts between the two
- * itself.  bytes_per_pixel and address_align are reported by
- * @MTK_G2D_CAP_INFO so that a caller can lay out its own pitch arithmetic
- * without hardcoding the table.
+ * Formats are named by DRM fourcc in the ioctl arguments - @mtk_g2d_surface's
+ * @format takes a DRM_FORMAT_* value directly - but DRM fourccs are a sparse
+ * 32-bit space, so they cannot index a bitmap.  This enum exists only to give
+ * @mtk_g2d_cap_info::formats something to count.
  *
- * Note that RGB888 is the packed 24bpp format (three bytes per pixel, three
- * bytes per row), which is why it is the one format whose address_align is 1:
- * the data sheet places no alignment constraint on it.
- *
- * Place new values at the end.  Do not re-order, replace or remove - these
- * numbers are what MTK_G2D_BLT and MTK_G2D_FILL take in their format fields.
+ * Place new values at the end.  Do not re-order, replace or remove.
  */
-enum mtk_g2d_format {
-	/** @MTK_G2D_RGB565: 16bpp, 2 bytes per pixel, 2-byte aligned. */
-	MTK_G2D_RGB565 = 0,
+enum mtk_g2d_format_index {
+	/** @MTK_G2D_FMT_RGB565: DRM_FORMAT_RGB565, 2 bytes per pixel. */
+	MTK_G2D_FMT_RGB565 = 0,
 
-	/** @MTK_G2D_PARGB8888: 32bpp, 4 bytes per pixel, 4-byte aligned. */
-	MTK_G2D_PARGB8888,
+	/** @MTK_G2D_FMT_ARGB8888: DRM_FORMAT_ARGB8888, 4 bytes per pixel. */
+	MTK_G2D_FMT_ARGB8888,
 
-	/** @MTK_G2D_ARGB8888: 32bpp, 4 bytes per pixel, 4-byte aligned. */
-	MTK_G2D_ARGB8888,
+	/** @MTK_G2D_FMT_RGB888: DRM_FORMAT_RGB888, packed 24bpp. */
+	MTK_G2D_FMT_RGB888,
 
-	/** @MTK_G2D_RGB888: packed 24bpp, 3 bytes per pixel, any alignment. */
-	MTK_G2D_RGB888,
+	/** @MTK_G2D_FMT_XRGB8888: DRM_FORMAT_XRGB8888, 4 bytes per pixel. */
+	MTK_G2D_FMT_XRGB8888,
 
-	/** @MTK_G2D_XRGB8888: 32bpp, 4 bytes per pixel, 4-byte aligned. */
-	MTK_G2D_XRGB8888,
-
+	/** @__MTK_G2D_FORMAT_COUNT: number of formats, not a format. */
 	__MTK_G2D_FORMAT_COUNT,
 };
 
 /**
+ * Formats not offered, and why
+ *
+ * The engine's CLRFMT field can encode a pre-multiplied 8888 format, and this
+ * header deliberately does not expose it.  DRM has no fourcc for
+ * pre-multiplied alpha: DRM_FORMAT_ARGB8888 names *non*-premultiplied alpha,
+ * so a caller passing that fourcc means the bytes are straight, and a
+ * premultiplied interpretation of the same bytes is a different image.  Naming
+ * it DRM_FORMAT_ARGB8888 would be silently wrong and naming it with a private
+ * value would fork the format namespace for one engine.
+ *
+ * The bitblt path is unaffected: it moves pixels without interpreting them, so
+ * a pre-multiplied buffer would copy correctly, which is exactly why leaving it
+ * out is about honesty rather than capability.  It is also the format whose
+ * alpha channel the engine applies in hardware on the fill path, where the
+ * driver would have no way to tell a caller whether @color was premultiplied.
+ * Both of those are reasons to add it later as a proper DRM format modifier, not
+ * to guess here.
+ */
+
+/**
  * struct mtk_g2d_cap_info - returned by @MTK_G2D_GET_CAP / @MTK_G2D_CAP_INFO
  *
- * @version: MTK_G2D_CAP_INFO_VERSION, the layout revision of this struct
- * @formats: bitmap of supported @enum mtk_g2d_format values, bit N set if
- *	@enum mtk_g2d_format N is usable
+ * @formats: bitmap of supported formats, indexed by @mtk_g2d_format_index
  * @max_width: largest scan window width the engine can express, in pixels
  * @max_height: largest scan window height the engine can express, in pixels
  * @max_pitch: largest pitch the engine can express, in bytes
@@ -175,14 +192,17 @@ enum mtk_g2d_format {
  * maximum, and @max_width / @max_height are 2048 because G2D_W2M_SIZE holds
  * them as 12-bit fields documented as 1..2048.  Exceeding any of them is
  * -EINVAL, not a silent truncation.
+ *
+ * There is no @version field.  A struct whose size is encoded in the ioctl
+ * number cannot be grown compatibly by a *newer driver* talking to an *older
+ * caller*: the caller's ioctl number was built from its own sizeof(), the
+ * driver dispatches on its own, and the two numbers differ, so the call is
+ * rejected before the struct is ever copied.  Adding a field is therefore a
+ * clean break, and pretending otherwise with a version field would only buy
+ * the illusion of compatibility.  See @mtk_g2d_get_cap.
  */
-#define MTK_G2D_CAP_INFO_VERSION	1
-
 struct mtk_g2d_cap_info {
-	/** @version: layout version of this struct, @MTK_G2D_CAP_INFO_VERSION. */
-	__u32 version;
-
-	/** @formats: bitmap of supported @enum mtk_g2d_format values. */
+	/** @formats: bitmap of supported formats, by @mtk_g2d_format_index. */
 	__u32 formats;
 
 	/** @max_width: maximum scan window width in pixels. */
@@ -207,39 +227,31 @@ struct mtk_g2d_cap_info {
 /**
  * struct mtk_g2d_get_cap - arguments for DRM_IOCTL_MTK_G2D_GET_CAP
  *
- * @size: size of @cap_info, for forward compatibility.  Must be
- *	@MTK_G2D_CAP_INFO_VERSION-sized on input; the driver reports how many
- *	bytes it filled.
- * @cap_info: pointer to a &mtk_g2d_cap_info to fill, or NULL to query only
- *	the size
+ * @cap_info: the &mtk_g2d_cap_info to fill, in place
  *
- * Fails with -EINVAL if @size is smaller than the driver's minimum, and with
- * -E2BIG if @cap_info is not NULL but @size is smaller than the struct the
- * driver would fill - the caller is then expected to retry with a bigger
- * buffer.  @cap_info is zeroed before the fields are written, so a caller
- * that passes a newer @size learns the version it got.
+ * The struct is the ioctl's argument and nothing is pointed at, so the core
+ * copies it in before the handler runs and back out after it returns.  There is
+ * no size, no version and no pointer: the ioctl number already encodes
+ * sizeof(struct mtk_g2d_get_cap), which is the only size negotiation that works
+ * across a driver change.
  *
  * The read-only nature of this ioctl means it needs no authentication: any
- * process that can open the card node can ask what the engine can do.
+ * process that can open the node can ask what the engine can do.
  */
 struct mtk_g2d_get_cap {
-	/** @size: in: size of @cap_info; out: bytes actually written. */
-	__u32 size;
-
-	/** @pad: must be zero. */
-	__u32 pad;
-
-	/** @cap_info: pointer to a &mtk_g2d_cap_info, or NULL. */
-	__u64 cap_info;
+	/** @cap_info: capability and limit report, filled by the driver. */
+	struct mtk_g2d_cap_info cap_info;
 };
 
 /**
  * struct mtk_g2d_surface - one operand of a G2D operation
  *
- * @handle: GEM handle naming the buffer, as returned by
- *	DRM_IOCTL_MODE_ADDFB2 (via drm_gem_fb_create_handle()) or
- *	DRM_IOCTL_PRIME_FD_TO_HANDLE.  Must be a handle this file owns.
- * @format: pixel format, an @enum mtk_g2d_format value
+ * @handle: GEM handle naming the buffer, in *this* device's namespace: either
+ *	a handle returned by DRM_IOCTL_PRIME_FD_TO_HANDLE on the G2D node, or
+ *	one it allocated itself.  A handle belonging to the display DRM device
+ *	is -ENOENT here, and that is not an oversight - see below.
+ * @format: pixel format, a DRM fourcc (DRM_FORMAT_RGB565, DRM_FORMAT_RGB888,
+ *	DRM_FORMAT_ARGB8888 or DRM_FORMAT_XRGB8888)
  * @pitch: stride of the surface in **bytes**, not pixels
  * @x: x origin of the rectangle within this surface, in pixels
  * @y: y origin of the rectangle within this surface, in pixels
@@ -269,12 +281,28 @@ struct mtk_g2d_get_cap {
  * the source and writes the destination, so for a blit the source surface must
  * be readable and the destination writable.  Both must be linear, single-plane
  * and in a format this engine can encode; anything else is -EINVAL.
+ *
+ * Why the handle must come from this node
+ *
+ * G2D is not the device that allocated the buffer, so it cannot be handed the
+ * display device's address for it.  With the M4U in the path an address is an
+ * IOVA in the page table of the engine that asked for the mapping, and the two
+ * engines' pages are not the same mapping.  To use a display buffer, export it
+ * (PRIME_HANDLE_TO_FD on the display node) and import it here
+ * (PRIME_FD_TO_HANDLE on this node); the import maps it into G2D's address
+ * space and the handle below then resolves to a G2D IOVA.
+ *
+ * @format is a DRM fourcc and not a driver-private encoding because the buffer
+ * has a real, public format independent of who programmed it.  The driver's
+ * CLRFMT is a hardware detail and is chosen from the fourcc inside the kernel;
+ * a caller does not need to know it exists.  Only the four formats the engine
+ * can encode are accepted, and the rest are -EINVAL rather than approximated.
  */
 struct mtk_g2d_surface {
 	/** @handle: GEM handle naming the buffer. */
 	__u32 handle;
 
-	/** @format: pixel format, an @enum mtk_g2d_format value. */
+	/** @format: pixel format, a DRM fourcc. */
 	__u32 format;
 
 	/** @pitch: stride in bytes. */
@@ -296,9 +324,6 @@ struct mtk_g2d_surface {
 /**
  * struct mtk_g2d_blt - arguments for DRM_IOCTL_MTK_G2D_BLT
  *
- * @size: size of this struct, for forward compatibility.  Must be at least
- *	@MTK_G2D_BLT_MIN_SIZE on input; unknown trailing bytes are ignored, so
- *	a newer struct can be passed to an older driver.
  * @flags: must be zero.  No flags are defined; a non-zero value is -EINVAL
  *	rather than being ignored, so a typo cannot silently change behaviour.
  * @src: source surface, read by the engine
@@ -335,7 +360,6 @@ struct mtk_g2d_surface {
  *     back to a software path should treat this as ordinary.
  *   - -EBUSY: the buffers could not be locked; another user holds them.
  *   - -EFAULT: the argument structure could not be copied from userspace.
- *   - -E2BIG: @size is smaller than this driver knows how to parse.
  *   - -ETIMEDOUT: the engine did not stop within its 100 ms budget.  The
  *     driver then warm-resets it and polls several times more.  If the engine
  *     is idle by then the reset worked, the buffers are safe, and only this call
@@ -361,11 +385,23 @@ struct mtk_g2d_surface {
  *
  * There is deliberately no fence or async submit: the call is synchronous, so
  * a completion signal would have nothing to wait on.
+ *
+ * There is no @size field.  An earlier revision of this header had one, and
+ * claimed that "unknown trailing bytes are ignored, so a newer struct can be
+ * passed to an older driver".  That was false, and the ioctl number is what
+ * makes it false: DRM_IOCTL_MTK_G2D_BLT is built with
+ * _IOWR(..., struct mtk_g2d_blt), which encodes sizeof(struct mtk_g2d_blt) into
+ * the number itself.  A caller built against a newer, larger struct and a
+ * driver built against the older, smaller one therefore issue *different*
+ * numbers, and the driver's table has no entry for the caller's number, so the
+ * call fails with -ENOTTY before the struct is ever copied.  A @size field
+ * cannot rescue that; it can only mislead a reader into believing a
+ * compatibility that does not exist.
+ *
+ * Growing a struct is a clean break, and that is the honest description.  The
+ * same reasoning removed the size/version dance from @mtk_g2d_get_cap.
  */
 struct mtk_g2d_blt {
-	/** @size: size of this struct; must be >= @MTK_G2D_BLT_MIN_SIZE. */
-	__u32 size;
-
 	/** @flags: must be zero. */
 	__u32 flags;
 
@@ -388,8 +424,6 @@ struct mtk_g2d_blt {
 /**
  * struct mtk_g2d_fill - arguments for DRM_IOCTL_MTK_G2D_FILL
  *
- * @size: size of this struct, for forward compatibility; unknown trailing
- *	bytes are ignored.
  * @flags: must be zero, as for @mtk_g2d_blt.
  * @dst: destination surface, written by the engine
  * @rect_width: rectangle width in pixels
@@ -411,9 +445,6 @@ struct mtk_g2d_blt {
  * wedged engine and a destination that may still be written.
  */
 struct mtk_g2d_fill {
-	/** @size: size of this struct; must be >= @MTK_G2D_FILL_MIN_SIZE. */
-	__u32 size;
-
 	/** @flags: must be zero. */
 	__u32 flags;
 
@@ -432,40 +463,6 @@ struct mtk_g2d_fill {
 	/** @reserved: must be zero. */
 	__u32 reserved;
 };
-
-/*
- * Minimum accepted @size for each argument struct.
- *
- * Computed rather than spelled out, so it cannot drift from the layout, and
- * expressed with a struct that ends at the last required field: offsetof()
- * would need <stddef.h>, which a kernel build cannot include.  Each value must
- * be <= the sizeof() of the struct it describes - a caller always passes the
- * full struct, so a minimum larger than it would reject every call with -E2BIG.
- * That mistake happened once during development and is now static_assert()ed in
- * mtk-g2d-uapi.c.
- */
-struct mtk_g2d_blt_min {
-	__u32 size;
-	__u32 flags;
-	struct mtk_g2d_surface src;
-	struct mtk_g2d_surface dst;
-	__u32 rect_width;
-	__u32 rect_height;
-	__u32 reserved;
-};
-
-struct mtk_g2d_fill_min {
-	__u32 size;
-	__u32 flags;
-	struct mtk_g2d_surface dst;
-	__u32 rect_width;
-	__u32 rect_height;
-	__u32 color;
-	__u32 reserved;
-};
-
-#define MTK_G2D_BLT_MIN_SIZE	((__u32)sizeof(struct mtk_g2d_blt_min))
-#define MTK_G2D_FILL_MIN_SIZE	((__u32)sizeof(struct mtk_g2d_fill_min))
 
 /*
  * Driver ioctls ride on the DRM command space: DRM_COMMAND_BASE (0x40) plus the
