@@ -945,22 +945,42 @@ err_dst:
 /**
  * mtk_g2d_ioctls - the driver ioctl table
  *
- * Non-static and intended for a &drm_driver belonging to the G2D node itself.
- * No such driver exists yet, so nothing references this table; DRM_IOCTL_DEF_DRV
- * places each entry at its own ioctl number, so these cannot collide with a
- * core DRM ioctl or with another driver's.
+ * DRM_IOCTL_DEF_DRV places each entry at its own ioctl number, so these cannot
+ * collide with a core DRM ioctl or with another driver's.  @mtk_g2d_drm_driver
+ * below is the &drm_driver that installs it.
  *
  * The flags are the access control:
  *
- *   - GET_CAP carries no flags, so it is available to any client that can open
- *     the node.  Querying limits changes nothing and has to be possible before
- *     a client authenticates.
+ *   - Every entry carries DRM_RENDER_ALLOW, and that is not decoration: it is
+ *     the only reason any of these ioctls works at all.  This node has no
+ *     primary minor - it is DRIVER_GEM | DRIVER_RENDER with no KMS - so every
+ *     client reaches it through /dev/dri/renderD*, and drm_ioctl_permit() in
+ *     drm_ioctl.c refuses *every* ioctl without DRM_RENDER_ALLOW to a client
+ *     that drm_is_render_client() reports, with -EACCES:
+ *
+ *		if (unlikely(!(flags & DRM_RENDER_ALLOW) &&
+ *			     drm_is_render_client(file_priv)))
+ *			return -EACCES;
+ *
+ *     Without the flag on these three entries, GET_CAP, BLT and FILL would all
+ *     fail for every process that can open the node, which is every process
+ *     this device exists for.  The core tables carry the same flag on its
+ *     render-reachable entries for the same reason.
+ *
+ *   - GET_CAP carries no DRM_AUTH, so it is available to any client that can
+ *     open the node.  Querying limits changes nothing and has to be possible
+ *     before a client authenticates.
  *
  *   - BLT and FILL carry DRM_AUTH and deliberately not DRM_MASTER.  DRM_AUTH is
  *     the important one: an unauthenticated process should not be able to make
  *     the engine write into buffers.  DRM_MASTER is withheld because a
  *     compositor's helper opens a render node and has no master at all, and
- *     that is exactly the client this exists for.
+ *     that is exactly the client this exists for.  Note that DRM_AUTH is
+ *     explicitly satisfied by a render client in this tree
+ *     (drm_ioctl_permit() waives it for drm_is_render_client()), so the two
+ *     flags together mean "render clients may call this; a non-render client
+ *     on a KMS node would have to authenticate first" - which is the intent,
+ *     and here the render-client waiver is the only half that can fire.
  */
 /*
  * The count is a compile-time constant the driver file needs but cannot
@@ -973,9 +993,12 @@ static_assert(MTK_G2D_NR_IOCTLS == 3,
 	      "MTK_G2D_NR_IOCTLS must match the mtk_g2d_ioctls table below");
 
 const struct drm_ioctl_desc mtk_g2d_ioctls[] = {
-	DRM_IOCTL_DEF_DRV(MTK_G2D_GET_CAP, mtk_g2d_ioctl_get_cap, 0),
-	DRM_IOCTL_DEF_DRV(MTK_G2D_BLT, mtk_g2d_ioctl_blt, DRM_AUTH),
-	DRM_IOCTL_DEF_DRV(MTK_G2D_FILL, mtk_g2d_ioctl_fill, DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(MTK_G2D_GET_CAP, mtk_g2d_ioctl_get_cap,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(MTK_G2D_BLT, mtk_g2d_ioctl_blt,
+			  DRM_AUTH | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(MTK_G2D_FILL, mtk_g2d_ioctl_fill,
+			  DRM_AUTH | DRM_RENDER_ALLOW),
 };
 
 /*
