@@ -237,8 +237,11 @@ static void mt6628_bt_rx(void *priv, const u8 *buf, size_t len)
 	struct sk_buff *skb;
 	u8 type;
 
-	if (len < 1)
+	if (len < 1) {
+		/* Not even a packet type byte: nothing can be handed on. */
+		bt->hdev->stat.err_rx++;
 		return;
+	}
 
 	type = buf[0];
 	switch (type) {
@@ -262,8 +265,16 @@ static void mt6628_bt_rx(void *priv, const u8 *buf, size_t len)
 	hci_skb_pkt_type(skb) = type;
 	bt->hdev->stat.byte_rx += len - 1;
 
-	if (hci_recv_frame(bt->hdev, skb) < 0)
-		bt->hdev->stat.err_rx++;
+	/*
+	 * hci_recv_frame() takes ownership of the skb unconditionally and
+	 * frees it on each of its error returns (net/bluetooth/hci_core.c
+	 * :2887 and :2921), so there is nothing left to free here and no
+	 * driver-side rejection to account for.  A negative return means
+	 * the core refused the frame (device not up, or a packet type it
+	 * will not accept), which is not this driver's rx error, so
+	 * err_rx is not incremented for it.
+	 */
+	hci_recv_frame(bt->hdev, skb);
 }
 
 static int mt6628_bt_probe(struct platform_device *pdev)
@@ -322,9 +333,30 @@ static void mt6628_bt_remove(struct platform_device *pdev)
 	if (!bt)
 		return;
 
-	hci_unregister_dev(bt->hdev);
+	/*
+	 * Drop the STP RX callback before the hci_dev goes away.
+	 *
+	 * mt6628_stp_unregister_rx() takes wmt->rx_lock
+	 * (drivers/net/wireless/mediatek/mt6628/mtk-stp.c:740), which is
+	 * the lock mt6628_bt_rx() itself is dispatched under (mtk-stp.c
+	 * :451-456), so once it returns no frame is in flight and none can
+	 * start: bt->hdev cannot be touched again.
+	 *
+	 * hci_unregister_dev() must therefore come second.  It ends with
+	 * device_del() plus hci_dev_put() (net/bluetooth/hci_core.c
+	 * :2700-2702); the last put_device() then runs the bt_host release
+	 * method, which calls hci_release_dev() and finally kfree(hdev)
+	 * (net/bluetooth/hci_sysfs.c:82-92, net/bluetooth/hci_core.c
+	 * :2707 and :2740).  The reverse order would leave the callback
+	 * registered against a freed hci_dev.
+	 *
+	 * remove() runs from the MFD teardown of the parent transport
+	 * (mtk-stp.c:1640-1647), not from a STP RX callback, so it does
+	 * not already hold rx_lock.
+	 */
 	mt6628_stp_unregister_rx(bt->wmt, MT6628_STP_TASK_BT,
 				 mt6628_bt_rx, bt);
+	hci_unregister_dev(bt->hdev);
 	hci_free_dev(bt->hdev);
 }
 
