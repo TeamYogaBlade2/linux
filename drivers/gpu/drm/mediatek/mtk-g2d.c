@@ -369,12 +369,49 @@ static void g2d_recover(struct mtk_g2d *g2d)
 	g2d_wedge(g2d);
 }
 
+/**
+ * g2d_irq_handler - retire the G2D interrupt line.
+ * @irq: interrupt number
+ * @data: the &struct mtk_g2d
+ *
+ * This handler deliberately completes nothing, and that is a considered
+ * decision rather than a missing feature.  G2D_START would be followed by
+ * this interrupt instead of by a poll, and the wait would be
+ * wait_for_completion_timeout(), but the evidence for doing that does not
+ * hold up:
+ *
+ *  - G2D_IRQ.IRQ_STA is documented as RW, "Write 0 to clear IRQ", and the
+ *    same entry adds that for debugging "software can write 1 to force G2D
+ *    to issue IRQ" (data sheet ch. 53, p. 1917).  So the bit is
+ *    software-writable, and nothing in the data sheet says when the hardware
+ *    sets it or guarantees it is set *only* when an operation ends.
+ *  - There is no documented ordering between IRQ_STA and STATUS.BUSY.  An
+ *    interrupt-driven wait would have to treat IRQ_STA as "the copy is
+ *    finished", and that is an inference, not a documented guarantee.
+ *  - The vendor HAL for this SoC is no help.  It registers MT_G2D_IRQ_ID
+ *    and its handler logs "G2D done!" when IRQ_STA is set, but it never
+ *    writes DISP_REG_G2D_START anywhere in the tree - the only G2D register
+ *    it ever writes is G2D_IRQ, from inside that handler.  The vendor never
+ *    runs the engine, so its interrupt path is no more proven than one written
+ *    here.
+ *
+ * Getting this wrong is not a hang or a lost interrupt, it is worse: a stale
+ * or software-forced IRQ_STA would be believed, the call would return
+ * success, and the caller would release a destination the engine may still be
+ * writing.  Polling STATUS.BUSY cannot have that failure mode - it can only
+ * ever be too slow, never wrong about whether the engine stopped.
+ *
+ * So the interrupt stays enabled and handled, and the operation still
+ * completes by polling.  What the line buys today is diagnostics: a stuck
+ * engine is visible in /proc/interrupts rather than silent.
+ */
 static irqreturn_t g2d_irq_handler(int irq, void *data)
 {
 	struct mtk_g2d *g2d = data;
 	u32 irq_reg;
 
-	/* The predicate is IRQ_STA, not STATUS.BUSY: by the time the engine
+	/*
+	 * The predicate is IRQ_STA, not STATUS.BUSY: by the time the engine
 	 * raises the interrupt it has normally finished the operation and
 	 * BUSY already reads 0.
 	 */
@@ -394,9 +431,17 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
  * g2d_start - fire one operation and wait for it to finish.
  * @g2d: device
  *
- * The completion wait is a poll, not an interrupt wait: the interrupt only
- * retires the level-sensitive line, so a late or lost interrupt cannot turn
- * into a hang.
+ * The completion wait is a poll of STATUS.BUSY, not an interrupt wait.  See
+ * g2d_irq_handler() for why: the data sheet does not document IRQ_STA as a
+ * reliable "operation finished" predicate on this part, and a wait that
+ * believed it could hand a caller back a destination the engine is still
+ * writing.
+ *
+ * The poll has one property the interrupt cannot have, which is what the
+ * rest of this driver is built on: it only ever reports "the engine is still
+ * running", never "the engine finished" on false evidence.  Being too slow is
+ * survivable - the caller's memory is still owned - whereas a premature
+ * completion is not.
  */
 static int g2d_start(struct mtk_g2d *g2d)
 {

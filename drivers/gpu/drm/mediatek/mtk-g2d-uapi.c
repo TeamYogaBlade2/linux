@@ -471,6 +471,20 @@ static void mtk_g2d_uapi_release(struct mtk_g2d_uapi_surf *surf)
  * ---------------------------------------------------------------------------
  * Lifetime.
  *
+ * The rule this section exists to keep: an -ETIMEDOUT from BLT or FILL never
+ * means "the buffers are yours again".  Both handlers below drop their GEM
+ * references and unlock both reservations on every path, including the
+ * failure paths, because the reference is a kernel object count and not a
+ * claim that the engine has finished with the memory - and that is safe
+ * precisely because of what the driver does instead.
+ *
+ * On the failure path the engine has been declared *wedged* rather than
+ * released: g2d_wedge() shuts out every later submission, so the memory the
+ * hardware may still be writing can no longer be handed to anything that
+ * would reuse it.  The cost is the right one for an accelerator that can no
+ * longer promise it has stopped.  See g2d_wedge() and the -ETIMEDOUT section
+ * of @mtk_g2d_blt in the UAPI header.
+ *
  * The engine reads and writes memory that userspace owns, asynchronously with
  * respect to userspace's view of it.  Two things therefore have to be true for
  * the whole of an operation, and both are established here rather than assumed:
