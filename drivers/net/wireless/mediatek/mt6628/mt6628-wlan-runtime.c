@@ -94,10 +94,26 @@ static int mt6628_runtime_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 
 static void mt6628_runtime_free_queues(struct mt6628_wlan *wl)
 {
+	struct sk_buff *skb;
+
 	skb_queue_purge(&wl->tx_queue);
 	skb_queue_purge(&wl->rx_queue);
 	skb_queue_purge(&wl->event_queue);
-	skb_queue_purge(&wl->mgmt_queue);
+
+	/*
+	 * mgmt_pending counts the frames in mgmt_queue, and it is only
+	 * decremented by mt6628_runtime_mgmt_work().  That work has already
+	 * been cancelled by the time the queue is purged here, so every frame
+	 * dropped now needs its count given back by hand.  Otherwise the
+	 * counter stays above zero, and mt6628_cfg80211_mgmt_rx_done() only
+	 * reports a finished scan once it reaches zero, so that scan would
+	 * never be completed.
+	 */
+	while ((skb = skb_dequeue(&wl->mgmt_queue))) {
+		kfree_skb(skb);
+		if (atomic_dec_and_test(&wl->mgmt_pending))
+			mt6628_cfg80211_mgmt_rx_done(wl);
+	}
 }
 
 static void mt6628_runtime_event_work(struct work_struct *work)
