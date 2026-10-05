@@ -135,6 +135,34 @@
 		#size-cells = <0>;
 		enable-method = "mediatek,mt6589-smp";
 
+		/*
+		 * Every CPU below declares the same two clocks: the mux
+		 * itself as "cpu", and a safe clock to park on as
+		 * "intermediate" while ARMPLL is reprogrammed.
+		 *
+		 * "intermediate" must therefore be derived from that mux.
+		 * CLK_INFRA_ARMDIV1 divides the MUX1 output through
+		 * TOP_CKDIV1.clkdiv1_sel, bits [4:0] (datasheet
+		 * pp. 435-437).  These nodes used to name clk26m there,
+		 * which is not a rate on the CPU's own path at all but an
+		 * unrelated always-on oscillator - it was a placeholder
+		 * for a clock whose real name had not been worked out.
+		 *
+		 * mediatek-cpufreq.c is what consumes both names: it reads
+		 * "intermediate" by name, reparents the CPU onto it around
+		 * the ARMPLL write, and looks up an OPP matching the
+		 * intermediate rate to derive a safe intermediate voltage.
+		 * Pointing it at clk26m made both the reparent target and
+		 * that voltage lookup meaningless.
+		 *
+		 * Note also that MUX1's first parent is CLKSQ, the squared
+		 * 26 MHz from the clock squarer, not a raw 26 MHz tap
+		 * (TOP_CKMUXSEL.mux1_sel bits [3:2], datasheet p. 436), so
+		 * clk26m was not even the right name for what MUX1 selects.
+		 *
+		 * See Documentation/clk/mediatek-mt6589-unused-gates.rst.
+		 */
+
 		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
@@ -151,7 +179,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -173,7 +201,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -195,7 +223,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -217,7 +245,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;

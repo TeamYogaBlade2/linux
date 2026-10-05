@@ -151,6 +151,22 @@ static const struct clk_ops mt6589_armdiv_ops = {
 
 static DEFINE_SPINLOCK(mt6589_infra_clk_lock);
 
+/*
+ * TOPCKMUXSEL.mux1_sel is bits [3:2] and takes four values
+ * (datasheet p. 436):
+ *
+ *	00: CLKSQ	01: ARMPLL	10: MAINPLL	11: MMPLL/2
+ *
+ * The first parent is named "clk26m" because CLKSQ is the clock
+ * squarer output of the external 26 MHz VCXO (datasheet p. 1340
+ * section 34.3.7, and the CLKSQ1/CLKSQ2 taps on p. 1341).  The name
+ * is therefore accurate about the frequency but not about the node:
+ * CLKSQ is a square-wave version of the pad input, not a raw 26 MHz
+ * tap.  Nothing in this driver depends on the spelling - it only has
+ * to match the "clk26m" fixed-clock in mt6589.dtsi - so it is left
+ * alone rather than renamed here, since other MT6589 clock trees
+ * would then have to change with it.
+ */
 static const char * const infra_mux1_parents[] = {
 	"clk26m",
 	"armpll",
