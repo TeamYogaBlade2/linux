@@ -1475,33 +1475,38 @@
 		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE
 		 * and CLK_DISP0_G2D_SMI.
 		 *
-		 * No "iommus" property YET, even though the block is on LARB2
-		 * port 11 (MT6589_M4U_PORT_G2D).  The port assignment is real -
-		 * G2D is a DMA client with its own SRC/W2M/DST addresses - but
-		 * the property is being added in stages, and adding it now would
-		 * be worse than leaving it out:
-		 *
-		 *  - The driver is still reached through the mediatek-drm
-		 *    master's ioctls and resolves GEM handles in the MASTER's
-		 *    namespace, so every address it programs today is the
-		 *    address the display DMA device produced.  Arming port 11
-		 *    while that is true would switch the engine to virtual
-		 *    addressing (mtk-smi.c programs SMI_SECUR_CON_VAL_VIRT per
-		 *    port for exactly those a domain attached) while the master
-		 *    kept handing out physical ones - the engine would then read
-		 *    and write through a page table that does not describe its
-		 *    buffers.
-		 *
-		 * The fix is not to leave G2D out of the M4U.  It is to give G2D
-		 * its own DMA identity first: G2D becomes its own drm_device
-		 * (DRIVER_GEM | DRIVER_RENDER, no KMS), its dma_dev becomes the
-		 * G2D platform device rather than OVL, and it owns its own GEM
+		 * "iommus" arms LARB2 port 11 (MT6589_M4U_PORT_G2D) and installs
+		 * the M4U's DMA ops on this platform device.  The port assignment
+		 * is real - G2D is a DMA client with its own SRC/W2M/DST
+		 * addresses - and the property is here because the driver gives
+		 * G2D a DMA identity to match: G2D is its own drm_device
+		 * (DRIVER_GEM | DRIVER_RENDER, no KMS), its dma_dev is this
+		 * platform device rather than OVL, and it owns its own GEM
 		 * namespace, importing display buffers through PRIME/dma-buf so
 		 * each engine's address is mapped in the address space that
-		 * engine reads.  Only once that is true does an "iommus" here
-		 * describe reality, and the property must be added in the same
-		 * change as the dma_dev switch - never before, and never to a
-		 * driver still borrowing another device's addresses.
+		 * engine reads.  A GEM dma_addr allocated against this device is
+		 * then an IOVA the engine can actually be handed, which is the
+		 * whole reason the property exists.
+		 *
+		 * The ordering is the point and it is not negotiable: this must
+		 * never be added to a driver still borrowing another device's
+		 * addresses.  Arming the port switches the engine to virtual
+		 * addressing - mtk-smi.c programs SMI_SECUR_CON_VAL_VIRT for
+		 * exactly those ports a domain attached - while a borrower would
+		 * still be programming the physical addresses its host produced,
+		 * and the engine would then read and write through a page table
+		 * that does not describe its buffers.
+		 *
+		 * One link in this chain is not closed by reading the code:
+		 * mtk-smi.c writes SMI_SECUR_CON_VAL_VIRT from
+		 * mtk_smi_larb_resume(), which runs on the LARB's pm_runtime
+		 * resume, while the port bit is armed by the IOMMU attaching this
+		 * device.  A port armed after the LARB's last resume would have
+		 * its mmu bit set without a matching SECUR_CON write.  That
+		 * ordering is identical for every display client that already
+		 * carries an "iommus" on this SoC (ovl, rdma0, rdma1), so this
+		 * node introduces no new class of problem; it is written down
+		 * because it is the part that can only be settled on hardware.
 		 */
 		g2d: g2d@14013000 {
 			compatible = "mediatek,mt6589-g2d";
@@ -1510,6 +1515,7 @@
 			clocks = <&dispsys CLK_DISP0_G2D_ENGINE>,
 				 <&dispsys CLK_DISP0_G2D_SMI>;
 			clock-names = "g2d-engine", "g2d-smi";
+			iommus = <&iommu MT6589_M4U_PORT_G2D>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 

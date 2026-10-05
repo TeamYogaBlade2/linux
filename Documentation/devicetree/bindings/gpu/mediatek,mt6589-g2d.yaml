@@ -49,6 +49,14 @@ properties:
     maxItems: 1
 
   iommus:
+    description: >
+      M4U port for the G2D engine's SRC, W2M and DST address registers.
+      G2D is a DMA client with its own address registers, so it needs its
+      own translation: the driver makes this platform device the DRM
+      device's dma_dev and allocates GEM memory against it, so a GEM
+      dma_addr is an IOVA this engine can be handed.  The driver cannot
+      work without it, because it programs addresses produced by that
+      device and no other.
     maxItems: 1
 
 required:
@@ -57,6 +65,7 @@ required:
   - interrupts
   - clocks
   - clock-names
+  - iommus
 
 additionalProperties: false
 
