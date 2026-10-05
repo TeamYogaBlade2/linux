@@ -438,12 +438,6 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
 	struct mtk_g2d *g2d = data;
 	u32 irq_reg;
 
-	/*
-	 * Clear IRQ_STA without touching EN: the two fields share G2D_IRQ, and
-	 * writing 0 through EN would mute the line for good.  Write the read
-	 * value back with only IRQ_STA dropped, so an unnamed bit in the same
-	 * word is never disturbed.
-	 */
 	irq_reg = readl(g2d->regs + G2D_IRQ);
 	if (!(irq_reg & G2D_IRQ_IRQ_STA))
 		return IRQ_NONE;
@@ -476,12 +470,22 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
  * still owned, whereas a premature completion is not.  A spurious or forced
  * interrupt therefore just costs a re-poll.
  *
- * The completion is re-armed before START is written, so an interrupt that
+* The completion is re-armed before START is written, so an interrupt that
  * lands between the two cannot be missed, and so a leftover completion from a
  * previous operation cannot be taken for this one.
+ *
+ * And the interrupt is a *wakeup*, never an authority: G2D_STATUS decides
+ * whether the operation finished, and it is consulted after the wait whether
+ * or not the completion ever arrived.  See g2d_irq_handler() for why that
+ * distinction is not academic - IRQ_STA is software-writable, so a forced or
+ * stale interrupt landing in the window below can complete the wait early and
+ * must not be able to end the call.  The ordering below is therefore not
+ * load-bearing: without the drain the wait could return immediately and the
+ * STATUS poll below would still be the thing that decides.
  */
 static int g2d_start(struct mtk_g2d *g2d)
 {
+	u32 irq_reg;
 	int ret;
 
 	/*
@@ -495,10 +499,35 @@ static int g2d_start(struct mtk_g2d *g2d)
 	if (g2d->wedged)
 		return -ETIMEDOUT;
 
-		/*
-		 * Re-arm before START, so neither a late interrupt from the previous
-		 * operation nor one racing this write can be missed or misread.
-		 */
+	/*
+	 * Drain first, then re-arm, then START.  All three, in this order, and
+	 * the reason each is here:
+	 *
+	 *  - The drain clears a stale IRQ_STA left by a previous operation, or
+	 *    by a recovery: G2D_RESET.WRST does not reset the APB-side IRQ
+	 *    status (see g2d_reset()), so the bit can well survive one.  G2D_IRQ
+	 *    packs IRQ_STA and EN together, so the read-modify-write below
+	 *    clears the status without dropping the enable - writing the whole
+	 *    register as zero would mute a negative level sensitive line for
+	 *    good.  No completion is signalled, so this cannot itself re-arm
+	 *    anything.
+	 *  - reinit_completion() then discards any completion the handler ran
+	 *    while the line was still pending, so a leftover cannot be taken for
+	 *    this operation's.
+	 *  - Only then is START written, so an interrupt raised by *this*
+	 *    operation cannot be missed.
+	 *
+	 * This ordering is an optimisation, not the correctness argument.  If
+	 * IRQ_STA is set by software in the window between the drain and the
+	 * wait, the wait simply returns at once and the STATUS poll below still
+	 * has to confirm the engine is idle before success is reported - so the
+	 * worst a spurious interrupt can do here is cost a re-poll, never
+	 * produce a false success on a destination still being written.
+	 */
+	irq_reg = readl(g2d->regs + G2D_IRQ);
+	if (irq_reg & G2D_IRQ_IRQ_STA)
+		writel(irq_reg & ~G2D_IRQ_IRQ_STA, g2d->regs + G2D_IRQ);
+
 	reinit_completion(&g2d->done);
 
 	writel(0, g2d->regs + G2D_START);
