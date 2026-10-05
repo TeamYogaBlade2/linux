@@ -32,6 +32,17 @@ properties:
       0x0000-0x00ff; the rest of the block is the pipeline itself.
     maxItems: 1
 
+  interrupts:
+    description: |
+      The CAM block's interrupt, GIC SPI 151 (Cam_irq_b), level active low.
+      The driver enables IMGO_DONE_EN in CAM_CTL_DMA_INT and keys its
+      handler off IMGO_DONE_ST, so without this a capture can start but no
+      frame ever completes.
+
+      The property is optional: the driver falls back to running without an
+      interrupt, which cannot deliver a frame, rather than failing probe.
+    maxItems: 1
+
   clocks:
     maxItems: 1
 
@@ -68,6 +79,7 @@ examples:
     cam: cam@15004000 {
         compatible = "mediatek,mt6589-cam";
         reg = <0x0 0x15004000 0x0 0x400>;
+        interrupts = <151 8>;
 
         ports {
             cam_in: port@0 {
