@@ -111,15 +111,16 @@ static void mt6628_conn_put_bss(struct mt6628_wlan *wl)
 	wl->conn_bss = NULL;
 }
 
-static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
+/*
+ * Tear down the firmware-side connection state.  Keys are indexed by peer,
+ * so mt6628_conn_fw_cleanup() removes them before this runs.
+ *
+ * The caller must hold cfg_mutex: this reads and rewrites sta_rec_idx,
+ * conn_bssid and channel_req_type.
+ */
+static void mt6628_conn_fw_teardown_locked(struct mt6628_wlan *wl)
 {
 	int ret;
-
-	if (!wl->runtime_started || !wl->fw_running || !wl->netdev)
-		return;
-
-	/* Keys are indexed by peer, so drop them before the STA-REC goes. */
-	mt6628_wlan_flush_keys(wl);
 
 	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
 		ret = mt6628_wlan_activate_bss(wl, false);
@@ -150,6 +151,49 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 				 "failed to release channel privilege: %d\n",
 				 ret);
 	}
+}
+
+static bool mt6628_conn_fw_cleanup_possible(struct mt6628_wlan *wl)
+{
+	return wl->runtime_started && wl->fw_running && wl->netdev;
+}
+
+static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
+{
+	if (!mt6628_conn_fw_cleanup_possible(wl))
+		return;
+
+	/* Keys are indexed by peer, so drop them before the STA-REC goes. */
+	mt6628_wlan_flush_keys(wl);
+	mt6628_conn_fw_teardown_locked(wl);
+}
+
+/*
+ * The same teardown for a caller that already holds cfg_mutex.
+ *
+ * mt6628_wlan_flush_keys() takes cfg_mutex itself, so it cannot run while
+ * this thread holds the lock: taking it a second time here would park the
+ * calling worker forever on a lock it already owns, blocking every later
+ * nl80211 operation and every workqueue behind it.  Drop the lock for that
+ * one call and retake it for the STA-REC, which keeps the keys ahead of the
+ * record they belong to.
+ *
+ * The unlock window is the same one mt6628_cfg80211_fw_beacon_timeout() and
+ * mt6628_connect_timeout_work() already use.  Callers must therefore have
+ * published the disconnected state under the lock before calling this, so
+ * that a connect() arriving in the window does not find live connection
+ * state to race with.
+ */
+static void mt6628_conn_fw_cleanup_locked(struct mt6628_wlan *wl)
+{
+	if (!mt6628_conn_fw_cleanup_possible(wl))
+		return;
+
+	mutex_unlock(&wl->cfg_mutex);
+	mt6628_wlan_flush_keys(wl);
+	mutex_lock(&wl->cfg_mutex);
+
+	mt6628_conn_fw_teardown_locked(wl);
 }
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
@@ -1480,8 +1524,14 @@ static bool mt6628_rx_mgmt_frame(struct sk_buff *skb,
 	return true;
 }
 
-static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
-					       u16 status_code)
+/*
+ * Both connection result helpers run with cfg_mutex held: they hand
+ * connection state straight to cfg80211, which must not see it change
+ * underneath it.  Their teardown therefore goes through the _locked form,
+ * which drops cfg_mutex only around mt6628_wlan_flush_keys().
+ */
+static void mt6628_connect_auth_result_locked(struct mt6628_wlan *wl,
+					      u16 status_code)
 {
 	int ret;
 
@@ -1491,8 +1541,8 @@ static void mt6628_connect_auth_result(struct mt6628_wlan *wl,
 				     status_code, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
 		mt6628_conn_put_bss(wl);
-		mt6628_conn_fw_cleanup(wl);
 		mt6628_conn_set_disconnected(wl);
+		mt6628_conn_fw_cleanup_locked(wl);
 		mt6628_conn_free_ies(wl);
 		return;
 	}
@@ -1516,15 +1566,15 @@ timeout:
 	cfg80211_connect_timeout(wl->netdev, wl->conn_bssid,
 				 wl->conn_req_ie, wl->conn_req_ie_len,
 				 GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
-	mt6628_conn_fw_cleanup(wl);
 	mt6628_conn_set_disconnected(wl);
+	mt6628_conn_fw_cleanup_locked(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 }
 
-static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
-						struct ieee80211_mgmt *mgmt,
-						size_t frame_len)
+static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
+					       struct ieee80211_mgmt *mgmt,
+					       size_t frame_len)
 {
 	size_t resp_ie_len;
 	const u8 *resp_ie;
@@ -1540,8 +1590,8 @@ static void mt6628_connect_assoc_result(struct mt6628_wlan *wl,
 				     le16_to_cpu(mgmt->u.assoc_resp.status_code),
 				     GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
 		mt6628_conn_put_bss(wl);
-		mt6628_conn_fw_cleanup(wl);
 		mt6628_conn_set_disconnected(wl);
+		mt6628_conn_fw_cleanup_locked(wl);
 		mt6628_conn_free_ies(wl);
 		return;
 	}
@@ -1588,14 +1638,14 @@ timeout:
 	cfg80211_connect_timeout(wl->netdev, wl->conn_bssid,
 				 wl->conn_req_ie, wl->conn_req_ie_len,
 				 GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
-	mt6628_conn_fw_cleanup(wl);
 	mt6628_conn_set_disconnected(wl);
+	mt6628_conn_fw_cleanup_locked(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 }
 
 bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
-					     struct sk_buff *skb)
+				     struct sk_buff *skb)
 {
 	struct ieee80211_mgmt *mgmt;
 	unsigned int frame_len;
@@ -1627,7 +1677,7 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 		if (frame_len < offsetof(struct ieee80211_mgmt,
 					 u.auth.variable)) {
 			mutex_unlock(&wl->cfg_mutex);
-			return true;
+			goto drop;
 		}
 
 		transaction = le16_to_cpu(mgmt->u.auth.auth_transaction);
@@ -1639,7 +1689,7 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 				if (le16_to_cpu(mgmt->u.auth.status_code) !=
 				    WLAN_STATUS_SUCCESS) {
 					relevant = true;
-					mt6628_connect_auth_result(wl,
+					mt6628_connect_auth_result_locked(wl,
 						le16_to_cpu(
 							mgmt->u.auth.status_code));
 					goto auth_done;
@@ -1657,15 +1707,15 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 
 			if (transaction != 4) {
 				mutex_unlock(&wl->cfg_mutex);
-				return true;
+				goto drop;
 			}
 		} else if (transaction != 2) {
 			mutex_unlock(&wl->cfg_mutex);
-			return true;
+			goto drop;
 		}
 
 		relevant = true;
-		mt6628_connect_auth_result(wl,
+		mt6628_connect_auth_result_locked(wl,
 				le16_to_cpu(mgmt->u.auth.status_code));
 auth_done:
 		;
@@ -1674,10 +1724,10 @@ auth_done:
 		if (frame_len < offsetof(struct ieee80211_mgmt,
 					 u.assoc_resp.variable)) {
 			mutex_unlock(&wl->cfg_mutex);
-			return true;
+			goto drop;
 		}
 		relevant = true;
-		mt6628_connect_assoc_result(wl, mgmt, frame_len);
+		mt6628_connect_assoc_result_locked(wl, mgmt, frame_len);
 	} else if ((ieee80211_is_deauth(fc) || ieee80211_is_disassoc(fc)) &&
 		   wl->conn_state != MT6628_CONN_DISCONNECTED) {
 		u16 reason;
@@ -1689,7 +1739,7 @@ auth_done:
 			offsetof(struct ieee80211_mgmt, u.disassoc.reason_code) +
 			sizeof(mgmt->u.disassoc.reason_code))) {
 			mutex_unlock(&wl->cfg_mutex);
-			return true;
+			goto drop;
 		}
 
 		reason = ieee80211_is_deauth(fc) ?
@@ -1698,7 +1748,7 @@ auth_done:
 		relevant = true;
 		if (connected) {
 			mt6628_conn_set_disconnected(wl);
-			mt6628_conn_fw_cleanup(wl);
+			mt6628_conn_fw_cleanup_locked(wl);
 			mutex_unlock(&wl->cfg_mutex);
 			cfg80211_disconnected(wl->netdev, reason, NULL, 0, false,
 				      GFP_KERNEL);
@@ -1708,8 +1758,8 @@ auth_done:
 				     WLAN_STATUS_UNSPECIFIED_FAILURE, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
 			mt6628_conn_put_bss(wl);
-			mt6628_conn_fw_cleanup(wl);
 			mt6628_conn_set_disconnected(wl);
+			mt6628_conn_fw_cleanup_locked(wl);
 			mt6628_conn_free_ies(wl);
 			mutex_unlock(&wl->cfg_mutex);
 		}
@@ -1721,4 +1771,13 @@ auth_done:
 	if (relevant)
 		kfree_skb(skb);
 	return relevant;
+
+	/*
+ * A frame of the right kind but too short to carry the field this state
+ * machine needs: it has been accounted for as handled, so the event is
+ * consumed here rather than passed on as an unhandled frame.
+ */
+drop:
+	kfree_skb(skb);
+	return true;
 }
