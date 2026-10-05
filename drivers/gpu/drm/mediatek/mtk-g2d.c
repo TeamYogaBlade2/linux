@@ -5,20 +5,20 @@
  * G2D - 2D blitter in the MediaTek display subsystem.
  *
  * Register map, bit fields and the programming sequence all come from the
- * MT6589 data sheet, section 53 ("G2D").  What is implemented here is the
- * part that can be expressed without guessing: a bitblt operation between
- * source and destination surfaces, plus a constant-colour fill.
+ * MT6589 data sheet, chapter 53 ("2D Acceleration", p. 1914).  What is
+ * implemented here is the part that can be expressed without guessing: a
+ * bitblt operation between source and destination surfaces, plus a
+ * constant-colour fill.
  *
  * Two details from the data sheet are easy to get wrong and are called out
  * where they are used:
  *
  *  - The pitch registers are in BYTES, not pixels, and the pitch divided by
- *    the format's bytes-per-pixel must be at least the ROI width.  This is
- *    the opposite of the OVL and RDMA pitch registers, which count pixels.
+ *    the format's bytes-per-pixel must be at least the ROI width (p. 1923).
  *
  *  - The engine resets itself once it has fired, so no explicit reset is
  *    needed between operations.  G2D_START bit 0 wants a 0 written before
- *    the 1 that triggers the operation.
+ *    the 1 that triggers the operation (p. 1915).
  */
 
 #include <linux/clk.h>
@@ -38,19 +38,15 @@
 #include "mtk-g2d.h"
 
 /*
- * Control block - documented 16 bits wide in the data sheet's address map.
- *
- * These five registers are nonetheless read and written as 32-bit values on
- * purpose.  The vendor HAL for this same block does exactly that: ddp_reg.h
- * defines DISP_REG_GET as a "volatile unsigned int" load and DISP_REG_SET as
- * mt65xx_reg_sync_writel(), which sync_write.h expands to writel(), and
- * ddp_drv.c reads G2D_STATUS and G2D_IRQ - both documented 16 bits here -
- * only through those 32-bit macros.  MediaTek's APB registers are commonly
- * 32-bit-accessible even when only the low 16 bits are defined, so the
- * documented width is a field width, not an access constraint.  The register
- * offsets and the bit assignments agree with the data sheet; only the
- * documented width differs, and the vendor is the authority on how the
- * hardware is actually driven.
+ * Control block - documented 16 bits wide in the data sheet's address map
+ * (p. 1914) but nonetheless read and written as 32-bit values on purpose.
+ * The vendor HAL does exactly that: ddp_reg.h defines DISP_REG_GET as a
+ * "volatile unsigned int" load and DISP_REG_SET as mt65xx_reg_sync_writel(),
+ * which sync_write.h expands to writel(), and ddp_drv.c reads G2D_STATUS and
+ * G2D_IRQ - both documented 16 bits here - only through those 32-bit macros.
+ * MediaTek's APB registers are commonly 32-bit-accessible even when only the
+ * low 16 bits are defined, so the documented width is a field width, not an
+ * access constraint.
  */
 #define G2D_START			0x00
 #define G2D_MODE_CON			0x04
@@ -74,11 +70,11 @@
 #define G2D_SRC_COLOR			0xd4
 /*
  * W2M_SIZE carries the destination scan window: WIDTH in bits [27:16] and
- * HEIGHT in bits [11:0].  It is the only size field in the block.
+ * HEIGHT in bits [11:0], both 12-bit unsigned, range 1..2048 (p. 1920).
  *
  * DI_MAT_0/DI_MAT_1 are the *dither* matrix, not a rectangle - they are
- * left at their reset values.  There is no ROI register; the source
- * rectangle is implied by the scan window and the source base address.
+ * left at their reset values (0x26374051).  There is no ROI register; the
+ * source rectangle is implied by the scan window and the source base address.
  */
 #define G2D_DI_MAT_0			0xd8
 #define G2D_DI_MAT_1			0xdc
@@ -135,7 +131,6 @@
 #define G2D_PITCH_MASK		GENMASK(13, 0)
 #define G2D_PITCH_MAX		0x2000
 
-/* W2M_SIZE WIDTH/HEIGHT are 12 bits with a documented range of 1..2048. */
 #define G2D_MAX_WIDTH		2048
 #define G2D_MAX_HEIGHT		2048
 
@@ -188,10 +183,7 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
 
 	/*
 	 * readl_poll_timeout() does its own deadline arithmetic, so the
-	 * microsecond budget needs no jiffies conversion here, and it sleeps
-	 * between reads.  A hand-rolled "while (BUSY) cpu_relax()" loop spins
-	 * on the APB bus without ever yielding, which is a scheduler-hostile
-	 * way to sit on a mutex for a 100 ms budget.
+	 * microsecond budget needs no conversion, and it sleeps between reads.
 	 */
 	return readl_poll_timeout(g2d->regs + G2D_STATUS, status,
 				  !(status & G2D_STATUS_BUSY), 20,
@@ -212,26 +204,23 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
  *	G2D_RESET = 0;
  *
  * "Please follow the correct reset sequence to avoid potential bus hang
- * problem (breaking bus protocol)."  Skipping the STATUS poll, or asserting
- * WRST while START is still high, is precisely what breaks the bus protocol,
- * so the steps below are issued in that order and are not reordered.
+ * problem (breaking bus protocol)." (p. 1916)  Skipping the STATUS poll, or
+ * asserting WRST while START is still high, is precisely what breaks the bus
+ * protocol, so the steps below are issued in that order and are not reordered.
  *
  * The data sheet's poll is unbounded; in the kernel it is bounded, so a
- * genuinely stuck engine cannot hang the caller.  The reset is de-asserted
- * either way: leaving WRST asserted would keep the engine permanently in
- * reset for every later operation.
+ * genuinely stuck engine cannot hang the caller.
  *
  * G2D_IRQ is deliberately left untouched.  The data sheet scopes the register
  * resets precisely: APB_RESET alone "resets G2D APB registers to initial
  * value", and HRST resets everything "except for APB registers" - so this
  * warm reset is not even documented to clear the APB-side IRQ status, and a
  * pending IRQ_STA may well survive it.  It must not be cleaned up here
- * regardless: IRQ_STA and EN share one register, so any write aimed at the
- * status that did not preserve EN would drop EN as well, and the line is
- * negative level sensitive, so the driver would never see another completion.
- * Leaving the register alone is safe in both cases - if a stale IRQ_STA
- * remains, the handler sees it, clears it and keeps EN, exactly as it does
- * for a genuine completion, and the engine is idle so nothing is missed.
+ * regardless: IRQ_STA and EN share one register (p. 1917), so any write aimed
+ * at the status that did not preserve EN would drop EN as well, and the line
+ * is negative level sensitive, so the driver would never see another
+ * completion.  If a stale IRQ_STA does remain, the handler sees it, clears it
+ * and keeps EN, exactly as it does for a genuine completion.
  *
  * Must be called with @g2d->lock held; the caller is the only writer of the
  * control block, so this serialises against the next operation's programming.
@@ -255,11 +244,10 @@ static void g2d_reset(struct mtk_g2d *g2d)
 
 	if (status & G2D_STATUS_BUSY) {
 		/*
-		 * Out of reset, but the engine never went idle.  That is the
-		 * one case recovery cannot fix on its own, so report it: the
-		 * caller still gets -ETIMEDOUT, but a blit that will keep
-		 * failing needs to be traceable rather than looking like an
-		 * ordinary slow one.
+		 * Out of reset, but never idle - the one case recovery cannot
+		 * fix on its own.  The caller still gets -ETIMEDOUT, but a blit
+		 * that will keep failing needs to be traceable rather than
+		 * looking like an ordinary slow one.
 		 */
 		dev_err(g2d->dev,
 			"G2D still busy after warm reset, engine may be wedged\n");
@@ -278,7 +266,7 @@ static void g2d_reset(struct mtk_g2d *g2d)
  * flag alone would leave that hardware state in place, and the next blit
  * would reprogram the engine and re-issue START while the previous operation
  * was possibly still running - which is how a single stall turns into
- * permanently corrupted output.  So reset the hardware before returning.
+ * permanently corrupted output.
  *
  * Must be called with @g2d->lock held.
  */
@@ -293,18 +281,15 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
 	struct mtk_g2d *g2d = data;
 	u32 irq_reg;
 
-	/*
-	 * The interrupt predicate is IRQ_STA, not STATUS.BUSY: by the time the
-	 * engine raises the interrupt it has normally finished the operation
-	 * and BUSY already reads 0, so gating on BUSY would make the handler
-	 * claim the interrupt is not ours.
+	/* The predicate is IRQ_STA, not STATUS.BUSY: by the time the engine
+	 * raises the interrupt it has normally finished the operation and
+	 * BUSY already reads 0.
 	 */
 	irq_reg = readl(g2d->regs + G2D_IRQ);
 	if (!(irq_reg & G2D_IRQ_IRQ_STA))
 		return IRQ_NONE;
 
-	/*
-	 * Clear IRQ_STA without touching EN: the two fields share G2D_IRQ,
+	/* Clear IRQ_STA without touching EN: the two fields share G2D_IRQ,
 	 * and a write of 0 would leave EN at 0 and mute the line for good.
 	 */
 	writel(irq_reg & ~G2D_IRQ_IRQ_STA, g2d->regs + G2D_IRQ);
@@ -316,12 +301,9 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
  * g2d_start - fire one operation and wait for it to finish.
  * @g2d: device
  *
- * Writes G2D_START = 0 then 1, which is what the data sheet asks for, and
- * then waits for G2D_STATUS to read 0.
- *
  * The completion wait is a poll, not an interrupt wait: the interrupt only
- * retires the level-sensitive line, so nothing here depends on it and a late
- * or lost interrupt cannot turn into a hang.
+ * retires the level-sensitive line, so a late or lost interrupt cannot turn
+ * into a hang.
  */
 static int g2d_start(struct mtk_g2d *g2d)
 {
@@ -332,11 +314,9 @@ static int g2d_start(struct mtk_g2d *g2d)
 
 	ret = g2d_wait_idle(g2d);
 	if (ret) {
-		/*
-		 * The engine did not finish in time and BUSY may still be set.
-		 * Recover the hardware *before* handing the timeout back, so
-		 * the next caller does not reprogram a still-running engine and
-		 * re-issue START on top of it.
+		/* Recover the hardware *before* handing the timeout back, so
+		 * the next caller does not reprogram a still-running engine
+		 * and re-issue START on top of it.
 		 */
 		g2d_recover(g2d);
 		return ret;
@@ -376,10 +356,8 @@ u32 mtk_g2d_max_height(void)
  * @align: alignment in bytes, returned to the caller
  *
  * The public form of g2d_check_align(): the same table, the same
- * g2d_check_fmt() test, so a caller that validates a request against this cannot
- * accept a format the engine would then reject - or the reverse, which would be
- * worse, since a format the engine does not have is one whose encoding the
- * caller has no way to predict.
+ * g2d_check_fmt() test, so a caller validating a request against this cannot
+ * disagree with the engine about which formats exist.
  *
  * @align is only written on success.
  */
@@ -406,17 +384,15 @@ int mtk_g2d_addr_align(u32 format, u32 *align)
  * @height: scan window height, in pixels
  *
  * Everything rejected here is a hard error rather than something to clamp:
- * the pitch registers only hold 14 bits with 0x2000 as the usable maximum,
- * so an over-large pitch would be silently truncated to a different (and
- * possibly zero) pitch, and W2M_SIZE holds WIDTH and HEIGHT as 12 bits
- * documented as 1..2048.
+ * the pitch registers only hold 14 bits with 0x2000 as the usable maximum, so
+ * an over-large pitch would be silently truncated to a different (and possibly
+ * zero) pitch.
  *
  * The rectangle must fit within a single row, origin included: (x + width) *
  * bpp must not exceed the pitch.  Checking only width * bpp <= pitch would
  * leave a rectangle that starts partway along a row free to run off the end of
  * it, and for the destination that is a write into memory the caller never
- * handed over.  The origin is baked into the address the engine is given, so
- * the bound has to be checked against it as well as against the pitch.
+ * handed over.
  *
  * @height is deliberately not bounded here.  The engine is only ever told a
  * starting address and a pitch, so it cannot walk more rows than the caller
@@ -431,21 +407,16 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
 	if (!height || height > G2D_MAX_HEIGHT)
 		return -EINVAL;
 
-	/*
-	 * Pitch is in bytes: the entire rectangle, origin included, must fit in
-	 * one row, and the pitch must be a whole number of pixels.  The sum is
-	 * evaluated in u64 so a large x cannot wrap past the check on a
-	 * configuration where dma_addr_t is 32 bits wide.
+	/* The sum is evaluated in u64 so a large x cannot wrap past the check
+	 * on a configuration where dma_addr_t is 32 bits wide.
 	 */
 	if (pitch > G2D_PITCH_MAX)
 		return -EINVAL;
 	if ((u64)(x + width) * bpp > pitch || pitch % bpp)
 		return -EINVAL;
 
-	/*
-	 * The origin is capped at the same scan-window bound the size is
-	 * checked against, so that the whole request is describable in the
-	 * register set without further reasoning.
+	/* Cap the origin at the same scan-window bound the size is checked
+	 * against, so the whole request is describable in the register set.
 	 */
 	if (x > G2D_MAX_WIDTH || y > G2D_MAX_HEIGHT)
 		return -EINVAL;
@@ -458,7 +429,7 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
  * @addr: start address, already offset by x/y
  *
  * The data sheet requires 2-byte alignment for RGB565 and 4-byte alignment
- * for the 8888 formats; RGB888 output may start at any address.
+ * for the 8888 formats; RGB888 output may start at any address (p. 1918).
  */
 static int g2d_check_align(dma_addr_t addr,
 			   const struct g2d_format_info *fmt)
@@ -483,17 +454,14 @@ static int g2d_check_align(dma_addr_t addr,
  * configuration where dma_addr_t is 32 bits wide (this one: LPAE and HIGHMEM
  * are off, so CONFIG_ARCH_DMA_ADDR_T_64BIT is not set).  A wrapped address
  * is exactly the sort of value that still passes the alignment test, and it
- * would send the engine to write somewhere else entirely.  So reject any
- * origin whose byte offset does not fit rather than programming a wrapped
- * one.
+ * would send the engine to write somewhere else entirely.
  *
  * The caller must already have run g2d_check_rect() on this surface, which
  * bounds pitch and keeps x * bpp well clear of any overflow.
  *
  * There is no hardware offset register in this block, so the origin is folded
- * into the base address here, in software, before it reaches the engine.  That
- * is also why the source and destination origins are independent of each
- * other: they are two separate base-address registers.
+ * into the base address here.  That is also why the source and destination
+ * origins are independent: they are two separate base-address registers.
  */
 static int g2d_check_offset(dma_addr_t base, u32 pitch, u32 bpp,
 			     u32 x, u32 y, dma_addr_t *addr)
@@ -522,10 +490,6 @@ static int g2d_check_offset(dma_addr_t base, u32 pitch, u32 bpp,
  * @width: scan window width, in pixels
  * @height: scan window height, in pixels
  *
- * This is the register-programming half of a bitblt, split out so that the
- * legacy one-origin form and the full two-origin form share exactly one
- * sequence.  Both entry points funnel through here, so the two cannot drift.
- *
  * Must be called with @g2d->lock held.
  */
 static int g2d_program_blt(struct mtk_g2d *g2d,
@@ -537,49 +501,42 @@ static int g2d_program_blt(struct mtk_g2d *g2d,
 {
 	/*
 	 * The address registers are 32 bits wide, which is also the width of
-	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
-	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
+	 * dma_addr_t on this configuration (LPAE and HIGHMEM are both off), and
 	 * g2d_check_offset() has already refused anything that would not fit.
 	 *
 	 * The addresses written here are in the *DMA address space of the DRM
 	 * master*, not this engine's own: the buffers are drm_gem objects
 	 * allocated by the mediatek-drm master, since the G2D ioctls resolve a
-	 * GEM handle in that device's namespace (mtk-g2d-uapi.c).  On this tree
-	 * no M4U domain is attached to that master or to any display engine,
-	 * so that address space is the physical one and equals what the engine
-	 * programs.  This is a property of the whole display path, not of G2D:
-	 * OVL and RDMA take dma_obj->dma_addr the same way and are MT6589-proven
-	 * with it.  See the G2D node comment in mt6589.dtsi for why attaching
-	 * the M4U port here in isolation would corrupt memory.
+	 * GEM handle in that device's namespace (mtk-g2d-uapi.c:255-260).  On
+	 * this tree no M4U domain is attached to that master or to any display
+	 * engine, so that address space is the physical one and equals what the
+	 * engine programs.  This is a property of the whole display path, not of
+	 * G2D: OVL and RDMA take dma_obj->dma_addr the same way and are
+	 * MT6589-proven with it.  See the G2D node comment in mt6589.dtsi for
+	 * why attaching the M4U port here in isolation would corrupt memory.
 	 */
 	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
 	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
 	writel(g2d_formats[src_fmt].clrfmt, g2d->regs + G2D_SRC_CON);
 
 	/*
-	 * The write target is the W2M (write-to-memory) engine.  The data
-	 * sheet's note on W2M_CON.DST_NEQ says that when the destination read
-	 * buffer is the same as the write buffer - which is what a plain
-	 * bitblt is - the bit is 0 and the driver then does not need to set
-	 * G2D_DST_CON, G2D_DST_ADDR or G2D_DST_PITCH at all.  DST_NEQ is 0 out
-	 * of reset, so only the W2M side is programmed here.
+	 * The write target is the W2M (write-to-memory) engine.  W2M_CON.DST_NEQ
+	 * (p. 1918) says that when the destination read buffer is the same as
+	 * the write buffer - which is what a plain bitblt is - the bit is 0 and
+	 * G2D_DST_CON, G2D_DST_ADDR and G2D_DST_PITCH need not be set at all.
+	 * DST_NEQ is 0 out of reset, so only the W2M side is programmed here.
 	 *
-	 * Note that G2D_DST_* is the destination *read* port, used for
-	 * read-modify-write blending, not an alternative write target: the only
-	 * writable surface is W2M_ADDR.  That is why a blit programs two
-	 * addresses here and why G2D_DST_ADDR cannot be used as a second
-	 * destination origin.
+	 * G2D_DST_* is the destination *read* port, for read-modify-write
+	 * blending, not an alternative write target: the only writable surface
+	 * is W2M_ADDR.
 	 */
 	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
 	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
 	writel(g2d_formats[dst_fmt].clrfmt, g2d->regs + G2D_W2M_CON);
 
-	/*
-	 * G2D_W2M_SIZE is the width and height of the destination scan window,
-	 * and it is the only geometry register in the block: there is no
-	 * G2D_SRC_SIZE, no ROI and no clip register.  Both ports therefore
-	 * always move the same number of pixels, which is what makes one shared
-	 * window unavoidable and is the one real limitation of this engine.
+	/* The only geometry register in the block: there is no G2D_SRC_SIZE, no
+	 * ROI and no clip register, so both ports always move the same number
+	 * of pixels.
 	 */
 	writel((width << 16) | height, g2d->regs + G2D_W2M_SIZE);
 
@@ -602,18 +559,15 @@ static int g2d_program_blt(struct mtk_g2d *g2d,
  * window that both ports share.  A blit from a buffer onto itself is only
  * meaningful when the two regions are disjoint: the engine reads a row and
  * writes a row, and with overlapping regions the outcome depends on the order
- * it does that in, which nothing in this driver specifies or can observe.  So
- * an in-place blit is reported as an overlap and rejected, rather than
- * producing the usual undefined result.
+ * it does that in, which nothing in this driver specifies or can observe.
  *
- * Two distinct base addresses cannot alias, whatever the origins - they are
- * two different allocations - so the arithmetic only runs for the same-surface
- * case.  There the comparison is done in bytes, because the two ports may have
- * different bytes-per-pixel, but only over the rows where the two rectangles
- * actually meet: the y ranges are compared first, and a row range that does not
- * intersect cannot overlap at all.  The pitch is deliberately not used - within
- * one row each rectangle is a contiguous run of pixels, so the byte offsets of
- * the two origins decide it.
+ * Two distinct base addresses cannot alias, whatever the origins, so the
+ * arithmetic only runs for the same-surface case.  It is done in bytes,
+ * because the two ports may have different bytes-per-pixel, and only over the
+ * rows where the two rectangles actually meet: the y ranges are compared
+ * first.  The pitch is deliberately not used - within one row each rectangle
+ * is a contiguous run of pixels, so the byte offsets of the two origins decide
+ * it.
  */
 static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
 			       u32 src_x, u32 src_y,
@@ -627,16 +581,13 @@ static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
 	if (src != dst)
 		return false;
 
-	/* Rows the two rectangles have in common. */
 	y_start = max(src_y, dst_y);
 	y_end = min(src_y + height, dst_y + height);
 	if (y_start >= y_end)
 		return false;
 
-	/*
-	 * Within any shared row, the source span and the destination span are
-	 * each a contiguous byte range, so one interval intersection decides
-	 * every shared row at once.
+	/* Within any shared row both spans are contiguous byte ranges, so one
+	 * interval intersection decides every shared row at once.
 	 */
 	s = (u64)src_x * src_bpp;
 	d = (u64)dst_x * dst_bpp;
@@ -663,26 +614,14 @@ static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
  * @height: rectangle height, in pixels
  *
  * The source and destination origins are independent, so this expresses a true
- * move as well as a same-coordinate copy.
- *
- * What is shared is the *size*: G2D_W2M_SIZE describes the single scan window
- * that both ports read and write, so a source rectangle and a destination
- * rectangle can never differ in size.  The engine has no per-surface size
- * register to express one.
- *
- * The origins themselves are not hardware offsets - the block has no offset
- * register at all - they are folded into the two base addresses in software
- * here, which is why each surface's origin is validated against *that*
- * surface's pitch and alignment.
+ * move as well as a same-coordinate copy.  What is shared is the *size*:
+ * G2D_W2M_SIZE describes the single scan window that both ports read and write,
+ * so a source rectangle and a destination rectangle can never differ in size.
  *
  * @src and @dst may name the same surface only if the two rectangles do not
- * overlap; an overlapping in-place blit is rejected with -EINVAL rather than
- * producing the usual undefined result, because the engine reads and writes in
- * an order this driver cannot describe.
- *
- * Every argument is validated before any register is programmed, so a request
- * rejected with -EINVAL leaves the engine untouched.  Blocks until the engine
- * is idle; -ETIMEDOUT means it did not stop, after a warm reset.
+ * overlap.  Every argument is validated before any register is programmed, so
+ * a request rejected with -EINVAL leaves the engine untouched.  Blocks until
+ * the engine is idle; -ETIMEDOUT means it did not stop, after a warm reset.
  */
 int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
 		      dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
@@ -708,11 +647,7 @@ int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
 	src_bpp = g2d_formats[src_fmt].bytes_per_pixel;
 	dst_bpp = g2d_formats[dst_fmt].bytes_per_pixel;
 
-	/*
-	 * Validate both surfaces up front: the registers must not be touched at
-	 * all unless the whole request is programmable.  Each surface is
-	 * checked against its own origin, because the origins differ.
-	 */
+	/* Both surfaces are validated up front, each against its own origin. */
 	ret = g2d_check_rect(src_pitch, src_bpp, src_x, src_y, width, height);
 	if (ret)
 		return ret;
@@ -727,7 +662,6 @@ int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
 	if (ret)
 		return ret;
 
-	/* Each origin must carry its own format's start-address alignment. */
 	ret = g2d_check_align(src_addr, &g2d_formats[src_fmt]);
 	if (ret)
 		return ret;
@@ -756,10 +690,8 @@ int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
  * @x: x offset, in pixels, applied to both the source and the destination
  * @y: y offset, in pixels, applied to both the source and the destination
  *
- * The legacy one-origin form, kept because it is what a same-coordinate copy
- * means and it is the smaller call.  It is exactly
- * mtk_g2d_blt_rect() with @src_x == @dst_x == @x and @src_y == @dst_y == @y;
- * it shares that function's programming sequence verbatim.
+ * Exactly mtk_g2d_blt_rect() with @src_x == @dst_x == @x and @src_y == @dst_y
+ * == @y; it shares that function's programming sequence verbatim.
  */
 int mtk_g2d_blt(struct mtk_g2d *g2d,
 		dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
@@ -805,10 +737,8 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 
 	mutex_lock(&g2d->lock);
 
-	/*
-	 * Same shape as the bitblt destination: the write target is the W2M
-	 * engine, and COLOR_EN (bit 9, named DST_COLOR_EN on both control
-	 * registers) selects the constant colour instead of a buffer.
+	/* Same shape as the bitblt destination: COLOR_EN (bit 9, named
+	 * DST_COLOR_EN) selects the constant colour instead of a buffer.
 	 */
 	writel((u32)dst_addr, g2d->regs + G2D_W2M_ADDR);
 	writel(dst_pitch & G2D_PITCH_MASK, g2d->regs + G2D_W2M_PITCH);
@@ -816,7 +746,6 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 	con = g2d_formats[dst_fmt].clrfmt | G2D_CON_COLOR_EN;
 	writel(con, g2d->regs + G2D_W2M_CON);
 
-	/* No source surface: the colour comes from W2M's constant colour. */
 	writel(color, g2d->regs + G2D_DST_COLOR);
 
 	writel((width << 16) | height, g2d->regs + G2D_W2M_SIZE);
@@ -847,20 +776,15 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 
 	/*
 	 * No dma_set_mask() call, deliberately.  This engine does no DMA of its
-	 * own: it is handed addresses that the DRM master already allocated
-	 * (see the G2D node comment in mt6589.dtsi), so a mask here would not
-	 * bound anything it can see.  Where a mask would matter is the master,
-	 * and the relevant limit is already enforced there.
+	 * own: it is handed addresses that the DRM master already allocated (see
+	 * the G2D node comment in mt6589.dtsi), so a mask here would not bound
+	 * anything it can see.
 	 *
-	 * The window itself is a real 32-bit one, not 28: the data sheet
-	 * defines G2D_W2M_ADDR, G2D_SRC_ADDR and G2D_DST_ADDR as full [31:0]
-	 * registers (ch. 53, p. 1914), so the (u32) casts in
-	 * g2d_program_blt() are not narrowing anything.  The pitch registers
-	 * are the narrow ones - [13:0], maximum 0x2000, which is what
-	 * G2D_PITCH_MASK and G2D_PITCH_MAX encode - and the scan window is
-	 * 12 bits, maximum 2,048x2,048.  MT6589 has at most 2 GB of LPDDR2 and
-	 * this kernel builds without LPAE or HIGHMEM, so dma_addr_t is 32 bits
-	 * and every reachable address fits.
+	 * The window is a real 32-bit one, not 28: the data sheet defines
+	 * G2D_W2M_ADDR, G2D_SRC_ADDR and G2D_DST_ADDR as full [31:0] registers
+	 * (ch. 53, p. 1914), so the (u32) casts in g2d_program_blt() are not
+	 * narrowing anything.  What is narrow is the pitch - [13:0], maximum
+	 * 0x2000 - and the scan window, 12 bits, maximum 2,048x2,048.
 	 */
 
 	g2d->clk_engine = devm_clk_get(dev, "g2d-engine");
@@ -908,12 +832,9 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	return 0;
 
 disable_clocks:
-	/*
-	 * The clocks were taken with clk_prepare_enable() above, not with
-	 * devm_clk_*_enable(), so unwinding is explicit: every path that leaves
-	 * probe after a clock was enabled must come through here.  Order is the
-	 * reverse of acquisition - smi first, then engine - and each clock is
-	 * disabled exactly once, on the one path that took it.
+	/* The clocks were taken with clk_prepare_enable() above, not with
+	 * devm_clk_*_enable(), so unwinding is explicit: reverse of
+	 * acquisition order - smi first, then engine.
 	 */
 	clk_disable_unprepare(g2d->clk_smi);
 	clk_disable_unprepare(g2d->clk_engine);
@@ -926,10 +847,8 @@ disable_clocks:
  *
  * The clocks were enabled with clk_prepare_enable(), which devm does not
  * undo, so without this the engine and SMI clock gates stay enabled for the
- * rest of the boot after the device is unbound.  devm frees the register
- * mapping, the IRQ and the allocation after this returns, so the clocks must
- * go first and in reverse acquisition order.  Mutex destruction is not
- * needed - the memory is about to be freed.
+ * rest of the boot after the device is unbound, so they must go before the
+ * devm cleanup.  Mutex destruction is not needed.
  */
 static void mtk_g2d_remove(struct platform_device *pdev)
 {
@@ -949,7 +868,7 @@ static int mtk_g2d_suspend(struct platform_device *pdev,
 	 * The line is negative level sensitive, so leaving the IRQ enabled
 	 * across a suspend means a completion that lands while the clocks are
 	 * off calls the handler against register reads that no longer have a
-	 * clock behind them.  Mask it first; unmask on resume.
+	 * clock behind them.
 	 */
 	disable_irq(g2d->irq);
 
@@ -994,10 +913,8 @@ MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
  * has no blitter.  NULL is a normal answer, not an error: the MDP DRM device
  * has no G2D, and callers must fall back rather than fail when there is none.
  *
- * The reference is what makes the returned pointer safe to use.  A bare
- * dev_get_drvdata() on a device found by node would be a use-after-free the
- * moment the platform device unbound, and unbinding is not gated on the DRM
- * device going away.
+ * The reference is what makes the returned pointer safe to use: unbinding is
+ * not gated on the DRM device going away.
  */
 struct mtk_g2d *mtk_g2d_get(struct device *dev)
 {
@@ -1009,15 +926,13 @@ struct mtk_g2d *mtk_g2d_get(struct device *dev)
 		return NULL;
 
 	/*
-	 * G2D is a sibling of the DRM device under MMSYS, not a child of it,
-	 * so this walks MMSYS - the same enumeration mtk_drm_probe() does when
-	 * it looks for the DISP blocks.  Being under MMSYS is not enough on
-	 * its own: an MDP DRM device sits under the same MMSYS and has no G2D,
-	 * which is why this is a lookup and not a shared global.
+	 * G2D is a sibling of the DRM device under MMSYS, not a child of it, so
+	 * this walks MMSYS.  Being under MMSYS is not enough on its own: an MDP
+	 * DRM device sits under the same MMSYS and has no G2D, which is why this
+	 * is a lookup and not a shared global.
 	 *
 	 * The node may be absent, disabled, unbound or bound; each of those is
-	 * "no blitter" rather than an error, because none of them is something
-	 * the caller can act on.
+	 * "no blitter" rather than an error.
 	 */
 	for_each_child_of_node(dev->parent->of_node->parent, node) {
 		if (!of_match_node(mtk_g2d_of_match, node))
@@ -1028,18 +943,15 @@ struct mtk_g2d *mtk_g2d_get(struct device *dev)
 		/*
 		 * The node existing says nothing about the driver: probe can
 		 * still fail, or not have run yet.  Only a bound device can be
-		 * programmed, so an unbound one is reported as absent rather
-		 * than dereferenced.
+		 * programmed.
 		 *
-		 * bus_find_device_by_of_node() returns a device with a reference
-		 * taken, and it is kept - not put here - because that reference
-		 * is what keeps both the platform device and its drvdata alive
-		 * for as long as the caller holds the &struct mtk_g2d.  The
-		 * matching put_device() is in mtk_g2d_put().  Note that
-		 * for_each_child_of_node() itself refcounts @node and releases
-		 * its own reference on the next iteration, so @node needs no
-		 * of_node_put() here and must not get one: doing so would drop
-		 * the reference the iteration is holding for us.
+		 * bus_find_device_by_of_node() takes a reference and it is
+		 * kept - not put here - because that reference is what keeps
+		 * both the platform device and its drvdata alive for as long as
+		 * the caller holds the &struct mtk_g2d.  The matching
+		 * put_device() is in mtk_g2d_put().  @node itself needs no
+		 * of_node_put() here: for_each_child_of_node() refcounts it
+		 * and releases its own reference on the next iteration.
 		 */
 		pdev = bus_find_device_by_of_node(&platform_bus_type, node);
 		if (!pdev)
@@ -1058,11 +970,8 @@ void mtk_g2d_put(struct mtk_g2d *g2d)
 		return;
 
 	/*
-	 * mtk_g2d_get() kept the reference bus_find_device_by_of_node() took,
-	 * so this is put_device() and not anything G2D-specific: it is what
-	 * finally allows the platform device to be unbound and its drvdata
-	 * freed.  Calling it more than once per get() would be an over-release,
-	 * which is why the contract is one put per get().
+	 * This is the put_device() for the reference bus_find_device_by_of_node()
+	 * took: one put per get(), never more.
 	 */
 	put_device(g2d->dev);
 }

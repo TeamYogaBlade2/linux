@@ -32,8 +32,7 @@ struct g2d_format_info {
  *
  * The pitch registers hold 14 bits and 0x2000 is the usable maximum.  Exposed so
  * that a caller which has to check a pitch *before* handing it over - a
- * userspace ABI, say - reads the same number the engine will apply instead of
- * keeping a second copy of it that can quietly drift out of date.
+ * userspace ABI, say - reads the same number the engine will apply.
  */
 u32 mtk_g2d_max_pitch(void);
 
@@ -60,9 +59,7 @@ u32 mtk_g2d_max_height(void);
  * formats; RGB888 may start at any address, which is reported as 1.
  *
  * Returns 0 and writes @align, or -EINVAL if @format is not a format the engine
- * can encode - in which case @align is not written.  This is the same test
- * g2d_check_align() makes internally, exposed so a caller validating a request
- * cannot disagree with the engine about which formats exist.
+ * can encode - in which case @align is not written.
  */
 int mtk_g2d_addr_align(u32 format, u32 *align);
 
@@ -76,19 +73,18 @@ int mtk_g2d_addr_align(u32 format, u32 *align);
  * rejected with -EINVAL leaves the engine untouched.  A NULL @g2d is
  * -EINVAL rather than a crash.
  *
- * Origins.  This block has no origin register of any kind, and no per-surface
- * size register: G2D_W2M_SIZE is the only geometry register, and it sizes the
- * one scan window that both the source and the destination port move through.
+ * Origins and sizes.  This block has no origin register and no per-surface
+ * size register:
  *
  *   - The source and destination ORIGINS are independent.  They are not
  *     independent in hardware terms - they are two plain base addresses,
  *     G2D_SRC_ADDR and G2D_W2M_ADDR, with the origin folded into them in
  *     software - but the practical consequence is that mtk_g2d_blt_rect()
  *     can move a rectangle from one position to a different position.
- *   - The source and destination SIZES are not independent.  Both ports
- *     always move width x height pixels, because only one size register
- *     exists.  A copy that needs different source and destination sizes is
- *     not expressible at all.
+ *   - The source and destination SIZES are not independent.  G2D_W2M_SIZE is
+ *     the only geometry register and it sizes the one scan window both ports
+ *     move through, so both always move width x height pixels.  A copy that
+ *     needs different source and destination sizes is not expressible at all.
  *
  * Note also that G2D_DST_* is the destination *read* port, used for
  * read-modify-write blending; the only writable address is G2D_W2M_ADDR.  So
@@ -156,9 +152,8 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
  * must fall back rather than fail.  An MDP DRM device, for instance, has no
  * G2D.
  *
- * The reference is what makes the pointer safe: it holds the platform device
- * alive, so the result cannot dangle if the block is unbound.  It must be
- * released with mtk_g2d_put().
+ * The reference holds the platform device alive, so the result cannot dangle if
+ * the block is unbound.  Release it with mtk_g2d_put().
  */
 struct mtk_g2d *mtk_g2d_get(struct device *dev);
 
@@ -170,11 +165,8 @@ struct mtk_g2d *mtk_g2d_get(struct device *dev);
  */
 void mtk_g2d_put(struct mtk_g2d *g2d);
 
-/**
- * mtk_g2d_device - the &struct device behind an engine.
- *
- * Exposed so a caller holding a reference can attribute diagnostics to the
- * right device.  The &struct mtk_g2d itself is private to the driver.
+/* The &struct device behind an engine, so a caller holding a reference can
+ * attribute diagnostics to the right device.
  */
 struct device *mtk_g2d_device(struct mtk_g2d *g2d);
 
