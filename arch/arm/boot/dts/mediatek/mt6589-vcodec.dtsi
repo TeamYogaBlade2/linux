@@ -101,18 +101,20 @@
 		 * wait easier to satisfy, never harder - so that fix is safe in the
 		 * direction that matters.
 		 *
-		 * VEN has no such fix.  Its four-bit poll is still in place, and the
-		 * data sheet names SRAM_PDN_ACK only as one 15:12 field, so the width
-		 * cannot be confirmed from documentation.  larb0, the VEN-side LARB,
-		 * fails the same way and is disabled in mt6589.dtsi for the same
-		 * reason.
+		 * VEN needed no width change - its four-bit poll is correct, and
+		 * the vendor's own VEN_SRAM_ACK is (0xf << 12) too.  What was wrong
+		 * was the position: our power-on stopped at PWR_RST_B and deferred
+		 * the SRAM release to scpsys_sram_enable(), which runs later and
+		 * after bus protection is touched.  The stock driver releases SRAM
+		 * inline, right after PWR_RST_B (mt_spm_mtcmos.c:443-462), and
+		 * scpsys_ctl_pwrseq_on() now does that for the domains marked
+		 * MTK_SCPD_SRAM_PDN_INLINE, which is this one and VDE.
 		 *
-		 * So the encoder's block is blocked on an undiagnosed failure with no
-		 * spare hardware to characterise it, while its decoder sibling is not
-		 * (see below).  Enabling it would produce a deferred probe, which
-		 * names the problem but delivers no functionality, and would map a
-		 * register window against a domain whose isolation state is unknown.
-		 * The honest state is off, with the reason recorded here.
+		 * That is unverified on hardware - it is a change to a power
+		 * sequence, and there is no board here to characterise it - but it
+		 * is the vendor's own ordering rather than an invention, and with
+		 * no spare hardware a deferred probe is at least a visible failure
+		 * rather than a silent one.
 		 */
 		power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
 
@@ -127,7 +129,6 @@
 			 <&iommu MT6589_M4U_PORT_VENC_CUR_CHROMA>,
 			 <&iommu MT6589_M4U_PORT_VENC_BSDMA>;
 
-		status = "disabled";
 	};
 
 	vdec: vdec@16020000 {

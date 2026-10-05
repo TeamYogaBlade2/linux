@@ -66,7 +66,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.ctl_offs = SPM_MFG_PWR_CON,
 		.sram_pdn_bits = BIT(8),
 		.sram_pdn_ack_bits = BIT(12),
-		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
+		.caps = MTK_SCPD_KEEP_DEFAULT_OFF | MTK_SCPD_SRAM_PDN_INLINE,
 		.bp_cfg = {
 			BUS_PROT_INFRA_UPDATE_TOPAXI(0x0020),
 			MT6589_BUS_PROT_INFRA_SI0_CTL(0x0400),
@@ -99,7 +99,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.ctl_offs = SPM_VEN_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
 		.sram_pdn_ack_bits = GENMASK(15, 12),
-		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
+		.caps = MTK_SCPD_KEEP_DEFAULT_OFF | MTK_SCPD_SRAM_PDN_INLINE,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},

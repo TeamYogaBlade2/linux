@@ -60,3 +60,27 @@ the log as
 
 with nothing from the driver's own probe - which is what made this
 particularly hard to place.
+## What actually blocked VEN, and what fixed it
+
+Neither VEN's mask nor VDE's mask was the problem, and narrowing VEN's four
+bits would have been wrong: the stock driver defines `VEN_SRAM_ACK` as
+`(0xf << 12)` too (mt_spm_mtcmos.c:329), so the table above already matched
+it.
+
+The defect was where the release happened. `scpsys_ctl_pwrseq_on()` followed
+the vendor's power-on exactly up to `PWR_RST_B` and then stopped, leaving the
+SRAM release to the caller's later `scpsys_sram_enable()` — which runs after
+bus protection has already been touched. The stock sequence does not defer it:
+`spm_mtcmos_ctrl_venc()` clears `SRAM_PDN` and waits for the acknowledge bits
+to fall to zero immediately after `PWR_RST_B`, before anything else
+(mt_spm_mtcmos.c:443-462).
+
+The domains whose vendor sequence releases SRAM there now carry
+`MTK_SCPD_SRAM_PDN_INLINE`, which makes `scpsys_ctl_pwrseq_on()` do it at that
+point and makes the later call skip them. On MT6589 that is VEN and VDE only;
+every other domain keeps the existing ordering.
+
+This is a change to a power sequence and it is unverified on hardware. It is
+the vendor's own ordering rather than an invention, and VEN's failure mode
+was a hang rather than silent corruption, so taking it was judged better than
+leaving a known-divergent sequence in place.
