@@ -204,6 +204,23 @@
  *
  * upmu_hw.h:3696-3709  PMIC_ISINKS_BREATH{0,1,2}_TRF_SEL_MASK 0x4 / _SHIFT 12
  * upmu_common.c:21866  upmu_set_isinks_breath0_trf_sel() -> ISINKS_CON8
+ *
+ * The register is named BREATH because the same field also selects the clock
+ * for the hardware breathing mode, whose on/off lengths come from two further
+ * nibbles in the same register - TON_SEL at [11:8] and TOFF_SEL at [7:0]
+ * (upmu_hw.h:3698-3701).  This driver programs only TRF_SEL: breathing is
+ * NOT implemented.  It is not wired up to any LED API, so no userspace can
+ * request it, and a "brightness 0..max" request drives the current step
+ * instead, exactly as the vendor steady path does.
+ *
+ * That is a deliberate omission, not an oversight.  The only BSP code that
+ * programs TON_SEL/TOFF_SEL is led_breath_pmic(), and it is itself disabled:
+ * the whole function sits inside an "#if 0" in the vendor leds.c, and the
+ * values it would write (ton 0x02, toff 0x03) are fixed magic numbers for
+ * one hardcoded pair of channels rather than anything derived from a delay.
+ * With no enabled reference for how the nibbles are meant to be computed,
+ * guessing the encoding would be inventing behaviour, so the sinks are left
+ * with the hardware's hard on/off blink, which is verified working.
  */
 #define MT6320_ISINK_TRF_SEL_MASK	GENMASK(15, 12)
 
