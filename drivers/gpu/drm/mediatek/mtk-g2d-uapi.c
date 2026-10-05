@@ -467,23 +467,79 @@ static void mtk_g2d_uapi_release(struct mtk_g2d_uapi_surf *surf)
 	surf->obj = NULL;
 }
 
+/**
+ * mtk_g2d_uapi_retain - keep a wedged operation's buffers out of circulation.
+ * @surf: the surface just programmed
+ *
+ * Called on the failure path once mtk_g2d_wedged() reports the engine gave up.
+ * One thing is done here, and it is worth being exact about what it achieves,
+ * because it is not sufficient on its own:
+ *
+ *  - The GEM reference taken by mtk_g2d_uapi_resolve() is deliberately *not*
+ *    dropped.  drm_gem_object_put() is what lets the last reference fall, and
+ *    that is what eventually reaches drm_gem_dma_object_free() ->
+ *    drm_gem_dma_free(), which for an imported buffer releases the dma-buf
+ *    attachment and unmaps it (drm_prime_gem_destroy(),
+ *    dma_buf_vunmap_unlocked()).  Retaining the reference is what stops that,
+ *    and with it the pages being freed or unmapped underneath an engine that
+ *    may still be writing to them.
+ *
+ *  - The mmap offset is released, so no new mapping can be handed out.
+ *    drm_gem_free_mmap_offset() is what makes
+ *    drm_gem_object_lookup_at_offset() - and therefore drm_gem_mmap() and
+ *    drm_gem_handle_to_offset() - fail for this object, so a userspace that
+ *    still holds the GEM handle can no longer obtain a fresh mapping of the
+ *    memory the engine is using.  It is safe to call on a live object: it only
+ *    removes an allocation from the offset manager, and it is idempotent, so
+ *    the later call from drm_gem_object_release() is a no-op.
+ *
+ * What this does NOT do, and the UAPI now says so plainly: the reservation
+ * lock is *not* held here.  Holding it for the life of the driver would wedge
+ * every other user of these buffers in the system, including a display
+ * pipeline that has no idea G2D exists, and that is a far worse failure than
+ * the one being prevented.  So another user of the same dma-buf - a
+ * compositor, another driver - is not stopped from reading or writing the
+ * buffer, and cannot be by anything reachable from here.
+ *
+ * This is therefore best-effort containment, not a guarantee, and the only
+ * honest summary is the one the UAPI now gives: a wedged device can never
+ * encode again, and the memory involved must be treated as belonging to it
+ * until the device is unbound.  What this buys is narrower and still worth
+ * having - this driver does not itself free, unmap or re-map the buffer
+ * underneath the hardware.
+ */
+static void mtk_g2d_uapi_retain(struct mtk_g2d_uapi_surf *surf)
+{
+	/*
+	 * Deliberately no drm_gem_object_put() here, and surf->obj is left set:
+	 * the reference outlives this call on purpose.  Releasing the offset is
+	 * the part that has an effect a caller can observe.
+	 */
+	if (surf->obj)
+		drm_gem_free_mmap_offset(surf->obj);
+}
+
 /*
  * ---------------------------------------------------------------------------
  * Lifetime.
  *
  * The rule this section exists to keep: an -ETIMEDOUT from BLT or FILL never
- * means "the buffers are yours again".  Both handlers below drop their GEM
- * references and unlock both reservations on every path, including the
- * failure paths, because the reference is a kernel object count and not a
- * claim that the engine has finished with the memory - and that is safe
- * precisely because of what the driver does instead.
+ * means "the buffers are yours again".
  *
- * On the failure path the engine has been declared *wedged* rather than
- * released: g2d_wedge() shuts out every later submission, so the memory the
- * hardware may still be writing can no longer be handed to anything that
- * would reuse it.  The cost is the right one for an accelerator that can no
- * longer promise it has stopped.  See g2d_wedge() and the -ETIMEDOUT section
- * of @mtk_g2d_blt in the UAPI header.
+ * Both handlers below unlock both reservations and drop both GEM references on
+ * every path - *except* the one where mtk_g2d_wedged() says the engine gave
+ * up, where mtk_g2d_uapi_retain() keeps the references and releases the mmap
+ * offsets instead.  -ETIMEDOUT alone does not select that path: g2d_recover()
+ * reports the same errno for a recovery that did prove the engine idle, and
+ * there the buffers are genuinely safe and are released.  The wedge is the
+ * thing that distinguishes the two, and it is set before the failing call
+ * returns, so asking afterwards cannot miss it.
+ *
+ * What retaining a reference does and does not achieve is set out in
+ * mtk_g2d_uapi_retain() and in the -ETIMEDOUT section of @mtk_g2d_blt in the
+ * UAPI header: this driver will not free, unmap or re-map the memory, but it
+ * cannot stop another user of the same dma-buf, so a wedged device has to be
+ * treated as lost.
  *
  * The engine reads and writes memory that userspace owns, asynchronously with
  * respect to userspace's view of it.  Two things therefore have to be true for
@@ -894,6 +950,29 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 		drm_dbg(dev, "G2D blit of %ux%u failed: %d\n",
 			arg.rect_width, arg.rect_height, ret);
 
+	/*
+	 * A wedged engine may still be moving data to these two addresses, so
+	 * the references are kept rather than dropped.  -ETIMEDOUT on its own is
+	 * not enough to tell: g2d_recover() reports the same errno after a
+	 * recovery that *did* prove the engine idle, and in that case the buffers
+	 * are safe and must be released.  mtk_g2d_wedged() is the thing that
+	 * distinguishes them, and it is monotonic, so it cannot have been set
+	 * and forgotten by the time this asks.
+	 *
+	 * Checked after mtk_g2d_uapi_unlock_pair() and not before: the engine is
+	 * idle or wedged by the time mtk_g2d_blt_rect() has returned, and
+	 * holding the reservation locks across this would pin the buffers
+	 * against every other user of them, not just against being freed.
+	 *
+	 * See mtk_g2d_uapi_retain() for what a retained reference
+	 * does and does not buy.
+	 */
+	if (mtk_g2d_wedged(priv->g2d)) {
+		mtk_g2d_uapi_retain(&src);
+		mtk_g2d_uapi_retain(&dst);
+		return ret;
+	}
+
 err_dst:
 	mtk_g2d_uapi_release(&dst);
 err_src:
@@ -963,6 +1042,12 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 	if (ret)
 		drm_dbg(dev, "G2D fill of %ux%u failed: %d\n",
 			arg.rect_width, arg.rect_height, ret);
+
+	/* As in mtk_g2d_ioctl_blt(): retained only if the engine is wedged. */
+	if (mtk_g2d_wedged(priv->g2d)) {
+		mtk_g2d_uapi_retain(&dst);
+		return ret;
+	}
 
 err_dst:
 	mtk_g2d_uapi_release(&dst);

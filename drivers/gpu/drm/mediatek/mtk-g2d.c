@@ -246,11 +246,16 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
  * That is what makes returning -ETIMEDOUT here and releasing the buffers
  * unsafe rather than merely untidy: the caller would be entitled to unmap and
  * reuse that memory, and the engine would keep writing into it.  So the driver
- * does not release them.  Every later entry point sees @wedged and returns
- * before programming a register or waiting on the hardware, which makes the
- * block inert from the driver's point of view; the cost is that G2D stops
- * working until the device is unbound, and that is the right trade for an
- * accelerator that can no longer guarantee it has stopped.
+ * does not release them.  The ioctl layer asks mtk_g2d_wedged() after a failed
+ * operation and, once this has run, keeps the GEM references it took instead
+ * of dropping them - the wedge is what tells it to, and it is set before the
+ * failing call returns, so the answer is always in time.
+ *
+ * Every later entry point sees @wedged and returns before programming a
+ * register or waiting on the hardware, which makes the block inert from the
+ * driver's point of view; the cost is that G2D stops working until the device
+ * is unbound, and that is the right trade for an accelerator that can no
+ * longer guarantee it has stopped.
  *
  * Must be called with @g2d->lock held.
  */
@@ -958,6 +963,39 @@ out_unlock:
 	mutex_unlock(&g2d->lock);
 
 	return ret;
+}
+
+/**
+ * mtk_g2d_wedged - has the engine given up on ever going idle again?
+ * @g2d: device
+ *
+ * False means every operation so far recovered and the engine is in a known
+ * idle state, so the buffers of a failed operation may be released.  True
+ * means G2D_STATUS.BUSY still read high after every warm reset, so the
+ * hardware may still be reading or writing the last address programmed and
+ * those buffers must not be given back.
+ *
+ * Read under @g2d->lock, because that is what g2d_wedge() sets @wedged under.
+ * That is what makes the answer meaningful to a caller that asks *after* an
+ * operation failed: the wedge is recorded before mtk_g2d_blt_rect() or
+ * mtk_g2d_fill() return, so asking afterwards cannot miss it and get a false
+ * "safe to release".
+ *
+ * Monotonic - it never goes back to false - so there is no window in which a
+ * buffer that has to be retained is reported as safe to release.
+ */
+bool mtk_g2d_wedged(struct mtk_g2d *g2d)
+{
+	bool wedged;
+
+	if (!g2d)
+		return false;
+
+	mutex_lock(&g2d->lock);
+	wedged = g2d->wedged;
+	mutex_unlock(&g2d->lock);
+
+	return wedged;
 }
 
 static int mtk_g2d_probe(struct platform_device *pdev)

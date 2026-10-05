@@ -84,12 +84,20 @@ extern "C" {
  * until after the engine is idle, so there is no window in which the caller
  * could unmap a buffer the hardware is still using.
  *
- * A 32-bit-on-ARM consideration: an imported buffer must be physically
- * contiguous, because the engine is given one base address and a pitch with
- * no descriptor.  This is enforced by the prime import path
- * (drm_gem_dma_prime_import_sg_table() rejects a non-contiguous scatterlist),
- * so a non-contiguous DMA-BUF fails at PRIME_FD_TO_HANDLE time rather than
- * silently producing a copy from the wrong address.
+ * A contiguity requirement, which is about the *DMA address space* rather than
+ * about physical memory: an imported buffer must be contiguous in G2D's DMA
+ * address space, because the engine is given one base address and a pitch with
+ * no descriptor.  With an M4U port on this device those addresses are IOVAs,
+ * so contiguity is not the same property as being physically contiguous - two
+ * segments can be physically discontiguous and still be consecutive in the page
+ * table this engine reads.
+ *
+ * It is enforced by the prime import path: drm_gem_dma_prime_import_sg_table()
+ * rejects a buffer for which drm_prime_get_contiguous_size() of its scatterlist
+ * is less than the dma-buf's size, and that helper measures the DMA address
+ * space, walking sg_dma_address() and sg_dma_len().  A non-contiguous DMA-BUF
+ * therefore fails at PRIME_FD_TO_HANDLE time rather than silently producing a
+ * copy from the wrong address.
  */
 
 /**
@@ -373,18 +381,37 @@ struct mtk_g2d_surface {
  *     failed.  If it is *still* busy the driver cannot stop it: the hardware may
  *     be writing the address last programmed, and no register write documented
  *     here can prevent that.  In that case the driver declares the engine
- *     **wedged**, which means two things for a caller:
+ *     **wedged**, and this is what a client can and cannot rely on:
  *
- *       1. **The source and destination of this operation may still be read
- *          or written by the engine indefinitely.**  The driver does not
- *          release them - it cannot promise the operation is over - but it
- *          cannot keep them alive either, so that memory must be treated as
- *          belonging to the engine.  Do not unmap it, and do not hand the same
- *          buffer to anything else.
- *       2. **Every later BLT and FILL returns -ETIMEDOUT immediately**, without
- *          programming a register or waiting on the hardware.  The blitter is
- *          unusable until the device is unbound; treat it as permanently lost
- *          and fall back to a software path.
+ *       1. **Every later BLT and FILL returns -ETIMEDOUT immediately**, without
+ *          programming a register or waiting on the hardware.  This one is
+ *          absolute: the wedge is recorded before this call returns and is
+ *          never cleared, so a wedged device can never encode again.  Treat
+ *          the blitter as permanently lost and fall back to a software path;
+ *          no amount of retrying will change that.
+ *       2. **The driver keeps its own reference to the source and destination
+ *          and will not hand them back.**  It does not drop the GEM reference
+ *          the operation took, which is what would eventually free the pages or
+ *          detach the dma-buf, and it releases the objects' mmap offsets so no
+ *          new mapping can be obtained through a GEM handle that is still open.
+ *          What this guarantees is exactly that *this driver* will not free,
+ *          unmap or re-map that memory while the engine may still be using it.
+ *       3. **It cannot stop anyone else from using the buffer.**  The
+ *          reservation locks are not held after the call returns - holding
+ *          them for the life of the device would deadlock every other user of
+ *          the same dma-buf, including a display pipeline that knows nothing
+ *          about G2D - so another client, compositor or driver that already
+ *          holds the same buffer is not prevented from reading or writing it.
+ *          Nothing in this ABI can be: the engine's addressing is not visible
+ *          to anyone else.
+ *
+ *     So the practical rule is the conservative one, and it is a requirement
+ *     rather than a caveat: **the source and destination of an operation that
+ *     returned -ETIMEDOUT must be treated as belonging to the engine.**  Do not
+ *     unmap them, and do not hand the same buffer to anything else, until the
+ *     device has been unbound.  A client that cannot tolerate that has to
+ *     treat the engine as unusable from the first -ETIMEDOUT, because the
+ *     driver cannot tell such a client apart from one that will respect it.
  *
  *     The errno is surfaced rather than swallowed precisely so a caller can
  *     make that decision.  A -ETIMEDOUT is not a transient error to retry:

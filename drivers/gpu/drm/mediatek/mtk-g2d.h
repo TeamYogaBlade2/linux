@@ -225,4 +225,28 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
   */
 struct device *mtk_g2d_device(struct mtk_g2d *g2d);
 
+/**
+ * mtk_g2d_wedged - has the engine given up on ever going idle again?
+ * @g2d: device
+ *
+ * Returns false if every operation so far recovered and the engine is in a
+ * known idle state, so the buffers of a failed operation may be released.
+ * Returns true if the engine has been *wedged*: G2D_STATUS.BUSY still read
+ * high after every warm reset, the hardware may still be moving data to the
+ * address last programmed, and the buffers of the operation that failed this
+ * way must be retained rather than released.
+ *
+ * A caller checks this after a -ETIMEDOUT from @mtk_g2d_blt or
+ * @mtk_g2d_fill and, when it is true, keeps its references instead of
+ * dropping them.  That is the only way the engine's inability to stop can be
+ * made safe for the memory it may still be touching - a reference keeps the
+ * allocation alive, but nothing here can stop another user of the same
+ * dma-buf from touching it, so a wedged device must also be treated as lost by
+ * userspace rather than merely busy.
+ *
+ * Monotonic, and read under the engine lock, so a caller asking after the fact
+ * cannot be told "safe" about an operation that has just wedged the engine.
+ */
+bool mtk_g2d_wedged(struct mtk_g2d *g2d);
+
 #endif /* _MTK_G2D_H_ */
