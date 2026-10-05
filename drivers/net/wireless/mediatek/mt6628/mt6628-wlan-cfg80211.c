@@ -759,6 +759,8 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 	struct mt6628_wlan *wl =
 		*(struct mt6628_wlan **)netdev_priv(wdev->netdev);
 	struct mt6628_event_sta_statistics stats;
+	u32 scaled;
+	__le16 link_speed;
 	bool connected;
 
 	if (!wl || !wdev->netdev)
@@ -800,16 +802,40 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 	sinfo->tx_failed = le32_to_cpu(stats.tx_fail_count);
 
 	/*
-	 * The link speed is reported in units of 0.5 Mbit/s - the vendor
-	 * driver multiplies it by 5000 to get bps
-	 * (nic_cmd_event.c:598).  This cfg80211 vintage has no bitrate field
-	 * in struct rate_info, so there is nowhere honest to put it; see
-	 * Downstream-Gaps.md section 2.5 for why no substitute is published.
-	 *
-	 * rx_bytes and tx_bytes are not filled either: EVENT_ID_STA_STATISTICS
-	 * carries no byte counters at all, and no other query command returns
-	 * one for a station.  Publishing a number the firmware never sent
-	 * would be worse than leaving the field out.
+	 * TX bitrate.  link_speed is documented "unit is 0.5 Mbits"
+	 * (nic_cmd_event.h:1690); the vendor scales it by 5000 to reach bps
+	 * (nic_cmd_event.c:598) and then divides by 1000 to reach the 100
+	 * kbit/s unit cfg80211 wants (gl_cfg80211.c:429-433).  Those two steps
+	 * cancel to a factor of 5, so 0.5 Mbit/s per unit becomes 500 kbit/s
+	 * per unit here.  Reported as a plain 802.11abg rate: u4PhyMode is an
+	 * ENUM_PHY_MODE_T index (wlan_lib.h:391-427) but the vendor ships no
+	 * table converting it to a rate, so there is no honest MCS/BW
+	 * description to publish.
+	 */
+	link_speed = le16_to_cpu(stats.link_speed);
+	if (link_speed) {
+		/*
+		 * txrate.legacy is a u16 in 100 kbit/s units, so the scaled
+		 * value has to be clamped rather than allowed to wrap.  The
+		 * fastest rate this radio can negotiate is far below the
+		 * clamp; it is a guard against a corrupt firmware field,
+		 * not a reachable limit.
+		 */
+		scaled = (u32)link_speed * 5;
+		if (scaled > U16_MAX)
+			scaled = U16_MAX;
+		sinfo->txrate.legacy = scaled;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
+	}
+
+	/*
+	 * rx_bytes and tx_bytes are not filled: EVENT_ID_STA_STATISTICS
+	 * carries no byte counters at all (it holds u4TxCount, u4TxFailCount,
+	 * u4TxLifeTimeoutCount and u4TxDoneAirTime - all packet or airtime
+	 * counts, nic_cmd_event.h:1690-1723), and no command in the downstream
+	 * Query set returns one for a station.  Likewise connected_time: the
+	 * event has no field for it, and the vendor's own get_station() does
+	 * not report it either.
 	 */
 	return 0;
 }
