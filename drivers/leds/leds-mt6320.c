@@ -284,8 +284,10 @@ struct mt6320_leds {
 	struct regmap			*regmap;
 	struct mutex			lock;
 	struct mt6320_led		*led[MT6320_MAX_LEDS];
+#ifdef CONFIG_LEDS_MT6320_KPLED
 	/* dedicated keypad sink, if the board has one */
 	struct mt6320_kpled		*kpled;
+#endif
 	unsigned int			bst_users;
 };
 
@@ -1110,7 +1112,16 @@ out_unlock:
  * This is a fourth, independent sink on KPLED_CON0 rather than one of the
  * three ISINK channels, so it gets its own class device and a pair of simple
  * on/off helpers rather than sharing the channel machinery above.
+ *
+ * CONFIG_LEDS_MT6320_KPLED decides whether this sink is supported at all,
+ * i.e. whether the register bits below are compiled in.  It is deliberately
+ * independent of whether a given board actually declares a keypad-backlight
+ * node: the symbol is the build-wide statement "this kernel drives the
+ * MT6320 keypad sink", and DT says whether any particular board has such a
+ * sink wired up.  Both together decide that a sink exists.
  */
+#ifdef CONFIG_LEDS_MT6320_KPLED
+
 struct mt6320_kpled {
 	struct mt6320_leds		*parent;
 	struct led_classdev		cdev;
@@ -1160,6 +1171,8 @@ static int mt6320_kpled_set_brightness(struct led_classdev *cdev,
 	return ret;
 }
 
+#endif /* CONFIG_LEDS_MT6320_KPLED */
+
 static int mt6320_led_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1184,14 +1197,20 @@ static int mt6320_led_probe(struct platform_device *pdev)
 
 	for_each_available_child_of_node_scoped(np, child) {
 		struct led_init_data init_data = {};
+#ifdef CONFIG_LEDS_MT6320_KPLED
 		struct mt6320_kpled *kpled;
+#endif
 		u32 reg, num_steps, delay_on = 0, delay_off = 0;
 
 		/*
 		 * A "keypad" child is the dedicated KPLED sink and does not
-		 * consume an ISINK channel.
+		 * consume an ISINK channel.  The node is legal DT whether or not
+		 * the keypad sink is compiled in, so skip it rather than fail:
+		 * CONFIG_LEDS_MT6320_KPLED=n means this kernel does not drive
+		 * KPLED_CON0, not that the board is wired wrong.
 		 */
 		if (of_property_read_bool(child, "mediatek,is-kpled")) {
+#ifdef CONFIG_LEDS_MT6320_KPLED
 			kpled = devm_kzalloc(dev, sizeof(*kpled), GFP_KERNEL);
 			if (!kpled)
 				return -ENOMEM;
@@ -1215,7 +1234,11 @@ static int mt6320_led_probe(struct platform_device *pdev)
 			if (ret)
 				return dev_err_probe(dev, ret,
 						     "failed to register keypad LED\n");
-
+#endif
+			/*
+			 * This node is a keypad sink, never an ISINK channel,
+			 * so either way the loop moves on to the next child.
+			 */
 			continue;
 		}
 
@@ -1308,8 +1331,10 @@ static void mt6320_led_remove(struct platform_device *pdev)
 		if (leds->led[i])
 			mt6320_led_hw_off(leds->led[i]);
 
+#ifdef CONFIG_LEDS_MT6320_KPLED
 	if (leds->kpled)
 		mt6320_kpled_set_brightness(&leds->kpled->cdev, LED_OFF);
+#endif
 
 	mutex_destroy(&leds->lock);
 }

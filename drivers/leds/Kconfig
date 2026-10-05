@@ -1061,3 +1061,10 @@ config LEDS_MT6320_KPLED
 	  Say Y to drive the MT6320's dedicated keypad backlight sink
 	  (KPLED_CON0).  The panel's display backlight is a separate BLS
 	  PWM path and is unaffected by this.
+
+	  This says whether the kernel has support for the sink at all.
+	  Whether any given board actually instantiates one is a separate
+	  question, answered by its keypad-backlight child node with
+	  "mediatek,is-kpled".  With this symbol disabled such a node is
+	  simply ignored instead of being an error, so a board that has
+	  the sink wired up can still use the same DT.
