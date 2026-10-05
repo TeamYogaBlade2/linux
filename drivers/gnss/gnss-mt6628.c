@@ -20,6 +20,7 @@
 #include <linux/mutex.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/slab.h>
 
 #include <linux/gnss.h>
@@ -226,11 +227,63 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 	gnss_put_device(priv->gdev);
 }
 
+/*
+ * Release the GPS function when the system suspends.
+ *
+ * Downstream does exactly this: its suspend path sets GPS_PWRCTL_OFF
+ * (gps/gps.c:369-380).  The matching resume deliberately does *not* power
+ * the chip back on - the comment there is "don't power on device
+ * automatically" (gps/gps.c:382-396) - because the GNSS session belongs to
+ * userspace, which reopens the device and reasserts the WMT FUNC_ON
+ * itself.  Driving that from a resume callback instead would race that
+ * open and leave the function powered with nobody attached to it.
+ *
+ * So this only tears down, exactly as downstream does.  A GPS fix in
+ * progress does not survive a suspend; that is the upstream behaviour and
+ * is also what userspace expects.
+ */
+static int mtk_gnss_suspend(struct device *dev)
+{
+	struct mtk_gnss *priv = dev_get_drvdata(dev);
+	bool was_open;
+
+	if (!priv)
+		return 0;
+
+	mutex_lock(&priv->lock);
+	was_open = priv->open;
+	/*
+	 * Stop relaying first: the chip is about to stop answering, and any
+	 * bytes that arrive on the way down belong to a session that is
+	 * being torn down.
+	 */
+	priv->open = false;
+	mutex_unlock(&priv->lock);
+
+	if (!was_open)
+		return 0;
+
+	/* Same teardown order as close, and as .remove below. */
+	mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+	if (priv->pinctrl_default)
+		pinctrl_select_state(priv->pinctrl, priv->pinctrl_default);
+	mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+
+	dev_dbg(dev, "released the GPS function for suspend\n");
+
+	return 0;
+}
+
+static const struct dev_pm_ops mtk_gnss_pm_ops = {
+	.suspend = mtk_gnss_suspend,
+};
+
 static struct platform_driver mtk_gnss_driver = {
 	.probe = mtk_gnss_probe,
 	.remove = mtk_gnss_remove,
 	.driver = {
 		.name = "mt6628-gnss",
+		.pm = &mtk_gnss_pm_ops,
 	},
 };
 module_platform_driver(mtk_gnss_driver);

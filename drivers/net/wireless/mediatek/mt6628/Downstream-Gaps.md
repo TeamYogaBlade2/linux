@@ -949,11 +949,29 @@ the vendor userspace, which is out of scope.
 
 ## GNSS — gaps
 
-### No reset callback, no suspend/resume
+### Suspend releases the GPS function; resume deliberately does not re-enable it
 
-The driver defines neither a `reset` nor a `suspend`/`resume` hook, so the GPS
-function is simply left enabled across a system suspend. It is released on
-`.remove` only.
+The driver now has a `suspend` callback that releases the GPS function — drops
+GPS_SYNC, restores the default pinctrl state and issues the WMT `FUNC_OFF` for
+GPS — using the same teardown order as `close()` and `.remove`.
+
+There is intentionally **no** matching resume callback that powers it back on.
+That mirrors downstream exactly: its suspend sets `GPS_PWRCTL_OFF`
+(`gps/gps.c:369-380`), and its resume deliberately leaves the chip off, with the
+comment *"don't power on device automatically"* (`gps/gps.c:382-396`). The GNSS
+session belongs to userspace, which reopens the device and reasserts the WMT
+`FUNC_ON` itself; doing it from a resume callback would race that open and can
+leave the function powered with nobody attached.
+
+The consequence is stated plainly: **a GPS fix in progress does not survive a
+system suspend.** That is the upstream behaviour, not an oversight here. A fix
+must be restarted by userspace after resume, exactly as it would have to be if
+this driver had never had a suspend hook at all.
+
+The generic GNSS framework has no reset or suspend hooks of its own
+(`include/linux/gnss.h:29-33` defines only `open`, `close` and `write_raw`), so
+this is registered through the platform driver's `dev_pm_ops` rather than
+through the framework.
 
 ### The downstream GPS ioctls are gone, and the hw version is not as unused as it looks
 
@@ -986,12 +1004,14 @@ obtained and used, just not re-exposed to userspace.
 | FM audio path | no producer on this board (see §2.1) |
 | STP SDIO framing / WMT / patch download | complete |
 | STP coex and GPS_SYNC | complete |
-| STP CRC16 | absent by design — matches the downstream SDIO reference |
-| STP seq/ack windowing | absent — the largest remaining protocol gap |
+| STP CRC16 | computed on TX, verified on RX — stricter than the downstream SDIO reference |
+| STP RX resynchronisation | byte-wise, like the downstream `MTKSTP_SYNC` state |
+| STP seq/ack windowing | absent — the chip does not use it on SDIO; see the section for the evidence |
 | STP PSM / in-band reset / paged dump | not implemented |
-| STP optional DT properties | all five absent from every DTS; defaults untested |
+| STP optional DT properties | two set from the vendor antenna config, three deliberately absent |
+| Station statistics | signal, tx_packets, tx_retries, tx_failed — nothing more is available |
 | GNSS raw relay | complete, and matches downstream (which is also just a pipe) |
-| GNSS reset / suspend / resume | not implemented |
+| GNSS suspend | releases the GPS function; resume does not re-enable it, as downstream |
 | GNSS `gps-sync` pinctrl state | dead code — the pin is inside the combo chip, not an SoC pinctrl |
 | GNSS ioctls (`GPS_HWVER` / `RTC_FLAG` / `CO_CLOCK_FLAG`) | absent — no ioctl hook in the generic framework |
 
