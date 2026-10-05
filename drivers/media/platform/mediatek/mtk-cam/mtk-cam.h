@@ -189,15 +189,33 @@
  *     VR/SMT the out_fmt must be YUV422 1 plane; at other scenarios it
  *     describes the CDRZ output instead.  1 plane is the only value valid in
  *     every scenario, which is why it is the one chosen.
- *   - cam_in_fmt is documented at 11:8 for a YUV input at 0 as "420 2 plane
- *     (imgi,vipi)" and at 2 as "422 1 plane (imgi)" (page 1955).  CAM's
- *     sink is fed by SCAM, which is a CSD parser that does not convert the
- *     payload (see mtk-scam.c), so the bus format on the sink is the sensor's
- *     -- YUV422 single plane, i.e. 2.
+ *   - cam_in_fmt is documented at 11:8 in three separate readings depending on
+ *     what pass 2 is fed (page 1955-1956): "If pass 2 is YUV input", "If pass 2
+ *     is RGB input", and "If pass 2 is bayer, 0: Bayer 8 / 1: Bayer 10 /
+ *     2: Bayer 12".  Which table applies is decided by sub_mode, not chosen
+ *     independently -- so cam_in_fmt and sub_mode cannot disagree.
  *
- * The vendor spells the same two fields out in isp_function.h:453-457
- * (_FMT_YUV422_1P_ == 2) and in stIspTopFmtSel (isp_function.h:525-527,
- * cam_in_fmt:4, cam_out_fmt:4), which matches these bit positions.
+ * THE TWO MUST BE READ TOGETHER, and this driver programs the Bayer pair:
+ *
+ *   sub_mode = CAM_SUB_MODE_RAW, cam_in_fmt = CAM_FMT_SEL_BAYER10.
+ *
+ * That is the only pair that matches what is wired up.  SCAM is a CSD parser
+ * that does not convert the payload (see mtk-scam.c), so CAM's sink carries the
+ * sensor's own Bayer 10 bits, and the data sheet's Bayer table is the one that
+ * applies.  The vendor agrees on the value from the other direction:
+ * isp_function.h:328-330 spells out
+ *
+ *	#define CAM_FMT_SEL_BAYER8       0
+ *	#define CAM_FMT_SEL_BAYER10      1
+ *	#define CAM_FMT_SEL_BAYER12      2
+ *
+ * matching page 1956 exactly, and PostProcPipe.cpp:781-785 is what selects it
+ * (CAM_FMT_SEL_BAYER10 for a eImgFmt_BAYER10 IMGI port), in the same switch
+ * whose YUV arm at :715 selected the pair used before.
+ *
+ * The vendor spells out the same bit layout in stIspTopFmtSel
+ * (isp_function.h:517-541: scenario:3, sub_mode:3, cam_in_fmt:4,
+ * cam_out_fmt:4), which matches these shifts.
  */
 #define CAM_CTL_FMT_SEL_SCENARIO_SHIFT		0
 #define CAM_CTL_FMT_SEL_SUB_MODE_SHIFT		4
@@ -215,13 +233,29 @@
 #define CAM_CTL_FMT_SEL_CAM_IN_FMT_MASK		GENMASK(11, 8)
 #define CAM_CTL_FMT_SEL_CAM_OUT_FMT_MASK	GENMASK(15, 12)
 
-/* CAM_CTL_FMT_SEL cam_in_fmt value: 422 1 plane (imgi). */
-#define CAM_FMT_SEL_YUV422_1P			2
-/* CAM_CTL_FMT_SEL cam_out_fmt value: 422 1 plane. */
+/*
+ * CAM_CTL_FMT_SEL values.  cam_in_fmt and sub_mode are one decision: which of
+ * the three input tables in the data sheet (page 1955-1956) applies is fixed by
+ * sub_mode, so these two are only meaningful together.
+ */
+
+/* cam_in_fmt: Bayer 10 bits.  Data sheet page 1956, "If pass 2 is bayer". */
+#define CAM_FMT_SEL_BAYER10			1
+/* cam_out_fmt: 422 1 plane.  Data sheet page 1955, YUV output table. */
 #define CAM_FMT_OUT_YUV422_1P			2
 
-/* CAM_CTL_FMT_SEL sub_mode: the pipeline is in its YUV sub-mode. */
-#define CAM_SUB_MODE_YUV			1
+/*
+ * CAM_CTL_FMT_SEL sub_mode: the pipeline is in its RAW sub-mode, i.e. it is
+ * fed by a RAW (Bayer) sensor.  Page 1956 spells the IC-scenario values out as
+ * "0: IC_RAW, connect to RAW sensor" and "1: IC_YUV, connect to YUV sensor";
+ * the vendor names the same two ISP_SUB_MODE_RAW / ISP_SUB_MODE_YUV at
+ * isp_function.h:303-304, both 0 and 1 respectively.
+ *
+ * This was CAM_SUB_MODE_YUV (1) paired with a Bayer sink bus code, which is the
+ * contradiction this driver carried: sub_mode=1 would have made the data sheet
+ * select the *YUV* input table for a Bayer sensor.
+ */
+#define CAM_SUB_MODE_RAW			0
 
 /* ------------------------------------------------------------------ */
 /* IMGO DMA engine                                                    */
@@ -364,6 +398,17 @@ enum {
  * source codes are the same.  CAM takes the same code on its sink, so
  * S_FMT on CAM's sink cannot conflict with SCAM's source, and CAM answers
  * CAM_OUT_FMT (post-CDP, processed) on its source pad.
+ *
+ * The sink code is the sensor's, and it is Bayer 10-bit packed.  The only
+ * sensor this platform shipped is the A5142, which is
+ * SENSOR_OUTPUT_FORMAT_RAW_B over MIPI with a 10-bit payload
+ * (aquaris-5/.../imgsensor/a5142_mipi_raw/a5142mipi_Sensor.h:79-81), and the
+ * data sheet says the same thing about the block: chapter 54.1 (page 1926)
+ * states that "MT6589 camera receives RAW and SOC sensor image data ...
+ * and outputting YUV data to DRAM", i.e. RAW in, YUV out.  So the sink is RAW
+ * and the source is YUV, which is exactly what CAM_SUB_MODE_RAW below selects
+ * for the sink.  The driver had these two declarations contradicting each
+ * other: a Bayer sink code paired with a YUV sub_mode.
  */
 #define CAM_MBUS_CODE_SINK			MEDIA_BUS_FMT_SBGGR10_1X10
 #define CAM_MBUS_CODE_SRC			MEDIA_BUS_FMT_YUYV8_1X16

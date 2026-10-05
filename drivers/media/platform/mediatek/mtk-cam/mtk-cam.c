@@ -661,18 +661,30 @@ static int mtk_cam_start(struct mtk_cam *cam, u32 width, u32 height,
 		return ret;
 
 	/*
-	 * CAM_CTL_FMT_SEL: scenario stays 0 (its reset value, meaning "no
-	 * special scenario"), sub_mode is YUV, cam_in_fmt is 422 1-plane and
-	 * cam_out_fmt is 422 1-plane.  See the header for each field's
-	 * provenance.  The register is written whole rather than with
-	 * read-modify-write because every field in it is named in the data
-	 * sheet (scenario, sub_mode, cam_in_fmt, cam_out_fmt, tg1_fmt, tg2_fmt,
-	 * two_pix, two_pix2, tg1_sw, tg2_sw) and the reset value 0 is the
-	 * value the vendor leaves the untouched fields at.
+	 * CAM_CTL_FMT_SEL: scenario stays 0, sub_mode is RAW, cam_in_fmt is
+	 * Bayer 10 and cam_out_fmt is 422 1-plane.  See the header for each
+	 * field's provenance.  sub_mode and cam_in_fmt are one decision, not
+	 * two: the data sheet selects which of the three input-format tables
+	 * applies by sub_mode, so a Bayer cam_in_fmt under a YUV sub_mode is
+	 * not a different configuration, it is a contradiction.  See
+	 * CAM_SUB_MODE_RAW in mtk-cam.h.
+	 *
+	 * The register is written whole rather than with read-modify-write
+	 * because every field in it is named in the data sheet (scenario,
+	 * sub_mode, cam_in_fmt, cam_out_fmt, tg1_fmt, tg2_fmt, two_pix,
+	 * two_pix2, tg1_sw, tg2_sw) and the reset value 0 is the value the
+	 * vendor leaves the untouched fields at -- TG1_FMT 0 is RAW 8 and
+	 * TG1_SW 0 is UYVY/RGB, both harmless defaults for a pipeline that is
+	 * never enabled.
+	 *
+	 * Note scenario 0 is IC ("connect to a sensor"), not "no special
+	 * scenario": the data sheet's SCENARIO table at page 1956 has no entry
+	 * meaning "none", and 0 is ISP_SCENARIO_IC on the vendor side too
+	 * (isp_function.h:293).  0 is simply the right default here.
 	 */
 	cam_write(cam, CAM_CTL_FMT_SEL,
-		  CAM_SUB_MODE_YUV << CAM_CTL_FMT_SEL_SUB_MODE_SHIFT |
-		  CAM_FMT_SEL_YUV422_1P << CAM_CTL_FMT_SEL_CAM_IN_FMT_SHIFT |
+		  CAM_SUB_MODE_RAW << CAM_CTL_FMT_SEL_SUB_MODE_SHIFT |
+		  CAM_FMT_SEL_BAYER10 << CAM_CTL_FMT_SEL_CAM_IN_FMT_SHIFT |
 		  CAM_FMT_OUT_YUV422_1P << CAM_CTL_FMT_SEL_CAM_OUT_FMT_SHIFT);
 
 	/*
