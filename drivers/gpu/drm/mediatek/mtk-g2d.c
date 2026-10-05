@@ -139,6 +139,14 @@
 /* Bounded poll budget for the warm-reset sequence's "while (G2D_STATUS)" loop. */
 #define G2D_RESET_TIMEOUT_US		100000
 
+/*
+ * How many times g2d_recover() will warm-reset and re-poll G2D_STATUS looking
+ * for the engine to go idle.  See g2d_wedge() for why the answer to "it is
+ * still busy" has to be "shut the block down" rather than "report the timeout
+ * and let the buffers go".
+ */
+#define G2D_RECOVER_TRIES		3
+
 struct mtk_g2d {
 	struct device *dev;
 	void __iomem *regs;
@@ -146,6 +154,15 @@ struct mtk_g2d {
 	struct clk *clk_smi;
 	struct mutex lock;
 	int irq;
+	/*
+	 * Set once the engine has been driven through every recovery this driver
+	 * is willing to attempt and G2D_STATUS.BUSY still reads high.  The
+	 * hardware may then still be reading or writing whatever address was last
+	 * programmed, so no buffer may be released and no new operation may be
+	 * submitted: both paths below refuse, and every entry point re-checks
+	 * this before it touches a register.
+	 */
+	bool wedged;
 };
 
 /* Formats the CLRFMT field encodes. */
@@ -191,6 +208,46 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
 }
 
 /**
+ * g2d_wedge - declare the engine unrecoverable and shut it out.
+ * @g2d: device
+ *
+ * Called when G2D_STATUS.BUSY still reads high after every recovery attempt.
+ * From here the driver cannot promise anything about what the block is doing:
+ * the last programmed G2D_SRC_ADDR / G2D_W2M_ADDR may still be the addresses
+ * the hardware is moving data to, indefinitely, with no register write this
+ * driver can make that is documented to stop it.
+ *
+ * That is what makes returning -ETIMEDOUT here and releasing the buffers
+ * unsafe rather than merely untidy: the caller would be entitled to unmap and
+ * reuse that memory, and the engine would keep writing into it.  So the driver
+ * does not release them.  Every later entry point sees @wedged and returns
+ * before programming a register or waiting on the hardware, which makes the
+ * block inert from the driver's point of view; the cost is that G2D stops
+ * working until the device is unbound, and that is the right trade for an
+ * accelerator that can no longer guarantee it has stopped.
+ *
+ * Must be called with @g2d->lock held.
+ */
+static void g2d_wedge(struct mtk_g2d *g2d)
+{
+	lockdep_assert_held(&g2d->lock);
+
+	if (g2d->wedged)
+		return;
+
+	g2d->wedged = true;
+
+	/*
+	 * One line, once, not rate limited: this is a state change userspace
+	 * observes through the errno it gets from now on, so it must not be
+	 * swallowed by an earlier identical message.
+	 */
+	dev_err(g2d->dev,
+		"G2D did not go idle after %u warm resets, wedging the engine: all further G2D operations fail\n",
+		G2D_RECOVER_TRIES);
+}
+
+/**
  * g2d_reset - drive the data sheet's warm-reset sequence.
  * @g2d: device
  *
@@ -209,7 +266,9 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
  * protocol, so the steps below are issued in that order and are not reordered.
  *
  * The data sheet's poll is unbounded; in the kernel it is bounded, so a
- * genuinely stuck engine cannot hang the caller.
+ * genuinely stuck engine cannot hang the caller.  A bound that expires is
+ * reported rather than swallowed, because "out of reset but still busy" is
+ * the one state this driver cannot recover from - see g2d_recover().
  *
  * G2D_IRQ is deliberately left untouched.  The data sheet scopes the register
  * resets precisely: APB_RESET alone "resets G2D APB registers to initial
@@ -225,7 +284,7 @@ static int g2d_wait_idle(struct mtk_g2d *g2d)
  * Must be called with @g2d->lock held; the caller is the only writer of the
  * control block, so this serialises against the next operation's programming.
  */
-static void g2d_reset(struct mtk_g2d *g2d)
+static int g2d_reset(struct mtk_g2d *g2d)
 {
 	u32 status;
 
@@ -238,23 +297,22 @@ static void g2d_reset(struct mtk_g2d *g2d)
 	writel(G2D_RESET_WRST, g2d->regs + G2D_RESET);
 
 	/* Step 3: while (G2D_STATUS != 0), bounded. */
-	readl_poll_timeout(g2d->regs + G2D_STATUS, status,
-			   !(status & G2D_STATUS_BUSY), 20,
-			   G2D_RESET_TIMEOUT_US);
-
-	if (status & G2D_STATUS_BUSY) {
-		/*
-		 * Out of reset, but never idle - the one case recovery cannot
-		 * fix on its own.  The caller still gets -ETIMEDOUT, but a blit
-		 * that will keep failing needs to be traceable rather than
-		 * looking like an ordinary slow one.
-		 */
-		dev_err(g2d->dev,
-			"G2D still busy after warm reset, engine may be wedged\n");
-	}
+	status = readl_poll_timeout(g2d->regs + G2D_STATUS, status,
+				   !(status & G2D_STATUS_BUSY), 20,
+				   G2D_RESET_TIMEOUT_US);
 
 	/* Step 4: G2D_RESET = 0, de-assert. */
 	writel(0, g2d->regs + G2D_RESET);
+
+	/*
+	 * -ETIMEDOUT, not -EIO: the engine did not stop, which is the same
+	 * condition g2d_wait_idle() reports and the same one the caller already
+	 * has a documented meaning for.  Note that the reset is de-asserted
+	 * either way - leaving WRST asserted would brick the block for every
+	 * later operation - so a failure here does not stop the retries in
+	 * g2d_recover() from being attempted.
+	 */
+	return status ? -ETIMEDOUT : 0;
 }
 
 /**
@@ -268,12 +326,38 @@ static void g2d_reset(struct mtk_g2d *g2d)
  * was possibly still running - which is how a single stall turns into
  * permanently corrupted output.
  *
+ * One warm reset is not treated as sufficient.  The reset sequence's own poll
+ * is bounded here, so an engine that needs longer than that budget to settle
+ * reads as still busy on the first attempt; repeating the sequence gives it
+ * several such budgets rather than one.  When the retries are exhausted the
+ * engine is wedged rather than released: the hardware may still be moving
+ * data to the address last programmed, and there is no further register write
+ * documented to stop it, so the only safe answer is to refuse every later
+ * operation and never hand those buffers back.  See g2d_wedge().
+ *
  * Must be called with @g2d->lock held.
  */
 static void g2d_recover(struct mtk_g2d *g2d)
 {
+	unsigned int i;
+
 	lockdep_assert_held(&g2d->lock);
-	g2d_reset(g2d);
+
+	for (i = 0; i < G2D_RECOVER_TRIES; i++) {
+		if (!g2d_reset(g2d))
+			return;
+
+		/*
+		 * Rate limited: the retries are a known-bad state, and a caller
+		 * looping on the ioctl would otherwise produce one line per
+		 * attempt.  The wedge below is reported once and unratelimited.
+		 */
+		dev_warn_ratelimited(g2d->dev,
+			"G2D still busy after warm reset %u/%u\n",
+			i + 1, G2D_RECOVER_TRIES);
+	}
+
+	g2d_wedge(g2d);
 }
 
 static irqreturn_t g2d_irq_handler(int irq, void *data)
@@ -308,6 +392,17 @@ static irqreturn_t g2d_irq_handler(int irq, void *data)
 static int g2d_start(struct mtk_g2d *g2d)
 {
 	int ret;
+
+	/*
+	 * Never re-program a wedged engine.  START is what makes it fetch and
+	 * write the addresses in the registers, and those still describe the
+	 * operation that never finished, so this is the single place where
+	 * "submit" happens and therefore the single place the wedge has to be
+	 * refused.  The caller has already released nothing yet, so returning
+	 * here also means no buffer is handed back on this path.
+	 */
+	if (g2d->wedged)
+		return -ETIMEDOUT;
 
 	writel(0, g2d->regs + G2D_START);
 	writel(G2D_START_START, g2d->regs + G2D_START);
@@ -407,10 +502,10 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
 	if (!height || height > G2D_MAX_HEIGHT)
 		return -EINVAL;
 
-	/* Widen before the add, not after: (u64)(x + width) would evaluate the
-	 * sum in u32 first and wrap there, so a large x passes a check whose
-	 * whole purpose is to keep the rectangle inside the row.  Both operands
-	 * are u32 from the caller, so that is reachable.
+	/* The sum is widened before the add, not after: (u64)(x + width) would
+	 * evaluate x + width in u32 first and wrap there, so a large x passes a
+	 * check that exists to keep the rectangle inside the row.  Both are u32
+	 * from the caller, so that is reachable.
 	 */
 	if (pitch > G2D_PITCH_MAX)
 		return -EINVAL;
@@ -549,60 +644,6 @@ static int g2d_program_blt(struct mtk_g2d *g2d,
 }
 
 /**
- * g2d_rects_overlap - test whether a blit would read and write the same bytes.
- * @src_bpp: bytes per pixel of the source
- * @src_x, @src_y: origin of the source rectangle within @src, in pixels
- * @dst_bpp: bytes per pixel of the destination
- * @dst_x, @dst_y: origin of the destination rectangle within @dst, in pixels
- * @width: rectangle width, in pixels
- * @height: rectangle height, in pixels
- *
- * Both rectangles are the same size, because G2D_W2M_SIZE sizes the single scan
- * window that both ports share.  A blit from a buffer onto itself is only
- * meaningful when the two regions are disjoint: the engine reads a row and
- * writes a row, and with overlapping regions the outcome depends on the order
- * it does that in, which nothing in this driver specifies or can observe.
- *
- * Two distinct base addresses cannot alias, whatever the origins, so the
- * arithmetic only runs for the same-surface case.  It is done in bytes,
- * because the two ports may have different bytes-per-pixel, and only over the
- * rows where the two rectangles actually meet: the y ranges are compared
- * first.  The pitch is deliberately not used - within one row each rectangle
- * is a contiguous run of pixels, so the byte offsets of the two origins decide
- * it.
- */
-static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
-			       u32 src_x, u32 src_y,
-			       dma_addr_t dst, u32 dst_bpp,
-			       u32 dst_x, u32 dst_y,
-			       u32 width, u32 height)
-{
-	u64 y_start, y_end;
-	u64 s, d;
-
-	if (src != dst)
-		return false;
-
-	y_start = max_t(u64, src_y, dst_y);
-	/* Widen each operand before the add: src_y + height is a u32 sum that
-	 * wraps for a large origin, which would make the y ranges look disjoint
-	 * and report a same-surface blit as safe.
-	 */
-	y_end = min((u64)src_y + height, (u64)dst_y + height);
-	if (y_start >= y_end)
-		return false;
-
-	/* Within any shared row both spans are contiguous byte ranges, so one
-	 * interval intersection decides every shared row at once.
-	 */
-	s = (u64)src_x * src_bpp;
-	d = (u64)dst_x * dst_bpp;
-
-	return min(s + (u64)width * src_bpp, d + (u64)width * dst_bpp) >
-	       max(s, d);
-}
-
-/**
  * mtk_g2d_blt_rect - copy one rectangle between two surfaces at independent
  *			origins.
  * @g2d: device
@@ -624,10 +665,37 @@ static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
  * G2D_W2M_SIZE describes the single scan window that both ports read and write,
  * so a source rectangle and a destination rectangle can never differ in size.
  *
- * @src and @dst may name the same surface only if the two rectangles do not
- * overlap.  Every argument is validated before any register is programmed, so
- * a request rejected with -EINVAL leaves the engine untouched.  Blocks until
- * the engine is idle; -ETIMEDOUT means it did not stop, after a warm reset.
+ * @src and @dst must be two different surfaces.  A blit of one buffer onto
+ * itself is refused outright, even when the rectangles are far apart, and this
+ * is the interesting restriction in this function so it is worth saying why
+ * there is no overlap test here.
+ *
+ * The engine reads a row and writes a row, and nothing in its programming
+ * interface says in which order, so an overlapping in-place copy has no
+ * defined result - that much only rules out the overlapping case.  Deciding
+ * whether the rectangles overlap at all is the harder half, and the arguments
+ * do not carry enough to answer it correctly: with different pitches, and with
+ * the two origins at different y, row n of the source lives at
+ * src_base + (src_y + n) * src_pitch + src_x * src_bpp while row n of the
+ * destination lives at dst_base + (dst_y + n) * dst_pitch + dst_x * dst_bpp -
+ * two different strides, so the byte ranges intersect only in some rows and
+ * the rows on which they do are not the rows whose y ranges overlap.  A test
+ * that compares the origins within a row - the only thing that can be computed
+ * without walking every row - answers a question about a row that may not
+ * intersect at all, and a false "disjoint" is a silently corrupted buffer
+ * rather than an error.
+ *
+ * So v1 requires two distinct surfaces, and the callers upstream (the ioctl
+ * layer) refuse a same-GEM-object request by comparing the handles, which is
+ * the same rule stated in the one place that knows what "the same surface"
+ * means.  Supporting in-place blits later needs a real per-row address walk;
+ * that is a feature to add once it is correct, not a shortcut to take here.
+ *
+ * Every argument is validated before any register is programmed, so a request
+ * rejected with -EINVAL leaves the engine untouched.  Blocks until the engine
+ * is idle; -ETIMEDOUT means it did not stop, after which the engine is either
+ * back in a known idle state or has been wedged and will refuse every further
+ * operation.
  */
 int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
 		      dma_addr_t src, u32 src_pitch, enum g2d_format src_fmt,
@@ -675,16 +743,32 @@ int mtk_g2d_blt_rect(struct mtk_g2d *g2d,
 	if (ret)
 		return ret;
 
-	if (g2d_rects_overlap(src, src_bpp, src_x, src_y,
-			      dst, dst_bpp, dst_x, dst_y,
-			      width, height))
+	/* See the comment above: same-surface blits are not expressible safely
+	 * here, so the rule is stated as "the caller already ensured two
+	 * different surfaces" and this only guards the direct entry point.
+	 */
+	if (src == dst)
 		return -EINVAL;
 
 	mutex_lock(&g2d->lock);
 
+	/*
+	 * Re-check under the lock, before anything is programmed.  g2d_start()
+	 * would refuse a wedged engine too, but by then g2d_program_blt() has
+	 * already written the addresses into SRC_ADDR and W2M_ADDR - which are
+	 * the very registers describing what the stuck engine may still be
+	 * moving data to.  Refusing before the first write is what keeps a
+	 * wedged block from being reprogrammed.
+	 */
+	if (g2d->wedged) {
+		ret = -ETIMEDOUT;
+		goto out_unlock;
+	}
+
 	ret = g2d_program_blt(g2d, src_addr, src_pitch, src_fmt,
 			      dst_addr, dst_pitch, dst_fmt, width, height);
 
+out_unlock:
 	mutex_unlock(&g2d->lock);
 
 	return ret;
@@ -743,6 +827,12 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 
 	mutex_lock(&g2d->lock);
 
+	/* As in mtk_g2d_blt_rect(): nothing is programmed on a wedged engine. */
+	if (g2d->wedged) {
+		ret = -ETIMEDOUT;
+		goto out_unlock;
+	}
+
 	/* Same shape as the bitblt destination: COLOR_EN (bit 9, named
 	 * DST_COLOR_EN) selects the constant colour instead of a buffer.
 	 */
@@ -760,6 +850,7 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 
 	ret = g2d_start(g2d);
 
+out_unlock:
 	mutex_unlock(&g2d->lock);
 
 	return ret;
@@ -910,77 +1001,6 @@ static const struct of_device_id mtk_g2d_of_match[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
-
-/**
- * mtk_g2d_get - find the G2D device belonging to a DRM device.
- * @dev: the mediatek-drm device
- *
- * Returns a &struct mtk_g2d with a reference held, or NULL if this DRM device
- * has no blitter.  NULL is a normal answer, not an error: the MDP DRM device
- * has no G2D, and callers must fall back rather than fail when there is none.
- *
- * The reference is what makes the returned pointer safe to use: unbinding is
- * not gated on the DRM device going away.
- */
-struct mtk_g2d *mtk_g2d_get(struct device *dev)
-{
-	struct device_node *node;
-	struct mtk_g2d *g2d = NULL;
-	struct device *pdev;
-
-	if (!dev->parent || !dev->parent->of_node || !dev->parent->of_node->parent)
-		return NULL;
-
-	/*
-	 * G2D is a sibling of the DRM device under MMSYS, not a child of it, so
-	 * this walks MMSYS.  Being under MMSYS is not enough on its own: an MDP
-	 * DRM device sits under the same MMSYS and has no G2D, which is why this
-	 * is a lookup and not a shared global.
-	 *
-	 * The node may be absent, disabled, unbound or bound; each of those is
-	 * "no blitter" rather than an error.
-	 */
-	for_each_child_of_node(dev->parent->of_node->parent, node) {
-		if (!of_match_node(mtk_g2d_of_match, node))
-			continue;
-		if (!of_device_is_available(node))
-			break;
-
-		/*
-		 * The node existing says nothing about the driver: probe can
-		 * still fail, or not have run yet.  Only a bound device can be
-		 * programmed.
-		 *
-		 * bus_find_device_by_of_node() takes a reference and it is
-		 * kept - not put here - because that reference is what keeps
-		 * both the platform device and its drvdata alive for as long as
-		 * the caller holds the &struct mtk_g2d.  The matching
-		 * put_device() is in mtk_g2d_put().  @node itself needs no
-		 * of_node_put() here: for_each_child_of_node() refcounts it
-		 * and releases its own reference on the next iteration.
-		 */
-		pdev = bus_find_device_by_of_node(&platform_bus_type, node);
-		if (!pdev)
-			break;
-
-		g2d = dev_get_drvdata(pdev);
-		break;
-	}
-
-	return g2d;
-}
-
-void mtk_g2d_put(struct mtk_g2d *g2d)
-{
-	if (!g2d)
-		return;
-
-	/*
-	 * This is the put_device() for the reference bus_find_device_by_of_node()
-	 * took: one put per get(), never more.
-	 */
-	put_device(g2d->dev);
-}
 
 struct device *mtk_g2d_device(struct mtk_g2d *g2d)
 {

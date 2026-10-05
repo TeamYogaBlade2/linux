@@ -4,12 +4,20 @@
  *
  * Userspace interface to the G2D 2D blitter.
  *
- * These ioctls are deliberately thin.  Everything that decides whether an
- * operation is *safe* - resolving a buffer, taking a reference to it, locking
- * it, validating the geometry against what the registers can hold, and waiting
- * for the engine to stop - already exists in the DRM-side helper layer
- * (mtk_g2d_drm_blt_rect() / mtk_g2d_drm_fill() in mtk_drm_drv.c).  This file
- * adds the ABI on top: validate the arguments strictly, then hand them over.
+ * This file is the whole of the G2D userspace plumbing: it resolves and
+ * validates a request, takes the locks and references that keep the buffers
+ * alive for the duration, programs the engine through mtk-g2d.c and waits for
+ * it to stop.  It used to be split across here and mtk_drm_drv.c, with the
+ * framebuffer-resolving and locking half living in the display driver because
+ * that is where the ioctls were registered.  The ioctls are no longer on the
+ * display device - the display DRM must not own a block it does not program
+ * - so the whole of it lives here, next to the ABI it implements.
+ *
+ * Nothing here is registered anywhere yet: the G2D block owns no DRM device,
+ * so there is no ioctl table in any &drm_driver and no node to reach this
+ * through.  Until it gets a render node of its own these ioctls are dead code,
+ * deliberately kept compiling rather than deleted so the ABI does not have to
+ * be rewritten twice.
  *
  * Three things this file does *not* do, each for a reason:
  *
@@ -28,38 +36,27 @@
  *    a pitch with no descriptor.
  *
  *  - It does not use a DMA-BUF fd in the ABI.  A user pointer is meaningless
- *    here (G2D is a DMA engine and the display path has no IOMMU, so hardware
- *    consumes physical addresses), and a raw fd would be a second, parallel way
- *    of naming the same buffers that the GEM namespace already covers.
+ *    here (G2D is a DMA engine, and the display path hands it DMA addresses),
+ *    and a raw fd would be a second, parallel way of naming the same buffers
+ *    that the GEM namespace already covers.
  *
- * The one behaviour this file does add on top of the helper is *strictness*.
- * mtk_g2d_drm_blt_rect() clips an over-large rectangle down to what the buffers
- * can supply, which is right for an internal caller that asked for "copy what
- * you can" and wrong for an ABI, where silently doing less than was requested
- * is a bug the caller cannot see.  So every bound is re-checked here and
- * reported as -EINVAL.  By the time the helper runs, the request is known to
- * fit: nothing is ever clipped, and the two layers cannot disagree about what
- * was accepted.
- *
- * A side effect worth naming, because it is a real benefit rather than a
- * convenience: the helper's locking, reference-taking and format validation
- * only work on a &struct drm_framebuffer, so this file builds a framebuffer
- * view of each GEM object.  That is what lets the audited buffer handling be
- * reused instead of reimplemented - but it also means an ioctl buffer is
- * *required* to be a single-plane, linear framebuffer, which is exactly what the
- * engine needs anyway.
+ * The file's job is *strictness*.  Every bound the engine imposes is
+ * re-checked here and reported as -EINVAL, rather than being clipped to what
+ * the buffers can supply: for an ABI, silently doing less than was requested
+ * is a bug the caller cannot see.  By the time the engine is programmed the
+ * request is known to fit, so nothing is ever clipped and the two layers
+ * cannot disagree about what was accepted.
  */
 
+#include <drm/drm_device.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
-#include <drm/drm_device.h>
-#include <drm/drm_file.h>
-#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
-#include <drm/drm_print.h>
 #include <drm/drm_ioctl.h>
+#include <drm/drm_print.h>
 #include <drm/drm_prime.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma-resv.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
@@ -68,15 +65,14 @@
 #include <drm/mtk_g2d.h>
 
 #include "mtk-g2d.h"
-#include "mtk_drm_drv.h"
 
 /**
  * struct mtk_g2d_uapi_surf - one operand, resolved and validated
  * @obj: the GEM object, referenced for as long as this structure lives
- * @fb: the framebuffer view the helper layer takes
  * @addr: DMA address of the first byte of the buffer
  * @size: real size of the allocation in bytes, from obj->size
  * @pitch: stride in bytes
+ * @fmt: engine CLRFMT this buffer is programmed with
  * @bpp: bytes per pixel, from the format
  * @width, @height: surface dimensions in pixels, as declared by userspace
  * @x, @y: origin of the rectangle within the surface, in pixels
@@ -91,10 +87,10 @@
  */
 struct mtk_g2d_uapi_surf {
 	struct drm_gem_object *obj;
-	struct drm_framebuffer fb;
 	dma_addr_t addr;
 	size_t size;
 	u32 pitch;
+	enum g2d_format fmt;
 	u32 bpp;
 	u32 width;
 	u32 height;
@@ -105,19 +101,18 @@ struct mtk_g2d_uapi_surf {
 /**
  * mtk_g2d_uapi_map_format - map a @mtk_g2d_format onto a DRM fourcc.
  *
- * Returns a format the helper layer recognises, or NULL if there is none.
+ * Returns a format the DRM side recognises, or NULL if there is none.
  *
- * The helper maps DRM fourccs onto CLRFMT in one direction only, so an ioctl
- * that takes engine-native formats has to come back the other way.  The
- * mapping is one-to-one over the four formats both sides have in common.
- *
- * MTK_G2D_PARGB8888 is the honest awkward case: the engine can encode a
- * pre-multiplied format, and DRM has no fourcc for it - DRM_FORMAT_ARGB8888
- * names non-premultiplied alpha.  Rather than let the two silently disagree
- * about what the bytes mean, PARGB8888 is reported as *unsupported* here and is
- * excluded from the capability bitmap.  A caller wanting pre-multiplied alpha
- * has no representation for it yet; getting that wrong would corrupt colours,
- * which is a much worse outcome than a format being unavailable.
+ * The two directions are deliberately separate mappings rather than one
+ * table walked backwards: the engine names its encodings, DRM names its own,
+ * and the honest awkward case is MTK_G2D_PARGB8888 - the engine can encode a
+ * pre-multiplied format and DRM has no fourcc for it, since
+ * DRM_FORMAT_ARGB8888 names non-premultiplied alpha.  Rather than let the two
+ * silently disagree about what the bytes mean, PARGB8888 is reported as
+ * *unsupported* here and is excluded from the capability bitmap.  A caller
+ * wanting pre-multiplied alpha has no representation for it yet; getting that
+ * wrong would corrupt colours, which is a much worse outcome than a format
+ * being unavailable.
  */
 static const struct drm_format_info *
 mtk_g2d_uapi_map_format(u32 format)
@@ -134,6 +129,44 @@ mtk_g2d_uapi_map_format(u32 format)
 	default:
 		/* Includes MTK_G2D_PARGB8888: see above. */
 		return NULL;
+	}
+}
+
+/**
+ * mtk_g2d_uapi_to_clrfmt - the DRM fourcc that came out of the mapping above,
+ *	turned back into the engine's own CLRFMT encoding.
+ * @format: a DRM fourcc
+ * @out: CLRFMT, written on success
+ *
+ * The inverse of mtk_g2d_uapi_map_format().  It is a switch rather than an
+ * index because the engine's enum is not dense - it has a hole where
+ * PARGB8888 sits, and no fourcc to go with it - so walking an array of four
+ * entries by fourcc would be the wrong shape.
+ *
+ * The conversions are format-identities, not approximations: no swap bit
+ * (RB_SWP, BYTE_SWP) or flip is programmed here, so a BGR variant of any of
+ * these would be a different layout and is deliberately absent rather than
+ * approximated.
+ *
+ * Returns 0, or -EINVAL if @format has no CLRFMT encoding.
+ */
+static int mtk_g2d_uapi_to_clrfmt(u32 format, enum g2d_format *out)
+{
+	switch (format) {
+	case DRM_FORMAT_RGB565:
+		*out = g2d_clrfmt_rgb565;
+		return 0;
+	case DRM_FORMAT_RGB888:
+		*out = g2d_clrfmt_rgb888;
+		return 0;
+	case DRM_FORMAT_ARGB8888:
+		*out = g2d_clrfmt_argb8888;
+		return 0;
+	case DRM_FORMAT_XRGB8888:
+		*out = g2d_clrfmt_xrgb8888;
+		return 0;
+	default:
+		return -EINVAL;
 	}
 }
 
@@ -189,8 +222,7 @@ mtk_g2d_uapi_map_format(u32 format)
  *     imported one is checked here because the prime import path only guarantees
  *     it for the default import helper.
  */
-static int mtk_g2d_uapi_resolve(struct drm_device *dev,
-				struct drm_file *file_priv,
+static int mtk_g2d_uapi_resolve(struct drm_file *file_priv,
 				const struct mtk_g2d_surface *s,
 				u32 rect_w, u32 rect_h,
 				struct mtk_g2d_uapi_surf *out)
@@ -207,6 +239,10 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 	info = mtk_g2d_uapi_map_format(s->format);
 	if (!info)
 		return -EINVAL;
+
+	ret = mtk_g2d_uapi_to_clrfmt(info->format, &out->fmt);
+	if (ret)
+		return ret;
 
 	out->bpp = info->cpp[0];
 	out->pitch = s->pitch;
@@ -237,13 +273,15 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 	if (rect_w > max_width || rect_h > max_height)
 		return -EINVAL;
 
-	/* 3. One row, origin included. */
 	/*
-	 * Widen before the add, not after: (u64)(x + rect_w) evaluates the sum
-	 * in u32 first, so a large x wraps there and the check then compares a
-	 * small number against the pitch and passes.  Both operands are u32
-	 * from userspace, so that is reachable, and this check exists to keep
-	 * the rectangle inside the row.
+	 * 3. One row, origin included.
+	 *
+	 * The widen is on each operand *before* the add, not on the sum:
+	 * (u64)(x + rect_w) evaluates x + rect_w in u32 first, so a large x
+	 * wraps there and the check then compares a small number against the
+	 * pitch and passes.  Both x and rect_w are u32 from userspace, so this
+	 * is reachable, and it is a check that exists to keep the engine inside
+	 * the buffer.
 	 */
 	row_end = ((u64)s->x + rect_w) * out->bpp;
 	if (row_end > s->pitch)
@@ -281,9 +319,12 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 		}
 	}
 
-	/* 5. The real allocation, which is the check that actually protects it. */
-	/* Same widen-before-add reasoning as check 3: this is the check that is
-	 * supposed to stop the engine writing past the end of a buffer.
+	/*
+	 * 5. The real allocation, which is the check that actually protects it.
+	 *
+	 * Same widen-before-add reasoning as check 3: (u64)(y + rect_h) would
+	 * wrap the sum in u32 first, and this is the check that is supposed to
+	 * stop the engine writing past the end of a buffer.
 	 */
 	if (((u64)s->y + rect_h) * s->pitch > out->size) {
 		ret = -EINVAL;
@@ -320,25 +361,6 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 		goto err_put;
 	}
 
-	/*
-	 * Build the framebuffer view the helper layer takes.  offsets[0] is 0
-	 * because the origin is expressed in pixels and folded into the address
-	 * by the engine driver; the helper adds offsets[0] to the object's DMA
-	 * address itself, so a non-zero value here would double-count the
-	 * origin and shift every access.
-	 *
-	 * The view borrows the GEM object, which this function holds a reference
-	 * to for the whole operation, so the helper taking its own reference on
-	 * top is safe and the stack frame outlives it.
-	 */
-	out->fb.dev = dev;
-	out->fb.format = info;
-	out->fb.pitches[0] = s->pitch;
-	out->fb.offsets[0] = 0;
-	out->fb.width = s->width;
-	out->fb.height = s->height;
-	out->fb.obj[0] = out->obj;
-
 	return 0;
 
 err_put:
@@ -353,6 +375,235 @@ static void mtk_g2d_uapi_release(struct mtk_g2d_uapi_surf *surf)
 	if (surf->obj)
 		drm_gem_object_put(surf->obj);
 	surf->obj = NULL;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Lifetime.
+ *
+ * The engine reads and writes memory that userspace owns, asynchronously with
+ * respect to userspace's view of it.  Two things therefore have to be true for
+ * the whole of an operation, and both are established here rather than assumed:
+ *
+ *   - The buffers cannot be freed or remapped underneath us.  The GEM object
+ *     reference taken in mtk_g2d_uapi_resolve() stops the allocation being
+ *     freed, and the reservation lock stops anything that mutates the mapping -
+ *     a vmap/vunmap of the same object, a prime export, another driver taking
+ *     it for its own use - from proceeding while the engine is reading it.
+ *     This is the same pairing drm_gem_vmap()/drm_gem_vunmap() use, for the
+ *     same reason.
+ *
+ *   - The engine has stopped before the locks are dropped.  mtk_g2d_blt_rect()
+ *     and mtk_g2d_fill() both block in g2d_wait_idle() until G2D_STATUS reads
+ *     idle before they return, so releasing the locks afterwards is not a
+ *     race: there is nothing left running that could touch the memory.  If it
+ *     does not go idle, the engine is wedged shut rather than released - see
+ *     the timeout note below.
+ *
+ * That is why this is synchronous and installs no fence.  A fence would let
+ * the source be released earlier, which is a real benefit, but it would also
+ * mean the engine outliving this call - and the display path here has no
+ * fencing infrastructure to hang one on, because nothing in the OVL/RDMA path
+ * ever installs one either.  A correct synchronous wait is the honest choice:
+ * it is bounded, it cannot hang, and it leaves no window in which a buffer is
+ * unlocked while the engine is still running.
+ *
+ * Locking order.  A blit takes two reservation locks, and two concurrent
+ * blits of the same pair of buffers in opposite directions would deadlock if
+ * the order depended on which buffer was passed first.  It does not:
+ * mtk_g2d_uapi_lock_pair() always takes them in reservation-object pointer
+ * order, which is one global order over every buffer in the system.  The
+ * reservation locks are therefore the only locks held across the engine
+ * operation, and they are always released in the reverse of the order taken.
+ *
+ * No engine lock is taken here: mtk_g2d_blt_rect()/mtk_g2d_fill() take
+ * g2d->lock internally around register programming, and this code never programs
+ * a register itself, so there is nothing here that could race with another user
+ * of the engine.
+ */
+
+/**
+ * mtk_g2d_uapi_lock - take a surface's reservation object.
+ * @surf: surface to lock
+ * @owner: set to the reservation object actually locked, for the pair case
+ *
+ * drm_gem_lock() is dma_resv_lock(obj->resv, NULL), and a NULL acquire context
+ * is documented as legal only for locking a reservation object against itself.
+ * That is exactly the wrong property for a pair of buffers: a NULL context
+ * carries no record of what this task already holds, so if the two surfaces
+ * turn out to be the same object the second lock blocks on a mutex the first
+ * one is still holding, and the task sleeps forever.  A pair lock therefore
+ * uses a real ww_acquire_ctx.  The same-object case cannot be reached from
+ * here any more - mtk_g2d_ioctl_blt() refuses it outright - but the short
+ * circuit below stays, because a single lock is still the right answer for one
+ * object and it costs nothing to not depend on the caller's check.
+ *
+ * Not interruptible, deliberately: what is being waited on is another G2D user
+ * finishing a copy that is itself bounded, so bailing out with -EINTR halfway
+ * through owning one of two buffers would cost more state to unwind than it
+ * saves.
+ */
+static int mtk_g2d_uapi_lock(struct mtk_g2d_uapi_surf *surf,
+			     struct ww_acquire_ctx *ctx)
+{
+	if (!surf->obj)
+		return 0;
+
+	return dma_resv_lock(surf->obj->resv, ctx);
+}
+
+static void mtk_g2d_uapi_unlock(struct mtk_g2d_uapi_surf *surf)
+{
+	if (surf->obj)
+		dma_resv_unlock(surf->obj->resv);
+}
+
+/**
+ * mtk_g2d_uapi_lock_pair - lock two surfaces in a deadlock-free order.
+ * @a: first surface
+ * @b: second surface
+ *
+ * Both buffers must be held for the whole operation - the engine reads the
+ * source while it writes the destination, so locking only one would leave the
+ * other exposed.
+ *
+ * The order is always reservation-object pointer order, which is a single
+ * global order over every buffer in the system.  Ordering by "which argument it
+ * was" would not be: A->B and B->A are both reachable, and the second thread
+ * would take the first lock the first thread is holding and wait for it
+ * forever.
+ *
+ * Returns 0, or the error from the first lock that could not be taken, in
+ * which case anything already taken has been released again.
+ */
+static int mtk_g2d_uapi_lock_pair(struct mtk_g2d_uapi_surf *a,
+				  struct mtk_g2d_uapi_surf *b)
+{
+	struct ww_acquire_ctx ctx;
+	struct mtk_g2d_uapi_surf *first, *second;
+	int ret;
+
+	/*
+	 * One reservation object means one lock is already enough, and taking
+	 * it twice is a self-deadlock.  Not an error case, just one lock
+	 * instead of two.
+	 */
+	if (a->obj && a->obj == b->obj) {
+		first = a;
+		second = NULL;
+	} else {
+		/* Deterministic global order, independent of argument position. */
+		if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+			first = b;
+			second = a;
+		} else {
+			first = a;
+			second = b;
+		}
+	}
+
+	/*
+	 * The acquire context is a transaction, not bookkeeping the caller
+	 * owns.  ww_acquire_init() ... ww_acquire_fini() brackets it, and
+	 * ww_acquire_fini() while @ctx still holds locks is premature: it
+	 * releases the transaction's lockdep state and clears its acquired
+	 * count while the mutexes stay locked, so a later ww_mutex_lock() on
+	 * this class no longer knows the task already holds them and can no
+	 * longer order against them.  The documented order is init, lock every
+	 * object, ww_acquire_done(), release the locks, then fini - so fini()
+	 * belongs to the unlock side, not to the end of the lock side, and the
+	 * lock side must close the transaction with ww_acquire_done() first.
+	 */
+	ww_acquire_init(&ctx, &reservation_ww_class);
+
+	ret = mtk_g2d_uapi_lock(first, &ctx);
+	if (ret)
+		goto err_fini;
+
+	if (second) {
+		ret = mtk_g2d_uapi_lock(second, &ctx);
+
+		/*
+		 * reservation_ww_class is a DEFINE_WD_CLASS, so the ww mutex
+		 * *dies* rather than waiting when it finds a cycle: -EDEADLK
+		 * is how it reports contention, not a failure of the request.
+		 * Returning it up would turn an ordinary concurrent blit into a
+		 * spurious error, so the pair is retried on the slowpath.
+		 *
+		 * The die case has a hard requirement, from dma_resv.h and
+		 * ww_mutex.h alike: *everything* @ctx holds must be released
+		 * before dma_resv_lock_slow() is called on the contended
+		 * object, and it is forbidden to call the slowpath with any
+		 * other mutex of this context still held.  So @first goes back
+		 * first, then the slowpath claims the object that died, and
+		 * only then is @first re-taken.  Both buffers are held when this
+		 * returns, which the engine requires: it reads the source while
+		 * it writes the destination.
+		 *
+		 * Ordering cannot simply be restarted from the top here - that
+		 * is the same cycle that just produced the -EDEADLK.  Backing
+		 * off one object and waiting for it is what breaks it, and
+		 * ww_mutex.h explicitly allows the remaining mutexes to be
+		 * re-acquired with ww_mutex_lock() afterwards.
+		 */
+		if (ret == -EDEADLK) {
+			mtk_g2d_uapi_unlock(first);
+
+			/* Cannot fail: the slowpath is an uninterruptible wait. */
+			dma_resv_lock_slow(second->obj->resv, &ctx);
+
+			ret = mtk_g2d_uapi_lock(first, &ctx);
+			if (ret) {
+				/*
+				 * Only reachable if @first itself is now
+				 * contended, which the ww class cannot report as
+				 * -EDEADLK without dying again, and a dying
+				 * mutex cannot be waited on.  Release what is
+				 * held so the transaction can still be closed.
+				 */
+				dma_resv_unlock(second->obj->resv);
+				goto err_fini;
+			}
+		}
+	}
+
+	ww_acquire_done(&ctx);
+
+	return 0;
+
+err_fini:
+	/*
+	 * Nothing is held on this path, so the transaction is simply closed.
+	 */
+	ww_acquire_fini(&ctx);
+
+	return ret;
+}
+
+/**
+ * mtk_g2d_uapi_unlock_pair - release both, in the reverse of the order taken.
+ * @a: first surface passed to the lock
+ * @b: second surface passed to the lock
+ *
+ * Strict reverse of the order mtk_g2d_uapi_lock_pair() took them in, which is
+ * what makes the order it chose a real one rather than a convention.
+ */
+static void mtk_g2d_uapi_unlock_pair(struct mtk_g2d_uapi_surf *a,
+				     struct mtk_g2d_uapi_surf *b)
+{
+	if (a->obj && a->obj == b->obj) {
+		mtk_g2d_uapi_unlock(a);
+		return;
+	}
+
+	/* Strict reverse of the order mtk_g2d_uapi_lock_pair() took them in. */
+	if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+		mtk_g2d_uapi_unlock(a);
+		mtk_g2d_uapi_unlock(b);
+	} else {
+		mtk_g2d_uapi_unlock(b);
+		mtk_g2d_uapi_unlock(a);
+	}
 }
 
 /**
@@ -427,17 +678,16 @@ static int mtk_g2d_ioctl_get_cap(struct drm_device *dev, void *data,
 /**
  * mtk_g2d_ioctl_blt - DRM_IOCTL_MTK_G2D_BLT
  *
- * Blocking: returns only once the engine has stopped.  See the -ETIMEDOUT
- * documentation in the UAPI header for what a caller owes in that case - in
- * particular the destination may still be written after this returns, which is
- * why the errno is passed through unchanged rather than folded into a generic
- * failure.
+ * Blocking: returns only once the engine has stopped, or has been declared
+ * unrecoverable.  See the -ETIMEDOUT documentation in the UAPI header for what
+ * that means - in particular that the destination may still be written after
+ * the call returns - and why that is now a state no further ioctl can reach.
  */
 static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 			      struct drm_file *file_priv)
 {
-	struct mtk_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_uapi_surf src = {}, dst = {};
+	struct mtk_g2d_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_blt arg;
 	int ret;
 
@@ -462,35 +712,64 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 		return -EINVAL;
 
 	/* -ENODEV rather than -EINVAL: a missing blitter is a normal config. */
-	if (!priv->g2d)
+	if (!priv || !priv->g2d)
 		return -ENODEV;
 
-	ret = mtk_g2d_uapi_resolve(dev, file_priv, &arg.src,
+	ret = mtk_g2d_uapi_resolve(file_priv, &arg.src,
 				   arg.rect_width, arg.rect_height, &src);
 	if (ret)
 		return ret;
 
-	ret = mtk_g2d_uapi_resolve(dev, file_priv, &arg.dst,
+	ret = mtk_g2d_uapi_resolve(file_priv, &arg.dst,
 				   arg.rect_width, arg.rect_height, &dst);
 	if (ret)
 		goto err_src;
 
 	/*
-	 * Validated strictly, so the helper has nothing to clip and nothing to
-	 * refuse.  It owns buffer references, locking and the wait for idle.
+	 * A blit of one buffer onto itself is refused rather than analysed.
+	 *
+	 * The engine reads a row and writes a row with no ordering this driver
+	 * can specify, so an overlapping in-place copy has no defined result at
+	 * all.  Whether two rectangles overlap cannot be answered from the
+	 * arguments alone either: with different pitches, and with the two
+	 * origins at different y, row n of the source is at base + (y + n) *
+	 * pitch + x * bpp and row n of the destination is at a different
+	 * offset again, so comparing origins inside a row - which is all the
+	 * geometry would otherwise allow - decides a question about rows it
+	 * cannot see.  Getting that right means either walking every row or
+	 * proving non-overlap with per-row address arithmetic, and a false
+	 * "no overlap" is a silent corruption of the buffer, not an error.
+	 *
+	 * So the safe rule for v1: two operands must be two GEM objects.
 	 */
-	ret = mtk_g2d_drm_blt_rect(priv->g2d, &src.fb,
-				   arg.src.x, arg.src.y,
-				   &dst.fb,
-				   arg.dst.x, arg.dst.y,
-				   arg.rect_width, arg.rect_height);
+	if (src.obj == dst.obj) {
+		ret = -EINVAL;
+		goto err_dst;
+	}
+
+	/* Both buffers are held for the whole engine operation. */
+	ret = mtk_g2d_uapi_lock_pair(&src, &dst);
+	if (ret)
+		goto err_dst;
+
+	/*
+	 * Validated strictly, so the engine has nothing to clip and nothing to
+	 * refuse: every bound above is already against the real allocation.
+	 */
+	ret = mtk_g2d_blt_rect(priv->g2d,
+			       src.addr, src.pitch, src.fmt, src.x, src.y,
+			       dst.addr, dst.pitch, dst.fmt, dst.x, dst.y,
+			       arg.rect_width, arg.rect_height);
+
+	mtk_g2d_uapi_unlock_pair(&src, &dst);
 
 	if (ret)
 		drm_dbg(dev, "G2D blit of %ux%u failed: %d\n",
 			arg.rect_width, arg.rect_height, ret);
 
-err_src:
+err_dst:
 	mtk_g2d_uapi_release(&dst);
+err_src:
 	mtk_g2d_uapi_release(&src);
 
 	return ret;
@@ -504,8 +783,8 @@ err_src:
 static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
-	struct mtk_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_uapi_surf dst = {};
+	struct mtk_g2d_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_fill arg;
 	int ret;
 
@@ -517,22 +796,30 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 		return -EINVAL;
 	if (!arg.rect_width || !arg.rect_height)
 		return -EINVAL;
-	if (!priv->g2d)
+
+	if (!priv || !priv->g2d)
 		return -ENODEV;
 
-	ret = mtk_g2d_uapi_resolve(dev, file_priv, &arg.dst,
+	ret = mtk_g2d_uapi_resolve(file_priv, &arg.dst,
 				   arg.rect_width, arg.rect_height, &dst);
 	if (ret)
 		return ret;
 
-	ret = mtk_g2d_drm_fill(priv->g2d, &dst.fb,
-			       arg.dst.x, arg.dst.y,
-			       arg.rect_width, arg.rect_height, arg.color);
+	ret = mtk_g2d_uapi_lock(&dst, NULL);
+	if (ret)
+		goto err_dst;
+
+	ret = mtk_g2d_fill(priv->g2d, dst.addr, dst.pitch, dst.fmt,
+			   dst.x, dst.y, arg.rect_width, arg.rect_height,
+			   arg.color);
+
+	mtk_g2d_uapi_unlock(&dst);
 
 	if (ret)
 		drm_dbg(dev, "G2D fill of %ux%u failed: %d\n",
 			arg.rect_width, arg.rect_height, ret);
 
+err_dst:
 	mtk_g2d_uapi_release(&dst);
 
 	return ret;
@@ -541,7 +828,8 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 /**
  * mtk_g2d_ioctls - the driver ioctl table
  *
- * Non-static and referenced from mtk_drm_drv.c's &drm_driver.  DRM_IOCTL_DEF_DRV
+ * Non-static and intended for a &drm_driver belonging to the G2D node itself.
+ * No such driver exists yet, so nothing references this table; DRM_IOCTL_DEF_DRV
  * places each entry at its own ioctl number, so these cannot collide with a
  * core DRM ioctl or with another driver's.
  *
@@ -553,10 +841,9 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
  *
  *   - BLT and FILL carry DRM_AUTH and deliberately not DRM_MASTER.  DRM_AUTH is
  *     the important one: an unauthenticated process should not be able to make
- *     the display hardware write into buffers.  DRM_MASTER is withheld because
- *     this is not display state - requiring modeset master would exclude the
- *     render-node clients that have no master at all, which is where a
- *     compositor's helper would live.
+ *     the engine write into buffers.  DRM_MASTER is withheld because a
+ *     compositor's helper opens a render node and has no master at all, and
+ *     that is exactly the client this exists for.
  */
 /*
  * The count is a compile-time constant the driver file needs but cannot

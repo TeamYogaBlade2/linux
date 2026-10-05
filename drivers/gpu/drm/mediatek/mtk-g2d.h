@@ -11,6 +11,26 @@
 
 struct mtk_g2d;
 
+/**
+ * struct mtk_g2d_drm_private - per-G2D-node state the ioctl layer needs.
+ * @g2d: the engine this node programs
+ *
+ * It lives here, and holds nothing but the engine pointer, because
+ * mtk-g2d.c must stay free of DRM dependencies: it owns the hardware and the
+ * programming sequence, while mtk-g2d-uapi.c owns the ioctls.  The node's
+ * &struct drm_device is not referenced at all - no field of it is needed by
+ * either file - so the two can be built without DRM headers seeing each other.
+ *
+ * This is deliberately not a second route to the engine from elsewhere in the
+ * tree.  The old mtk_g2d_get() walked the device tree looking for a sibling
+ * G2D on behalf of the display DRM device, which existed only because the
+ * display device was reaching a block it does not own; with the ioctls off that
+ * device there is no caller left that would need it.
+ */
+struct mtk_g2d_drm_private {
+	struct mtk_g2d *g2d;
+};
+
 /* CLRFMT encodings, from the data sheet's SRC_CON/DST_CON description. */
 enum g2d_format {
 	g2d_clrfmt_rgb565 = 0,
@@ -67,11 +87,17 @@ int mtk_g2d_addr_align(u32 format, u32 *align);
  * Pitch is in bytes, not pixels, and width/height are in pixels.
  *
  * Both calls are fully synchronous: they return only once the engine has
- * gone idle, and they report -ETIMEDOUT if it did not (after attempting a
- * warm reset, so a subsequent call starts from a known state).  Every
- * argument is validated before any register is programmed, so a request
- * rejected with -EINVAL leaves the engine untouched.  A NULL @g2d is
- * -EINVAL rather than a crash.
+ * gone idle, and they report -ETIMEDOUT if it did not.  On that path the
+ * driver warm-resets the engine and re-polls several times; if it is still
+ * busy after the last of them it is *wedged* - shut out for good - because the
+ * hardware may then still be writing the address last programmed and no
+ * register write documented here can stop it.  A wedged engine refuses every
+ * subsequent call with -ETIMEDOUT without programming a register or waiting on
+ * the hardware, and the buffers of the operation that wedged it are not
+ * released, so the memory they name is not reused underneath the engine.
+ * Every argument is validated before any register is programmed, so a request
+ * rejected with -EINVAL leaves the engine untouched.  A NULL @g2d is -EINVAL
+ * rather than a crash.
  *
  * Origins and sizes.  This block has no origin register and no per-surface
  * size register:
@@ -116,10 +142,14 @@ int mtk_g2d_blt(struct mtk_g2d *g2d,
  * pixel and address alignment, and each rectangle must fit within one row of
  * its surface, origin included.
  *
- * A blit of a buffer onto itself is permitted only when the two rectangles do
- * not overlap; an overlapping in-place blit is -EINVAL.  The engine reads and
- * writes row by row and its ordering is not specified, so an overlapping
- * in-place copy has no defined result.
+ * A blit of a buffer onto itself is -EINVAL, even when the two rectangles are
+ * far apart.  The engine reads a row and writes a row with no ordering this
+ * driver can specify, and whether the rectangles overlap at all cannot be
+ * answered from the arguments: with differing pitches and origins, row n of
+ * the source and row n of the destination sit at different strides, so the
+ * rows whose byte ranges intersect are not the rows whose y ranges do.
+ * Requiring two surfaces is the safe rule; offering in-place blits would need
+ * a real per-row address walk to be correct.
  *
  * Blocks until the engine is idle.
  */
@@ -142,32 +172,9 @@ int mtk_g2d_fill(struct mtk_g2d *g2d,
 		dma_addr_t dst, u32 dst_pitch, enum g2d_format dst_fmt,
 		u32 x, u32 y, u32 width, u32 height, u32 color);
 
-/**
- * mtk_g2d_get - find the G2D device belonging to a DRM device.
- * @dev: a mediatek-drm device
- *
- * The DRM device and the G2D block are separate platform devices under the same
- * MMSYS parent.  Returns the &struct mtk_g2d that @dev may use, with a
- * reference held, or NULL if there is none - in which case an accelerated path
- * must fall back rather than fail.  An MDP DRM device, for instance, has no
- * G2D.
- *
- * The reference holds the platform device alive, so the result cannot dangle if
- * the block is unbound.  Release it with mtk_g2d_put().
- */
-struct mtk_g2d *mtk_g2d_get(struct device *dev);
-
-/**
- * mtk_g2d_put - release a reference taken by mtk_g2d_get().
- *
- * NULL is accepted and ignored, so a caller that treats "no blitter" as an
- * ordinary case needs no branch of its own.
- */
-void mtk_g2d_put(struct mtk_g2d *g2d);
-
 /* The &struct device behind an engine, so a caller holding a reference can
- * attribute diagnostics to the right device.
- */
+  * attribute diagnostics to the right device.
+  */
 struct device *mtk_g2d_device(struct mtk_g2d *g2d);
 
 #endif /* _MTK_G2D_H_ */

@@ -23,11 +23,13 @@ extern "C" {
  *
  * Where these ioctls live
  *
- * They are driver ioctls on the mediatek-drm card node, not a separate /dev.
- * G2D is an off-path accelerator for the display pipeline rather than a
- * compositor node of its own, so it belongs to the DRM device that owns the
- * buffers it moves; a second device node would mean a second, parallel way of
- * naming those same buffers for no benefit.
+ * They are *not* on the mediatek-drm card node.  They used to be, because
+ * there was nowhere else for them to be: the G2D block owns no DRM device of
+ * its own, so its ioctls were hung off the display device that owns the
+ * buffers - which made a display card node the only way to reach a block that
+ * has nothing to do with modesetting.  They are being moved to a render node
+ * belonging to G2D itself; until that exists they are registered nowhere and
+ * are unreachable.
  *
  * Buffer references
  *
@@ -313,9 +315,15 @@ struct mtk_g2d_surface {
  * scan window, so a copy with different source and destination sizes cannot be
  * expressed and is not offered.  Both must be 1..2048.
  *
- * In-place operation is allowed when the two rectangles do not overlap, since
- * the engine's read/write ordering is unspecified and an overlapping in-place
- * copy would have no defined result; an overlap is -EINVAL.
+ * The two surfaces must be two different buffers: a blit of one buffer onto
+ * itself is -EINVAL, even when the rectangles are far apart.  The engine's
+ * read/write ordering is unspecified, so an overlapping in-place copy has no
+ * defined result, and with differing pitches and origins it is not decidable
+ * from these arguments whether the rectangles overlap at all - row n of the
+ * source and row n of the destination sit at different strides, so the rows
+ * whose byte ranges intersect are not the rows whose y ranges do.  A client
+ * that wants to move data within one buffer should do it with two buffers and
+ * a copy, or in software.
  *
  * This ioctl blocks until the engine is idle.  It returns:
  *
@@ -329,12 +337,27 @@ struct mtk_g2d_surface {
  *   - -EFAULT: the argument structure could not be copied from userspace.
  *   - -E2BIG: @size is smaller than this driver knows how to parse.
  *   - -ETIMEDOUT: the engine did not stop within its 100 ms budget.  The
- *     driver has attempted a warm reset, but that recovery is best-effort: the
- *     engine may still be running, so **the destination buffer may still be
- *     being written after this call returns**.  Treat this as "engine state is
- *     now unknown", do not reuse the destination, and stop using the blitter.
+ *     driver then warm-resets it and polls several times more.  If the engine
+ *     is idle by then the reset worked, the buffers are safe, and only this call
+ *     failed.  If it is *still* busy the driver cannot stop it: the hardware may
+ *     be writing the address last programmed, and no register write documented
+ *     here can prevent that.  In that case the driver declares the engine
+ *     **wedged**, which means two things for a caller:
+ *
+ *       1. **The source and destination of this operation may still be read
+ *          or written by the engine indefinitely.**  The driver does not
+ *          release them - it cannot promise the operation is over - but it
+ *          cannot keep them alive either, so that memory must be treated as
+ *          belonging to the engine.  Do not unmap it, and do not hand the same
+ *          buffer to anything else.
+ *       2. **Every later BLT and FILL returns -ETIMEDOUT immediately**, without
+ *          programming a register or waiting on the hardware.  The blitter is
+ *          unusable until the device is unbound; treat it as permanently lost
+ *          and fall back to a software path.
+ *
  *     The errno is surfaced rather than swallowed precisely so a caller can
- *     make that decision.
+ *     make that decision.  A -ETIMEDOUT is not a transient error to retry:
+ *     after a wedge the retry cannot succeed, because nothing was submitted.
  *
  * There is deliberately no fence or async submit: the call is synchronous, so
  * a completion signal would have nothing to wait on.
@@ -384,8 +407,8 @@ struct mtk_g2d_blt {
  * @rect_height must be 1..2048.
  *
  * This ioctl blocks until the engine is idle, and its errors are the same set
- * as @mtk_g2d_blt's - including -ETIMEDOUT, with the same warning that the
- * destination may still be written after the call returns.
+ * as @mtk_g2d_blt's - including -ETIMEDOUT, with the same warning about a
+ * wedged engine and a destination that may still be written.
  */
 struct mtk_g2d_fill {
 	/** @size: size of this struct; must be >= @MTK_G2D_FILL_MIN_SIZE. */
