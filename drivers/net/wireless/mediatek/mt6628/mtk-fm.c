@@ -27,7 +27,9 @@
 #include <linux/slab.h>
 #include <linux/unaligned.h>
 
+#include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
+#include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
 
 /* FM BOP opcodes */
@@ -58,6 +60,16 @@
 #define FM_FORCE_MS			0x0008
 #define FM_STEREO_IND			BIT(12)
 /*
+ * FM_MAIN_CTRL[5] is the receiver mute bit, named MUTE in
+ * aquaris-5/mediatek/kernel/drivers/fmradio/mt6628/inc/mt6628_fm_reg.h:65
+ * (register 0x63 at :8).  mt6628_Mute() in pub/mt6628_fm_lib.c:212-229 sets
+ * and clears it with a read-modify-write of the whole register, which is what
+ * mtk_fm_set_mute() below does.
+ */
+#define FM_REG_MAIN_CTRL		0x63
+#define FM_MUTE				0x0020
+
+/*
  * FM_RSSI_IND[9:0] is a signed 10-bit field whose LSB is 6/16 = 0.375 dB,
  * so the raw code is a signal level in 1/16 dB steps.
  * aquaris-5/mediatek/kernel/drivers/fmradio/mt6628/pub/mt6628_fm_lib.c:1072-1092
@@ -81,10 +93,12 @@ struct mtk_fm {
 	struct device *dev;
 	struct v4l2_device v4l2_dev;
 	struct video_device vdev;
+	struct v4l2_ctrl_handler ctrl_handler;
 	struct mt6628_wmt *wmt;
 	struct completion cmd_done;
 	struct mutex cmd_lock;
 	struct mutex power_lock;
+	bool mute;			/* cached V4L2_CID_AUDIO_MUTE value */
 	u8 waiting_opcode;
 	int cmd_status;
 	u8 cmd_data[4];
@@ -245,6 +259,33 @@ static int mtk_fm_write_reg(struct mtk_fm *fm, u8 addr, u16 value)
 
 	return mtk_fm_send_cmd(fm, cmd, sizeof(cmd),
 			       FM_FSPI_WRITE_OPCODE, FM_CMD_TIMEOUT_MS);
+}
+
+/*
+ * Set or clear FM_MAIN_CTRL[MUTE].
+ *
+ * This is a plain read-modify-write of the whole register, matching the
+ * downstream mt6628_Mute() (aquaris-5/.../mt6628/pub/mt6628_fm_lib.c:212-229).
+ * The surrounding bits must be preserved: the tune and seek paths of this
+ * driver reuse bits [1:0] of the same register for TUNE and SEEK.  Those
+ * paths use a read-modify-write that keeps bits 15:3, so a mute set here is
+ * not cleared by a later tune or seek.
+ */
+static int mtk_fm_set_mute(struct mtk_fm *fm, bool mute)
+{
+	u16 val;
+	int ret;
+
+	ret = mtk_fm_read_reg(fm, FM_REG_MAIN_CTRL, &val);
+	if (ret)
+		return ret;
+
+	if (mute)
+		val |= FM_MUTE;
+	else
+		val &= ~FM_MUTE;
+
+	return mtk_fm_write_reg(fm, FM_REG_MAIN_CTRL, val);
 }
 
 /*
@@ -654,7 +695,24 @@ static int mtk_fm_open(struct file *file)
 	if (ret)
 		return ret;
 
-	return mtk_fm_power_get(fm);
+	ret = mtk_fm_power_get(fm);
+	if (ret)
+		return ret;
+
+	/*
+	 * The FM power-up sequence leaves FM_MAIN_CTRL[MUTE] clear, so the
+	 * hardware has to be told about the mute state requested before this
+	 * open.  Re-applying it here also restores mute across a power
+	 * cycle, and only the mute bit of FM_MAIN_CTRL is changed, so an
+	 * in-flight tune or seek is not disturbed.
+	 */
+	if (fm->mute) {
+		ret = mtk_fm_set_mute(fm, true);
+		if (ret)
+			mtk_fm_power_put(fm);
+	}
+
+	return ret;
 }
 
 static int mtk_fm_release(struct file *file)
@@ -977,6 +1035,56 @@ restore:
 
 /* ---- V4L2 ---- */
 
+/*
+ * V4L2_CID_AUDIO_MUTE is mapped onto the receiver mute bit in FM_MAIN_CTRL,
+ * which is the same hardware mute that the downstream FM_IOCTL_MUTE path
+ * drove through mt6628_Mute() (aquaris-5/.../mt6628/pub/mt6628_fm_lib.c:212-229).
+ *
+ * This is the tuner-side mute only.  This driver exposes no audio capture
+ * path (there is no V4L2_CAP_AUDIO and no PCM device for the FM audio
+ * chain), so this control silences the chip's own output rather than
+ * attenuating a stream.
+ */
+static int mtk_fm_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct mtk_fm *fm =
+		container_of(ctrl->handler, struct mtk_fm, ctrl_handler);
+	bool users;
+	int ret;
+
+	switch (ctrl->id) {
+	case V4L2_CID_AUDIO_MUTE:
+		/*
+		 * Record the request first.  The control can be set while the
+		 * radio is closed, in which case the hardware is powered down
+		 * and the register write cannot be issued; mtk_fm_open()
+		 * then applies the cached value after power-up.  With no user
+		 * of the radio open there is nothing listening anyway, so it
+		 * is better to honour the request than to fail it.
+		 */
+		fm->mute = ctrl->val;
+
+		mutex_lock(&fm->power_lock);
+		users = fm->users > 0;
+		mutex_unlock(&fm->power_lock);
+
+		if (!users)
+			return 0;
+
+		ret = mtk_fm_set_mute(fm, ctrl->val);
+		if (ret)
+			return ret;
+
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static const struct v4l2_ctrl_ops mtk_fm_ctrl_ops = {
+	.s_ctrl = mtk_fm_s_ctrl,
+};
+
 static int mtk_fm_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
@@ -1156,6 +1264,14 @@ static const struct v4l2_ioctl_ops mtk_fm_ioctl_ops = {
 	.vidioc_s_frequency	= mtk_fm_s_frequency,
 	.vidioc_enum_freq_bands	= mtk_fm_enum_freq_bands,
 	.vidioc_s_hw_freq_seek	= mtk_fm_s_hw_freq_seek,
+	/*
+	 * The control ioctls themselves are dispatched by the V4L2 core
+	 * against fm->ctrl_handler; only the handler-side reporting and
+	 * event plumbing has to be provided here.
+	 */
+	.vidioc_log_status	= v4l2_ctrl_log_status,
+	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
+	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
 
 static const struct v4l2_file_operations mtk_fm_fops = {
@@ -1163,6 +1279,7 @@ static const struct v4l2_file_operations mtk_fm_fops = {
 	.open			= mtk_fm_open,
 	.release		= mtk_fm_release,
 	.unlocked_ioctl		= video_ioctl2,
+	.poll			= v4l2_ctrl_poll,
 };
 
 static int mtk_fm_probe(struct platform_device *pdev)
@@ -1197,6 +1314,21 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_unregister_rx;
 
+	v4l2_ctrl_handler_init(&fm->ctrl_handler, 1);
+	fm->vdev.ctrl_handler = &fm->ctrl_handler;
+	v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
+			  V4L2_CID_AUDIO_MUTE, 0, 1, 1, 0);
+	if (fm->ctrl_handler.error) {
+		ret = fm->ctrl_handler.error;
+		v4l2_err(&fm->v4l2_dev, "failed to init controls: %d\n", ret);
+		goto err_free_ctrls;
+	}
+	/*
+	 * Do not call v4l2_ctrl_handler_setup() here: it would run the mute
+	 * control's s_ctrl against hardware that is still powered off.
+	 * mtk_fm_open() applies the current value after powering up instead.
+	 */
+
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
 	fm->vdev.ioctl_ops = &mtk_fm_ioctl_ops;
@@ -1209,15 +1341,16 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	ret = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
 	if (ret) {
 		v4l2_err(&fm->v4l2_dev, "failed to register radio: %d\n", ret);
-		v4l2_device_unregister(&fm->v4l2_dev);
-		goto err_unregister_rx;
+		goto err_free_ctrls;
 	}
 
 	platform_set_drvdata(pdev, fm);
 
 	return 0;
 
-err_v4l2:
+err_free_ctrls:
+	v4l2_ctrl_handler_free(&fm->ctrl_handler);
+	fm->vdev.ctrl_handler = NULL;
 	v4l2_device_unregister(&fm->v4l2_dev);
 err_unregister_rx:
 	mt6628_stp_unregister_rx(wmt, MT6628_STP_TASK_FM,
@@ -1234,6 +1367,7 @@ static void mtk_fm_remove(struct platform_device *pdev)
 
 	video_unregister_device(&fm->vdev);
 	mtk_fm_power_put(fm);
+	v4l2_ctrl_handler_free(&fm->ctrl_handler);
 	v4l2_device_unregister(&fm->v4l2_dev);
 	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
 				 mtk_fm_rx, fm);
