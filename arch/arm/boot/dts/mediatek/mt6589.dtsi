@@ -1081,11 +1081,34 @@
 			reset-names = "pwrap", "pwrap-bridge";
 		};
 
+		/*
+		 * MIPI DSI TX PHY and its DSI PLL.
+		 *
+		 * "clocks" here is the PLL's 26 MHz reference, which is
+		 * clk26m - correct, and not a mistake.  The DSI PLL is
+		 * self-contained: DSI_PLL0_CON0 (10012050) has PREDIV,
+		 * FBKDIV and TXDIV fields but no source-select mux, so it has
+		 * exactly one input and no second candidate to pick.  The
+		 * driver's rate formula confirms it, since mt6589_pll_rate() is
+		 * "26 * (fbk_div + 1) * fbk_sel * 2 / (txdiv0 * txdiv1 *
+		 * pre_div)" MHz - the 26 being this reference clock.  The
+		 * datasheet's own power-on value for the register,
+		 * DSI_PLL0_CON0 = 0xBE510026, decodes to the same
+		 * divider set.
+		 *
+		 * mipi_tx0_pll below is the *output* of this PLL, not its
+		 * source.  The vblank/HS lane clock is taken from it through
+		 * clock-output-names, and the DSI PLL must not be treated as
+		 * its own parent.  Every MediaTek SoC in this tree declares
+		 * exactly the same single clk26m parent for its mipi-tx node
+		 * (mt7623n.dtsi:248 and others), so devm_clk_get(dev, NULL)
+		 * in the generic probe - which resolves index 0 when there is
+		 * no clock-names - resolves correctly.
+		 */
 		mipi_tx0: dsi-phy@10012000 {
 			compatible = "mediatek,mt6589-mipi-tx";
 			reg = <0x10012000 0x90>;
 			clocks = <&clk26m>;
-			/* <&dispsys CLK_DISP1_DSI_DIGITAL_LANE> ? */
 			clock-output-names = "mipi_tx0_pll";
 			#clock-cells = <0>;
 			#phy-cells = <0>;

@@ -129,6 +129,18 @@ static int mtk_mipi_tx_probe(struct platform_device *pdev)
 	if (IS_ERR(mipi_tx->regs))
 		return PTR_ERR(mipi_tx->regs);
 
+	/*
+	 * The node's single "clocks" entry is the DSI PLL's reference clock,
+	 * and devm_clk_get(dev, NULL) resolves it.  With no clock-names
+	 * property a NULL lookup always means index 0, which is the only
+	 * clock these nodes declare - the same in every MediaTek SoC here.
+	 *
+	 * On MT6589 that reference is clk26m, and it is the right one: the
+	 * DSI PLL has no source-select mux (DSI_PLL0_CON0 is PREDIV, FBKDIV,
+	 * TXDIV and analog trim only), so it has one input.  It is also this
+	 * PLL, not an upstream lane clock, that mipi_tx0_pll names - that is
+	 * its output, registered here as the pll_hw clock provider.
+	 */
 	ref_clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(ref_clk))
 		return dev_err_probe(dev, PTR_ERR(ref_clk),
