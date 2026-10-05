@@ -17,6 +17,54 @@
  * Registers 0x020..0x05c are the display crossbar controls. MOUT_EN fields
  * enable output ports and *_SEL fields select the input consumed by a block.
  * Fixed datapath links do not need entries in the routing table below.
+ *
+ * Blocks with no driver
+ * ---------------------
+ * The crossbar below describes more blocks than the KMS driver drives. The
+ * main path is OVL0 -> BLS -> RDMA0 -> DSI0 (mtk_drm_drv.c), and these are
+ * the DISP0 blocks that have no driver, with the reason for each. A grep for
+ * e.g. "mt6589-rotator" returns nothing, so without this note the next person
+ * has to re-derive the whole table from the datasheet.
+ *
+ *  block  base      IRQ  clock gates          reset       why there is no driver
+ *  ROT    0x14001000 161 ROT_ENGINE/SMI       DISP_ROT_RST no rotated panel mount on this board
+ *  SCL    0x14002000 162 CLK_DISP0_SCL        DISP_SCL_RST panel is native 1280x800; no scaling
+ *  WDMA0  0x14004000 164 WDMA0_ENGINE/SMI     DISP_WDMA0_RST no consumer on this path
+ *  WDMA1  0x14005000 165 WDMA1_ENGINE/SMI     DISP_WDMA1_RST consumer is panel readback via DBI
+ *  DBI    0x1400c000 171 DBI_ENGINE/SMI/OUT   -           panel is DSI video mode; no DBI node
+ *  DPI0   0x1400e000 173 CLK_DISP1_DPI0        -           no parallel-RGB output on this board
+ *  DPI1   0x1400f000 174 CLK_DISP1_DPI1        -           no parallel-RGB output on this board
+ *  CMDQ   0x14012000 176 CMDQ_ENGINE/SMI      -           no command-queue driver exists upstream
+ *
+ * Two of these deserve the detail, because the routing table does carry entries
+ * for them and that is misleading on its own:
+ *
+ *  - WDMA is the write-only output leg, used downstream for panel readback
+ *    (screencap, WDMA1) and for an SCL-to-memory leg marked "FIXME: for hdmi
+ *    temp" upstream. Both need something this board does not have: panel
+ *    readback needs the DBI path, which a DSI video-mode panel does not use,
+ *    and the memory leg needs HDMI. The registers are a clean datasheet match
+ *    (chapter 41), so this is a missing driver rather than uncertain hardware.
+ *    mtk_ddp_comp.c reserves DDP_COMPONENT_WDMA0/1 with a NULL funcs pointer;
+ *    every accessor in mtk_ddp_comp.h guards on !comp->funcs, so a component
+ *    that ends up on a path degrades to a no-op rather than faulting.
+ *
+ *  - COLOR and TDSHP have drivers (mtk_disp_color.c, mtk_disp_tdshp.c) and DT
+ *    nodes, but are deliberately not on the MT6589 path; see mtk_drm_drv.c.
+ *    The reason is not simply that the vendor omits them. The BSP's own path
+ *    setup for DISP_MODULE_DSI, DISP_MODULE_DSI_VDO and DISP_MODULE_DSI_CMD
+ *    routes OVL -> COLOR -> BLS with COLOR_SEL=1 and BLS_SEL=1
+ *    (aquaris-5 ddp_path.c:850-858), whereas the LK bootloader uses a
+ *    different topology with no COLOR at all (OVL_MOUT_EN=0x2 straight to BLS).
+ *    The vendor trees disagree, the LK topology is the one this driver follows,
+ *    and COLOR has never been exercised on hardware here. Note that putting
+ *    COLOR0 into the CRTC component array without also adding a (COLOR0, BLS)
+ *    route silently disables the display: mtk_mmsys_ddp_connect() only wires
+ *    ADJACENT pairs and returns void, so a missing route becomes a no-op
+ *    rather than an error. Both halves have to change together.
+ *
+ * DISP_MISC (0x060) holds the DPI0/1/2 and DBI C/IO select bits. It is defined
+ * here and written by nothing, because only DPI and DBI would use it.
  */
 
 /* DISPSYS_CONFIG routing registers. */
