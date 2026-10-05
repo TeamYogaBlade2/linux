@@ -168,13 +168,24 @@
 #define MT6320_AFUNC_AUD_CON2		MT6320_AFE_AFUNC_AUD_CON2
 
 /*
- * AUXADC channel select is CHSEL[10:7] (upmu_hw.h: RG_AUXADC_CHSEL mask 0xF,
- * shift 7).  Channel 5 is the accessory-detect key voltage, the same one the
- * IIO AUXADC driver uses; select it here so the audio mic path does not depend
- * on that driver having run first.
+ * AUXADC channel select is CHSEL[10:7], and it lives in AUXADC_CON1 (0x0542),
+ * not in CON0: the vendor setter upmu_set_rg_auxadc_chsel() wraps the
+ * RG_AUXADC_CHSEL mask 0xF / shift 7 pair around a write to AUXADC_CON1
+ * (mediatek/platform/mt6589/lk/mt_pmic.c:26752-26766, and the same in
+ * kernel/drivers/power/upmu_common.c:20642), and the IIO AUXADC driver here
+ * programs the same field in the same register.
+ *
+ * CON0 (0x0540) is a different register entirely - it holds SPL_NUM[11:7] and
+ * AVG_NUM[6:4] plus the BUF_PWD_ON/B bits that the IIO driver sets per read,
+ * so it must not be used for the channel select, and must not be zeroed
+ * wholesale either.
+ *
+ * Channel 5 is the accessory-detect key voltage, the same one the IIO AUXADC
+ * driver uses; select it here so the audio mic path does not depend on that
+ * driver having run first.
  */
-#define MT6320_AUXADC_CON0_CHSEL	GENMASK(10, 7)
-#define MT6320_AUXADC_CON0_CHSEL_ACCDET	0x5
+#define MT6320_AUXADC_CON1_CHSEL	GENMASK(10, 7)
+#define MT6320_AUXADC_CON1_CHSEL_ACCDET	0x5
 /*
  * Mic bias / AUXADC switch.
  *
@@ -1117,7 +1128,7 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		/*
 		 * The analog input multiplexer is NOT programmed here.
 		 *
-		 * AUXADC_CON0.CHSEL below does not select the capture input.
+		 * AUXADC_CON1.CHSEL below does not select the capture input.
 		 * It picks which auxiliary ADC (ACC_DET, TP, etc.) the
 		 * accessory-detection logic reads; this codec has no separate
 		 * ACCDET cell, so it is parked on the ACCDET channel and
@@ -1164,10 +1175,10 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		 * single write leaves the uplink SRC running on whatever rate
 		 * was previously latched, i.e. on the wrong rate or not at all.
 		 */
-		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON0,
-					 MT6320_AUXADC_CON0_CHSEL,
-					 FIELD_PREP(MT6320_AUXADC_CON0_CHSEL,
-						    MT6320_AUXADC_CON0_CHSEL_ACCDET));
+		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON1,
+					 MT6320_AUXADC_CON1_CHSEL,
+					 FIELD_PREP(MT6320_AUXADC_CON1_CHSEL,
+						    MT6320_AUXADC_CON1_CHSEL_ACCDET));
 		if (ret)
 			return ret;
 
@@ -1271,17 +1282,26 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		/*
 		 * The vendor has no explicit capture power-down in this file,
 		 * so this only undoes what the pre-PMU path asserted: the mic
-		 * bias switch, the AUXADC channel select, and the ADC clock
-		 * that the pre-PMU sequence enabled via AUDCLKGEN_CFG0 bit 1.
-		 * Leaving that clock on would hold the ADC domain powered
-		 * between streams.
+		 * bias switch and the ADC clock that the pre-PMU sequence
+		 * enabled via AUDCLKGEN_CFG0 bit 1.  Leaving that clock on
+		 * would hold the ADC domain powered between streams.
+		 *
+		 * The AUXADC channel select is deliberately left as the
+		 * pre-PMU path set it.  CHSEL is a mux that costs no power
+		 * and no current, CON1 is shared state that the IIO AUXADC
+		 * driver reprograms on every read, and the register's reset
+		 * value is not published - so "restoring" it would mean
+		 * inventing a value, and the previous code's regmap_write()
+		 * of the whole of AUXADC_CON0 was worse than useless: that
+		 * is the register holding SPL_NUM[11:7], AVG_NUM[6:4] and
+		 * the BUF_PWD_ON/B bits the IIO driver sets up per read
+		 * (vendor setters upmu_set_rg_spl_num(), upmu_set_rg_avg_num(),
+		 * upmu_set_rg_buf_pwd_on(), upmu_set_rg_buf_pwd_b() all write
+		 * AUXADC_CON0), so every capture stop wiped the state the
+		 * IIO driver had just put there.
 		 */
 		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
 				   MT6320_ACCDET_MICBIAS_DISABLE);
-		if (ret)
-			return ret;
-
-		ret = regmap_write(priv->regmap, MT6320_AUXADC_CON0, 0);
 		if (ret)
 			return ret;
 
