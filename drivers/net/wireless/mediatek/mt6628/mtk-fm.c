@@ -57,6 +57,14 @@
  * straight to the RDS parser, confirming it is a plain data event.
  */
 #define FM_RDS_DATA_OPCODE		0x0d
+/*
+ * The CQI read is issued with the scan opcode, and its answer also arrives as
+ * a scan opcode event: aquaris-5/.../mt6628/pub/mt6628_fm_cmd.c:859-876 builds
+ * the request with FM_SCAN_OPCODE and mt6628_CQI_Get() at
+ * pub/mt6628_fm_lib.c:915 waits for FLAG_SCAN | FLAG_CQI_DONE.  The vendor link
+ * parser tells the two apart by payload length at core/fm_link.c:340-357.
+ */
+#define FM_SCAN_OPCODE			0x0b
 
 #define FM_REG_CHIP_ID			0x62
 #define FM_REG_ROM_VERSION		0x83
@@ -235,8 +243,25 @@ struct mtk_fm_rds {
 #define FM_RSSI_MIN_16			(-512 * FM_RSSI_ONE_LSB_NUM)
 #define FM_RSSI_SPAN_16			(1023 * FM_RSSI_ONE_LSB_NUM)
 
+/*
+ * One CQI record as the firmware reports it: struct mt6628_fm_cqi
+ * (aquaris-5/.../mt6628/inc/mt6628_fm_lib.h:44-48), three 16-bit words.  A
+ * read returns up to FM_CQI_BUF_SIZE (96) bytes of them, i.e. 8 records
+ * (inc/fm_link.h:87).
+ */
+#define FM_CQI_REC_SIZE			(3 * 2)
+#define FM_CQI_BUF_SIZE			96
+#define FM_CQI_MAX_RECS			(FM_CQI_BUF_SIZE / FM_CQI_REC_SIZE)
+#define FM_CQI_READ			0x0008
+#define FM_CQI_TIMEOUT_MS			3000
+
 #define FM_PATCH_SEG_LEN		512
 #define FM_CMD_TIMEOUT_MS		3000
+
+struct mtk_fm_cqi {
+	u32 freq;			/* 10 kHz units */
+	s32 rssi;			/* 1/16 dB */
+};
 
 struct mtk_fm {
 	struct device *dev;
@@ -258,6 +283,8 @@ struct mtk_fm {
 	bool deemph_75us;		/* cached V4L2_CID_TUNE_DEEMPHASIS */
 	bool rds_on;			/* cached V4L2_CID_RDS_RECEPTION */
 	unsigned int volume;		/* cached V4L2_CID_AUDIO_VOLUME */
+	struct mtk_fm_cqi cqi;		/* last CQI read, in 1/16 dB */
+	bool cqi_valid;		/* whether @cqi holds a fresh reading */
 	u8 waiting_opcode;
 	int cmd_status;
 	u8 cmd_data[4];
@@ -399,7 +426,7 @@ static bool mtk_fm_rds_ps_segment(struct mtk_fm *fm, unsigned int seg, u8 hi,
  * and the rt_bm test at core/fm_rds_parser.c:1507-1512.
  */
 static bool mtk_fm_rds_rt_segment(struct mtk_fm *fm, unsigned int seg,
-				   unsigned int seg_len, const u8 *chars)
+				  unsigned int seg_len, const u8 *chars)
 {
 	struct mtk_fm_rds *rds = &fm->rds;
 	unsigned int i;
@@ -933,6 +960,23 @@ static u16 mtk_fm_rssi_to_signal(u16 rssi_ind)
 		rssi_16 = ((s32)rssi_ind - FM_RSSI_BIAS) * FM_RSSI_ONE_LSB_NUM;
 	else
 		rssi_16 = (s32)rssi_ind * FM_RSSI_ONE_LSB_NUM;
+
+	return div_u64((u64)(rssi_16 - FM_RSSI_MIN_16) * U16_MAX,
+		       FM_RSSI_SPAN_16);
+}
+
+/*
+ * Convert a CQI RSSI reading, already in signed 1/16 dB units, into the V4L2
+ * tuner->signal range.  It is the same scale mtk_fm_rssi_to_signal() expects,
+ * so only the sign handling differs: the CQI path has already sign extended
+ * its 16-bit field.
+ */
+static u16 mtk_fm_cqi_to_signal(s32 rssi_16)
+{
+	if (rssi_16 < FM_RSSI_MIN_16)
+		rssi_16 = FM_RSSI_MIN_16;
+	if (rssi_16 > FM_RSSI_MIN_16 + FM_RSSI_SPAN_16)
+		rssi_16 = FM_RSSI_MIN_16 + FM_RSSI_SPAN_16;
 
 	return div_u64((u64)(rssi_16 - FM_RSSI_MIN_16) * U16_MAX,
 		       FM_RSSI_SPAN_16);
@@ -1553,6 +1597,96 @@ static u16 mtk_fm_seek_spacing_code(u32 spacing)
 	return 0x4000;			/* 200 kHz */
 }
 
+/*
+ * Read the channel quality figures for the currently tuned channel.
+ *
+ * The request is the two-BOP sequence of mt6628_cqi_get()
+ * (aquaris-5/.../mt6628/pub/mt6628_fm_cmd.c:859-876): clear the
+ * tune/seek/scan/cqi bits of FM_MAIN_CTRL[3:0], then set CQI_READ
+ * (FM_MAIN_CTRL[3]).  The vendor clears the same bits afterwards
+ * ("make sure tune/seek/scan/cqi bits = 0", pub/mt6628_fm_lib.c:939), so this
+ * does too.
+ *
+ * Each record in the answer is struct mt6628_fm_cqi (ch, rssi, reserve).  The
+ * vendor converts the two fields with, at pub/mt6628_fm_lib.c:925-932:
+ *
+ *	ch   = ch * 10 / 2 + 6400	(in 10 kHz units)
+ *	rssi = sign_extend_16(rssi) * 6 / 16	(in 1/16 dB)
+ *
+ * Both are reproduced here.  Note the two fields use the same 1/16 dB scale as
+ * FM_RSSI_IND, so the value can be fed to mtk_fm_rssi_to_signal() directly.
+ *
+ * Only the record matching @freq is used, because the firmware returns the
+ * entries it has queued and that set can span more than one channel.
+ *
+ * Returns 0 and stores the channel's figures in @cqi on success.
+ */
+static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
+{
+	u8 buf[64] = {};
+	unsigned int i;
+	u16 ctrl;
+	int pkt = 4;
+	int ret;
+	s32 rssi_16;
+
+	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
+	buf[1] = FM_SCAN_OPCODE;
+
+	/* Clear FM_MAIN_CTRL[3:0], then set CQI_READ (bit 3). */
+	pkt += fm_bop_modify(FM_REG_MAIN_CTRL, 0xfff0, 0x0000,
+			     buf + pkt, sizeof(buf) - pkt);
+	pkt += fm_bop_modify(FM_REG_MAIN_CTRL, ~FM_CQI_READ, FM_CQI_READ,
+			     buf + pkt, sizeof(buf) - pkt);
+
+	put_unaligned_le16(pkt - 4, buf + 2);
+
+	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_SCAN_OPCODE, FM_CQI_TIMEOUT_MS);
+
+	/*
+	 * Clear the command bits again whatever the outcome, as the vendor
+	 * does at pub/mt6628_fm_lib.c:939.  Only bits [3:0] are touched, so
+	 * the mute and RDS bits this driver manages are preserved.
+	 */
+	if (mtk_fm_read_reg(fm, FM_REG_MAIN_CTRL, &ctrl))
+		return ret ? ret : -EIO;
+
+	ctrl &= ~0x000f;
+	if (mtk_fm_write_reg(fm, FM_REG_MAIN_CTRL, ctrl))
+		return ret ? ret : -EIO;
+
+	if (ret)
+		return ret;
+
+	/*
+	 * A short answer means the firmware had no CQI queued, which happens
+	 * on a channel with no signal.  That is not an error: it just leaves
+	 * the caller's figures untouched.
+	 */
+	if (fm->cmd_data_len < FM_CQI_REC_SIZE ||
+	    fm->cmd_data_len > sizeof(fm->cmd_data))
+		return -ENODATA;
+
+	for (i = 0; i + FM_CQI_REC_SIZE <= fm->cmd_data_len;
+	     i += FM_CQI_REC_SIZE) {
+		u16 raw_ch = get_unaligned_le16(fm->cmd_data + i);
+		u16 raw_rssi = get_unaligned_le16(fm->cmd_data + i + 2);
+		s32 raw_rssi_s = (s16)raw_rssi;
+
+		if ((s32)(raw_ch * 10 / 2 + 6400) != (s32)freq)
+			continue;
+
+		/* Sign extend, then convert to 1/16 dB as the vendor does. */
+		rssi_16 = (raw_rssi_s * FM_RSSI_ONE_LSB_NUM) >> 4;
+
+		cqi->freq = freq;
+		cqi->rssi = rssi_16;
+		return 0;
+	}
+
+	return -ENODATA;
+}
+
 static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 		       bool wrap_around, u32 rangelow, u32 rangehigh,
 		       u32 spacing)
@@ -1665,6 +1799,18 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	}
 
 	fm->freq = result;
+
+	/*
+	 * Ask for the channel quality figures of the channel just found and
+	 * record them, so the caller can tell a real station from noise.  A
+	 * failed read is not a seek failure: the seek itself completed, and
+	 * the stale figures are left alone.
+	 */
+	if (mtk_fm_read_cqi(fm, result, &fm->cqi))
+		fm->cqi_valid = false;
+	else
+		fm->cqi_valid = true;
+
 	return 0;
 
 restore:
@@ -1836,8 +1982,15 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 
 	strscpy(tuner->name, "FM", sizeof(tuner->name));
 	tuner->type = V4L2_TUNER_RADIO;
+	/*
+	 * V4L2_TUNER_CAP_RDS says the tuner delivers RDS as controls.  The
+	 * block-level capture ioctls are not offered: this tree's UAPI has no
+	 * VIDIOC_G_RDS or VIDIOC_S_RDS, so the groups cannot be handed over
+	 * raw.
+	 */
 	tuner->capability = V4L2_TUNER_CAP_LOW |
 			    V4L2_TUNER_CAP_STEREO |
+			    V4L2_TUNER_CAP_RDS |
 			    V4L2_TUNER_CAP_HWSEEK_BOUNDED |
 			    V4L2_TUNER_CAP_HWSEEK_WRAP;
 	/*
@@ -1852,7 +2005,22 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	tuner->audmode = (force_ms & FM_FORCE_MS) ?
 			 V4L2_TUNER_MODE_MONO :
 			 V4L2_TUNER_MODE_STEREO;
-	tuner->signal = mtk_fm_rssi_to_signal(rssi_ind);
+	/*
+	 * Report the signal level from the CQI read done by the last seek
+	 * when one is available, since that is the measurement taken at the
+	 * moment the channel was judged; otherwise use the live FM_RSSI_IND
+	 * register.
+	 *
+	 * Both are converted by mtk_fm_rssi_to_signal(), which expects the raw
+	 * signed 1/16 dB code.  FM_RSSI_IND carries that in bits [9:0] and the
+	 * stereo flag in bit 12 (FM_BF_STEREO in mt6628_GetMonoStereo(),
+	 * aquaris-5/.../mt6628/pub/mt6628_fm_lib.c:1159-1165), so the flag
+	 * must be masked off before the conversion.
+	 */
+	if (fm->cqi_valid)
+		tuner->signal = mtk_fm_cqi_to_signal(fm->cqi.rssi);
+	else
+		tuner->signal = mtk_fm_rssi_to_signal(rssi_ind);
 	/*
 	 * The MT6628 has no AFC: downstream only uses AFC_ON to pick an
 	 * alternative FM_MAIN_CTRL power-on value
@@ -1949,6 +2117,7 @@ static int mtk_fm_enum_freq_bands(struct file *file, void *priv,
 
 	band->capability = V4L2_TUNER_CAP_LOW |
 			   V4L2_TUNER_CAP_STEREO |
+			   V4L2_TUNER_CAP_RDS |
 			   V4L2_TUNER_CAP_HWSEEK_BOUNDED |
 			   V4L2_TUNER_CAP_HWSEEK_WRAP;
 	band->rangelow = 76 * 16000;
