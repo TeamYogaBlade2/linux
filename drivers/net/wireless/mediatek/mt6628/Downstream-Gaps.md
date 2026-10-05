@@ -621,45 +621,52 @@ applies to the WLAN section applies with equal force here.
 
 ## FM radio — what is implemented
 
-Tune, seek (bounded and wrapping, with 50/100/200 kHz spacing selection), stereo
-and mono selection, the frequency range and unit handling, mute
-(`V4L2_CID_AUDIO_MUTE`), volume (`V4L2_CID_AUDIO_VOLUME`), runtime de-emphasis
-(`V4L2_CID_TUNE_DEEMPHASIS`), RDS decoding, and a reported signal level. Power-up
-follows the downstream sequence including the ROM-version probe, and the patch
-and coefficient download policy matches
-`mt6628/pub/mt6628_fm_lib.c:294-320`.
+The V4L2 surface is the whole of it. What exists today:
 
-Two things worth stating explicitly because they were defects:
+| Area | Surface |
+|---|---|
+| Tuning | `VIDIOC_G/S_FREQUENCY`, `VIDIOC_ENUM_FREQ_BANDS` |
+| Searching | `VIDIOC_S_HW_FREQ_SEEK`, 50/100/200 kHz spacing |
+| Stereo / mono | `tuner->audmode` and `tuner->rxsubchans` |
+| Signal level | `tuner->signal`, post-seek CQI else live FM_RSSI_IND |
+| RDS | `V4L2_CID_RDS_RECEPTION` plus six decoded `V4L2_CID_RDS_RX_*` controls |
+| Mute | `V4L2_CID_AUDIO_MUTE` to FM_MAIN_CTRL[5] |
+| Volume | `V4L2_CID_AUDIO_VOLUME` to the chip's 16-entry gain table in 0x7d |
+| De-emphasis | `V4L2_CID_TUNE_DEEMPHASIS` to FM_MAIN_CG2_CTRL[12] |
 
-- `VIDIOC_G_TUNER` now decodes the RSSI field and reports `tuner->signal`
-  (before this it left the field untouched, so userspace read back whatever it
-  had put there). The field is bits 9:0 of FM_RSSI_IND (0x6c,
-  `inc/mt6628_fm_reg.h:16`), signed with a 1024 bias and an LSB of 6/16 dB, per
-  `mt6628_GetCurRSSI` at `mt6628/pub/mt6628_fm_lib.c:1072-1092` and the
-  identical mask and bias in the CQI path at `:1414`. Downstream has no
-  0..65535 mapping and no calibration constant that would justify converting to
-  dBuV, so the value is scaled linearly across the register's full range.
-- `tuner->afc` is always 0. The MT6628 has no AFC: downstream only uses `AFC_ON`
-  to select an alternative power-on value (`inc/mt6628_fm.h:48-52`) and never
-  computes or reports an AFC number.
+The power-up sequence follows the downstream one including the ROM-version
+probe, and the patch and coefficient download policy matches
+`mt6628/pub/mt6628_fm_lib.c:294-320`. Mute, volume, de-emphasis and force-mono
+are all cached and re-applied by `mtk_fm_open()` after power-up, because the
+power-down sequence resets the registers that hold them.
 
-## FM radio — gaps
+The following is **still** worth reading as a caveat rather than as
+progress: none of this has been run on a chip. Every register field, opcode
+and scaling constant below was taken from the vendor source and is cited so it
+can be re-checked, but the driver has never been probed.
 
-### RDS is decoded, but not every group type and not as raw blocks
+Three deliberate choices:
 
-The hardware's RDS is now decoded and exposed as the standard V4L2 controls.
-`V4L2_TUNER_CAP_RDS` is advertised and `V4L2_CID_RDS_RECEPTION` enables the
-receiver; the decoded fields are published as `V4L2_CID_RDS_RX_PS_NAME`,
-`V4L2_CID_RDS_RX_RADIO_TEXT`, `V4L2_CID_RDS_RX_PTY`,
-`V4L2_CID_RDS_RX_TRAFFIC_ANNOUNCEMENT`, `V4L2_CID_RDS_RX_TRAFFIC_PROGRAM` and
-`V4L2_CID_RDS_RX_MUSIC_SPEECH`.
+- `tuner->afc` is always 0. The MT6628 has no AFC: downstream only uses
+  `AFC_ON` to select an alternative power-on value
+  (`mt6628/inc/mt6628_fm.h:48-52`) and never computes or reports an AFC number.
+- `tuner->signal` is scaled linearly across the register's full range. The
+  downstream driver hands the signed value from `mt6628_GetCurRSSI()` to
+  userspace unchanged (`aquaris-5/mediatek/platform/mt6589/external/meta/fm/
+  meta_fm.c:1000-1009`), so there is no vendor 0..65535 mapping to reproduce
+  and no calibration constant that would justify converting to dBuV. This is a
+  judgement call, made where it is used, and it is the weakest number the
+  driver reports.
+- `VIDIOC_S_HW_FREQ_SEEK` is not implemented for `O_NONBLOCK`. The underlying
+  command is a blocking STP round trip.
 
-How the data arrives is worth recording, because it is not how the register
-list suggests. RDS groups are pushed to the host unsolicited as their own
+### RDS
+
+RDS groups are pushed to the host unsolicited as their own
 `RDS_RX_DATA_OPCODE` (0x0d) event packet
 (`core/inc/fm_link.h:35`, handled at `core/fm_link.c:389-409`), carrying up to
-`MAX_RDS_RX_GROUP_CNT` 12-byte records (`inc/fm_rds.h:15-32`). The register-level
-reader the vendor provides, `mt6628_RDS_GetData()` at
+`MAX_RDS_RX_GROUP_CNT` 12-byte records (`inc/fm_rds.h:15-32`). The
+register-level reader the vendor provides, `mt6628_RDS_GetData()` at
 `mt6628/pub/mt6628_fm_rds.c:157-219`, is `#if 0`'d out — it is dead code in the
 vendor tree as well. There is no "new group available" register to poll in this
 path, so the driver decodes in the STP receive workqueue that already exists,
@@ -669,89 +676,223 @@ when the radio is closed. No second thread was added.
 Decoding follows the vendor parser rather than the RDS standard, because this
 demodulator does its own error correction and reports only which blocks
 survived. A block is usable only when the matching `FM_RDS_GDBK_IND_x` bit is
-set (`inc/fm_rds.h:5-8`, checked in `core/fm_rds_parser.c:124-133`), and PS/RT
+set (`inc/fm_rds.h:5-8`, checked in `core/fm_rds_parser.c:116-133`), and PS/RT
 are reported only once a segment has been received twice identically, the rule
 in `rds_g0_ps_cmp()` at `core/fm_rds_parser.c:532-592` and `rds_g2_rt_cmp()` at
 `:857`. Every field bit position is cited at the point of use in `mtk-fm.c`.
-The segment logic was replayed on the host to check the two-repeat rule, the
-segment ordering and the 0x0d terminator.
+
+One defect was found here during the audit and fixed. The radio text was
+decoded **back to front**: passing the address of a block to the segment handler
+read it in host byte order, so a 2A segment carrying `ABCD` in blocks C and D
+published `BADC`. `rds_g2_rt_get()` at `core/fm_rds_parser.c:781-828` writes
+each block's high byte first, so the characters are now assembled explicitly in
+`mtk_fm_rds_rt_chars()` (`mtk-fm.c:446`).
 
 Two things are deliberately **not** there:
 
 - **Raw block access.** `V4L2_TUNER_CAP_RDS_BLOCK_IO` and the
   `VIDIOC_G_RDS`/`VIDIOC_S_RDS` ioctls are not offered. This tree's
   `include/uapi/linux/videodev2.h` has no such ioctls and no
-  `V4L2_EVENT_SUB_CTRL`, so the older draft API that would carry `RDS_RADIO_TEXT`
-  and `RDS_DATA_EE_GROUP` on an `EVENT_V4L2_CTRL` cannot be expressed without
-  editing the UAPI headers, which are outside this driver's scope. The control
-  route above is what this tree's UAPI does support, and it is the route the
-  in-tree vivid radio model uses (`drivers/media/test-drivers/vivid/
-  vivid-radio-common.c:93-94`).
+  `V4L2_EVENT_SUB_CTRL`, so the older draft API that would carry
+  `RDS_RADIO_TEXT` and `RDS_DATA_EE_GROUP` on an `EVENT_V4L2_CTRL` cannot be
+  expressed without editing the UAPI headers, which are outside this driver's
+  scope. The control route above is what this tree's UAPI does support, and it
+  is the route the in-tree vivid radio model uses
+  (`drivers/media/test-drivers/vivid/vivid-radio-common.c:93-94`).
 - **Group types 14, 15 and paging.** The vendor's TMC, EON and paging decoders
   are not ported; only groups 0 (PS/TA/AF) and 2 (radio text) are interpreted.
   The alternative-frequency list is parsed but not published, because this
   tree's UAPI has no control for it.
 
-None of this has been run against a chip.
+### Channel quality after a seek
 
-### Seek quality is read; a full band scan is not exposed
-
-The hardware CQI read is now issued after each seek
+The hardware CQI read is issued after each seek
 (`mt6628_cqi_get()` at `mt6628/pub/mt6628_fm_cmd.c:859-876` for the request,
-`mt6628_CQI_Get()` at `mt6628/pub/mt6628_fm_lib.c:897-942` for the answer), and
-its result is what `VIDIOC_G_TUNER` reports as `tuner->signal`. The record
-layout and both per-field conversions follow the vendor: frequency
-`ch * 10 / 2 + 6400`, RSSI sign-extended from 16 bits then `* 6 / 16`
-(`mt6628_fm_lib.c:925-932`). That arithmetic was checked against the vendor's
-own expressions across the whole FM band and agrees exactly. The stereo flag in
-FM_RSSI_IND is bit 12 — `FM_BF_STEREO` in `mt6628_GetMonoStereo()` at
-`mt6628_fm_lib.c:1159-1165` — and is masked off before the signal conversion,
-which uses all of bits [9:0].
+`mt6628_CQI_Get()` at `mt6628_fm_lib.c:897-942` for the answer), and its
+result is what `VIDIOC_G_TUNER` reports as `tuner->signal` while it is the
+freshest. The record layout and both per-field conversions follow the vendor:
+frequency `ch * 10 / 2 + 6400`, RSSI sign-extended from 16 bits then `* 6 / 16`
+(`mt6628_fm_lib.c:922-932`). The stereo flag in FM_RSSI_IND is bit 12 —
+`FM_BF_STEREO` in `mt6628_GetMonoStereo()` at `mt6628_fm_lib.c:1159-1165` — and
+is masked off before the signal conversion, which uses all of bits [9:0].
 
-What is still missing is the **full band scan**: `FM_IOCTL_SCAN`,
-`FM_IOCTL_STOP_SCAN`, `FM_IOCTL_SCAN_NEW` and `FM_IOCTL_SCAN_GETRSSI`
-(`core/inc/fm_ioctl.h:17-18`, `:63`, `:82`) are a multi-segment table walk
-(`mt6628_Scan()` at `mt6628_fm_lib.c:844-895`, segmented 250 channels at a time
-at `:947`) that needs a cancel path and its own state machine, and there is no
-V4L2 ioctl that fits it. A userspace can still search the band by seeking and
-reading `tuner->signal`.
+## FM radio — gaps
 
-### Antenna switch and search threshold are still absent
+The following were worked through one at a time against the vendor source.
+Each is either implemented, with the evidence, or documented as unavailable,
+with the reason. Nothing is listed here that was neither.
 
-- **Volume is now implemented** as `V4L2_CID_AUDIO_VOLUME`. The hardware has no
-  linear gain field: the level is chosen by index into the same 16-entry table
-  the vendor applies, written to register 0x7d by `mt6628_SetVol()`
-  (`mt6628_fm_lib.c:1100-1119`, table at `:1095-1099`, read-back by
-  `mt6628_GetVol()` at `:1121-1143`). Values above 15 are clamped, as the
-  vendor's own `(vol > 15) ? 15 : vol` does.
-- **De-emphasis is now a control**, `V4L2_CID_TUNE_DEEMPHASIS`, setting
-  FM_MAIN_CG2_CTRL[12] — `DE_EMPHASIS` at
-  `mt6628/inc/mt6628_fm_reg.h:83`, "0x61 D12, 0:50us, 1:75 us". This is the
-  bit `mt6628_pwrup_clock_on()` programs at power-up
-  (`mt6628_fm_cmd.c:295`), which was previously hardcoded here. Note that the
-  vendor writes it *only* in the power-up sequence and has no runtime setter, so
-  the runtime read-modify-write is a small extension of the vendor sequence
-  rather than a port of one. The default remains 50 us, matching
-  `FM_RX_DEEMPHASIS_MT6628 = 0` at `mt6628/inc/mt6628_fm_cust_cfg.h:64`.
-- **Antenna switch is not implemented.** `FM_IOCTL_ANA_SWITCH`
-  (`core/inc/fm_ioctl.h:51`) maps to a real bit — `ANTENNA_TYPE` at
-  `mt6628_fm_lib.c:181-197` reads and writes FM_MAIN_CG2_CTRL[4], 0 for long and
-  1 for short, with `mt6628_GetAntennaType()` at `:199-210` — but the driver
-  selects the long antenna unconditionally during power-up
-  (`fm_bop_modify(0x61, 0xff63, 0x0000, ...)`). It is left alone rather than
-  exposed, because which antenna this board's FM path actually uses is a
-  board-layout fact that is not documented anywhere in either tree, and
-  offering the switch could silently select an unconnected antenna.
-- **Search threshold is not implemented.**
-  `FM_IOCTL_SET_SEARCH_THRESHOLD` only feeds the soft-mute validity decision in
-  `mt6628_soft_mute_tune()` (`mt6628_fm_lib.c:1382-1450`), and the threshold
-  register writer, `mt6628_set_RSSITh()`, is commented out at
-  `mt6628_fm_lib.c:231`. There is no live register path to port.
+### (a) De-emphasis — implemented, and now read back from the chip
 
-### No audio path
+`V4L2_CID_TUNE_DEEMPHASIS` sets FM_MAIN_CG2_CTRL[12] — `DE_EMPHASIS` at
+`mt6628/inc/mt6628_fm_reg.h:83`, "0x61 D12, 0:50us, 1:75 us" — through a
+read-modify-write of the whole register in `mtk_fm_set_deemphasis()`
+(`mtk-fm.c:961`). Only bit 12 is touched, so the antenna type and the
+analog/I2S select programmed at power-up are preserved. The default is 50 us,
+matching `FM_RX_DEEMPHASIS_MT6628 = 0` at
+`mt6628/inc/mt6628_fm_cust_cfg.h:64`.
 
-As §2.1 records for the AWB/I2S2/hardware-gain chain, there is no producer for
-FM audio on this board. The driver advertises only
+Two caveats, both of which the audit turned up:
+
+- The vendor writes this bit **only** inside the power-up sequence
+  (`mt6628_fm_cmd.c:295`) and has no runtime setter at all. The runtime
+  read-modify-write is therefore a small extension of the vendor sequence, not
+  a port of one.
+- Because that power-up sequence programs 50 us behind the driver's back, the
+  control value could disagree with the hardware. The control is therefore
+  `V4L2_CTRL_FLAG_VOLATILE` and `mtk_fm_g_volatile_ctrl()` (`mtk-fm.c:2018`)
+  reads FM_MAIN_CG2_CTRL[12] back on every `VIDIOC_G_CTRL`. `struct v4l2_tuner`
+  has no de-emphasis field, so the control is the only place the state can be
+  reported; there is nothing to add to `VIDIOC_G_TUNER`.
+
+`V4L2_CID_AUDIO_MUTE` is volatile for the same reason. `V4L2_CID_AUDIO_VOLUME`
+is deliberately **not**: the hardware holds a table value rather than the index,
+and mapping it back would mean searching the table for an entry a failed write
+may have left absent.
+
+### (b) Mono / stereo — implemented, and made to survive a power cycle
+
+`FM_IOCTL_SETMONOSTERO` reaches `mt6628_SetMonoStereo()`
+(`mt6628_fm_lib.c:1176-1192`), which writes 0x3007 to FM_MAIN_CG1_CTRL and then
+sets or clears bit 3 of register 0x75 (`FM_FORCE_MS`). Both steps are
+reproduced in `mtk_fm_set_force_mono()` (`mtk-fm.c:992`), reached from
+`VIDIOC_S_TUNER` with `V4L2_TUNER_MODE_MONO`. Only bit 3 is touched, which is
+what the vendor's own read-modify-write helper does.
+
+The audit found this was **not** actually working across a power cycle: 0x75
+is one of the registers the power-down sequence resets, so a MONO request
+silently reverted to STEREO on the next open. The request is now cached in
+`fm->force_mono` and re-applied by `mtk_fm_open()` (`mtk-fm.c:1478`), with mute,
+volume and de-emphasis.
+
+Detection was already correct and is unchanged. `tuner->rxsubchans` reports
+`V4L2_TUNER_SUB_STEREO` or `_MONO` from FM_RSSI_IND bit 12, per
+`mt6628_GetMonoStereo()`. The distinction is worth stating because it is easy
+to conflate with `audmode`: `audmode` is what was *asked for* (the force-mono
+request), `rxsubchans` is what the demodulator *detected*. A mono-forced tuner
+on a stereo station reports `audmode == V4L2_TUNER_MODE_MONO` and
+`rxsubchans == V4L2_TUNER_SUB_STEREO`, and that is correct, not a contradiction.
+
+### (c) GETRSSI beyond what CQI provides — nothing further is available
+
+The register is FM_RSSI_IND (0x6c,
+`mt6628/inc/mt6628_fm_reg.h:16`). Everything the vendor reads from it is two
+things: bits 9:0, the signed RSSI with a 1024 bias and an LSB of 6/16 dB
+(`mt6628_GetCurRSSI()`, `mt6628_fm_lib.c:1077-1092`), and bit 12, the stereo
+flag (`mt6628_GetMonoStereo()`). Both are used. There is no vendor code that
+reads a further field from this register, and the neighbouring FM_RSSI_TH (0x6d)
+has no live accessor — see (g). **No further implementation is possible here,
+and none is offered.**
+
+`FM_IOCTL_GETCURPAMD` would give a second measurement, from FM_ADDR_PAMD (0xb4),
+averaged over eight reads (`mt6628_GetCurPamd()`, `mt6628_fm_lib.c:1209-1248`).
+It is not surfaced because `struct v4l2_tuner` has one signal field, not two,
+and there is no V4L2 control for a second measurement.
+
+### (d) SCAN — documented as unavailable; it does not fit the V4L2 seek API
+
+`FM_IOCTL_SCAN`, `FM_IOCTL_SCAN_NEW`, `FM_IOCTL_STOP_SCAN`,
+`FM_IOCTL_SCAN_GETRSSI` and `FM_IOCTL_PRE_SEARCH`/`FM_IOCTL_RESTORE_SEARCH`
+(`core/inc/fm_ioctl.h:17-18`, `:39`, `:58`, `:65-66`) map onto a multi-segment
+sweep. Each hardware segment is a `FM_SCAN_OPCODE` command
+(`mt6628_scan()`, `mt6628_fm_cmd.c:798-851`) whose answer is a 16-word bitmap
+of which channels in the segment carried a signal
+(`FM_SCANTBL_SIZE = 16`, `core/inc/fm_link.h:86`, filled at
+`core/fm_link.c:358`). The whole band at 50 kHz spacing is 410 channels, so the
+vendor walks it in segments of 250 channels (`SCAN_SEG_LEN`,
+`mt6628_fm_lib.c:947`) with a cancel check between them
+(`mt6628_Scan_50KHz()`, `:950-1039`), and then drains the CQI queue afterwards
+for the RSSI of each hit.
+
+**This is not expressible through `VIDIOC_S_HW_FREQ_SEEK`**, and it is worth
+being precise about why rather than just asserting it:
+
+- The hardware returns a *set* of frequencies. `VIDIOC_S_HW_FREQ_SEEK` returns
+  one, by setting `*p_frequency`, and has no way to hand back a list.
+- The bitmap is a firmware-owned format. This tree's `videodev2.h` has no ioctl
+  that carries a bitmap or a list of found channels. Inventing one would be
+  inventing a private ABI, which is a decision for the operator, not a port.
+- Stopping mid-sweep needs a cancel path. The vendor's is a firmware event
+  injection, `fm_force_active_event()` from `mt6628_ScanStop()`
+  (`mt6628_fm_lib.c:1248-1255`), which has no equivalent here.
+- The pre-search and restore-search steps are a ramp-down and mute around the
+  sweep (`mt6628_pre_search()`/`:1363-1374`), not separate user-visible states.
+
+What userspace *can* do today is search the band by seeking and reading
+`tuner->signal`, which is what `VIDIOC_S_HW_FREQ_SEEK` with
+`V4L2_TUNER_CAP_HWSEEK_WRAP` already gives, one channel at a time.
+
+**Recommendation, deliberately not acted on:** if a real scan is wanted, the
+honest route is a private MTK ioctl matching `struct fm_scan_t`
+(`core/inc/fm_main.h:132-146`), which needs closed vendor userspace to be
+useful. It has not been added, because a private ABI with no consumer in this
+tree is dead code that looks like a feature.
+
+### (e) DESENSE — the WMT lists are driven; there is no readback to report
+
+`mtk_fm_update_desense()` (`mtk-fm.c:1585`) programs the coex DSNS lists on
+every tune, from the same two tables the vendor uses:
+`mt6628_mcu_dese_list` (`mt6628_fm_lib.c:1608-1610`) and
+`mt6628_gps_dese_list` (`:1612-1614`).
+
+`FM_IOCTL_DESENSE_CHECK` and `FM_IOCTL_IS_DESE_CHAN` read back nothing from the
+chip. `mt6628_is_dese_chan()` (`mt6628_fm_lib.c:1658-1675`) searches a third,
+*different* table, `mt6628_scan_dese_list` (`:1653-1655`, ten channels), and
+`mt6628_desense_check()` (`:1681-1692`) additionally compares the signal level
+against a software threshold that only `FM_IOCTL_SET_SEARCH_THRESHOLD` can set —
+see (g). Neither value reaches the hardware.
+
+So there is no register to report and no state to expose: **both are pure
+userspace arithmetic over a static table in the vendor library, and they are
+deliberately not reimplemented here.** The consequence for a user is that the
+driver cannot tell applications "this frequency is a known desense channel";
+the desense adjustment happens transparently at tune time instead. That is the
+better behaviour, since the alternative would push a board-level frequency
+table into every application.
+
+### (f) Chip id, hardware version and patch version — not reported anywhere
+
+`FM_IOCTL_GET_HW_INFO` and `FM_IOCTL_GETCHIPID` return `struct fm_hw_info`,
+which the vendor fills from a file-static struct (`mt6628_hw_info_get()`,
+`mt6628_fm_lib.c:1357-1367`). Its four fields come from four different places,
+and it is worth listing them because they are *not* equally available:
+
+| Field | Vendor source | Available here? |
+|---|---|---|
+| `chip_id` | reg 0x62 vs 0x6628 (`mt6628_fm_lib.c:522`) | yes, at power-up |
+| `rom_ver` | 0x83[15:8], `mt6628_fm_lib.c:294` | yes, at power-up |
+| `patch_ver` | **coeff blob bytes 38-39** (`:566-568`) | no, firmware file |
+| `eco_ver` | `mtk_wcn_wmt_hwver_get()` (`:538`) | no, not in this WMT API |
+
+The driver reads `chip_id` and `rom_ver` at power-up and uses both — the chip id
+gates whether the part is an MT6628 at all, and the ROM version selects the
+firmware image — but neither is surfaced to userspace. There is no V4L2 field
+for it: `struct v4l2_tuner` has no chip-id member, and no standard FM control
+carries it. Inventing one would mean a private control with a private ID, which
+is the same objection as (d).
+
+`patch_ver` and `eco_ver` are additionally not obtainable without a firmware
+blob and a WMT hwver entry that this tree's `include/linux/mfd/mt6628.h` does
+not provide, so they could not be reported even if a field existed.
+
+### (g) Search threshold — confirmed dead in the vendor tree
+
+`FM_IOCTL_SET_SEARCH_THRESHOLD` is **not implemented, and cannot be.** The
+vendor's only register path is `mt6628_set_RSSITh()`, and it is commented out
+in its entirety at `mt6628_fm_lib.c:231-243`, which is why the only call site,
+`mt6628_fm_lib.c:688`, is inside dead code as well.
+
+What the ioctl still does downstream is set three software thresholds used only
+by `mt6628_soft_mute_tune()` (`mt6628_set_search_th()`, `:1482-1505`), and
+`FM_IOCTL_SOFT_MUTE_TUNE` is itself the vendor's experimental soft-mute tuning
+probe, which has no V4L2 equivalent and no in-tree consumer. So there is neither
+a register to write nor a user of the value. **Documented, not coded.**
+
+### Not implemented on purpose
+
+**`V4L2_CAP_AUDIO` and any PCM path.** As §2.1 records for the
+AWB/I2S2/hardware-gain chain, there is no producer for FM audio on this board.
+The driver advertises only
 
 ```c
 fm->vdev.device_caps = V4L2_CAP_RADIO |
@@ -762,11 +903,44 @@ fm->vdev.device_caps = V4L2_CAP_RADIO |
 with no `V4L2_CAP_AUDIO` and no PCM device. `V4L2_CID_AUDIO_MUTE` and
 `V4L2_CID_AUDIO_VOLUME` are therefore **tuner-side** controls: the mute gates the
 chip's own mute bit in FM_MAIN_CTRL, which is the same bit the downstream
-`FM_IOCTL_MUTE` drove (`mt6628/pub/mt6628_fm_lib.c:212-229`), and the volume
-writes the chip's output gain register. They silence and level the chip rather
-than attenuating a capture stream, because there is no stream to attenuate.
+`FM_IOCTL_MUTE` drove (`mt6628_fm_lib.c:213-229`), and the volume writes the
+chip's output gain register. They silence and level the chip rather than
+attenuating a capture stream, because there is no stream to attenuate.
 Adding `V4L2_CAP_AUDIO` or a PCM device would advertise a path that does not
 exist.
+
+**The diagnostic ioctls.** `FM_IOCTL_DUMP_REG`, `FM_IOCTL_RW_REG`,
+`FM_IOCTL_HOST_RDWR`, `FM_IOCTL_TOP_RDWR`, `FM_IOCTL_EM_TEST`,
+`FM_IOCTL_GETBADBNT`, `FM_IOCTL_GETGOODBCNT`, `FM_IOCTL_GETBLERRATIO`,
+`FM_IOCTL_GETCURPAMD`, `FM_IOCTL_GET_AUDIO_INFO`, `FM_IOCTL_GET_I2S_INFO` and
+`FM_IOCTL_I2S_SETTING` (`core/inc/fm_ioctl.h:18`, `:24-29`, `:37-38`, `:53`,
+`:61-62`) are vendor debug and bring-up facilities: a register dumper, raw
+register read/write, host and top (chip) register access, an engineering test
+hook, and RDS block-error counters. None has a standard V4L2 equivalent, and
+porting them would put an unaudited raw register interface on a public device
+node. **Not added.**
+
+**The private 58-ioctl MTK ABI as-is.** `core/inc/fm_ioctl.h` declares 58
+ioctls, dispatched in `core/fm_module.c`, against a `fm_hw_info`/`fm_scan_t`/
+`fm_rssi_req` ABI that only exists in a closed vendor userspace image. Porting
+it as-is would be a large amount of untested code with no consumer. It is
+**not** ported; where a small piece of it is genuinely useful and has a
+standard home — the CQI read, force-mono, volume, de-emphasis, mute — the piece
+was taken and the rest left.
+
+### Also still absent, for the record
+
+- **Antenna switch.** `FM_IOCTL_ANA_SWITCH` maps to a real bit —
+  `ANTENNA_TYPE`, FM_MAIN_CG2_CTRL[4], 0 for long and 1 for short
+  (`mt6628_fm_lib.c:181-210`) — but the driver selects the long antenna
+  unconditionally during power-up (`fm_bop_modify(0x61, 0xff63, 0x0000, ...)`,
+  matching `mt6628_fm_cmd.c:294`). It is left alone rather than exposed,
+  because which antenna this board's FM path actually uses is a board-layout
+  fact that is not documented anywhere in either tree, and offering the switch
+  could silently select an unconnected antenna. Note that the de-emphasis
+  read-modify-write in (a) preserves this bit rather than clobbering it.
+- **RDS alternative frequencies.** Parsed, kept, not published; no control for
+  it in this tree's UAPI.
 
 ## STP transport — what is implemented
 
@@ -1062,14 +1236,21 @@ obtained and used, just not re-exposed to userspace.
 
 | Area | State |
 |---|---|
-| FM tune / seek / mono-stereo | complete |
-| FM signal level (`tuner->signal`) | reported from FM_RSSI_IND, linearly scaled |
+| FM tune / seek | complete — bounded and wrapping, 50/100/200 kHz spacing |
+| FM mono-stereo | complete; cached across power cycles |
+| FM `tuner->signal` | post-seek CQI else FM_RSSI_IND, scaled linearly |
 | FM `tuner->afc` | always 0 — no AFC on this chip |
-| FM mute | complete — `V4L2_CID_AUDIO_MUTE` → FM_MAIN_CTRL[5] |
-| FM RDS | not implemented — hardware present, parser not ported |
-| FM scan / CQI | not implemented |
-| FM volume / antenna / de-emphasis | not implemented — de-emphasis fixed at the downstream default |
+| FM mute | complete; `V4L2_CID_AUDIO_MUTE`, volatile read-back |
+| FM volume | complete — `V4L2_CID_AUDIO_VOLUME` → 0x7d gain table |
+| FM de-emphasis | complete; volatile read-back |
+| FM RDS | groups 0 and 2 only; no raw blocks, TMC/EON/paging |
+| FM CQI | complete — read after each seek |
+| FM band scan | not exposed; no V4L2 expression, see (d) |
+| FM antenna switch | not exposed; long antenna fixed at power-up |
+| FM search threshold | not possible; vendor writer is commented out |
+| FM chip id / hw version | used internally, not surfaced; no V4L2 field |
 | FM audio path | no producer on this board (see §2.1) |
+| FM private ioctls | not ported; needs closed vendor userspace |
 | STP SDIO framing / WMT / patch download | complete |
 | STP coex and GPS_SYNC | complete |
 | STP CRC16 | computed on TX, verified on RX — stricter than the downstream SDIO reference |
