@@ -74,13 +74,21 @@ struct mtk_vcodec_dev;
 #define MTK_VENC_RC_CACHE_SIZE			(64 * 1024)
 
 /*
- * Reference/reconstruction buffer pairs.
+ * Frame buffers in the reference/reconstruction ping-pong.
  *
- * Two, because a genuine ping-pong needs two: frame N predicts from REF[N & 1] and
- * writes REC[N & 1]; frame N+1's reference IS frame N's reconstruction.  With one
- * pair the encoder would be reading the very buffer it is writing.
+ * Two, because a genuine ping-pong needs two: frame N predicts from
+ * frame_addr[N & 1] and writes frame_addr[!(N & 1)], the index flips, and frame
+ * N+1's reference IS frame N's reconstruction.  With a single buffer the encoder
+ * would be reading the very buffer it is writing.
+ *
+ * An earlier revision kept two SEPARATE arrays -- ref_addr[] and rec_addr[], four
+ * distinct allocations -- and handed frame N the pair sharing its index.  That is
+ * not a ping-pong: the next frame was given ref_addr[!idx], a buffer nothing ever
+ * writes, so every P-frame predicted against whatever DMA happened to be there.
+ * One array indexed by the same parity is the same number of allocations and is
+ * provably the frame the encoder last reconstructed.
  */
-#define MTK_VCODEC_REF_BUFFER			2
+#define MTK_VCODEC_FRAME_BUFFER			2
 
 /*
  * Per-instance encoder state.
@@ -90,6 +98,15 @@ struct mtk_vcodec_dev;
  * being encoded, so two independent encodes must not fight over them.
  */
 struct mtk_vcodec_enc_ctx {
+	/*
+	 * The V4L2 file handle, and the first member for a reason: file->private_data
+	 * is the v4l2_fh, which is what v4l2_m2m_fop_poll(), v4l2_m2m_fop_mmap() and
+	 * video_ioctl2() all reach their m2m context through.  file2ctx() recovers the
+	 * driver context by walking back from it, so moving this breaks the accessor
+	 * rather than being caught by the compiler.
+	 */
+	struct v4l2_fh			fh;
+
 	struct mtk_vcodec_dev			*dev;
 
 	/* The m2m context the framework allocated for this open. */
@@ -100,7 +117,13 @@ struct mtk_vcodec_enc_ctx {
 	struct v4l2_format			dst_fmt;
 
 	/*
-	 * Driver-owned reference and reconstruction planes.
+	 * The frame-buffer ping-pong.
+	 *
+	 * frame_vaddr[buf_idx] is this frame's REFERENCE and frame_vaddr[!buf_idx] is
+	 * its RECONSTRUCTION, so the frame just written is the frame the next one
+	 * predicts from.  These are NV12 pictures: one coherent allocation holds luma
+	 * at the base and chroma half a luma plane further on, which is why each one is
+	 * frame_size * 3 / 2 bytes rather than frame_size.
 	 *
 	 * Coherent DMA rather than vb2 buffers: they are never queued, never dequeued
 	 * and never mapped into userspace, so a vb2 buffer lifecycle around each would
@@ -111,12 +134,10 @@ struct mtk_vcodec_enc_ctx {
 	 * dma_alloc_coherent() gives 16-byte alignment as a side effect of its
 	 * page-aligned allocation, which is what the DIV16 address fields require.
 	 */
-	dma_addr_t				ref_addr[MTK_VCODEC_REF_BUFFER];
-	void					*ref_vaddr[MTK_VCODEC_REF_BUFFER];
-	dma_addr_t				rec_addr[MTK_VCODEC_REF_BUFFER];
-	void					*rec_vaddr[MTK_VCODEC_REF_BUFFER];
+	dma_addr_t				frame_addr[MTK_VCODEC_FRAME_BUFFER];
+	void					*frame_vaddr[MTK_VCODEC_FRAME_BUFFER];
 
-	/* Luma plane size, rounded up to whole macroblocks. */
+	/* Luma plane size, rounded up to whole macroblocks; chroma follows it. */
 	unsigned long				frame_size;
 
 	/* Rate control scratch: loaded and saved by the hardware, never by us. */
@@ -125,7 +146,7 @@ struct mtk_vcodec_enc_ctx {
 	void					*rc_code_vaddr;
 	void					*rc_info_vaddr;
 
-	/* Which (REF, REC) pair the next frame uses; alternates per frame. */
+	/* Which of the two frame buffers the next frame predicts from. */
 	unsigned int				buf_idx;
 
 	/* Frame counter, for the GOP keyframe decision. */
@@ -195,6 +216,9 @@ struct mtk_vcodec_enc_ctx {
  * exposes to userspace and what makes the node usable for negotiation at all.
  */
 struct mtk_vcodec_dec_ctx {
+	/* First member, for the same file2dectx() reason as the encoder's fh. */
+	struct v4l2_fh			fh;
+
 	struct mtk_vcodec_dev			*dev;
 
 	/* The m2m context the framework allocated for this open. */
