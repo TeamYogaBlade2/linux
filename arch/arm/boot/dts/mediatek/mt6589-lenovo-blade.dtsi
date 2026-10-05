@@ -101,7 +101,12 @@
 		};
 	};
 
-/*
+	/*
+	 * Disabled: the AL3320 ambient-light sensor node below has its pinctrl
+	 * and interrupts properties commented out, so nothing drives GPIO38 as
+	 * an EINT any more.  The block is kept rather than deleted so the
+	 * original wiring is still visible.
+	 *
 	alsps_eint_pins: alsps-eint-pins {
 		pin-alsps-int {
 			pinmux = <MT6589_GPIO38__FUNC_EINT4>;
@@ -109,7 +114,7 @@
 			bias-pull-up;
 		};
 	};
-*/
+	 */
 
 	usb_pins: usb-pins {
 		pins_iddig {
@@ -605,8 +610,23 @@
 		compatible = "mediatek,mt6628-pwrseq";
 		status = "disabled";
 
-		/* TODO: add pmu-gpios and reset-gpios once the Blade pin
-		 * assignment is confirmed. See the comment above.
+		/*
+		 * pmu-gpios and reset-gpios are intentionally ABSENT, and this node
+		 * stays disabled until they can be filled in from the Blade
+		 * schematics.
+		 *
+		 * There is no evidence for the MT6628's power and reset pins on
+		 * this board anywhere: the aquaris-5 tree configures no combo-chip
+		 * power sequence at all, and contains no mt6628- or mt6630-pwrseq
+		 * reference.  The GPIO101/GPIO38 pair that circulates for this
+		 * sequence comes only from the error strings inside an MT6630
+		 * driver written for a different board, which is not a source for a
+		 * pin assignment here.
+		 *
+		 * That matters more than usual because the ALS EINT that used to
+		 * own GPIO38 is now disabled, so the pin looks free and would
+		 * happily accept a guess - but a real pin driven on no evidence is
+		 * exactly what this node must not do.
 		 */
 	};
 
