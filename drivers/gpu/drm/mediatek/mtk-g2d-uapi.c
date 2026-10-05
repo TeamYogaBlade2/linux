@@ -797,6 +797,7 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 	struct mtk_g2d_uapi_surf src = {}, dst = {};
 	struct mtk_g2d_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_blt arg;
+	int idx;
 	int ret;
 
 	/* Already copied in by drm_ioctl(); see mtk_g2d_ioctl_get_cap(). */
@@ -823,10 +824,28 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 	if (!priv || !priv->g2d)
 		return -ENODEV;
 
+	/*
+	 * From here on the engine is reachable, so the rest of the handler runs
+	 * inside this critical section - a srcu read lock, drm_dev_enter() in
+	 * drivers/gpu/drm/drm_drv.c.  It is what ties the engine's resources to
+	 * the node's lifetime: drm_dev_unplug() sets ->unplugged and then
+	 * synchronize_srcu()s this section, so by the time remove() gates the
+	 * clocks off no BLT can still be programming G2D_SRC_ADDR and
+	 * G2D_W2M_ADDR, and one that arrives later is refused here instead.
+	 * See mtk_g2d_unregister_drm().
+	 *
+	 * Taken this late deliberately: the checks above touch no engine state,
+	 * and every early return before it would otherwise have to remember to
+	 * drop the lock.  Every path from here on falls through to err_src,
+	 * which does.
+	 */
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
 	ret = mtk_g2d_uapi_resolve(file_priv, &arg.src,
 				   arg.rect_width, arg.rect_height, &src);
 	if (ret)
-		return ret;
+		goto err_src;
 
 	ret = mtk_g2d_uapi_resolve(file_priv, &arg.dst,
 				   arg.rect_width, arg.rect_height, &dst);
@@ -879,6 +898,7 @@ err_dst:
 	mtk_g2d_uapi_release(&dst);
 err_src:
 	mtk_g2d_uapi_release(&src);
+	drm_dev_exit(idx);
 
 	return ret;
 }
@@ -904,6 +924,7 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 	struct mtk_g2d_uapi_surf dst = {};
 	struct mtk_g2d_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_fill arg;
+	int idx;
 	int ret;
 
 	arg = *(struct mtk_g2d_fill *)data;
@@ -917,10 +938,17 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 	if (!priv || !priv->g2d)
 		return -ENODEV;
 
+	/* The same critical section, and for the same reason, as in
+	 * mtk_g2d_ioctl_blt(); taken after the checks that touch no engine
+	 * state, so every path below falls through to err_dst and drops it once.
+	 */
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
 	ret = mtk_g2d_uapi_resolve(file_priv, &arg.dst,
 				   arg.rect_width, arg.rect_height, &dst);
 	if (ret)
-		return ret;
+		goto err_dst;
 
 	ret = mtk_g2d_uapi_lock(&dst, NULL);
 	if (ret)
@@ -938,6 +966,7 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 
 err_dst:
 	mtk_g2d_uapi_release(&dst);
+	drm_dev_exit(idx);
 
 	return ret;
 }
@@ -1186,24 +1215,40 @@ void mtk_g2d_unregister_drm(void *drm)
 {
 	struct drm_device *dev = drm;
 
+	/*
+	 * drm_dev_unplug(), not drm_dev_unregister().  Both take the node away
+	 * from userspace, but only unplug establishes what remove() needs:
+	 * that no ioctl can be running.
+	 *
+	 * Every ioctl in this file runs inside drm_dev_enter() /
+	 * drm_dev_exit(), which is a srcu read section, and unplug does
+	 * synchronize_srcu(&drm_unplug_srcu).  So an entry point that was
+	 * already inside one has finished by the time unplug returns, and one
+	 * that arrives afterwards sees ->unplugged set and returns -ENODEV
+	 * before touching the engine.  drm_dev_unregister() sets neither
+	 * ->unplugged nor that barrier, which is why it was not safe to gate the
+	 * clocks off after it: a BLT already inside the handler would still
+	 * write G2D_SRC_ADDR and G2D_W2M_ADDR with no clock behind them.
+	 *
+	 * drm_dev_put() then drops the driver's reference.  That is the last one
+	 * only once every open file has closed: each holds its own reference,
+	 * taken by drm_minor_acquire() and given back by drm_minor_release()
+	 * from drm_release_noglobal().  So dev_private, which the handlers read
+	 * without a reference of their own, outlives the last of them - it is
+	 * drmm_kzalloc()ed and freed by drm_managed_release() from that put.
+	 *
+	 * So remove() may safely release the engine's clocks once this returns:
+	 * the only things an open file can still reach are refusals.
+	 *
+	 * Unplug also unmaps the device's anon_inode mappings, so no new mmap
+	 * can be established against the node on the way out.
+	 */
+
 	/* NULL when probe never got as far as registering. */
 	if (!dev)
 		return;
 
-	drm_dev_unregister(dev);
-
-	/*
-	 * drm_dev_put() drops the driver's reference.  That is the last one only
-	 * once every open file has closed: each holds its own reference, taken
-	 * by drm_minor_acquire() and given back by drm_minor_release() from
-	 * drm_release_noglobal().  drm_dev_unregister() above does not wait for
-	 * those files, so this put is what actually ends the &drm_device's
-	 * lifetime - and with it, through drm_managed_release(), dev_private.
-	 *
-	 * dev_private is therefore still valid for as long as any ioctl can run,
-	 * which is the property the handlers depend on and the one a kfree() here
-	 * did not have.
-	 */
+	drm_dev_unplug(dev);
 	drm_dev_put(dev);
 }
 EXPORT_SYMBOL_GPL(mtk_g2d_unregister_drm);

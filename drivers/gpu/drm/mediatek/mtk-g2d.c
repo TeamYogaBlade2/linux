@@ -1091,11 +1091,31 @@ static void mtk_g2d_remove(struct platform_device *pdev)
 	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
 
 	/*
-	 * Before the clocks go.  drm_dev_unregister() closes the render node
-	 * and waits for the last open file to finish, so after it returns no
-	 * ioctl can be in flight and the engine can be powered down without
-	 * a programmed address being left behind on a block whose clock is
-	 * about to be gated off.
+	 * Before the clocks go, and this is why the order matters.
+	 *
+	 * mtk_g2d_unregister_drm() calls drm_dev_unplug(), which sets
+	 * ->unplugged and synchronize_srcu()s the read section every ioctl here
+	 * runs inside.  So once it returns, no BLT or FILL is executing and none
+	 * can start: one that arrives later is refused with -ENODEV before it
+	 * reaches the engine.  That is what makes gating the clocks off
+	 * immediately afterwards safe, rather than leaving a programmed address
+	 * behind on a block whose clock has gone.
+	 *
+	 * drm_dev_unregister() would not have given that: it does not set
+	 * ->unplugged and does not wait for open files, so an ioctl already
+	 * inside a handler could still be writing G2D_SRC_ADDR and
+	 * G2D_W2M_ADDR with no clock behind it.
+	 *
+	 * Note that the clocks themselves are *not* freed here.  They came from
+	 * devm_clk_get() and the &mtk_g2d with devm_kzalloc(), and devres is
+	 * released by device_unbind_cleanup() right after this function returns
+	 * - before any file holding the node has necessarily closed.  So the
+	 * engine's own storage, its ioremap and its clocks all go away while an
+	 * ioctl could still hold a pointer to them; the unplug above is what
+	 * guarantees none can, and the ioctls' drm_dev_enter() /
+	 * drm_dev_exit() pair is what enforces it.  dev_private is the one
+	 * resource deliberately *not* devres, because it is read by those
+	 * handlers; see mtk_g2d_register_drm().
 	 */
 	mtk_g2d_unregister_drm(g2d->drm);
 

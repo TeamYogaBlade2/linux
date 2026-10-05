@@ -58,12 +58,24 @@ void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d);
  * mtk_g2d_unregister_drm - take the render node back down.
  * @drm: handle from mtk_g2d_register_drm(), or NULL
  *
- * Unpublishes the minor and drops the driver reference.  Must run while the
- * engine's clocks are still on, because drm_dev_unregister() closes the node
- * and waits for the last open file, so nothing may be programmed into an
- * engine whose clock is being gated off underneath it.  A NULL handle is
- * ignored, which is what makes this safe to call unconditionally from
- * mtk_g2d_remove() when probe may have stopped before registration.
+ * Unplugs the device and drops the driver reference.  Must run while the
+ * engine's clocks are still on, and must be the last thing that can start a
+ * G2D operation.
+ *
+ * The unplug is what makes that true.  drm_dev_unregister() only unpublishes
+ * the minor - it does not stop an ioctl on a file that is already open -
+ * whereas drm_dev_unplug() sets ->unplugged and then synchronises the read
+ * section the ioctls run inside, so on return no operation is executing and
+ * none can start.  The caller may therefore release the engine's clocks as
+ * soon as this returns.
+ *
+ * The reference dropped here is the driver's, and it is the last one only once
+ * every open file has closed.  That is what keeps the private data the ioctls
+ * dereference alive until the last of them has finished with it.
+ *
+ * A NULL handle is ignored, which is what makes this safe to call
+ * unconditionally from mtk_g2d_remove() when probe may have stopped before
+ * registration.
  */
 void mtk_g2d_unregister_drm(void *drm);
 
