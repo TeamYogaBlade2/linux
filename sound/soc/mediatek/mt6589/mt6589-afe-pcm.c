@@ -418,6 +418,38 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
  * prepare() and trigger(); this only turns the memory interface on and off
  * as DAPM walks the graph, matching what the stock driver does between
  * SetMEMIFEnable() and the stream teardown.
+ *
+ * AFE_ON (AFE_DAC_CON0 bit 0) is written from two places - here and from
+ * mt6589_afe_pcm_trigger() / mt6589_afe_stop() - so it is worth saying why
+ * that does not need a reference count, because the two links share one AFE
+ * component and playback can indeed be streaming while capture starts.
+ *
+ * What decides it is the order ASoC runs the two in.  soc_pcm_trigger()
+ * walks the hops of snd_soc_trigger_order SND_SOC_TRIGGER_ORDER_DEFAULT
+ * forwards on START and backwards on STOP - the table is at
+ * sound/soc/soc-pcm.c:1185-1195, the forward walk at 1231-1238 and the
+ * backward walk at 1262-1269 - and that order is link -> component -> DAI.
+ * So:
+ *
+ *	START: the DAPM power-up (this handler, PRE_PMU) runs *before* the
+ *	       component's trigger(), which then sets AFE_ON again.  The
+ *	       second write is redundant, not harmful.
+ *	STOP:  mt6589_afe_stop() clears AFE_ON from the DAI trigger, which
+ *	       runs *before* this handler's POST_PMD, which clears it again.
+ *
+ * Both directions therefore drop the AFE out in a defined order with no
+ * window in which a still-running memory interface has the AFE gated off
+ * underneath it.  The one case that could look dangerous - the VUL widget
+ * powering down while DL1 is streaming - needs the VUL POST_PMD to run
+ * without the DL1 stream also stopping, and it cannot: POST_PMD only runs
+ * when DAPM decides the VUL widget has no active source, which happens as
+ * part of tearing down the capture stream, and that teardown does not touch
+ * the DL1 widget or the DL1 trigger.
+ *
+ * A reference count here would guard a state the ordering above already
+ * prevents, and could not be exercised without hardware.  If a future
+ * change adds a playback path that is *not* ordered behind the same DAPM
+ * walk, revisit this.
  */
 static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 				  struct snd_kcontrol *kcontrol, int event)
@@ -430,8 +462,14 @@ static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 	if (!afe)
 		return -ENODEV;
 
-	/* Capture widgets are VUL and "VUL Capture"; the rest are playback. */
-	capture = !strcmp(w->name, "VUL") || !strcmp(w->name, "VUL Capture");
+	/*
+	 * The two widgets carrying this handler are "DL1" and "VUL" (see
+	 * mt6589_afe_widgets below); "VUL Capture" and "DL1 Playback" are
+	 * DAI widgets that ASoC creates automatically, and they never reach
+	 * this function, so matching them here would be dead code.  Only "VUL"
+	 * is capture.
+	 */
+	capture = !strcmp(w->name, "VUL");
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
