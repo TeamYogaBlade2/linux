@@ -513,8 +513,17 @@ static int scpsys_ctl_pwrseq_on(struct scpsys_domain *pd)
 	if (pd->data->sram_pdn_bits &&
 	    MTK_SCPD_CAPS(pd, MTK_SCPD_SRAM_PDN_INLINE)) {
 		ret = scpsys_sram_enable(pd);
-		if (ret < 0)
+		if (ret < 0) {
+			u32 ctl = 0;
+
+			regmap_read(scpsys->base, pd->data->ctl_offs, &ctl);
+			dev_err(scpsys->dev,
+				"%s: SRAM release failed (%d): ctl=0x%08x still acknowledging 0x%08x of mask 0x%08x\n",
+				pd->genpd.name, ret, ctl,
+				ctl & pd->data->sram_pdn_ack_bits,
+				pd->data->sram_pdn_ack_bits);
 			return ret;
+		}
 	}
 
 	/*
@@ -666,8 +675,35 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	else
 		ret = scpsys_ctl_pwrseq_on(pd);
 
-	if (ret)
+	/*
+	 * Say which domain is being powered on, and which step failed.
+	 *
+	 * Nothing on the failure path logs: genpd_power_on()'s error is
+	 * discarded by __genpd_dev_pm_attach(), which returns a bare
+	 * -EPROBE_DEFER (drivers/pmdomain/core.c), and that happens inside
+	 * dev_pm_domain_attach() before the consumer's own ->probe() runs.
+	 * A device stuck behind a domain that will not switch on is therefore
+	 * indistinguishable in the log from a device whose driver has not
+	 * been called yet - which is the trap this driver fell into on
+	 * MT6589, where larb0 and larb1 deferred silently with no output
+	 * from mtk-smi.c at all.
+	 *
+	 * The PWR_ACK step reports ctl and both status registers against the
+	 * mask the domain's table entry declares, because a domain stuck in
+	 * that poll is a hardware or clocking problem and the register state
+	 * is what tells them apart.
+	 */
+	if (ret) {
+		u32 ctl = 0, sta = 0, sta2 = 0;
+
+		regmap_read(scpsys->base, pd->data->ctl_offs, &ctl);
+		regmap_read(scpsys->base, pd->data->pwr_sta_offs, &sta);
+		regmap_read(scpsys->base, pd->data->pwr_sta2nd_offs, &sta2);
+		dev_err(scpsys->dev,
+			"%s: power-on failed in pwrseq (%d): ctl=0x%08x sta=0x%08x sta_s=0x%08x want=0x%08x\n",
+			pd->genpd.name, ret, ctl, sta, sta2, pd->data->sta_mask);
 		goto err_pwr_ack;
+	}
 
 	/*
 	 * In MT8189 mminfra power domain, the bus protect policy separates
