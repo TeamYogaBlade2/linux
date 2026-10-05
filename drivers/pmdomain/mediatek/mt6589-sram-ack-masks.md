@@ -77,8 +77,15 @@ to fall to zero immediately after `PWR_RST_B`, before anything else
 
 The domains whose vendor sequence releases SRAM there now carry
 `MTK_SCPD_SRAM_PDN_INLINE`, which makes `scpsys_ctl_pwrseq_on()` do it at that
-point and makes the later call skip them. On MT6589 that is VEN and VDE only;
-every other domain keeps the existing ordering.
+point and makes the later call skip them.
+
+On MT6589 that is every domain that has SRAM power-down bits at all: MD1, MD2,
+DIS, MFG, ISP, IFR, VEN and VDE. The vendor does it for all of them - the
+`& ~SRAM_PDN` and the wait that follows sit immediately after `PWR_RST_B` in
+each of spm_mtcmos_ctrl_md1/md2/venc/vdec/isp/disp/mfg/ifr
+(mt_spm_mtcmos.c:393, 458, 522, 586, 659, 728, 853, 923) - so there is no
+vendor basis for treating any of them differently. DPY has no SRAM bits and so
+carries no cap; the cap would be a no-op there.
 
 This is a change to a power sequence and it is unverified on hardware. It is
 the vendor's own ordering rather than an invention, and VEN's failure mode

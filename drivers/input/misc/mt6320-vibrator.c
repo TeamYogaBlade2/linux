@@ -414,6 +414,7 @@ static int mt6320_vibr_led_pattern_clear(struct led_classdev *cdev)
 
 static int mt6320_vibr_probe(struct platform_device *pdev)
 {
+	struct mt6397_chip *pmic;
 	struct mt6320_vibrator *vib;
 	struct led_classdev *cdev;
 	struct regulator *rdev;
@@ -425,7 +426,23 @@ static int mt6320_vibr_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	vib->dev = &pdev->dev;
-	vib->regmap = dev_get_regmap(pdev->dev.parent, NULL);
+	/*
+	 * Take the regmap from the MFD parent's private data, which is how
+	 * every other MT6320 cell gets it: mt6397_probe() reads the regmap
+	 * from pwrap and keeps it in its mt6397_chip, and each child reaches
+	 * it with dev_get_drvdata(pdev->dev.parent).
+	 *
+	 * dev_get_regmap() only searches devres, and the MT6320 parent never
+	 * calls dev_set_regmap() - it only reads a regmap that pwrap created.
+	 * So asking for it here always returned NULL and probe failed
+	 * -ENODEV, and none of the rest of this driver ever ran.
+	 */
+	pmic = dev_get_drvdata(pdev->dev.parent);
+	if (!pmic)
+		return dev_err_probe(&pdev->dev, -ENODEV,
+				     "no MT6320 parent\n");
+
+	vib->regmap = pmic->regmap;
 	if (!vib->regmap)
 		return dev_err_probe(&pdev->dev, -ENODEV,
 				     "no regmap available from parent\n");
