@@ -629,24 +629,90 @@ correct change is to zero the trailer on TX only; the RX check would then
 have to go with it, since a firmware that computes nothing must also be one
 that expects nothing.
 
-### No sequence numbering or ACK windowing — the largest remaining protocol gap
+### Sequence numbering and ACK windowing — investigated, and deliberately not ported
 
-STP header byte 0 carries the sequence and acknowledge fields, but this driver
-always writes the constant `0x80` (`mtk-stp.c:486`) and never sends an ACK frame.
-Downstream, by contrast, maintains `txseq`, `txack`, `rxack`, `winspace` and
-`expected_rxseq`, uses them to build header byte 0 as
-`0x80 + (txseq << 3) + txack` (`stp_core.c:901`), and re-synchronises the whole
-context through `stp_rest_ctx_state()` (`stp_core.c:318-347`) after a host or MCU
-reset.
+STP header byte 0 carries a sequence number in bits 5:3 and an acknowledge in
+bits 2:0. This driver always writes the constant `0x80` and never sends an ACK
+frame, so those fields are always zero. Downstream, on the BTIF/UART transport,
+maintains `txseq`, `txack`, `rxack`, `winspace` and `expected_rxseq`, builds
+byte 0 as `0x80 + (txseq << 3) + txack` (`stp_core.c:901`), emits bare 4-byte
+ACK frames (`stp_send_ack()`, `stp_core.c:809-857`), NAKs a sequence mismatch and
+re-synchronises through `stp_rest_ctx_state()` (`stp_core.c:318-347`).
 
-From a cold boot, with the host always the only initiator, this is very likely
-benign — which is presumably why the SDIO reference can get away with it. But
-nothing in this driver re-synchronises after the far end restarts: there is no
-window accounting, no retransmission timer, no ACK to detect a lost or
-duplicated frame. If the MCU resets while the radio is in use, this driver has no
-mechanism to notice and recover. This is the one gap here that a hardware bring-up
-should specifically exercise. Fixing it is a high-risk change with no hardware to
-validate against, so it is documented rather than attempted.
+That machinery was ported as far as the evidence allowed, and the evidence says
+**the MT6628 does not use it over SDIO at all.** The sequence of checks:
+
+1. **Downstream's SDIO transmit branch ignores the sequence state.** It writes
+   `mtkstp_header[0] = 0x80;` unconditionally and never reads `sequence.txseq`
+   or `sequence.txack` (`stp_core.c:869-871`). Only the BTIF/UART branch builds
+   the `0x80 + (txseq << 3) + txack` form (`stp_core.c:901`).
+2. **Downstream's SDIO receive branch never parses sequence fields.**
+   `parser.seq` and `parser.ack` are assigned at exactly one place in the whole
+   file — `stp_core.c:2096-2097` — and that line sits inside the
+   `btif_fullset_mode` parser branch, which begins at `stp_core.c:2043`. The SDIO
+   branch runs from `stp_core.c:1684` to `stp_core.c:2042` and never assigns
+   either field.
+3. **Consequently the whole acknowledgment machinery is unreachable in SDIO
+   mode.** `stp_process_packet()`, `stp_process_rxack()` and `stp_send_ack()`
+   are called only from the BTIF/UART parser and from the BTIF/UART send path.
+   In SDIO mode nothing ever calls them, so `expected_rxseq`, `winspace`,
+   `txseq` and `rxack` are dead state.
+4. **This is not an accident of one file.** The second, independent vendor STP
+   implementation (`combo/common/core/stp_core.c`) has the same split: its SDIO
+   parser branch contains no reference to `parser.seq`, `parser.ack`,
+   `stp_process_packet()`, `stp_send_ack()` or `stp_process_rxack()`, while the
+   UART branch does. Two trees, same conclusion.
+
+The SDIO `MTKSTP_NAK` state (`stp_core.c:1762-1785`) parses only the type and
+length nibbles — it reads no sequence bit either, and it is reached from
+`MTKSTP_SYNC` on the SDIO path. `MTKSTP_FW_MSG`, which handles firmware assert
+and dump traffic, is likewise SDIO-side and equally sequence-free.
+
+**So the constant `0x80` this driver writes is not a shortcut that loses a
+guarantee; it is what the far end is told by the shipping driver on this exact
+transport.** Implementing windowing here would mean emitting bare 4-byte ACK
+frames and sequence-carrying headers that the MCU demonstrably does not parse,
+on a bring-up with no hardware to detect the resulting failure.
+
+**On the post-reset resynchronisation** — the real question in the original
+framing of this gap. `stp_rest_ctx_state()` is reached from exactly two places:
+the in-band reset path (`mtk_wcn_stp_inband_reset()`, `stp_core.c:3276-3329`,
+plus its completion check in the `MTKSTP_FW_MSG` state at `stp_core.c:2399`) and
+`mtk_wcn_stp_flush_context()` (`stp_core.c:3402`). Both belong to the BTIF/UART
+control model: the in-band reset is a *STP-level* request that the MCU answers
+with a `STP_TASK_INDX` frame of `seq == 0 && ack == 0 && length == 0`
+(`stp_core.c:2400-2411`). The MT6628 in this tree has no pwrseq GPIO wired up at
+all, so the chip is never reset independently of the SoC, and the SDIO endpoint
+comes up from a cold boot with both sides at zero. There is no reset event on
+this transport for a resynchronisation to be triggered by, and no in-band reset
+command ported that could introduce one.
+
+**What was left as a genuine improvement instead.** The one thing the SDIO
+parser *should* do, and does not, is resynchronise byte-wise. Downstream's
+`MTKSTP_SYNC` state advances one byte at a time and only commits once a full
+4-byte header has been seen (`stp_core.c:1690-1757`), so a truncated or
+corrupted leading byte costs nothing; this driver's parser walks on the declared
+frame length and `break`s out of the loop, discarding the remainder of the
+buffer. That is a real difference in robustness, and it was fixed — see the next
+paragraph. Everything else in this section is now documented rather than
+attempted, deliberately: porting sequence/ACK into a transport whose peer does
+not implement it is the plausible-and-wrong option.
+
+### The SDIO receive parser resynchronises one byte at a time
+
+The receive parser used to trust the length field of whatever it found at the
+current offset: one bad byte made it walk off the end and throw the rest of the
+buffer away, including every valid frame behind it.
+
+It now scans for the `0x80` start marker the way the downstream `MTKSTP_SYNC`
+state does (`stp_core.c:1690-1757`), and only commits to a frame once a complete
+4-byte header has been seen and its length fits within the bytes remaining. That
+is the same rule downstream applies, and it costs one extra comparison per
+mis-aligned byte. The downstream parser also accepts `0x55` as a delimiter and
+`0x7f` as the start of a resync pattern; neither appears in any MT6628 SDIO
+traffic this driver can observe, and the vendor's own SDIO branch discards
+alignment padding rather than looking for markers, so only the `0x80` marker is
+matched here.
 
 ### No PSM, in-band reset or paged dump
 

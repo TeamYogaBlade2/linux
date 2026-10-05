@@ -462,6 +462,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 	size_t end = bus_len;
 
 	while (pos + MT6628_STP_HEADER_SIZE + MT6628_STP_TRAILER_SIZE <= end) {
+		const u8 *hdr;
 		const u8 *payload;
 		const u8 *trailer;
 		u16 len;
@@ -469,52 +470,88 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 		size_t frame_len;
 		size_t padded_len;
 
-		if (!(wmt->rx_buf[pos] & BIT(7)))
-			break;
-
-		task = (wmt->rx_buf[pos + 1] >> 4) & 0x07;
-		len = ((wmt->rx_buf[pos + 1] & 0x0f) << 8) |
-			wmt->rx_buf[pos + 2];
-		if (len >= 2000)
-			break;
-
-		frame_len = MT6628_STP_HEADER_SIZE + len +
-			MT6628_STP_TRAILER_SIZE;
-		if (frame_len > end - pos)
-			break;
-
 		/*
-		 * Verify the payload checksum before handing the packet on.
-		 * A frame that fails is dropped rather than passed on: the
-		 * alternative is feeding a corrupted payload to WMT command
-		 * parsing, where a wrong length field means a wrong WMT
-		 * opcode and a wrong result.
+		 * Scan for the frame marker one byte at a time, the way the
+		 * downstream MTKSTP_SYNC state does (stp_core.c:1690-1757).
+		 * Downstream only commits once a whole 4-byte header is in
+		 * hand; this driver instead requires that the length the header
+		 * declares actually fits in what is left of the buffer, which
+		 * is the stronger of the two checks and needs no extra state.
 		 *
-		 * This is stricter than the downstream SDIO path, which
-		 * discards the two trailer bytes without looking at them
-		 * (stp_core.c:1873-1882).  It costs one pass over the payload
-		 * and it cannot reject a frame that is actually intact,
-		 * because the checksum is computed the same way it is written.
-		 * See Downstream-Gaps.md.
+		 * Getting here does not mean the bytes are a frame, so a bad
+		 * header costs one byte of progress rather than the rest of the
+		 * buffer.  Without this a single corrupted byte ahead of a
+		 * valid frame would discard every frame behind it.
 		 */
-		payload = wmt->rx_buf + pos + MT6628_STP_HEADER_SIZE;
-		trailer = payload + len;
-		if (mt6628_stp_crc16(payload, len) !=
-		    ((u16)trailer[0] | ((u16)trailer[1] << 8))) {
-			if (wmt->rx_crc_errors != U32_MAX)
-				wmt->rx_crc_errors++;
-			dev_warn_ratelimited(&wmt->func->dev,
-					     "STP RX CRC mismatch on task %u, dropping frame\n",
-					     task);
-			break;
+		hdr = wmt->rx_buf + pos;
+		if (hdr[0] & BIT(7)) {
+			task = (hdr[1] >> 4) & 0x07;
+			len = ((hdr[1] & 0x0f) << 8) | hdr[2];
+			frame_len = MT6628_STP_HEADER_SIZE + len +
+				MT6628_STP_TRAILER_SIZE;
+
+			/*
+			 * Header byte 3 is the sum of bytes 0..2.  The
+			 * downstream parser rejects a header that fails it
+			 * (stp_core.c:2240-2244); over SDIO the chip is
+			 * documented to write zero there instead
+			 * (stp_core.c:871), so this is not enforced here.
+			 */
+			if (len < 2000 && frame_len <= end - pos) {
+				payload = hdr + MT6628_STP_HEADER_SIZE;
+				trailer = payload + len;
+
+				/*
+				 * Verify the payload checksum before handing
+				 * the packet on.  A frame that fails is dropped
+				 * rather than passed on: the alternative is
+				 * feeding a corrupted payload to WMT command
+				 * parsing, where a wrong length field means a
+				 * wrong WMT opcode and a wrong result.
+				 *
+				 * This is stricter than the downstream SDIO
+				 * path, which discards the two trailer bytes
+				 * without looking at them
+				 * (stp_core.c:1873-1882).  It costs one pass
+				 * over the payload and it cannot reject a frame
+				 * that is actually intact, because the checksum
+				 * is computed the same way it is written.
+				 *
+				 * On failure the frame is dropped and the scan
+				 * resumes one byte later, so a frame that
+				 * failed its checksum does not cost the
+				 * frames queued behind it.
+				 */
+				if (mt6628_stp_crc16(payload, len) !=
+				    ((u16)trailer[0] | ((u16)trailer[1] << 8))) {
+					if (wmt->rx_crc_errors != U32_MAX)
+						wmt->rx_crc_errors++;
+					dev_warn_ratelimited(&wmt->func->dev,
+							     "STP RX CRC mismatch on task %u, dropping frame\n",
+							     task);
+					pos++;
+					continue;
+				}
+
+				mt6628_stp_dispatch(wmt, task, payload, len);
+
+				padded_len = ALIGN(frame_len, 4);
+				if (padded_len > end - pos) {
+					/*
+					 * A frame whose padding runs past
+					 * the end of the buffer is the last
+					 * thing here; there is nothing left
+					 * to walk to.
+					 */
+					break;
+				}
+				pos += padded_len;
+				continue;
+			}
 		}
 
-		mt6628_stp_dispatch(wmt, task, payload, len);
-
-		padded_len = ALIGN(frame_len, 4);
-		if (padded_len > end - pos)
-			break;
-		pos += padded_len;
+		/* Not a usable frame header: resynchronise one byte later. */
+		pos++;
 	}
 }
 
