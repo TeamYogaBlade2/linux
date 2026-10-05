@@ -443,6 +443,45 @@ static const struct mtk_ddp_comp_funcs ddp_ufoe = {
 	.start = mtk_ufoe_start,
 };
 
+/*
+ * DISP_WDMA.  Wired to WDMA0 and WDMA1 below, which previously carried a
+ * NULL funcs pointer - so every mtk_ddp_comp_* accessor on those two
+ * components fell through to its default.  The defaults were safe (all of
+ * them guard on !comp->funcs) but not free: mtk_ddp_comp_power_on() and
+ * _power_off() fall back to pm_runtime_resume_and_get()/pm_runtime_put()
+ * rather than returning 0, and mtk_ddp_comp_supported_rotations() falls back
+ * to DRM_MODE_ROTATE_0.  Those defaults were the right behaviour for a block
+ * with no driver attached, and they are now the driver's own behaviour.
+ *
+ * Note what is absent: power_on/power_off, because WDMA needs no power
+ * sequence beyond pm_runtime, which mtk_ddp_comp_power_on() already does when
+ * funcs->power_on is NULL - and adding an empty wrapper would only remove
+ * that fallback.  Also absent: layer_nr and layer_config, and that is the
+ * point rather than an omission.  WDMA is the write-only output leg of the
+ * pipeline; the pixel source is upstream of it, so WDMA never owns a plane.
+ * mtk_ddp_comp_supports_plane() requires BOTH hooks to report true, so with
+ * these two absent WDMA reports false and mtk_crtc_num_comp_planes() will
+ * never allocate a plane for it.  That is what keeps it out of any path
+ * array by construction, and it is why adding a funcs pointer here is not
+ * the same risk as adding a component to mt6589_mtk_ddp_main[] - see
+ * commits c9e543f22025 and 2d59d9693be8.
+ *
+ * supported_rotations is DRM_MODE_ROTATE_0, the same value the NULL-funcs
+ * fallback returned, so nothing observable changes there either.
+ */
+static const struct mtk_ddp_comp_funcs ddp_wdma = {
+	.clk_enable = mtk_wdma_clk_enable,
+	.clk_disable = mtk_wdma_clk_disable,
+	.config = mtk_wdma_config,
+	.start = mtk_wdma_start,
+	.stop = mtk_wdma_stop,
+	.register_vblank_cb = mtk_wdma_register_vblank_cb,
+	.unregister_vblank_cb = mtk_wdma_unregister_vblank_cb,
+	.enable_vblank = mtk_wdma_enable_vblank,
+	.disable_vblank = mtk_wdma_disable_vblank,
+	.supported_rotations = mtk_wdma_supported_rotations,
+};
+
 static const struct mtk_ddp_comp_funcs ddp_ovl_adaptor = {
 	.power_on = mtk_ovl_adaptor_power_on,
 	.power_off = mtk_ovl_adaptor_power_off,
@@ -542,8 +581,8 @@ static const struct mtk_ddp_comp_match mtk_ddp_matches[DDP_COMPONENT_DRM_ID_MAX]
 	[DDP_COMPONENT_RDMA4]		= { MTK_DISP_RDMA,		4, &ddp_rdma },
 	[DDP_COMPONENT_TDSHP]		= { MTK_DISP_TDSHP,		0, &ddp_tdshp },
 	[DDP_COMPONENT_UFOE]		= { MTK_DISP_UFOE,		0, &ddp_ufoe },
-	[DDP_COMPONENT_WDMA0]		= { MTK_DISP_WDMA,		0, NULL },
-	[DDP_COMPONENT_WDMA1]		= { MTK_DISP_WDMA,		1, NULL },
+	[DDP_COMPONENT_WDMA0]		= { MTK_DISP_WDMA,		0, &ddp_wdma },
+	[DDP_COMPONENT_WDMA1]		= { MTK_DISP_WDMA,		1, &ddp_wdma },
 };
 
 static bool mtk_ddp_comp_find(struct device *dev,

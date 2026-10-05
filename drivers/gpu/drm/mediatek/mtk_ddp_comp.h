@@ -50,6 +50,34 @@ enum mtk_ddp_comp_type {
 
 struct mtk_ddp_comp;
 struct cmdq_pkt;
+
+/*
+ * DISP_WDMA hooks, implemented in mtk_disp_wdma.c and wired into
+ * ddp_wdma in mtk_ddp_comp.c.
+ *
+ * WDMA is the display pipeline's write-only output leg: it takes a pixel
+ * stream from an upstream block and writes it to memory.  It carries no
+ * display plane and is not a CRTC path component on any SoC this tree
+ * supports, so there is deliberately no layer_nr/layer_config here.  The
+ * probes in mtk_ddp_comp_supports_plane() treat a component with no funcs
+ * pointer that way already, and WDMA now has one, so the hooks it does
+ * provide are what mtk_ddp_comp_supports_plane() will find.
+ */
+int mtk_wdma_clk_enable(struct device *dev);
+void mtk_wdma_clk_disable(struct device *dev);
+void mtk_wdma_config(struct device *dev, unsigned int w, unsigned int h,
+		     unsigned int vrefresh, unsigned int bpc,
+		     struct cmdq_pkt *cmdq_pkt);
+void mtk_wdma_start(struct device *dev);
+void mtk_wdma_stop(struct device *dev);
+void mtk_wdma_register_vblank_cb(struct device *dev,
+				 void (*vblank_cb)(void *),
+				 void *vblank_cb_data);
+void mtk_wdma_unregister_vblank_cb(struct device *dev);
+void mtk_wdma_enable_vblank(struct device *dev);
+void mtk_wdma_disable_vblank(struct device *dev);
+unsigned int mtk_wdma_supported_rotations(struct device *dev);
+
 struct mtk_ddp_comp_funcs {
 	int (*power_on)(struct device *dev);
 	void (*power_off)(struct device *dev);
@@ -114,8 +142,11 @@ struct mtk_ddp_comp {
  *
  * This answers "does this component implement the plane hooks at all?", which
  * is what distinguishes a component that can never take a plane (COLOR, DSI,
- * BLS, ... and PWM/WDMA, which have no funcs pointer at all) from one that
- * does.  It deliberately says nothing about *where* in a pipeline the component
+ * BLS, ... and PWM, which have no funcs pointer at all) from one that
+ * does.  WDMA is the interesting case now that it has a funcs table: it
+ * implements several hooks but neither layer hook, so it still reports
+ * false, which is correct - WDMA is the write-only output leg and the
+ * pixel source is upstream of it, so it never owns a plane.  It deliberately says nothing about *where* in a pipeline the component
  * sits: that is the CRTC's business, and no SoC currently wires a plane to
  * anything but path index 0 or 1.
  *
