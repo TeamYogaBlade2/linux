@@ -1128,8 +1128,17 @@ static const struct snd_soc_component_driver mt6589_afe_component = {
 	.pcm_new = mt6589_afe_pcm_new,
 };
 
-/* IRQ1 marks a DL1 period, IRQ2 a VUL one; hardirq, fast_io regmap,
+/*
+ * IRQ1 marks a DL1 period, IRQ2 a VUL one; hardirq, fast_io regmap,
  * atomic PCM.  Active-low.
+ *
+ * The line is level triggered and the status bits are cleared nowhere else,
+ * so the handler has to ack before doing anything that can sleep: it writes
+ * the status it captured to AFE_IRQ_CLR first, and only then calls
+ * snd_pcm_period_elapsed().  Returning with the line still asserted would
+ * simply re-enter this handler forever.
+ *
+ * Not a shared handler - see the devm_request_irq() call in the probe.
  */
 static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
@@ -1251,6 +1260,24 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
+	/*
+	 * Flags 0 is deliberate: it leaves the trigger type exactly as the
+	 * device tree declared it (IRQ_TYPE_LEVEL_LOW for this node), and the
+	 * level behaviour is required here - the AFE status bits stay set
+	 * until mt6589_afe_irq() clears them, so an edge-triggered line would
+	 * drop a period whose status it could not ack in time.
+	 *
+	 * Passing 0 does not silently downgrade the interrupt to an edge one:
+	 * request_irq() only calls __irq_set_trigger() when IRQF_TRIGGER_MASK
+	 * is actually set in the flags (kernel/irq/manage.c:1715-1721), so
+	 * with 0 the trigger configured earlier from the DT by the GIC driver
+	 * stands.
+	 *
+	 * No IRQF_SHARED: SPI 104 is the AFE's own interrupt line - the data
+	 * sheet's interrupt table names it "Afe_irq_mcu_b" and gives no other
+	 * source - so it is never requested twice and the handler does not
+	 * need to be chained.
+	 */
 	ret = devm_request_irq(dev, irq, mt6589_afe_irq, 0, "mt6589-afe", afe);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to request AFE irq %d\n", irq);
