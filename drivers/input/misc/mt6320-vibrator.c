@@ -157,6 +157,12 @@ struct mt6320_vibrator {
 	struct hrtimer timer;
 	struct work_struct poweroff_work;
 
+	/*
+	 * @running is also the regulator reference count, bounded at one: this
+	 * driver only ever calls regulator_enable() when it is clear and
+	 * regulator_disable() when it is set.  Two concurrent pulse requests
+	 * cannot take two references.
+	 */
 	bool running;
 	bool shutdown;
 	u32 amplitude;		/* microvolts */
@@ -308,11 +314,24 @@ static int mt6320_vibr_start(struct mt6320_vibrator *vib, u32 duration_ms)
 	if (ret)
 		goto out_unlock;
 
-	ret = mt6320_vibr_hw_set_power(vib, true);
-	if (ret)
-		goto out_unlock;
+	/*
+	 * Only enable a rail this driver does not already hold.  @running is
+	 * exactly the "this call owns one regulator_enable()" flag: it is set
+	 * here and cleared by whichever path disables the rail again.  Calling
+	 * regulator_enable() on a pulse that is already in flight would take a
+	 * second reference that nothing ever puts, because the matching stop
+	 * only ever disables once - two "1" writes to
+	 * /sys/class/leds/.../brightness followed by one "0" leave the LDO
+	 * energised with @running already false, so no later stop can drain it.
+	 */
+	if (!vib->running) {
+		ret = mt6320_vibr_hw_set_power(vib, true);
+		if (ret)
+			goto out_unlock;
 
-	vib->running = true;
+		vib->running = true;
+	}
+
 	vib->duration_ms = ms;
 	hrtimer_start(&vib->timer,
 		      ktime_set(ms / 1000, (ms % 1000) * 1000000LL),
@@ -462,32 +481,49 @@ static int mt6320_vibr_probe(struct platform_device *pdev)
 static void mt6320_vibr_remove(struct platform_device *pdev)
 {
 	struct mt6320_vibrator *vib = platform_get_drvdata(pdev);
+	bool poweroff;
 
 	/* Latch shutdown first so no new pulse can start. */
 	mutex_lock(&vib->lock);
 	vib->shutdown = true;
+	poweroff = vib->running;
+	vib->running = false;
 	mutex_unlock(&vib->lock);
 
 	hrtimer_cancel(&vib->timer);
-	if (mt6320_vibr_hw_set_power(vib, false))
-		dev_err(&pdev->dev, "failed to disable vibrator\n");
 	cancel_work_sync(&vib->poweroff_work);
+
+	/*
+	 * Only give back a reference this driver actually took.  The LED core
+	 * already runs brightness_set(LED_OFF) from led_classdev_unregister(),
+	 * which is what stops a live pulse and clears @running; an unconditional
+	 * regulator_disable() here would then be one more disable than enables,
+	 * tripping WARN_ON(enable_count == 0) in the regulator core and
+	 * returning -EIO.
+	 */
+	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
+		dev_err(&pdev->dev, "failed to disable vibrator\n");
 }
 
 static void mt6320_vibr_shutdown(struct platform_device *pdev)
 {
 	struct mt6320_vibrator *vib = platform_get_drvdata(pdev);
+	bool poweroff;
 
 	mutex_lock(&vib->lock);
 	vib->shutdown = true;
+	poweroff = vib->running;
+	vib->running = false;
 	mutex_unlock(&vib->lock);
 
-	/* Leave the rail down for good: mt6320_vibr_stop() would refuse once
-	 * shutdown is latched, so cut it directly.
-	 */
 	hrtimer_cancel(&vib->timer);
 	cancel_work_sync(&vib->poweroff_work);
-	if (mt6320_vibr_hw_set_power(vib, false))
+
+	/* Leave the rail down for good: mt6320_vibr_stop() would refuse once
+	 * shutdown is latched, so cut it directly.  As in remove(), only a
+	 * reference that is still held is given back.
+	 */
+	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
 		dev_err(&pdev->dev, "failed to disable vibrator\n");
 }
 
