@@ -1388,3 +1388,77 @@ obtained and used, just not re-exposed to userspace.
 | GNSS ioctls (`GPS_HWVER` / `RTC_FLAG` / `CO_CLOCK_FLAG`) | absent — no ioctl hook in the generic framework |
 
 Nothing in this section has been run on hardware.
+
+---
+
+## 4. Host-side defects found and fixed after the port
+
+A later pass read these three drivers for deadlocks, leaks and lifetime bugs
+rather than for missing features. The claims in sections 1–3 were written
+against the code as it then stood, so the ones below are the places where a
+claim was only true by accident and is now true by construction. Nothing here
+changes a feature table above.
+
+- **Self-deadlock in the connection state machine.** `connection_mgmt()` holds
+  `cfg_mutex` across its body, and its failure paths called
+  `mt6628_conn_fw_cleanup()`, which called `mt6628_wlan_flush_keys()`, which
+  takes `cfg_mutex` as its first statement — and `mt6628_wlan_del_key()` takes
+  it again. A deauth or disassoc for the current AP therefore parked the mgmt
+  worker on a lock it already owned, holding the driver-wide lock forever:
+  every later nl80211 operation and every workqueue behind it blocked, and the
+  radio could never be handed back to firmware. The teardown is now split so
+  the locked part does not itself re-enter the lock; the keys still go before
+  the STA-REC they belong to, and the lock order is unchanged (never
+  `cmd_mutex` → `cfg_mutex`). Six call sites run under the lock, four of them
+  inside the two result helpers `connection_mgmt()` drives.
+- **Management-frame leak.** Five truncated-frame paths returned "handled"
+  without freeing the skb, which the caller's contract says they must. A peer
+  needs only a 24-byte header to reach any of them.
+- **A completed scan could go unreported forever.** `mgmt_pending` is only
+  decremented by the mgmt drain loop, but the queue purge during teardown
+  dropped frames without returning their count, so the counter never reached
+  zero and the `cfg80211_scan_done()` gated on it was never called.
+- **A remain-on-channel abort the firmware refused was unrecoverable.** The
+  return of `mt6628_wlan_release_channel()` was discarded, so a refused abort
+  retired the window while the grant stayed live, with no cookie left for
+  cfg80211 to release it and the next request refused `-EBUSY`. It is now
+  retried. The cookie being committed only after the channel is released is
+  deliberate and is *not* a defect: it is what stops a stale cancel from
+  tearing down a newer window, and the comment at
+  `mt6628-wlan-cfg80211.c:584-601` says so.
+- **FM: no RDS value was ever committed.** The six RDS controls carried
+  `mtk_fm_ctrl_ops`, whose `s_ctrl` returns `-EINVAL` for any id that is not
+  one of the four settings controls, so `try_or_set_cluster()` aborted before
+  `new_to_cur()`. `V4L2_TUNER_CAP_RDS` was advertised but void. The RDS
+  controls now carry no ops, which is the correct shape for a control the
+  driver writes itself.
+- **FM: the CQI answer was truncated to four bytes**, against a 96-byte vendor
+  reply holding 16 six-byte records, so a reading at any index other than
+  zero was never found and `tuner->signal` silently fell back to the plain
+  RSSI register.
+- **Bluetooth: `remove()` could use a freed `hci_dev`**, because the STP RX
+  callback was unregistered after `hci_unregister_dev()` had already dropped
+  the last reference; and `err_rx` was incremented for frames
+  `hci_recv_frame()` had already freed.
+
+### What still needs hardware
+
+Every item above is verified against the downstream source and the kernel
+source, and all of it builds, but **none of it has been run on hardware** and
+none of it can be without the tablet. Specifically still unproven:
+
+- That the released key flush and STA-REC teardown produce no visible glitch
+  on the AP's side during a deauth, which is the whole reason the ordering
+  matters.
+- The FM CQI record layout: that the firmware's 96-byte answer is a dense
+  array of 6-byte records with no padding or header. That is the vendor's own
+  inference — `core/fm_link.c` copies all 96 bytes verbatim and
+  `mt6628_fm_lib.c` casts the buffer straight to `struct mt6628_fm_cqi *` —
+  and it is followed here, but it is the one assumption in this section that
+  a real seek would settle immediately.
+- The FM RDS control path end to end: that `v4l2_ctrl_s_ctrl()` now commits
+  each decoded value and raises the event, which needs a transmitter whose
+  RDS group can be received.
+- The Bluetooth removal ordering under a genuinely in-flight STP frame.
+- Whether the remain-on-channel retry ever fires in practice, which requires a
+  firmware that refuses a `CH_PRIVILEGE` abort.
