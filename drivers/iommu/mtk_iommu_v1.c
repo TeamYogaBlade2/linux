@@ -899,8 +899,18 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 	}
 
 	larbdev = data->larb_imu[larbid].dev;
-	if (!larbdev)
+	if (!larbdev) {
+		/*
+		 * This is the one client that cannot work: its port lives in a
+		 * LARB the M4U did not pick up, so there is nothing to link
+		 * against and nothing to program the port through.  Refusing
+		 * here keeps the promise the probe loop now makes by skipping
+		 * absent LARBs - every other client of this M4U still works.
+		 */
+		dev_err(dev, "iommu port %d needs larb %d, which is unavailable\n",
+			fwspec->ids[0], larbid);
 		return ERR_PTR(-EINVAL);
+	}
 
 	link = device_link_add(dev, larbdev,
 			       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
@@ -1217,29 +1227,49 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 
 		plarbdev = of_find_device_by_node(larbnode);
 		if (!plarbdev) {
-			of_node_put(larbnode);
-			ret = -ENODEV;
-			goto out_put_larbs;
-		}
-		if (!plarbdev->dev.driver) {
-			of_node_put(larbnode);
-			put_device(&plarbdev->dev);
 			/*
-			 * Silently deferring here is what makes an M4U that
-			 * never comes up hard to diagnose: the boot log only
-			 * ever says "deferred probe pending: (reason
-			 * unknown)".  Name the LARB that is missing its
-			 * driver.
+			 * A LARB the M4U lists is not a prerequisite of the
+			 * M4U.  Each one arbitrates one bus segment, and the
+			 * M4U only programs the SMI ports of the segments a
+			 * client actually names, so a client whose port lands
+			 * in an absent LARB is the one that cannot work - not
+			 * every other client of the same M4U.  This is the
+			 * same treatment a node marked status = "disabled" gets
+			 * just above, and it is what lets the display path
+			 * (larb2) come up on a board where larb0 sits behind a
+			 * power domain that will not switch on.
 			 */
-			dev_info(dev, "deferring: larb %d has no driver yet\n",
+			dev_warn(dev, "larb %d has no platform device, skipping\n",
 				 i);
-			ret = -EPROBE_DEFER;
-			goto out_put_larbs;
+			of_node_put(larbnode);
+			continue;
 		}
-		data->larb_imu[i].dev = &plarbdev->dev;
 
-		component_match_add_release(dev, &match, component_release_of,
-					    component_compare_of, larbnode);
+		/*
+		 * dev.driver is cleared again by device_unbind_cleanup() when
+		 * the probe fails, so a NULL here covers both "not probed yet"
+		 * and "probed and deferred", and neither is a reason to hold
+		 * the whole M4U back.  The reference is taken either way
+		 * because a probe in flight holds one of its own.
+		 *
+		 * Skipping the match entry below is what keeps this safe: the
+		 * aggregate device cannot come up while any match entry is
+		 * unresolved (find_components() in drivers/base/component.c),
+		 * so matching a LARB that may never come up would block the
+		 * M4U for exactly as long as this code is trying to stop.
+		 */
+		if (plarbdev->dev.driver) {
+			data->larb_imu[i].dev = &plarbdev->dev;
+			component_match_add_release(dev, &match,
+						    component_release_of,
+						    component_compare_of,
+						    larbnode);
+			continue;
+		}
+
+		dev_warn(dev, "larb %d has no driver, skipping\n", i);
+		put_device(&plarbdev->dev);
+		of_node_put(larbnode);
 	}
 
 	platform_set_drvdata(pdev, data);
