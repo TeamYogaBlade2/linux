@@ -1060,23 +1060,26 @@ void mtk_mutex_enable(struct mtk_mutex *mutex)
 	WARN_ON(&mtx->mutex[mutex->id] != mutex);
 
 	/*
-	 * Restore the mutex interrupt enable mask.  The data sheet gives this
-	 * register a power-on value of 0 and notes the block is reset when the
-	 * display power domain is cycled, which is why the downstream driver
-	 * re-writes DDP_MUTEX_INTR_ENABLE_BIT in disp_power_on() "because this
-	 * reg will be reset if power is off".
+	 * The mutex interrupt enable mask is deliberately left at its reset
+	 * value of zero.
 	 *
-	 * Note that the grant itself does NOT depend on this: DISP_MUTEX(n)
-	 * bit 1 is set by hardware regardless of INTEN, so an unmasked INTEN
-	 * is what makes the *interrupt* arrive, not what makes the mutex work.
-	 * mtk_mutex_acquire() reads that bit directly and is unaffected either
-	 * way.  Writing the mask here keeps the block in the state the vendor
-	 * driver leaves it in, so a DISP_MUTEX_INTSTA-based path would see the
-	 * interrupts it expects.
+	 * The grant does not depend on it: DISP_MUTEX(n) bit 1 is set by
+	 * hardware regardless of INTEN, and mtk_mutex_acquire() reads that bit
+	 * directly, so masking the interrupt costs this driver nothing.
+	 *
+	 * What it would cost is an interrupt nobody services. The vendor
+	 * driver can afford to leave DDP_MUTEX_INTR_ENABLE_BIT in place
+	 * because it takes the grant from DISP_MUTEX_INTSTA, and it services
+	 * that interrupt. Nothing here does: INTSTA is typed "RU" in the data
+	 * sheet, a read-to-clear whose semantics the preface never defines, so
+	 * there is no safe handler to write, and the node declares GIC_SPI 160
+	 * that no code requests. Unmasking a level interrupt nothing
+	 * acknowledges is how a storm starts - the block raises it, INTSTA
+	 * stays asserted because nobody reads it, and the line never drops.
+	 *
+	 * So the register stays masked. If a DISP_MUTEX_INTSTA-based path is
+	 * ever added, the handler and this unmask belong in the same change.
 	 */
-	if (mtx->data->needs_mutex_inten)
-		writel(DISP_REG_MUTEX_INTEN_ALL,
-		       mtx->regs + DISP_REG_MUTEX_INTEN);
 
 	writel(1, mtx->regs + DISP_REG_MUTEX_EN(mutex->id));
 }
