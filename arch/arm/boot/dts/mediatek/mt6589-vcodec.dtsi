@@ -69,9 +69,24 @@ vcodec: vcodec@17002000 {
 	 * acknowledge bits, which the stock driver also does, so its failure is
 	 * undiagnosed.
 	 *
-	 * Both domains are best-effort here: the driver tolerates a missing
-	 * domain so that the node can be enabled while the VEN/VDE power
-	 * sequence is still being worked on.
+	 * The node is disabled, and that is not merely caution.  A device with
+	 * more than one domain must attach them itself: genpd_dev_pm_attach()
+	 * counts the "power-domains" phandles and returns 0 without attaching
+	 * anything unless there is exactly one (see the count != 1 test in
+	 * drivers/pmdomain/core.c).
+	 *
+	 * With two phandles and no dev_pm_domain_attach_by_id()/_by_list() call
+	 * in the driver, the codec would get no domain at all, and not even a
+	 * deferred probe: probe would succeed, register the video nodes and hand
+	 * the encoder to userspace while VENC sits unpowered and unclocked.
+	 * mtk_venc_power_on() only takes a clock - it cannot raise MTCMOS - so
+	 * 0x17002000 would be an unisolated access to a dark domain: a bus hang,
+	 * or garbage returned as encoded video.
+	 *
+	 * Enabling this needs both halves at once.  Either the driver attaches
+	 * the two domains by id and turns a failed power-on into a visible
+	 * -EPROBE_DEFER, or the domains are known good and the reference count
+	 * drops to one.  Until then it stays off, like larb0/larb1.
 	 */
 	power-domains = <&spm MT6589_POWER_DOMAIN_VEN>,
 			<&spm MT6589_POWER_DOMAIN_VDE>;
@@ -81,5 +96,7 @@ vcodec: vcodec@17002000 {
 		 <&iommu MT6589_M4U_PORT_VENC_BSDMA>,
 		 <&iommu MT6589_M4U_PORT_HW_VDEC_PP_EXT>,
 		 <&iommu MT6589_M4U_PORT_HW_VDEC_VLD_EXT>;
+
+	status = "disabled";
 };
 };
