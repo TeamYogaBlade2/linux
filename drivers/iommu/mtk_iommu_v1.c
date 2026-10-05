@@ -246,6 +246,8 @@ struct mtk_iommu_v1_domain {
 	struct mtk_iommu_v1_data	*data;
 };
 
+static struct dma_iommu_mapping *mtk_iommu_v1_get_mapping(struct device *dev);
+
 static void mt6589_enable_translation(struct mtk_iommu_v1_data *data)
 {
 	int i;
@@ -597,8 +599,21 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 	struct dma_iommu_mapping *mtk_mapping;
 	int ret;
 
-	/* Only allow the domain created internally. */
-	mtk_mapping = data->mapping;
+	/*
+	 * Only allow the domain created internally.  The mapping is fetched
+	 * rather than read straight out of @data because the core calls this
+	 * *before* .probe_finalize(): iommu_setup_default_domain() attaches the
+	 * group's default domain from inside __iommu_probe_device(), and
+	 * probe_finalize() is only reached after that returns.  Reading
+	 * @data->mapping here would therefore see NULL for the first client of
+	 * this M4U and dereference it.  Asking for the same getter
+	 * probe_finalize() uses keeps the one-mapping-for-all-clients invariant
+	 * in one place and hands every caller the identical pointer.
+	 */
+	mtk_mapping = mtk_iommu_v1_get_mapping(dev);
+	if (IS_ERR(mtk_mapping))
+		return PTR_ERR(mtk_mapping);
+
 	if (mtk_mapping->domain != domain) {
 		dev_warn(dev, "Ignoring attach request for foreign domain\n");
 		return 0;
@@ -702,25 +717,76 @@ static const struct iommu_ops mtk_iommu_v1_ops;
 
 /*
  * MTK generation one iommu HW only support one iommu domain, and all the client
- * sharing the same iova address space.
+ * sharing the same iova address space.  That is why the mapping is created
+ * once and then attached to each client in turn, rather than built per device:
+ * a second mapping would be a second page-table bitmap over the same IOVA range
+ * and a second domain the hardware cannot translate with.
+ *
+ *
+ * Returns the shared mapping, or an error pointer.
  */
-static int mtk_iommu_v1_create_mapping(struct device *dev,
-				       const struct of_phandle_args *args)
+static struct dma_iommu_mapping *
+mtk_iommu_v1_get_mapping(struct device *dev)
+{
+	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
+	struct dma_iommu_mapping *mtk_mapping;
+	int ret;
+
+	mtk_mapping = data->mapping;
+	if (!mtk_mapping) {
+		/* MTK iommu support 4GB iova address space. */
+		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
+		if (IS_ERR(mtk_mapping) || !mtk_mapping) {
+			/*
+			 * A NULL is not an error pointer, so IS_ERR() alone would
+			 * let it through and store NULL in @mapping - which
+			 * mtk_iommu_v1_attach_device() then dereferences.  The
+			 * !CONFIG_ARM stub above expands to a plain NULL, so
+			 * both spellings have to be refused here.
+			 */
+			ret = IS_ERR(mtk_mapping) ? PTR_ERR(mtk_mapping) :
+						     -ENODEV;
+			return ERR_PTR(ret);
+		}
+
+		data->mapping = mtk_mapping;
+	}
+
+	return mtk_mapping;
+}
+
+/**
+ * mtk_iommu_v1_of_xlate - translate one "iommus" phandle into a master id.
+ * @dev: the client device
+ * @args: the phandle arguments: one LARB port number
+ *
+ * This is the entry point the core uses, and there is no substitute for it:
+ * of_iommu_xlate() looks the ops up by fwnode and returns -ENODEV if they have
+ * no .of_xlate, so a driver without this callback never gets its fwspec built
+ * at all.  A client that declares "iommus" then is accepted, parses cleanly
+ * and silently gets no IOMMU - no group, no domain, no DMA ops.  That is what
+ * this was doing on this SoC for jpgdec, jpgenc, ovl, rdma0 and rdma1.
+ *
+ * The core has already called iommu_fwspec_init() by the time this runs, so the
+ * only jobs here are to remember which M4U this client belongs to and to record
+ * the port.  @data is shared by every client of the M4U - it is the M4U
+ * platform device's drvdata - so it is fetched once here and every later
+ * callback, including the ones the core runs from another context, can find it.
+ *
+ * Called once per phandle, so a client with four ports contributes four ids and
+ * probe_device() can check they all belong to one LARB.
+ */
+static int mtk_iommu_v1_of_xlate(struct device *dev,
+				const struct of_phandle_args *args)
 {
 	struct mtk_iommu_v1_data *data;
 	struct platform_device *m4updev;
-	struct dma_iommu_mapping *mtk_mapping;
-	int ret;
 
 	if (args->args_count != 1) {
 		dev_err(dev, "invalid #iommu-cells(%d) property for IOMMU\n",
 			args->args_count);
 		return -EINVAL;
 	}
-
-	ret = iommu_fwspec_init(dev, of_fwnode_handle(args->np));
-	if (ret)
-		return ret;
 
 	if (!dev_iommu_priv_get(dev)) {
 		/* Get the m4u device */
@@ -733,49 +799,27 @@ static int mtk_iommu_v1_create_mapping(struct device *dev,
 		put_device(&m4updev->dev);
 	}
 
-	ret = iommu_fwspec_add_ids(dev, args->args, 1);
-	if (ret)
-		return ret;
-
 	data = dev_iommu_priv_get(dev);
-	mtk_mapping = data->mapping;
-	if (!mtk_mapping) {
-		/* MTK iommu support 4GB iova address space. */
-		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
-		if (IS_ERR(mtk_mapping))
-			return PTR_ERR(mtk_mapping);
 
-		data->mapping = mtk_mapping;
-	}
-
-	return 0;
+	return iommu_fwspec_add_ids(dev, args->args, 1);
 }
 
 static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 {
-	struct iommu_fwspec *fwspec = NULL;
-	struct of_phandle_args iommu_spec;
+	struct iommu_fwspec *fwspec;
 	struct mtk_iommu_v1_data *data;
-	int err, idx = 0, larbid, larbidx;
+	int idx, larbid, larbidx;
 	struct device_link *link;
 	struct device *larbdev;
 
-	while (!of_parse_phandle_with_args(dev->of_node, "iommus",
-					   "#iommu-cells",
-					   idx, &iommu_spec)) {
-
-		err = mtk_iommu_v1_create_mapping(dev, &iommu_spec);
-		of_node_put(iommu_spec.np);
-		if (err)
-			return ERR_PTR(err);
-
-		/* dev->iommu_fwspec might have changed */
-		fwspec = dev_iommu_fwspec_get(dev);
-		idx++;
-	}
-
-	if (!fwspec)
-		return ERR_PTR(-ENODEV);
+	/*
+	 * The fwspec and its ids were built by mtk_iommu_v1_of_xlate() before the
+	 * core got here; this only validates what it collected.  No client can
+	 * reach this point without one, because the core found no ops otherwise.
+	 */
+	fwspec = dev_iommu_fwspec_get(dev);
+	if (!fwspec || !fwspec->num_ids)
+		return ERR_PTR(-EINVAL);
 
 	data = dev_iommu_priv_get(dev);
 
@@ -805,16 +849,50 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 	return &data->iommu;
 }
 
+/**
+ * mtk_iommu_v1_probe_finalize - attach the shared mapping to one client.
+ * @dev: the client, now in a group and attached to the group's domain
+ *
+ * Mapping creation belongs here rather than in .probe_device or .of_xlate
+ * because it cannot happen any earlier: arm_iommu_create_mapping() ends in
+ * iommu_paging_domain_alloc(), which calls back into the core to allocate the
+ * domain, and at the time .of_xlate() runs the device has no group and no
+ * domain yet.  The core calls this once per device, after the group has been
+ * set up and the default domain attached, which is the first point at which
+ * both exist.
+ *
+ * So the shape is: of_xlate collects the master ids, probe_device validates
+ * them and links the consumer to its LARB, and this creates the one mapping
+ * the M4U has (see mtk_iommu_v1_get_mapping()) and attaches it to this
+ * device.  Every client ends up attached to the same mapping, which is what
+ * "one page table, one IOVA space" requires.
+ *
+ * Both the create and the attach sleep, so this may run in process context; the
+ * core calls it from probe_finalize with no lock of its own held.
+ */
 static void mtk_iommu_v1_probe_finalize(struct device *dev)
 {
-	__maybe_unused struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
-	int err;
+	struct dma_iommu_mapping *mtk_mapping;
+	int ret;
 
-	err = arm_iommu_attach_device(dev, data->mapping);
-	if (err)
+	mtk_mapping = mtk_iommu_v1_get_mapping(dev);
+	if (IS_ERR(mtk_mapping)) {
+		dev_err(dev, "Can't create IOMMU mapping - DMA-OPS will not work\n");
+		return;
+	}
+
+	ret = arm_iommu_attach_device(dev, mtk_mapping);
+	if (ret)
 		dev_err(dev, "Can't create IOMMU mapping - DMA-OPS will not work\n");
 }
 
+/**
+ * mtk_iommu_v1_release_device - undo what .probe_device did to the LARB link.
+ *
+ * The mapping is deliberately not released here: it belongs to the M4U, not
+ * to any one client, and the other clients of it are still using it.  It is
+ * freed with the M4U's private data.
+ */
 static void mtk_iommu_v1_release_device(struct device *dev)
 {
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
@@ -902,6 +980,7 @@ static int mt6589_hw_init(struct mtk_iommu_v1_data *data)
 static const struct iommu_ops mtk_iommu_v1_ops = {
 	.identity_domain = &mtk_iommu_v1_identity_domain,
 	.domain_alloc_paging = mtk_iommu_v1_domain_alloc_paging,
+	.of_xlate	= mtk_iommu_v1_of_xlate,
 	.probe_device	= mtk_iommu_v1_probe_device,
 	.probe_finalize = mtk_iommu_v1_probe_finalize,
 	.release_device	= mtk_iommu_v1_release_device,
