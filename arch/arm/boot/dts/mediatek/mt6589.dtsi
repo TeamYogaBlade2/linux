@@ -1363,38 +1363,33 @@
 		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE
 		 * and CLK_DISP0_G2D_SMI.
 		 *
-		 * No "iommus" property, deliberately, even though the block is
-		 * on LARB2 port 11 (MT6589_M4U_PORT_G2D).  Attaching the M4U
-		 * here would be actively wrong, not merely redundant:
+		 * No "iommus" property YET, even though the block is on LARB2
+		 * port 11 (MT6589_M4U_PORT_G2D).  The port assignment is real -
+		 * G2D is a DMA client with its own SRC/W2M/DST addresses - but
+		 * the property is being added in stages, and adding it now would
+		 * be worse than leaving it out:
 		 *
-		 *  - G2D does no DMA of its own.  The buffers it programs are
-		 *    drm_gem objects belonging to the mediatek-drm master (the
-		 *    dispsys node), because the G2D ioctls live on the DRM
-		 *    device and resolve a GEM handle in its namespace.  Their
-		 *    dma_addr comes from whichever device allocated them, not
-		 *    from this node.
+		 *  - The driver is still reached through the mediatek-drm
+		 *    master's ioctls and resolves GEM handles in the MASTER's
+		 *    namespace, so every address it programs today is the
+		 *    address the display DMA device produced.  Arming port 11
+		 *    while that is true would switch the engine to virtual
+		 *    addressing (mtk-smi.c programs SMI_SECUR_CON_VAL_VIRT per
+		 *    port for exactly those a domain attached) while the master
+		 *    kept handing out physical ones - the engine would then read
+		 *    and write through a page table that does not describe its
+		 *    buffers.
 		 *
-		 *  - The M4U port is programmed in the opposite direction by
-		 *    mtk-smi.c: mtk_smi_larb_config_port_gen0() sets the port to
-		 *    virtual mode (SMI_SECUR_CON_VAL_VIRT, mtk-smi.c:84) only for
-		 *    ports whose shadow bit in larb_mmu->mmu is set, and that bit
-		 *    is set in mtk_iommu_v1_config() when a domain is attached.
-		 *
-		 * So arming port 11 alone would switch the engine to virtual
-		 * addresses while the DRM master kept handing out physical ones,
-		 * and the engine would read and write through an unmapped page
-		 * table.  The whole display path - OVL, RDMA and G2D - programs
-		 * the master's addresses unchanged, and MT6589's M4U is in
-		 * bypass for those ports.  MTE would be a separate, all-or-
-		 * nothing change covering the DRM master and every engine at
-		 * once, not a per-node one.
-		 *
-		 * Note this is not currently observable at all: the in-tree
-		 * mtk_iommu_v1_ops (drivers/iommu/mtk_iommu_v1.c) has no
-		 * .of_xlate, so of_iommu_xlate() returns -ENODEV and an "iommus"
-		 * property registers no fwspec at all.  The property is left out
-		 * rather than left in as a decoration that would silently become
-		 * live - and wrong - if an .of_xlate were ever added.
+		 * The fix is not to leave G2D out of the M4U.  It is to give G2D
+		 * its own DMA identity first: G2D becomes its own drm_device
+		 * (DRIVER_GEM | DRIVER_RENDER, no KMS), its dma_dev becomes the
+		 * G2D platform device rather than OVL, and it owns its own GEM
+		 * namespace, importing display buffers through PRIME/dma-buf so
+		 * each engine's address is mapped in the address space that
+		 * engine reads.  Only once that is true does an "iommus" here
+		 * describe reality, and the property must be added in the same
+		 * change as the dma_dev switch - never before, and never to a
+		 * driver still borrowing another device's addresses.
 		 */
 		g2d: g2d@14013000 {
 			compatible = "mediatek,mt6589-g2d";
