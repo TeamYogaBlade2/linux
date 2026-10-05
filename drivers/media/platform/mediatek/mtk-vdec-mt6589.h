@@ -61,6 +61,15 @@ struct mtk_vdec_ctx {
 
 	struct mtk_vdec_dev		*dev;
 
+	/*
+	 * Serialises buffer queueing for both vb2 queues.  vb2 requires each
+	 * queue to be given one - vb2_queue_init() has
+	 * WARN_ON(!q->lock); return -EINVAL - and neither vb2 nor the m2m core
+	 * supplies it.  One mutex serves both queues, so queueing a source is
+	 * serialised against queueing the capture buffer for the same frame.
+	 */
+	struct mutex			vb_queue_lock;
+
 	/* The m2m context the framework allocated for this open. */
 	struct v4l2_m2m_ctx		*m2m;
 
