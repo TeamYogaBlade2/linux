@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-cam.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 CAM/ISP control plane
+
+maintainers:
+  - Lenovo Linux Team
+
+description: >
+  The CAM block on the MT6589 is the image signal processor.  Its control
+  registers are at 0x15004000; the image processing itself runs in the TG
+  and CPIPE stages that follow.
+
+  WARNING: the driver behind this binding is a scaffold.  It programs the
+  control plane (software reset, block enable, start/stop strobes) and the
+  IMGO output DMA, and it implements one capture video node.  The image
+  pipeline is NOT implemented: no CPIPE stage is enabled, no TG is started
+  and no command queue is armed.  Loading it will not produce a picture, and
+  on a board with no sensor attached STREAMON succeeds while DQBUF blocks
+  forever.  See the driver source.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-cam
+
+  reg:
+    description: |
+      Register window of the CAM block.  The control registers occupy
+      0x0000-0x00ff; the rest of the block is the pipeline itself.
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    maxItems: 1
+
+  resets:
+    maxItems: 1
+
+  reset-names:
+    const: cam
+
+  power-domains:
+    maxItems: 1
+
+  # One sink pad, fed by the SCAM adaptor that follows the CSI-2 receiver.
+  #
+  # The driver also creates a source pad, and a capture video node behind it,
+  # which is where the IMGO DMA lands.  That pad needs no endpoint here: the
+  # video node is not described by the device tree, and the core creates the
+  # interface link between the two itself when the node registers.
+  ports:
+    $ref: /schemas/graph/ports.yaml#
+
+required:
+  - compatible
+  - reg
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    cam: cam@15004000 {
+        compatible = "mediatek,mt6589-cam";
+        reg = <0x0 0x15004000 0x0 0x400>;
+
+        ports {
+            cam_in: port@0 {
+                cam_in_ep: endpoint {
+                    remote-endpoint = <&scam_out_ep>;
+                };
+            };
+        };
+    };
+
+...

@@ -493,6 +493,31 @@ static int scpsys_ctl_pwrseq_on(struct scpsys_domain *pd)
 	regmap_set_bits(scpsys->base, pd->data->ctl_offs, PWR_RST_B_BIT);
 
 	/*
+	 * Release SRAM here rather than leaving it to the caller's later
+	 * scpsys_sram_enable(), for the domains whose vendor power-on sequence
+	 * puts it in this exact spot.
+	 *
+	 * The stock MT6589 driver does it inline: spm_mtcmos_ctrl_venc() sets
+	 * PWR_ON, PWR_ON_S, waits on PWR_STATUS, clears PWR_CLK_DIS and PWR_ISO,
+	 * sets PWR_RST_B, and only then clears SRAM_PDN and waits for the
+	 * acknowledge bits to fall to zero (mt_spm_mtcmos.c:443-462).  Our
+	 * sequence matched that exactly right up to PWR_RST_B and then stopped,
+	 * deferring the SRAM release to scpsys_sram_enable() - which runs later,
+	 * after bus protection has already been touched.
+	 *
+	 * Doing it here is not cosmetic.  For VEN the deferred wait never
+	 * completed, which is the undiagnosed power-on failure recorded in
+	 * drivers/pmdomain/mediatek/mt6589-power-domains.md and the reason
+	 * larb0/larb1 and the venc node are disabled.
+	 */
+	if (pd->data->sram_pdn_bits &&
+	    MTK_SCPD_CAPS(pd, MTK_SCPD_SRAM_PDN_INLINE)) {
+		ret = scpsys_sram_enable(pd);
+		if (ret < 0)
+			return ret;
+	}
+
+	/*
 	 * RTFF HW state may be modified by secure world or remote processors.
 	 *
 	 * With the only exception of STOR_UFS, which always needs save/restore,
@@ -636,6 +661,9 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	if (MTK_SCPD_CAPS(pd, MTK_SCPD_MODEM_PWRSEQ))
 		ret = scpsys_modem_pwrseq_on(pd);
 	else
+		if (MTK_SCPD_CAPS(pd, MTK_SCPD_MODEM_PWRSEQ))
+		ret = scpsys_modem_pwrseq_on(pd);
+	else
 		ret = scpsys_ctl_pwrseq_on(pd);
 
 	if (ret)
@@ -662,9 +690,16 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 			goto err_pwr_ack;
 	}
 
-	ret = scpsys_sram_enable(pd);
-	if (ret < 0)
-		goto err_disable_subsys_clks;
+	/* Already done inline in scpsys_ctl_pwrseq_on() for the domains whose
+	 * vendor sequence releases SRAM there; repeating it would only wait on
+	 * bits that are already clear.
+	 */
+	if (!(pd->data->sram_pdn_bits &&
+	      MTK_SCPD_CAPS(pd, MTK_SCPD_SRAM_PDN_INLINE))) {
+		ret = scpsys_sram_enable(pd);
+		if (ret < 0)
+			goto err_disable_subsys_clks;
+	}
 
 	ret = scpsys_bus_protect_disable(pd, 0);
 	if (ret < 0)

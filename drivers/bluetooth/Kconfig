@@ -438,6 +438,17 @@ config BT_MTKSDIO
 	  Say Y here to compile support for MediaTek Bluetooth SDIO devices
 	  into the kernel or say M to compile it as module (btmtksdio).
 
+config BT_MT6628_STP
+	tristate "MediaTek MT6628 Bluetooth over STP"
+	depends on MMC
+	depends on MTK_MT6628_STP
+	help
+	  Bluetooth HCI transport for the MT6628 shared STP function.
+
+	  The MT6628 Bluetooth controller shares SDIO function 2 with
+	  FM/GPS/WMT and therefore cannot use the generic MediaTek SDIO
+	  Bluetooth driver.
+
 config BT_MTKUART
 	tristate "MediaTek HCI UART driver"
 	depends on BT_HCIUART

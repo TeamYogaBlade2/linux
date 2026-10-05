@@ -28,11 +28,18 @@ properties:
               - mediatek,mt6795-disp-wdma
               - mediatek,mt8167-disp-wdma
           - const: mediatek,mt8173-disp-wdma
+      - items:
+          - enum:
+              - mediatek,mt6589-disp-wdma0
+              - mediatek,mt6589-disp-wdma1
 
   reg:
     maxItems: 1
 
   interrupts:
+    maxItems: 1
+
+  resets:
     maxItems: 1
 
   power-domains:
@@ -42,7 +49,9 @@ properties:
 
   clocks:
     items:
-      - description: WDMA Clock
+      - description: WDMA engine clock
+    additionalItems:
+      - description: WDMA SMI clock, present on the MT6589 instances
 
   iommus:
     description:

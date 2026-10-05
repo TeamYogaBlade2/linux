@@ -47,16 +47,15 @@
 #define MT6397_RTC_BASE		0xe000
 #define MT6397_RTC_SIZE		0x3e
 
+#define MT6320_PWRC_BASE	MT6320_RTC_BASE
+#define MT6320_PWRC_SIZE	MT6320_RTC_SIZE
+
 #define MT6323_PWRC_BASE	0x8000
 #define MT6323_PWRC_SIZE	0x40
 
 static const struct resource mt6320_rtc_resources[] = {
 	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
 	DEFINE_RES_IRQ(MT6320_IRQ_RTC),
-};
-
-static const struct resource mt6320_pwrc_resources[] = {
-	DEFINE_RES_MEM(MT6320_RTC_BASE, MT6320_RTC_SIZE),
 };
 
 static const struct resource mt6323_rtc_resources[] = {
@@ -89,15 +88,15 @@ static const struct resource mt6320_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_HOMEKEY, "homekey"),
 };
 
+static const struct resource mt6320_accdet_resources[] = {
+	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_ACCDET, "accdet_irq"),
+};
+
 static const struct resource mt6358_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_PWRKEY, "powerkey"),
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_HOMEKEY, "homekey"),
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_PWRKEY_R, "powerkey_r"),
 	DEFINE_RES_IRQ_NAMED(MT6358_IRQ_HOMEKEY_R, "homekey_r"),
-};
-
-static const struct resource mt6320_accdet_resources[] = {
-	DEFINE_RES_IRQ_NAMED(MT6320_IRQ_ACCDET, "accdet_irq"),
 };
 
 static const struct resource mt6359_keys_resources[] = {
@@ -142,6 +141,10 @@ static const struct resource mt6397_keys_resources[] = {
 	DEFINE_RES_IRQ_NAMED(MT6397_IRQ_HOMEKEY, "homekey"),
 };
 
+static const struct resource mt6320_pwrc_resources[] = {
+	DEFINE_RES_MEM(MT6320_PWRC_BASE, MT6320_PWRC_SIZE),
+};
+
 static const struct resource mt6323_pwrc_resources[] = {
 	DEFINE_RES_MEM(MT6323_PWRC_BASE, MT6323_PWRC_SIZE),
 };
@@ -155,6 +158,17 @@ static const struct mfd_cell mt6320_devs[] = {
 	}, {
 		.name = "mt6320-regulator",
 		.of_compatible = "mediatek,mt6320-regulator",
+	}, {
+		/*
+		 * The ISINK and keypad backlight sinks live in ISINKS_CONx and
+		 * KPLED_CON0 inside the PMIC, so like the regulator this cell
+		 * needs no resources of its own: the driver takes the parent's
+		 * regmap with dev_get_drvdata().  Without this cell the board's
+		 * "leds" child is never instantiated, because the PMIC node is
+		 * not a bus and of_platform_populate() cannot reach it.
+		 */
+		.name = "mt6320-led",
+		.of_compatible = "mediatek,mt6320-led",
 	}, {
 		.name = "mt6320-clk",
 		.of_compatible = "mediatek,mt6320-clk",
@@ -185,6 +199,14 @@ static const struct mfd_cell mt6320_devs[] = {
 	}, {
 		.name = "mt6320-sound",
 		.of_compatible = "mediatek,mt6320-sound",
+	}, {
+		/*
+		 * The vibrator is an LDO inside the PMIC with no resources of
+		 * its own: the driver takes the parent's regmap with
+		 * dev_get_regmap(), so it only needs to be instantiated.
+		 */
+		.name = "mt6320-vibrator",
+		.of_compatible = "mediatek,mt6320-vibrator",
 	},
 };
 

@@ -12,6 +12,7 @@
 #include <linux/input.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
+#include <linux/string.h>
 
 #include <sound/jack.h>
 #include <sound/soc.h>
@@ -49,7 +50,8 @@ static struct snd_soc_jack_pin mt6589_mt6320_jack_pins[] = {
 
 static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 {
-	struct snd_soc_component *accdet;
+	struct snd_soc_component *accdet = NULL;
+	struct snd_soc_component *component;
 	int ret;
 
 	ret = snd_soc_card_jack_new_pins(card, "Headphone Jack", SND_JACK_HEADSET,
@@ -74,12 +76,48 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	if (ret)
 		return ret;
 
-	accdet = snd_soc_lookup_component_by_name("mt6320-accdet");
-	if (!accdet)
-		return -EPROBE_DEFER;
+	/*
+	 * Find the headset detector among this card's aux components.
+	 *
+	 * This must not use snd_soc_lookup_component_by_name().  That helper
+	 * takes client_mutex, and late_probe runs with client_mutex already
+	 * held: snd_soc_register_card() acquires it, then reaches
+	 * snd_soc_card_late_probe() through snd_soc_bind_card(), so a lookup
+	 * from here re-acquires a non-recursive mutex the caller already
+	 * holds and the card deadlocks part-way through probe.  That is why
+	 * enabling the AFE froze the boot: with the AFE node disabled the
+	 * DAI lookup defers and late_probe is never reached.
+	 *
+	 * aux-devs are bound by soc_bind_aux_dev(), which runs in the same
+	 * locked region but takes no lock of its own, so the component is
+	 * already on card->aux_comp_list by the time we get here.
+	 */
+	for_each_card_auxs(card, component) {
+		if (component->driver && component->driver->name &&
+		    !strcmp(component->driver->name, "mt6320-accdet")) {
+			accdet = component;
+			break;
+		}
+	}
 
-	return snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack,
-					  NULL);
+	if (!accdet) {
+		dev_info(card->dev, "no headset detection support\n");
+		return 0;
+	}
+
+	/*
+	 * Headphone detection is optional, so never let this fail the card.
+	 * snd_soc_card_late_probe() runs through soc_card_ret(), and any
+	 * negative return from here is fatal - the card is abandoned and
+	 * never registered.  -ENOTSUPP in particular comes back whenever the
+	 * component has no set_jack callback.
+	 */
+	ret = snd_soc_component_set_jack(accdet, &mt6589_mt6320_hp_jack, NULL);
+	if (ret)
+		dev_info(card->dev,
+			 "headset detection unavailable: %d\n", ret);
+
+	return 0;
 }
 
 static struct snd_soc_card mt6589_mt6320_card = {
@@ -104,9 +142,21 @@ static int mt6589_mt6320_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				     "missing mediatek,platform\n");
 
-	/* The DL1 CPU DAI and the PCM platform both live on the AFE node. */
+	/*
+	 * Both links declare their CPU by name (COMP_CPU("mt6589-afe-dl1")),
+	 * so leave the CPU component alone - adding of_node as well would make
+	 * it invalid, since snd_soc_dlc_component_is_invalid() rejects a dlc
+	 * that has both a name and a node.
+	 *
+	 * The platform component is declared COMP_EMPTY(), and that is fatal:
+	 * the card fails to register with
+	 *	ASoC: Neither Component name/of_node are set for DL1
+	 * so fill it on every link.
+	 *
+	 * The codec is likewise found by the name the dai_link already
+	 * declares, so no phandle is needed for it.
+	 */
 	for_each_card_prelinks(card, i, dai_link) {
-		dai_link->cpus->of_node = platform_node;
 		dai_link->platforms->of_node = platform_node;
 	}
 

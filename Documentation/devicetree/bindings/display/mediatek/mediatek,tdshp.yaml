@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/mediatek/mediatek,tdshp.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek Two-Dimension Sharpness Processor (TDSHP)
+
+maintainers:
+  - AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+  - Matthias Brugger <matthias.bgg@gmail.com>
+
+description: |
+  The MediaTek TDSHP is a two-dimension sharpness processor found in
+  various MediaTek SoCs. On MT6589 the block sits between the COLOR
+  processor and BLS in the display pipeline and is used in relay mode.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-disp-tdshp
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - clocks
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/mediatek,mt6589-clk.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    soc {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        tdshp@1400b000 {
+            compatible = "mediatek,mt6589-disp-tdshp";
+            reg = <0x1400b000 0x1000>;
+            interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_LOW>;
+            clocks = <&dispsys CLK_DISP0_2DSHP>;
+        };
+    };

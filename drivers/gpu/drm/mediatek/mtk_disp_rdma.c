@@ -11,6 +11,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mtk_crtc.h"
@@ -19,6 +20,7 @@
 #include "mtk_drm_drv.h"
 
 #define DISP_REG_RDMA_INT_ENABLE		0x0000
+
 #define DISP_REG_RDMA_INT_STATUS		0x0004
 #define RDMA_TARGET_LINE_INT				BIT(5)
 #define RDMA_FIFO_UNDERFLOW_INT				BIT(4)
@@ -28,14 +30,17 @@
 #define RDMA_REG_UPDATE_INT				BIT(0)
 #define DISP_REG_RDMA_GLOBAL_CON		0x0010
 #define RDMA_ENGINE_EN					BIT(0)
-#define RDMA_MODE_MEMORY				BIT(1)
+/* MODE_SEL is one bit at position 1: 0 = direct link, 1 = memory
+ * (REG_FLD(1, 1) in the stock ddp_rdma.h, RDMA_MODE_DIRECT_LINK = 0).
+ * This is the field mask, so writing 0 through it selects direct link.
+ */
+#define RDMA_MODE_SEL					BIT(1)
 #define DISP_REG_RDMA_SIZE_CON_0		0x0014
-#define RDMA_MATRIX_ENABLE				BIT(17)
-#define RDMA_MATRIX_INT_MTX_SEL				GENMASK(23, 20)
-#define RDMA_MATRIX_INT_MTX_BT601_to_RGB		(6 << 20)
 #define DISP_REG_RDMA_SIZE_CON_1		0x0018
 #define DISP_REG_RDMA_TARGET_LINE		0x001c
 #define DISP_RDMA_MEM_CON			0x0024
+#define DISP_REG_RDMA_MEM_SRC_PITCH		0x002c
+
 #define MEM_MODE_INPUT_FORMAT_RGB565			(0x000 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGB888			(0x001 << 4)
 #define MEM_MODE_INPUT_FORMAT_RGBA8888			(0x002 << 4)
@@ -45,6 +50,7 @@
 #define MEM_MODE_INPUT_SWAP				BIT(8)
 #define DISP_RDMA_MEM_SRC_PITCH			0x002c
 #define DISP_RDMA_MEM_GMC_SETTING_0		0x0030
+#define DISP_REG_RDMA_MEM_GMC_SETTING_1		0x0038
 #define DISP_REG_RDMA_FIFO_CON			0x0040
 #define RDMA_FIFO_UNDERFLOW_EN				BIT(31)
 #define RDMA_FIFO_PSEUDO_SIZE(bytes)			(((bytes) / 16) << 16)
@@ -52,7 +58,32 @@
 #define RDMA_FIFO_SIZE(rdma)			((rdma)->data->fifo_size)
 #define DISP_RDMA_MEM_START_ADDR		0x0f00
 
+/*
+ * Every status bit this block can raise, and therefore the whole of what
+ * RDMAStart() enables.  Only meaningful where data->int_enable_mask says so
+ * - see mtk_rdma_start().
+ */
+#define RDMA_INT_ALL \
+(RDMA_REG_UPDATE_INT | RDMA_FRAME_START_INT | RDMA_FRAME_END_INT | \
+ RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT | RDMA_TARGET_LINE_INT)
+
 #define RDMA_MEM_GMC				0x40402020
+
+/*
+ * ARGB8888 but not XRGB8888: the RDMA block's input-format field has only
+ * VYUY, RGB565, RGB888 and ARGB8888 encodings (data sheet, RDMA SIZE_CON_0
+ * OUTPUT_FORMAT), so there is nothing to map XRGB8888 to.  Advertising it
+ * here made DRM pick it for the usual XRGB8888 framebuffer and then hand
+ * 4-byte pixels to the block as if they were ARGB.  The OVL side, which
+ * does have an xARGB8888 encoding, is where XRGB content is handled.
+ */
+static const u32 mt6589_formats[] = {
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_RGB888,
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_UYVY,
+	DRM_FORMAT_YUYV,
+};
 
 static const u32 mt8173_formats[] = {
 	DRM_FORMAT_XRGB8888,
@@ -68,10 +99,46 @@ static const u32 mt8173_formats[] = {
 	DRM_FORMAT_YUYV,
 };
 
+struct mtk_disp_rdma;
+
 struct mtk_disp_rdma_data {
 	unsigned int fifo_size;
 	const u32 *formats;
 	size_t num_formats;
+	u32 size_con0;
+	u32 size_con1;
+	unsigned int (*fmt_convert)(unsigned int fmt);
+	u32 mem_start_addr_reg;
+	u32 mem_gmc_val;
+	void (*reset)(struct mtk_disp_rdma *rdma);
+	/*
+	 * int_enable_mask is what mtk_rdma_start() writes to INT_ENABLE
+	 * before enabling the engine.  Zero - the value on every SoC whose
+	 * INT_STATUS bit map this driver has not checked - leaves the
+	 * register alone, exactly as this driver did before the MT6589 work,
+	 * and lets mtk_rdma_enable_vblank() be the only thing that enables
+	 * an interrupt.  A non-zero mask is only set where the reset value
+	 * of the block is known and that mask is the complete set of status
+	 * bits, so the write cannot enable a bit this driver cannot name.
+	 */
+	unsigned int int_enable_mask;
+	/*
+	 * direct_link_no_plane says this RDMA is chained behind a layer
+	 * block that feeds it, and no plane is ever attached to it, so
+	 * mtk_rdma_layer_config() never runs for it.  mtk_rdma_config() then
+	 * has to program what the layer hook would otherwise have written:
+	 * MODE_SEL is left clear so the block passes its input straight
+	 * through instead of fetching from a memory ring, and the input
+	 * format, source pitch and ring start address are programmed here.
+	 *
+	 * The block needs no plane in that arrangement: the stock driver
+	 * selects RDMA_MODE_DIRECT_LINK with address 0 (ddp_path.c), and
+	 * the layer block in front is what has the plane.  On the other
+	 * SoCs the plane *is* attached to the RDMA, so layer_config does
+	 * run and doing any of this again from the config hook would be
+	 * both redundant and, for the mode bit, wrong.
+	 */
+	bool direct_link_no_plane;
 };
 
 /*
@@ -79,21 +146,70 @@ struct mtk_disp_rdma_data {
  * @data: local driver data
  */
 struct mtk_disp_rdma {
-	struct clk			*clk;
+	struct clk_bulk_data		*clks;
+	struct reset_control		*rstc;
+	int				num_clks;
 	void __iomem			*regs;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_rdma_data	*data;
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
 	u32				fifo_size;
+	bool				dbg_done;
 };
 
 static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_disp_rdma *priv = dev_id;
+	u32 status;
 
-	/* Clear frame completion interrupt */
-	writel(0x0, priv->regs + DISP_REG_RDMA_INT_STATUS);
+	/*
+	 * Acknowledge whatever latched, and nothing else.
+	 *
+	 * DISP_RDMA_INT_STATUS (0x14006004) is write-1-to-clear.  The data
+	 * sheet gives every one of its six bits the type "A1", the same
+	 * type the WDMA, GAMMA, BLS, COLOR and DBI status registers use,
+	 * and it spells out the mechanism in prose on at least one of them
+	 * ("SW writes this bit to clear IRQ", ovl.txt:221469 for BLS).  The
+	 * stock driver agrees: ddp_drv.c:662 acknowledges a captured
+	 * status with DISP_REG_SET(..., ~reg_val), i.e. writing a 1 to each
+	 * bit that is set - the same thing mtk_disp_ovl_irq_handler() does
+	 * for OVL_INTSTA.
+	 *
+	 * Writing 0x0, as this handler used to, therefore acknowledged
+	 * nothing at all: on a write-1-to-clear register a zero bit has no
+	 * effect.  Because RDMA's line is level triggered and INT_ENABLE
+	 * has six bits unmasked (mtk_rdma_start() writes RDMA_INT_ALL), the
+	 * condition stayed asserted after every entry and the handler
+	 * re-entered immediately, forever - the 33575 RDMA interrupts in
+	 * /proc/interrupts, roughly one per millisecond, which also starved
+	 * everything else of CPU time.
+	 *
+	 * The write is inverted on purpose: a condition that arrives after
+	 * the readl above goes out as a 0 and is left alone rather than
+	 * being wiped before it can be reported.
+	 *
+	 * This is not a read-then-write-0 ("clear everything") either.
+	 * Read 0x0, write 0x0 clears nothing; read 0x0, write 0xffffffff
+	 * would clear every bit including ones that arrived unobserved, and
+	 * would also poke bits 31..6, which the data sheet leaves unnamed
+	 * on this block.  Acknowledging exactly the bits that were read is
+	 * the only form that cannot lose an event or invent one.
+	 */
+	status = readl(priv->regs + DISP_REG_RDMA_INT_STATUS);
+	writel(status, priv->regs + DISP_REG_RDMA_INT_STATUS);
+
+	/*
+	 * Acknowledge only the bits this driver knows how to name.  The
+	 * write above already acknowledged everything that was latched, so
+	 * this test cannot lose an event; it only decides whether the line
+	 * really was ours, which is what IRQ_NONE has to mean.  RDMA_INT_ALL
+	 * is a compile-time constant, so it is never zero here - the test
+	 * is written to make that explicit rather than to guard a value
+	 * that could vary per SoC.
+	 */
+	if (!RDMA_INT_ALL || !(status & RDMA_INT_ALL))
+		return IRQ_NONE;
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
@@ -160,18 +276,45 @@ int mtk_rdma_clk_enable(struct device *dev)
 {
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 
-	return clk_prepare_enable(rdma->clk);
+	return clk_bulk_prepare_enable(rdma->num_clks, rdma->clks);
 }
 
 void mtk_rdma_clk_disable(struct device *dev)
 {
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 
-	clk_disable_unprepare(rdma->clk);
+	clk_bulk_disable_unprepare(rdma->num_clks, rdma->clks);
 }
+
+static void mtk_rdma_reset_mt6589(struct mtk_disp_rdma *rdma);
 
 void mtk_rdma_start(struct device *dev)
 {
+	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
+
+	/*
+	 * Enable the engine's interrupts before the engine itself, as the
+	 * stock driver does (RDMAStart() writes INT_ENABLE = 0x3F, then
+	 * ENGINE_EN; RDMAConfig() writes 0x1F).  Starting the engine first
+	 * leaves any status latched from before running - the reset path
+	 * zeroes INT_STATUS, but nothing clears EOF_ABNORMAL raised while
+	 * the engine was idle - and a latched status keeps the OVL reporting
+	 * "RDMA0 didn't complete frame" on every frame.
+	 *
+	 * That reasoning is MT6589's: 0x3F is only correct if all six
+	 * interrupt bits are the ones named above, which is a fact about
+	 * this block's INT_STATUS layout and not something the stock
+	 * driver's constant can be assumed to mean on a different SoC.  So
+	 * the write is per-SoC data, and a SoC that has not stated a mask
+	 * gets no write here at all - which is what this function did for
+	 * every SoC before the MT6589 work.  Those blocks are left with the
+	 * interrupts probe() cleared, and mtk_rdma_enable_vblank() still
+	 * turns on frame-end for them.
+	 */
+	if (rdma->data->int_enable_mask)
+		writel(rdma->data->int_enable_mask,
+		       rdma->regs + DISP_REG_RDMA_INT_ENABLE);
+
 	rdma_update_bits(dev, DISP_REG_RDMA_GLOBAL_CON, RDMA_ENGINE_EN,
 			 RDMA_ENGINE_EN);
 }
@@ -185,15 +328,97 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 		     unsigned int height, unsigned int vrefresh,
 		     unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
+	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	unsigned int threshold;
 	unsigned int reg;
-	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	u32 rdma_fifo_size;
 
+	/*
+	 * Clear the engine before programming it, as the stock path does:
+	 * ddp_path.c calls RDMAStop(0) and RDMAReset(0) immediately before
+	 * RDMAConfig().  mtk_rdma_reset_mt6589() matches that RDMAReset()
+	 * but was never called from anywhere, so the block kept whatever the
+	 * bootloader and the previous mode left in its registers.  OVL
+	 * resets itself from its own config hook; RDMA0 had no such step.
+	 *
+	 * This has to run here rather than from mtk_rdma_start(), because the
+	 * CRTC configures each component before starting it - a reset in
+	 * start() would clear the values written a moment earlier.
+	 *
+	 * It is also the only SoC-specific step here, and it is reached only
+	 * through data->reset, which only the MT6589 data sets.  The other
+	 * SoCs never had a reset in this hook and must not grow one: the
+	 * register values above are this block's, and the reset sequence
+	 * they came from is written against the MT6589 reset state.
+	 */
+	if (rdma->data->reset)
+		rdma->data->reset(rdma);
+
+	/*
+	 * direct_link_no_plane says no plane is ever attached to this RDMA,
+	 * so mtk_rdma_layer_config() - which programs the mode, the input
+	 * format, the pitch and the ring address - never runs for it, and
+	 * everything below has to be programmed here instead.
+	 */
+	if (rdma->data->direct_link_no_plane) {
+		/*
+		 * Leave MODE_SEL clear so RDMA0 passes the OVL's output
+		 * straight through instead of fetching from a memory ring.
+		 *
+		 * This has to be set here rather than in layer_config: no
+		 * plane is ever attached to RDMA0 on this path, so
+		 * layer_config never runs.  It was the only place MODE_SEL
+		 * was cleared, which meant the reset above left RDMA0 in
+		 * memory mode and it then waited forever on a ring start
+		 * address of zero.
+		 */
+		mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
+				   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_SEL);
+
+		/*
+		 * The main path is RGB888 (the panel's format), and the stock
+		 * driver sets RDMA_INPUT_FORMAT_RGB888 even when it selects
+		 * direct-link mode, so the input format is not a
+		 * memory-mode-only field.  Set it here: the .config hook is
+		 * the only place it can be written, since no plane is ever
+		 * attached to RDMA0 on this path and so layer_config never
+		 * runs.
+		 */
+		mtk_ddp_write_relaxed(cmdq_pkt,
+				      rdma->data->fmt_convert(DRM_FORMAT_RGB888),
+				      &rdma->cmdq_reg, rdma->regs,
+				      DISP_RDMA_MEM_CON);
+
+		/*
+		 * Source pitch, in bytes per line.  RDMA_MAX_WIDTH is a pixel
+		 * count but this register holds bytes, and the stock driver
+		 * programs the pitch from RDMAConfig() in direct-link mode
+		 * too - ddp_path.c passes the real pitch with address 0 when
+		 * it selects RDMA_MODE_DIRECT_LINK.  The main path is RGB888,
+		 * which is three bytes per pixel.
+		 *
+		 * This has to be written here and not in layer_config: the
+		 * layer hook never runs on this path, since no plane is ever
+		 * attached to RDMA0.  Leaving the pitch at reset is what left
+		 * RDMA0 raising EOF_ABNORMAL while the overlay completed
+		 * frames around it.
+		 *
+		 * The start address is zero in direct-link mode for the same
+		 * reason the stock driver passes 0: there is no memory ring
+		 * to read from.
+		 */
+		mtk_ddp_write_relaxed(cmdq_pkt, (width * 3) & GENMASK(15, 0),
+				      &rdma->cmdq_reg, rdma->regs,
+				      DISP_REG_RDMA_MEM_SRC_PITCH);
+		mtk_ddp_write_relaxed(cmdq_pkt, 0, &rdma->cmdq_reg,
+				      rdma->regs,
+				      rdma->data->mem_start_addr_reg);
+	}
+
 	mtk_ddp_write_mask(cmdq_pkt, width, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_0, 0xfff);
+			   DISP_REG_RDMA_SIZE_CON_0, rdma->data->size_con0);
 	mtk_ddp_write_mask(cmdq_pkt, height, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_SIZE_CON_1, 0xfffff);
+			   DISP_REG_RDMA_SIZE_CON_1, rdma->data->size_con1);
 
 	if (rdma->fifo_size)
 		rdma_fifo_size = rdma->fifo_size;
@@ -211,10 +436,61 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	      RDMA_FIFO_PSEUDO_SIZE(rdma_fifo_size) |
 	      RDMA_OUTPUT_VALID_FIFO_THRESHOLD(threshold);
 	mtk_ddp_write(cmdq_pkt, reg, &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_FIFO_CON);
+
+	/*
+	 * One-shot readback after programming, because RDMA0 raising no
+	 * interrupt is indistinguishable from it being wedged: the OVL's
+	 * OVL_STA only reports RDMA0_IDLE, not why.  Log what the engine
+	 * actually latched so a stuck RDMA0 can be placed rather than
+	 * guessed at.  Guarded by a flag so a per-frame failure cannot flood.
+	 */
+	/*
+	 * Only when the writes above went straight to the hardware.
+	 * With a command packet they are still queued in the GCE
+	 * buffer and have not been executed, so the shadow registers
+	 * read back here are the previous mode's values - exactly the
+	 * misleading output this dump is meant to rule out.  MT6589
+	 * sets shadow_register and uses CMDQ, so the interesting case
+	 * is the one where this would be wrong; the first config runs
+	 * with cmdq_pkt == NULL from mtk_crtc_ddp_hw_init(), which is
+	 * where a real dump is wanted anyway.
+	 */
+	if (!cmdq_pkt && !rdma->dbg_done) {
+		rdma->dbg_done = true;
+		dev_info(dev,
+			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n"
+			 "rdma0: mem_con=%#x src_pitch=%#x start_addr=%#x gmc1=%#x fifo_con=%#x\n",
+			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1),
+			 readl(rdma->regs + DISP_RDMA_MEM_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
+			 readl(rdma->regs + rdma->data->mem_start_addr_reg),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_GMC_SETTING_1),
+			 readl(rdma->regs + DISP_REG_RDMA_FIFO_CON));
+	}
 }
 
-static unsigned int rdma_fmt_convert(struct mtk_disp_rdma *rdma,
-				     unsigned int fmt)
+static unsigned int rdma_fmt_convert_mt6589(unsigned int fmt)
+{
+	switch (fmt) {
+	case DRM_FORMAT_YUYV:
+		return (0 << 4);
+	case DRM_FORMAT_UYVY:
+		return (1 << 4);
+	case DRM_FORMAT_RGB565:
+		return (4 << 4);
+	case DRM_FORMAT_RGB888:
+		return (8 << 4);
+	case DRM_FORMAT_ARGB8888:
+		return (16 << 4);
+	default:
+		return (16 << 4);
+	}
+}
+
+static unsigned int rdma_fmt_convert(unsigned int fmt)
 {
 	/* The return value in switch "MEM_MODE_INPUT_FORMAT_XXX"
 	 * is defined in mediatek HW data sheet.
@@ -250,6 +526,37 @@ static unsigned int rdma_fmt_convert(struct mtk_disp_rdma *rdma,
 	}
 }
 
+static void mtk_rdma_reset_mt6589(struct mtk_disp_rdma *rdma)
+{
+	void __iomem *regs = rdma->regs;
+	unsigned int delay_cnt = 0;
+
+	writel(0x10, regs + DISP_REG_RDMA_GLOBAL_CON);
+	while ((readl(regs + DISP_REG_RDMA_GLOBAL_CON) & 0x700) == 0x100) {
+		if (++delay_cnt > 10000) {
+			pr_warn("RDMA reset stage 1 timeout\n");
+			break;
+		}
+	}
+
+	writel(0x00, regs + DISP_REG_RDMA_GLOBAL_CON);
+	delay_cnt = 0;
+	while ((readl(regs + DISP_REG_RDMA_GLOBAL_CON) & 0x700) != 0x100) {
+		if (++delay_cnt > 10000) {
+			pr_warn("RDMA reset stage 2 timeout\n");
+			break;
+		}
+	}
+
+	writel(0x00, regs + DISP_REG_RDMA_SIZE_CON_0);
+	writel(0x00, regs + DISP_REG_RDMA_SIZE_CON_1);
+	writel(0x00, regs + DISP_RDMA_MEM_CON);
+	writel(0x00, regs + rdma->data->mem_start_addr_reg);
+	writel(0x00, regs + DISP_RDMA_MEM_SRC_PITCH);
+	writel(0x20, regs + DISP_REG_RDMA_MEM_GMC_SETTING_1);
+	writel(0x80f00008, regs + DISP_REG_RDMA_FIFO_CON);
+}
+
 unsigned int mtk_rdma_layer_nr(struct device *dev)
 {
 	return 1;
@@ -262,33 +569,70 @@ void mtk_rdma_layer_config(struct device *dev, unsigned int idx,
 	struct mtk_disp_rdma *rdma = dev_get_drvdata(dev);
 	struct mtk_plane_pending_state *pending = &state->pending;
 	unsigned int addr = pending->addr;
+	/*
+	 * MEM_MODE_SRC_PITCH counts *bytes* per line, not pixels.  The field
+	 * is 16 bits wide, so an aligned 1080p frame at four bytes per pixel
+	 * fits (8640), but a wider one would not - which is why this stays
+	 * the byte pitch that mainline hands us.  pending->pitch is already
+	 * drm's fb->pitches[0] in bytes; do not divide it by cpp here.
+	 *
+	 * Evidence that the register takes bytes, despite ddp_path.c's
+	 * "pitch, pixel number" comment being used for the *OVL* config
+	 * struct: every stock call site that feeds RDMAConfig() scales by
+	 * the pixel size, while every site that feeds the OVL layer config
+	 * does not.  hdmitx.c:539 passes src_pitch * 4 for ARGB and
+	 * disp_drv_dsi.c:404 passes width * 2 for RGB565; disp_drv.c:1807
+	 * passes width * 3 for the RGB888 OVL dump, where the OVL path takes
+	 * the value unscaled.  RDMAConfig() itself prints width*bpp in the
+	 * same argument list it is handed the unscaled "pitch" in.
+	 *
+	 * Dividing by cpp here (as this driver briefly did) made RDMA fetch
+	 * every line a third to a quarter of the way too early and sheared
+	 * the frame diagonally.
+	 */
 	unsigned int pitch = pending->pitch & 0xffff;
 	unsigned int fmt = pending->format;
 	unsigned int con;
 
-	con = rdma_fmt_convert(rdma, fmt);
+	con = rdma->data->fmt_convert(fmt);
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &rdma->cmdq_reg, rdma->regs, DISP_RDMA_MEM_CON);
 
-	if (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV) {
-		mtk_ddp_write_mask(cmdq_pkt, RDMA_MATRIX_ENABLE, &rdma->cmdq_reg, rdma->regs,
-				   DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_ENABLE);
-		mtk_ddp_write_mask(cmdq_pkt, RDMA_MATRIX_INT_MTX_BT601_to_RGB,
-				   &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_INT_MTX_SEL);
-	} else {
-		mtk_ddp_write_mask(cmdq_pkt, 0, &rdma->cmdq_reg, rdma->regs,
-				   DISP_REG_RDMA_SIZE_CON_0,
-				   RDMA_MATRIX_ENABLE);
-	}
+	/*
+	 * No YUV matrix is programmed here.  MT6589's DISP_RDMA_SIZE_CON_0 has
+	 * only OUTPUT_FORMAT in bit 29 and OUTPUT_FRAME_WIDTH in bits [11:0]
+	 * - there is no matrix enable or matrix select field, so those bits
+	 * are not where they are on MT8192.  Writing them set bit 17 of the
+	 * frame width and smeared BT601 coefficients across bits [23:20],
+	 * corrupting the width for every UYVY or YUYV frame.  The stock
+	 * driver converts YUV in the OVL instead.
+	 */
 	mtk_ddp_write_relaxed(cmdq_pkt, addr, &rdma->cmdq_reg, rdma->regs,
-			      DISP_RDMA_MEM_START_ADDR);
+			      rdma->data->mem_start_addr_reg);
 	mtk_ddp_write_relaxed(cmdq_pkt, pitch, &rdma->cmdq_reg, rdma->regs,
 			      DISP_RDMA_MEM_SRC_PITCH);
-	mtk_ddp_write(cmdq_pkt, RDMA_MEM_GMC, &rdma->cmdq_reg, rdma->regs,
+	mtk_ddp_write(cmdq_pkt, rdma->data->mem_gmc_val, &rdma->cmdq_reg, rdma->regs,
 		      DISP_RDMA_MEM_GMC_SETTING_0);
-	mtk_ddp_write_mask(cmdq_pkt, RDMA_MODE_MEMORY, &rdma->cmdq_reg, rdma->regs,
-			   DISP_REG_RDMA_GLOBAL_CON, RDMA_MODE_MEMORY);
+	/*
+	 * MODE_SEL in GLOBAL_CON selects how RDMA0 gets its pixels:
+	 *
+	 *	0: Direct link mode
+	 *	1: Memory mode
+	 *
+	 * This path is OVL -> RDMA0 -> DSI, and the stock driver programs
+	 * RDMA_MODE_DIRECT_LINK (ddp_path.c: RDMAConfig(0,
+	 * RDMA_MODE_DIRECT_LINK, ...)).  Memory mode instead points RDMA0 at
+	 * its own MEM_MODE ring, and on this configuration no plane is ever
+	 * attached to RDMA0 - mtk_crtc_num_comp_planes() only creates planes
+	 * for components 0 and 1, and MT6589's COLOR claims none, so every
+	 * plane lands on OVL.  RDMA0 would then be enabled with an
+	 * address nobody programmed and fetch from garbage:
+	 *
+	 *	OVL: underflow intsta=0x35 sta=0x1d (run=1 rdma0_idle=0)
+	 *
+	 * The ring registers above stay programmed: RDMAConfig() writes
+	 * START_ADDR, SRC_PITCH and the GMC settings either way.  MODE_SEL is
+	 * handled in mtk_rdma_config(), which is the hook that actually runs.
+	 */
 
 }
 
@@ -324,10 +668,20 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	priv->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(priv->clk))
-		return dev_err_probe(dev, PTR_ERR(priv->clk),
-				     "failed to get rdma clk\n");
+	/*
+	 * The node declares engine, SMI and output clocks.  Taking only index
+	 * 0 left the other two gated, so the register writes issued through
+	 * the shadow registers may not have reached the hardware.
+	 */
+	/*
+	 * Take every clock the node declares: engine, SMI and output.
+	 * devm_clk_get() can only return one of them, so with no clock-names
+	 * property the other two stayed gated.
+	 */
+	ret = devm_clk_bulk_get_all(dev, &priv->clks);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to get rdma clks\n");
+	priv->num_clks = ret;
 
 	priv->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->regs))
@@ -345,9 +699,24 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	if (ret && (ret != -EINVAL))
 		return dev_err_probe(dev, ret, "Failed to get rdma fifo size\n");
 
-	/* Disable and clear pending interrupts */
+	/*
+	 * Disable and clear pending interrupts.
+	 *
+	 * INT_ENABLE is a plain RW register of interrupt-enable bits, so 0
+	 * masks everything.  INT_STATUS is write-1-to-clear (see
+	 * mtk_disp_rdma_irq_handler()), so 0 does *not* clear it: writing 0
+	 * leaves every latched status bit standing.  Since the enable is
+	 * masked here the status cannot raise the line, but it survives
+	 * into mtk_rdma_start(), which unmasks all six bits - and the first
+	 * status bit the block finds already set is delivered as a
+	 * "fresh" interrupt the moment the engine is enabled.  Acknowledge
+	 * by writing all ones, which is what the stock RDMAStop() relies on
+	 * being harmless (ddp_rdma.c:54 writes 0 and does not clear either,
+	 * which is why the stock driver only ever gets away with it because
+	 * RDMAReset() follows immediately).
+	 */
 	writel(0x0, priv->regs + DISP_REG_RDMA_INT_ENABLE);
-	writel(0x0, priv->regs + DISP_REG_RDMA_INT_STATUS);
+	writel(~0u, priv->regs + DISP_REG_RDMA_INT_STATUS);
 
 	ret = devm_request_irq(dev, irq, mtk_disp_rdma_irq_handler,
 			       IRQF_TRIGGER_NONE, dev_name(dev), priv);
@@ -359,6 +728,66 @@ static int mtk_disp_rdma_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, priv);
 
 	pm_runtime_enable(dev);
+
+	/*
+	 * resume_and_get(), not get_sync(): get_sync() leaves the usage
+	 * counter incremented when the resume fails, and the pm_runtime_disable()
+	 * below does not undo that reference, so returning an error would
+	 * hand the device back with a reference nobody will ever drop.
+	 * The reference taken here is kept for the lifetime of the bound
+	 * device - pm_runtime_put_sync() below is balanced against the reset
+	 * setup below it, not against this one.
+	 */
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0) {
+		pm_runtime_disable(dev);
+		return dev_err_probe(dev, ret, "Failed to enable power\n");
+	}
+
+	if (priv->data->reset) {
+		/* Look the reset up by index; see the note in mtk_disp_ovl.c
+		 * about the missing "reset-names" on the display nodes.
+		 */
+		priv->rstc = devm_reset_control_get(dev, NULL);
+		if (IS_ERR(priv->rstc)) {
+			ret = PTR_ERR(priv->rstc);
+			pm_runtime_put_sync(dev);
+			pm_runtime_disable(dev);
+			return dev_err_probe(dev, ret,
+					     "Failed to get reset control\n");
+		}
+
+		ret = clk_bulk_prepare_enable(priv->num_clks, priv->clks);
+		if (ret) {
+			pm_runtime_put_sync(dev);
+			pm_runtime_disable(dev);
+			return dev_err_probe(dev, ret,
+					     "Failed to enable RDMA clocks\n");
+		}
+
+		/*
+		 * Reset the engine before programming it.  The bootloader
+		 * can leave the RDMA running with stale state, which shows up
+		 * as frames that never complete and OVL underflow.
+		 */
+		ret = reset_control_reset(priv->rstc);
+		if (ret) {
+			clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+			pm_runtime_put_sync(dev);
+			pm_runtime_disable(dev);
+			return dev_err_probe(dev, ret,
+					     "Failed to reset RDMA\n");
+		}
+
+		/* Clear anything the reset left latched. */
+		writel(0x0, priv->regs + DISP_REG_RDMA_INT_ENABLE);
+		writel(~0u, priv->regs + DISP_REG_RDMA_INT_STATUS);
+
+		priv->data->reset(priv);
+		clk_bulk_disable_unprepare(priv->num_clks, priv->clks);
+	}
+
+	pm_runtime_put_sync(dev);
 
 	ret = component_add(dev, &mtk_disp_rdma_component_ops);
 	if (ret) {
@@ -380,29 +809,91 @@ static const struct mtk_disp_rdma_data mt2701_rdma_driver_data = {
 	.fifo_size = SZ_4K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
+};
+
+static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
+	.fifo_size = 3840,
+	.formats = mt6589_formats,
+	.num_formats = ARRAY_SIZE(mt6589_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert_mt6589,
+	.mem_start_addr_reg = 0x0028,
+	/*
+	 * Unsourced: the data sheet gives MEM_GMC_SETTING_0 a reset value of
+	 * 0x0a0a0a0a, the shared upstream default RDMA_MEM_GMC is 0x40402020,
+	 * and the stock driver never writes this register at all - it relies
+	 * on the reset value.  This 0x20402040 came with the port and matches
+	 * neither.  Left as it is rather than changed to a value with no
+	 * better evidence; flagging it so it is a known-unknown rather than
+	 * an oversight.
+	 */
+	.mem_gmc_val = 0x20402040,
+	.reset = mtk_rdma_reset_mt6589,
+	/*
+	 * This block's INT_STATUS has exactly the six bits named above, and
+	 * the stock RDMAStart() enables all six, so the whole set is safe to
+	 * write here.  Stated per SoC rather than assumed, because on the
+	 * other SoCs 0x3F would be an unverified guess at their bit maps.
+	 */
+	.int_enable_mask = RDMA_INT_ALL,
+	/*
+	 * MT6589: mtk_crtc_hw_init() disables every plane and routes them
+	 * all to OVL - MT6589's COLOR claims no layers and OVL claims all
+	 * four - so mtk_ddp_comp_for_plane() never returns this RDMA and
+	 * mtk_rdma_layer_config() never runs for it.  The mode, format and
+	 * ring registers therefore have to be written from the config hook.
+	 */
+	.direct_link_no_plane = true,
 };
 
 static const struct mtk_disp_rdma_data mt8173_rdma_driver_data = {
 	.fifo_size = SZ_8K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct mtk_disp_rdma_data mt8183_rdma_driver_data = {
 	.fifo_size = 5 * SZ_1K,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 	.fifo_size = 1920,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.size_con0 = 0xfff,
+	.size_con1 = 0xfffff,
+	.fmt_convert = rdma_fmt_convert,
+	.mem_start_addr_reg = DISP_RDMA_MEM_START_ADDR,
+	.mem_gmc_val = RDMA_MEM_GMC,
+	.reset = NULL,
 };
 
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-rdma",
 	  .data = &mt2701_rdma_driver_data},
+	{ .compatible = "mediatek,mt6589-disp-rdma",
+	  .data = &mt6589_rdma_driver_data },
 	{ .compatible = "mediatek,mt8173-disp-rdma",
 	  .data = &mt8173_rdma_driver_data},
 	{ .compatible = "mediatek,mt8183-disp-rdma",

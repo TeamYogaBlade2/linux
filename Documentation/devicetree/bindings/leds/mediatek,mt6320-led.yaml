@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/mediatek,mt6320-led.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6320 PMIC LEDs
+
+maintainers:
+  - Lenovo Linux Team
+
+description: >
+  The MT6320 companion PMIC, used with MediaTek MT6589 SoCs, provides three
+  constant-current LED sinks (ISINK, called NLED in the vendor sources) plus
+  a fourth sink dedicated to the keypad backlight.  These LEDs are wired into
+  the PMIC rather than to SoC GPIOs, so each one needs its own current step,
+  dimming counter and enable bit programmed inside the PMIC.
+
+  Each LED is a child node of the PMIC node.  There are two distinct kinds
+  of child, and they are described separately below because their required
+  properties differ: an ISINK channel, identified by its "reg" index, and
+  the single keypad backlight sink, identified by "mediatek,is-kpled".
+
+properties:
+  compatible:
+    oneOf:
+      - const: mediatek,mt6320-led
+      - items:
+          - const: mediatek,mt6320
+          - const: mediatek,mt6320-led
+    description: >
+      Conformance to the PMIC type is optional for compatibility with
+      existing vendor bindings, which often only set the first string.
+
+# Child nodes carry no unit address, so they are matched by name: boards name
+# them freely ("keypad-backlight", "red", "isink-ch0", ...), so a catch-all
+# pattern is needed rather than the "led@[0-9a-f]" form used by I2C LED
+# controllers.
+patternProperties:
+  "^[a-zA-Z0-9][a-zA-Z0-9,_-]*$":
+    type: object
+    $ref: common.yaml#
+    unevaluatedProperties: false
+
+    properties:
+      reg:
+        description: >
+          Index of the LED current sink within the PMIC.  This is a channel
+          number, not an MMIO address: the sinks live in the ISINKS_CONx
+          registers and are addressed by an index 0, 1 or 2.
+        enum: [0, 1, 2]
+
+      mediatek,is-kpled:
+        type: boolean
+        description: >
+          Marks this node as the dedicated keypad backlight sink on KPLED_CON0
+          rather than one of the three ISINK channels.  That sink has no
+          channel index and no current step, so a node carrying this property
+          must not have "reg" or "mediatek,num-steps".
+
+      mediatek,num-steps:
+        minimum: 1
+        maximum: 8
+        default: 4
+        description: >
+          Number of current step codes this sink exposes.  This is the sink's
+          max_brightness and it is the only control on the current level: a
+          brightness of N selects current step N-1, so with the default of 4 a
+          brightness of 4 lights the sink at the highest step code available.
+          A brightness of 0 switches the sink off.
+
+          The MT6320 step field is three bits wide, so 1..8 codes is
+          representable, but the vendor driver only uses codes 0..3.  A board
+          that wired its LED for a fixed current, as the vendor driver does,
+          can expose a single code with num-steps = 1 and then always run it
+          at brightness 1.
+
+      delay-on:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        description: >
+          Default blink on-time in milliseconds.  Must be set together with
+          delay-off, and both must be non-zero.  Optional; without it the LED
+          has no default timing, and a blink request that asks to keep the
+          current timing before the LED has ever been blinked is declined so
+          that the LED core picks the fallback instead.
+
+      delay-off:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        description: >
+          Default blink off-time in milliseconds.  Must be set together with
+          delay-on, and both must be non-zero.
+
+          These are the timings this LED is programmed with before it has been
+          blinked explicitly.  A blink request of zero for both, which the LED
+          core issues to mean "keep the current timing", re-applies these
+          rather than changing them.
+
+      led-names:
+        description: Deprecated, use label instead.
+
+    # The two child shapes.  Property definitions live above so that
+    # unevaluatedProperties can see them; these branches only state which of
+    # them a given node must and must not carry.
+    oneOf:
+      # The keypad sink: no channel index, on/off only.
+      - required:
+          - mediatek,is-kpled
+
+        not:
+          anyOf:
+            - required: ["reg"]
+            - required: ["mediatek,num-steps"]
+
+      # An ISINK channel: must name its channel index, and is not a keypad
+      # sink.
+      - required:
+          - reg
+
+        not:
+          required:
+            - mediatek,is-kpled
+
+required:
+  - compatible
+
+additionalProperties: false
+
+examples:
+  - |
+    leds {
+      compatible = "mediatek,mt6320-led";
+
+      red {
+        reg = <0>;
+        mediatek,num-steps = <4>;
+        label = "red";
+      };
+
+      green {
+        reg = <1>;
+        mediatek,num-steps = <4>;
+        label = "green";
+      };
+
+      blue {
+        reg = <2>;
+        mediatek,num-steps = <4>;
+        label = "blue";
+      };
+    };
+
+  - |
+    leds {
+      compatible = "mediatek,mt6320-led";
+
+      keypad-backlight {
+        label = "button-backlight";
+        mediatek,is-kpled;
+      };
+    };
+...

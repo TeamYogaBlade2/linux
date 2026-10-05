@@ -71,6 +71,21 @@
 		};
 
 		/*
+		 * Vibrator LDO. The MT6320 has no separate amplifier enable
+		 * pin; the LDO output voltage is the amplitude, and the rail
+		 * is gated by RG_VIBR_EN which the regulator driver owns.
+		 *
+		 * VOSEL table (dct_pmic_VIBR_sel, pmic_mt6320.c:2030):
+		 * 1200 1300 1500 1800 2500 2800 3000 3300 mV. 2800 mV is the
+		 * vendor default (VOL_DEFAULT -> VOSEL 5).
+		 */
+		vibrator {
+			compatible = "mediatek,mt6320-vibrator";
+			vibr-supply = <&mt6320_ldo_vibr>;
+			mediatek,vibr-amplitude-uv = <2800000>;
+		};
+
+		/*
 		 * Expose the PMIC's own junction temperature sensor (AUXADC
 		 * channel 4) as a hardware monitoring device so that the
 		 * thermal framework can pick it up.
@@ -323,6 +338,17 @@
 				regulator-enable-ramp-delay = <216>;
 			};
 		};
+	};
+};
+
+/ {
+	/*
+	 * Expose the PMIC's junction temperature AUXADC channel
+	 * through the generic IIO hwmon bridge.
+	 */
+	pmic-temp {
+		compatible = "iio-hwmon";
+		io-channels = <&mt6320_adc 4>;
 	};
 };
 

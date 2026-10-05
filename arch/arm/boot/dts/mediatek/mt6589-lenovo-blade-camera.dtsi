@@ -1,0 +1,454 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * MIPI CSI-2 receiver, SCAM adaptor and CAM/ISP nodes for the Lenovo YOGA
+ * Tablet 8/10 (MT6589).
+ *
+ * DRAFT: not merged, and the camera pipeline does not work end to end.  The
+ * summary is:
+ *
+ *   - The receiver and SCAM register maps are transcribed from the MT6589
+ *     data sheet (and cross-checked against the vendor tree).
+ *   - The two clock gates the receiver wants are drafted but their bit
+ *     positions are unverified, so the driver takes them as optional.
+ *   - The MIPI CSI-2 D-PHY is NOT modelled at all.  It previously had a
+ *     placeholder node claiming an address that three other nodes also
+ *     claimed; see the note on the receiver node below for the details.
+ *   - The CAM/ISP node registers as a subdev with a sink pad, so it is the
+ *     downstream endpoint of the graph, but there is no video node and no
+ *     DMA behind it: the link ends at a subdev that consumes nothing yet.
+	 *   - The sensor step is absent.  There is no D-PHY node and no sensor node,
+	 *     so the receiver's sink pad exists in the driver but has no peer in the
+	 *     graph.  The receiver -> SCAM -> CAM links do resolve, because the
+	 *     mtk-cam-graph node below owns the media_device, waits on one endpoint
+	 *     per block -- all three of them, CAM included -- and creates the links
+	 *     from the remote-endpoint properties in this file.
+ *
+ * Address map of the sensor front end, from the data sheet:
+ *
+ *   0x15008000  seninf_top       per-port parallel clock gates
+ *   0x15008010  seninf
+ *   0x15008100  csi2 receiver 0  (main camera)
+ *   0x15008180  csi2 receiver 1
+ *   0x15008200  SCAM adaptor 0   (0x44 bytes, own node)
+ *   0x15008280  SCAM adaptor 1   (0x44 bytes, own node)
+ *   0x15008380  seninf TG1/TG2
+ *   0x15008400  seninf_ccir656
+ *   0x15008500  N3D
+ *   0x15009000  jpgdec
+ *   0x1500A000  jpgenc
+ *   0x15004000  CAM / ISP
+ *
+ * Every device below claims a disjoint slice of that map.  The two that used
+ * to overlap -- the receiver and the SCAM adaptor, both claiming
+ * 0x15008000/0x900 -- no longer do; see the notes on the two nodes.
+ *
+ * Note this window is NOT inside the imgsys syscon node, which only covers
+ * 0x15000000/0x1000.  The sensor front end therefore needs its own node,
+ * and it takes a multi-range reg in the same style as smi_common in
+ * mt6589.dtsi rather than being nested under &imgsys.
+ *
+ * The wiring that does exist is therefore:
+ *
+ *   csi2-rx (seninf port 0) -> scam (port 0) -> cam
+ *
+ * with the D-PHY step deliberately absent between the sensor and the
+ * receiver.  The media_device, the async notifier and the media links that
+ * make that chain a graph are owned by the mtk-cam-graph node at the bottom
+ * of this file; the three hardware nodes below own no graph between them.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	/*
+	 * The whole sensor front end: the two CSI-2 receivers, the SCAM
+	 * adaptors that follow them, the CCIR-656 and N3D blocks, and the
+	 * CAM/ISP they feed.
+	 *
+	 * The ranges are listed as separate entries rather than one span so
+	 * that the documented holes are not claimed as registers.
+	 *
+	 * Note what this node does NOT claim.  The first range below is
+	 * 0x200 bytes, ending at 0x150081FF, which is deliberately *short* of
+	 * the 0x900 it used to claim:
+	 *
+	 *   - this driver programs SENINF_TOP_CTRL (0x15008000) and the csi2
+	 *     registers (port 0 at 0x15008100, port 1 at 0x15008180, each 0x80
+	 *     long and ending at +0x3c), so nothing past 0x150081BC is ever
+	 *     touched;
+	 *   - SCAM1 at 0x15008200 is the scam device's, and claiming it here
+	 *     as well would make two platform devices reserve one aperture.
+	 *
+	 * The rest of the 0x900 span (seninf_ccir656 at 0x15008400, N3D, the TG
+	 * blocks at 0x15008380) is left unclaimed rather than reserved for a
+	 * driver that does not exist yet.
+	 *
+	 * This node also used to carry two more ranges, <0x15009000 0x400> and
+	 * <0x1500a000 0x400>.  Those are NOT the receiver's: mtk-csi2-rx.c never
+	 * touches an offset above +0x200, and both ranges sit inside registers
+	 * that mt6589.dtsi already gives to other drivers (jpgdec at
+	 * 0x15009000/0x1000 and jpgenc at 0x1500a000/0x1000), so claiming even
+	 * half of each was a second overlapping reservation.
+	 *
+	 * The three reg properties below are two-cell <address size> tuples,
+	 * not four.  The parent soc node is #address-cells = <1>,
+	 * #size-cells = <1> (mt6589.dtsi), and so is every other imgsys child.
+	 * Written as four cells they are not rejected at build time - dtc does
+	 * not check reg against the parent - but the kernel reads cell 0 as the
+	 * address and cell 1 as the size, so "reg = <0x0 0x15008000 0x0 0x200>"
+	 * became a request for 0x00000000..0x15007fff and probe died with
+	 * -EBUSY on all three drivers.
+	 */
+	seninf: csi2-rx@15008000 {
+		compatible = "mediatek,mt6589-csi2-rx";
+		reg = <0x15008000 0x200>;
+
+		/*
+		 * No "clocks" here on purpose.  The receiver wants seninf, csi2
+		 * and tg_grp gates, but the MT6589 clock bindings stop at
+		 * CLK_IMAGE_FPC (11) and the data sheet does not describe the
+		 * CAM_TG_CG register those gate bits would live in, so their
+		 * positions cannot be derived.  The driver takes all three as
+		 * optional, so it probes and programs the ports without them;
+		 * add the property once the real bit positions are read from
+		 * hardware.  Inventing gate bits risks disabling a block some
+		 * other driver is using.
+		 */
+
+		/*
+		 * Port 0 is the seninf1/csi2 receiver pair at 0x15008100, which
+		 * carries the main (rear) camera.  A second receiver at
+		 * 0x15008180 would be port 1 for the front camera; it is not
+		 * drafted here.
+		 */
+		mediatek,seninf-port = <0>;
+
+		/*
+		 * img_rst in the data sheet resets "imgsys and its related
+		 * pad macro (cam, mipi_rx)", so the sensor front end shares
+		 * the imgsys top reset.
+		 *
+		 * It is left out here, deliberately, and NOT because the
+		 * property is wrong or because the driver insists on it.  The
+		 * driver takes the reset as optional (devm_reset_control_get_
+		 * optional), so it probes without this property; see the note
+		 * in mtk-csi2-rx.c for the full contract.
+		 *
+		 * The earlier comment here said the reset was "TOPRGU bit 5" and
+		 * pointed at topckgen.  The bit position is right but the node
+		 * is not: img_rst is bit 5 of WDT_SWSYSRST, and that register is
+		 * at 0x10000000 + 0x18 in the WDT block
+		 * (draft/ds/ovl.txt:55062 and 55144), not in topckgen.  The
+		 * vendor tree agrees on the bit:
+		 *
+		 *	mtk_wdt.h: #define MTK_WDT_SWSYS_RST_IMG_RST (0x0020)
+		 *
+		 * and the datasheet's own description of bit 5 is "writes 1 to
+		 * reset imgsys and its related pad macro (cam, mipi_rx)".
+		 *
+		 * topckgen in this tree is syscon@10000100, a different node,
+		 * and it declares only #clock-cells with no #reset-cells, so
+		 * "&topckgen ..." could not have resolved even with the right
+		 * index.  Restoring that line as written would not build.
+		 *
+		 * What is needed to bring the reset back is a provider node for
+		 * WDT_SWSYSRST with #reset-cells = <1>, and then:
+		 *
+		 *	resets = <&wdt MT6589_WDT_SWSYSRST_IMG_RST>;
+		 *
+		 * The driver needs no change to pick that up.
+		 */
+		// resets = <&wdt 5>;
+
+		/*
+		 * The D-PHY this receiver sits on top of.
+		 *
+		 * NOT MODELLED.  There was previously a "mediatek,mt6589-mipi-csi-dphy"
+		 * node here, claiming reg = <0x15008000 0x900> -- the same window
+		 * already claimed by this receiver (0x15008000/0x900) and, at the
+		 * time, by SCAM below as well -- with a comment admitting the
+		 * address was not known to be correct.  Three nodes claiming one
+		 * register window is not a graph, it is a guess that would make
+		 * the mtk-csi2-rx driver map the wrong registers and then DMA on
+		 * top of them.
+		 *
+		 * So the node is gone rather than left to masquerade as a working
+		 * driver.  Do NOT reintroduce it with an invented address: the
+		 * MT6589 data sheet does not contain the MIPI RX PHY register map
+		 * at all (the PHY appears only as the word "mipi_rx" in the img_rst
+		 * reset description), so there is currently nothing to derive the
+		 * reg from.  When a real PHY binding and driver exist, add the
+		 * node, restore "phys" / "phy-names" below, and point
+		 * seninf_in_ep back at the PHY's source endpoint.
+		 *
+		 * mtk-csi2-rx takes a missing "phys" as non-fatal: it still probes
+		 * and programs the receiver, and the lanes simply stay idle.
+		 */
+
+		ports {
+			/*
+			 * Source: the receiver feeds the SCAM adaptor.
+			 *
+			 * This port used to sit alongside a seninf_in sink port
+			 * that pointed at the A5142's source endpoint.  That
+			 * sensor is gone (the driver oopsed at probe and never
+			 * answered), and removing the whole ports node took the
+			 * receiver's own source endpoint with it.
+			 *
+			 * It was then relocated *inside* scam's scam_in port, as a
+			 * nested "ports { port@1 }".  That cannot work and has
+			 * been moved back here, where it belongs, because it
+			 * describes the receiver, not SCAM:
+			 *
+			 *   of_fwnode_graph_get_port_parent() (drivers/of/
+			 *   property.c) resolves a port's owner by walking
+			 *   port -> parent -> (if that parent is named "ports")
+			 *   its own parent.  With the nested layout the owner
+			 *   of port@1 resolved to scam_in, i.e. to a *port*
+			 *   node rather than to a device node, and
+			 *   v4l2_subdev_get_fwnode_pad_1_to_1() then failed its
+			 *   device_match_fwnode() check with -ENXIO.  The
+			 *   receiver -> SCAM link was silently never created,
+			 *   even with the pads present.
+			 *
+			 * A port node's parent must be the device node that owns
+			 * the pads, so this endpoint lives on the receiver.
+			 */
+			seninf_out: port@1 {
+				seninf_out_ep: endpoint {
+					remote-endpoint = <&scam_in_ep>;
+				};
+			};
+		};
+
+	};
+
+	/*
+	 * The MIPI CSI-2 D-PHY that belongs between the A5142 and the receiver
+	 * is intentionally absent.  See the long note on the receiver node
+	 * above for why, and for what has to be added before it can come back.
+	 */
+
+	/*
+	 * The SCAM adaptor for port 0, and the CAM/ISP it feeds.  Both are
+	 * described so that the media graph closes out end to end; see
+	 * README.md for how much of each is actually implemented.
+	 *
+	 * The reg is THIS PORT'S BLOCK ONLY: SCAM1_CFG at 0x15008200 through
+	 * SCAM1_STA at 0x15008240 plus its 32 bits, so 0x44 bytes.  It used to
+	 * be
+	 *
+	 *	reg = <0x0 0x15008000 0x0 0x900>;
+	 *
+	 * which is byte-for-byte the same window the seninf node above claims.
+	 * Two platform devices cannot share one aperture: the second
+	 * devm_platform_ioremap_resource() either fails probe outright or, on a
+	 * kernel that allows it, hands out a second mapping over registers
+	 * another driver is already driving.
+	 *
+	 * Worse, the driver computed its own offsets assuming the window started
+	 * at SCAM1_CFG (0x15008200) while the DT pointed it at 0x15008000, so
+	 * every SCAM1_CFG access landed on SENINF_TOP_CTRL and the whole driver
+	 * was reading and writing the receiver's registers.
+	 *
+	 * SCAM2 would be a second node at 0x15008280/0x44, the same layout 0x80
+	 * further up; it is not drafted here because only port 0 is wired.
+	 */
+	scam: scam@15008200 {
+		compatible = "mediatek,mt6589-scam";
+		reg = <0x15008200 0x44>;
+
+		mediatek,scam-port = <0>;
+
+		/*
+		 * No "resets" property, and none should be added here without a
+		 * driver change: mtk-scam.c requests no reset control at all.  It
+		 * brings the block up through SCAM_CON's own documented
+		 * enable/reset field instead.
+		 *
+		 * An earlier version of this file carried the same commented-out
+		 * topckgen reference as the receiver, which implied the SCAM
+		 * driver wanted a reset it never asked for.  It did not, and
+		 * adding the property would have no effect.  See the long note on
+		 * the receiver node for why the topckgen reference is wrong in
+		 * the first place.
+		 */
+
+		ports {
+			scam_in: port@0 {
+				scam_in_ep: endpoint {
+					remote-endpoint = <&seninf_out_ep>;
+				};
+			};
+
+			scam_out: port@1 {
+				scam_out_ep: endpoint {
+					remote-endpoint = <&cam_in_ep>;
+				};
+			};
+		};
+	};
+
+	cam: cam@15004000 {
+		compatible = "mediatek,mt6589-cam";
+		reg = <0x15004000 0x400>;
+
+		ports {
+			cam_in: port@0 {
+				cam_in_ep: endpoint {
+					remote-endpoint = <&scam_out_ep>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * The owner of the media graph the three nodes above form.
+	 *
+	 * This node owns no hardware: there is no "reg", it maps nothing, and
+	 * it programs no registers.  It exists because a media graph is a
+	 * runtime object that has to be built, and the device tree alone does
+	 * not build it.  Concretely, the driver bound here registers the
+	 * media_device (/dev/media0) and the v4l2_device, runs the
+	 * v4l2_async_notifier that pulls csi2-rx, scam and cam into that
+	 * v4l2_device -- which is what registers their entities into the
+	 * media_device -- and creates the media links between them.
+	 *
+	 * Without this node the three subdevs still register as async subdevs,
+	 * but nothing is waiting for them, so no entity joins a media_device
+	 * and no media_link is ever created.  Their pads would exist and this
+	 * file's remote-endpoint properties would point at each other, and the
+	 * graph would still be empty: a media_link is created by the driver, not
+	 * by the DT.
+	 *
+	 * The endpoints below are the driver's OWN endpoints, one per block it
+	 * should wait for.  Each names a remote that lives on the block in
+	 * question:
+	 *
+	 *   graph_to_rx   -> seninf_out_ep, i.e. the receiver's output
+	 *   graph_to_scam -> scam_out_ep,    i.e. SCAM's output
+	 *   graph_to_cam  -> cam_in_ep,      i.e. CAM's input
+	 *
+	 * There is ONE endpoint per block, and every block needs its own -- CAM
+	 * included.  An earlier version of this file had only the first two, on
+	 * the reasoning that CAM "is reached through scam_out_ep, whose remote is
+	 * cam_in_ep".  That reasoning is wrong about how the async core works,
+	 * and the graph it described did not exist:
+	 *
+	 *   - v4l2_async_nf_add_fwnode_remote() adds a connection whose match
+	 *     descriptor is the *remote* endpoint fwnode.  That is the only way a
+	 *     subdev is ever pulled into a v4l2_device: when a subdev registers,
+	 *     v4l2_async_find_match() walks the notifier's waiting_list and
+	 *     match_fwnode_one() compares that subdev's own fwnode against each
+	 *     descriptor (or against fwnode_graph_get_port_parent() of it).  A
+	 *     connection that does not exist cannot match, so the subdev never
+	 *     binds.
+	 *
+	 *   - cam_in_ep being *named* as the remote of scam_out_ep tells the
+	 *     notifier nothing.  Only the endpoints on THIS node are scanned by
+	 *     mtk_cam_graph_add_endpoints(), so with no endpoint here pointing at
+	 *     cam_in_ep there was no connection to match against and CAM never
+	 *     bound.
+	 *
+	 *   - A subdev that never matched is never passed to
+	 *     __v4l2_device_register_subdev(), so it never lands on
+	 *     v4l2_dev->subdevs.  mtk_cam_graph_create_links() walks exactly that
+	 *     list, so with CAM absent from it the SCAM -> CAM link was never
+	 *     created even though both pads and both remote-endpoint properties
+	 *     existed and pointed at each other.
+	 *
+	 * So graph_to_cam is load-bearing, not a second spelling of
+	 * graph_to_scam: the latter gets SCAM into the v4l2_device, the former
+	 * gets CAM in, and only then does the cross-product in create_links()
+	 * have a (SCAM source, CAM sink) pair to resolve.
+	 *
+	 * Matching is per *endpoint* rather than per block, and one subdev
+	 * matching more than one of these connections is harmless:
+	 * v4l2_async_match_notify() calls __v4l2_device_register_subdev() only
+	 * when sd->asc_list is empty, and v4l2_create_fwnode_links_to_pad()
+	 * skips a link that already exists.
+	 *
+	 * Note there is deliberately no endpoint for the receiver's SINK pad.
+	 * That pad has no peer: the sensor step and the MIPI CSI-2 D-PHY are
+	 * both absent from this tree (see the long note on the receiver node),
+	 * so there is no node for that endpoint to point at.  The driver treats
+	 * an unresolvable remote as "not present", not as an error, which is
+	 * what lets this node build and probe on a board with no sensor wired.
+	 *
+	 * What a sensor would ACTUALLY require, precisely, because "when a sensor
+	 * lands its source endpoint will resolve and the link will be created with
+	 * no change here" was a claim this code does not deliver.  There are two
+	 * separate obstacles, not one:
+	 *
+	 *   1. The receiver has no sink endpoint at all.  Its ports node above
+	 *      carries only seninf_out (port@1); the seninf_in sink port and its
+	 *      seninf_in_ep were removed together with the dead A5142 node.  A
+	 *      sensor has nothing to point its own remote-endpoint at, and the
+	 *      D-PHY that would sit between the two is not modelled either.
+	 *      Restoring
+	 *
+	 *	seninf_in: port@0 {
+	 *		seninf_in_ep: endpoint {
+	 *			remote-endpoint = <&dphy_out_ep>;
+	 *		};
+	 *	};
+	 *
+	 *      on the receiver, plus the PHY node's endpoint pointing back at the
+	 *      sensor, is the first half.
+	 *
+	 *   2. Nothing would wait for the sensor even then.  The notifier only
+	 *      ever binds subdevs named by an endpoint on THIS node, so a sensor
+	 *      that registered a subdev and a sensor_out_ep of its own would still
+	 *      be absent from v4l2_dev->subdevs, and
+	 *      mtk_cam_graph_create_links() -- which iterates that list and
+	 *      nothing else -- would never consider it as a link source.  A fourth
+	 *      endpoint here (graph_to_sensor -> sensor_out_ep) is what makes that
+	 *      work, and it is the second half.
+	 *
+	 * Until both exist, the receiver's sink pad stays unconnected and the
+	 * graph honestly begins at the receiver's source pad.
+	 *
+	 * dtc emits THREE "graph connection ... is not bidirectional" warnings
+	 * for the endpoints below -- one per endpoint.  They are expected and are
+	 * not suppressed.  The four endpoints the three hardware nodes declare
+	 * ARE mutually bidirectional (seninf_out_ep <-> scam_in_ep and
+	 * scam_out_ep <-> cam_in_ep), but these three belong to a node that is not
+	 * part of the image path: it owns a media_device and a notifier, not pads,
+	 * so there is no peer endpoint on it for these to pair with.  Adding
+	 * back-pointing endpoints to silence the warning was tried and makes
+	 * things worse -- it adds a further warning for the new edge and
+	 * describes a connection that does not exist.  A node with no pads is the
+	 * normal way a graph owner is expressed; see the amlogic c3 "adap" node for
+	 * the same shape done with pads.  Nothing in this tree suppresses this
+	 * warning by name, so neither does this file.
+	 */
+	mtk-cam-graph {
+		compatible = "mediatek,mt6589-cam-graph";
+
+		ports {
+			graph_to_rx: port@0 {
+				graph_to_rx_ep: endpoint {
+					remote-endpoint = <&seninf_out_ep>;
+				};
+			};
+
+			graph_to_scam: port@1 {
+				graph_to_scam_ep: endpoint {
+					remote-endpoint = <&scam_out_ep>;
+				};
+			};
+
+			/*
+			 * CAM has to be waited for like any other block.  See
+			 * the note above: without this endpoint CAM never
+			 * matched, never joined v4l2_dev->subdevs, and the
+			 * scam_out -> cam_in link was never created.
+			 */
+			graph_to_cam: port@2 {
+				graph_to_cam_ep: endpoint {
+					remote-endpoint = <&cam_in_ep>;
+				};
+			};
+		};
+	};
+};

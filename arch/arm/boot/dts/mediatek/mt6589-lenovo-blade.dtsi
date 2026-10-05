@@ -9,13 +9,15 @@
 
 #include "mt6589.dtsi"
 #include "mt6320.dtsi"
+#include "mt6589-vcodec.dtsi"
+#include "mt6589-lenovo-blade-camera.dtsi"
 
 #include <dt-bindings/pinctrl/mt6589-pinfunc.h>
 
 / {
 	chosen {
 		/* DEBUG: testing clock drivers */
-		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1";
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
 	};
 
 	memory {
@@ -35,9 +37,39 @@
 		};
 	};
 
-	sound {
+	sound: sound {
 		compatible = "mediatek,mt6589-mt6320-sound";
 		mediatek,platform = <&afe>;
+		aux-devs = <&mt6320_accdet>;
+	};
+
+	/*
+	 * Backlight.
+	 *
+	 * Declared here at root level rather than as a child of &bls: a child
+	 * node of a platform device needs a "reg" to be enumerated, and this
+	 * one has none.  Nested under the PWM node it was silently skipped,
+	 * so no backlight_device was ever created - see the reasoning on the
+	 * &bls override below.
+	 *
+	 * The BLS block is both the backlight PWM generator and a stage of the
+	 * display pipeline, and nothing consumed the PWM side of it: there was
+	 * no backlight device in this tree at all, so the panel would stay
+	 * dark even once the video pipeline worked.
+	 *
+	 * The cells are PWM index then period in ns, so <&bls 0 100000>
+	 * selects the chip's only PWM with a 100 us period, which is what the
+	 * upstream mt2701-evb node uses for this same block.
+	 */
+	backlight_lcd: backlight_lcd {
+		compatible = "pwm-backlight";
+		pwms = <&bls 0 100000>;
+		brightness-levels = <
+			  0  16  32  48  64  80  96 112
+			128 144 160 176 192 208 224 240
+			255
+		>;
+		default-brightness-level = <13>;
 	};
 };
 
@@ -113,6 +145,56 @@
 &pmic {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pmic_eint_pins>;
+
+	/*
+	 * MT6320 LED current sinks.
+	 *
+	 * Only the dedicated keypad/button backlight is declared, because
+	 * that is the only LED sink whose presence on this board is
+	 * actually established.  See below for what is NOT known.
+	 *
+	 * The panel's own backlight is the display BLS PWM, declared
+	 * separately as backlight_lcd above.
+	 *
+	 * The MT6320 has three further constant-current sinks, ISINK0..2,
+	 * and the driver supports all three (children distinguished by
+	 * "reg = <0..2>", plus per-channel "mediatek,num-steps").  They
+	 * are deliberately left undeclared here, because no source
+	 * available in this tree says which of them this board populates:
+	 *
+	 *   - There is no Lenovo/MediaTek BSP for this board here.  The
+	 *     only vendor MT6589 tree present is aquaris-5, which is the
+	 *     bq Aquaris 5 (projects "eastaeon89_wet_kk" and
+	 *     "eastaeon89_wet_td"), a different handset.  Its cust_leds.c
+	 *     tables say nothing about this device and must not be read as
+	 *     if they did.
+	 *   - No pinctrl group in this board chain reserves an LED pin, and
+	 *     there is no LED GPIO either; these are PMIC sinks, so unlike
+	 *     the GPIOs there is no pinmux to corroborate them.
+	 *   - The MT6589 SoC datasheet does not cover the MT6320 PMIC; it
+	 *     contains no ISINK or pinout information for it.  There is no
+	 *     MT6320 register manual or datasheet anywhere in this tree.
+	 *
+	 * So the reg -> colour mapping for ISINK0..2 is unverified.  A
+	 * wrong ISINK channel mapping does not merely add a dead sysfs
+	 * entry, it labels every colour of a working notification LED
+	 * wrongly, which is worse than leaving them absent.  Add the three
+	 * channels only once the board's own BSP or a hardware check
+	 * establishes the mapping.
+	 *
+	 * Note also that the channel order is not RGB-sequential: on the
+	 * Aquaris 5, whose cust_leds.c does populate two sinks, "red" is
+	 * ISINK1 and "green" is ISINK0.  So "reg = <0> is red" must not be
+	 * assumed on any board.
+	 */
+	leds {
+		compatible = "mediatek,mt6320-led";
+
+		keypad-backlight {
+			label = "button-backlight";
+			mediatek,is-kpled;
+		};
+	};
 };
 
 &mt6320_accdet {
@@ -460,12 +542,13 @@
 
 /* SDIO */
 &mmc3 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
 	/* FIXME: always 1.8V? */
-	vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	//vmmc-supply = <&mt6320_ldo_vemc_3v3>;
+	vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
 	bus-width = <4>;
@@ -474,11 +557,142 @@
 	no-mmc;
 	no-sd;
 
+	max-frequency = <50000000>;
+
+/*
 	max-frequency = <200000000>;
 	cap-sd-highspeed;
 	sd-uhs-sdr104;
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
+*/
+
+	/*
+	 * MT6628 combo chip power sequence.
+	 *
+	 * The chip is released out of reset the way the vendor DFT flow does
+	 * it: supply enable and reset lines are asserted low while the
+	 * boot-mode strap pins are moved to their strap pinmux, then reset is
+	 * released once the supply has settled.  See pwrseq_mt6628.c for the
+	 * sequence and where the delays come from.
+	 *
+	 * NOTE: this node is deliberately left status = "disabled", and
+	 * &mmc3 deliberately has no "mmc-pwrseq" property pointing at it,
+	 * until the pin assignment is filled in.  The pmu-gpios and
+	 * reset-gpios properties are intentionally ABSENT rather than filled
+	 * with a guess: no in-tree or downstream source documents which
+	 * MT6589 pins carry this board's MT6628 pmu and reset lines, and a
+	 * plausible-looking number here is indistinguishable from a confirmed
+	 * one to the next reader.  Turning the node on without them would
+	 * fail probe harmlessly; turning it on with invented numbers would
+	 * silently drive unrelated hardware (this board already uses GPIO57,
+	 * 115, 140 and 171 for other purposes).
+	 *
+	 * Leaving the node disabled is also the only safe option here: the mmc
+	 * core resolves "mmc-pwrseq" with of_parse_phandle(), which ignores
+	 * node status.  Pointing &mmc3 at this node while it is disabled
+	 * would make mmc_pwrseq_alloc() return -EPROBE_DEFER forever and
+	 * permanently break the whole SDIO bus.
+	 *
+	 * To enable: add pmu-gpios/reset-gpios confirmed against the Blade
+	 * schematics, set status = "okay", and add
+	 *	mmc-pwrseq = <&mt6628_pwrseq>;
+	 * to &mmc3.
+	 */
+	mt6628-pwrseq {
+		compatible = "mediatek,mt6628-pwrseq";
+		status = "disabled";
+
+		/* TODO: add pmu-gpios and reset-gpios once the Blade pin
+		 * assignment is confirmed. See the comment above.
+		 */
+	};
+
+	/*
+	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the
+	 * STP transport (Bluetooth/FM/GNSS) as function 2.  Both function
+	 * nodes have to exist for the hardware to be enumerated: without
+	 * this one the WLAN is never probed.
+	 */
+	mt6628-wlan@1 {
+		reg = <1>;
+	};
+
+	mt6628-stp@2 {
+		reg = <2>;
+
+		/*
+		 * WiFi/BT/FM antenna multiplexing mode and SDIO output drive
+		 * strength.  The value is MT6628 family-wide rather than
+		 * per-board: it is the single antenna configuration the
+		 * vendor ships for this combo chip,
+		 * CUSTOM_HAL_ANT=mt6628_ant_m1, whose file
+		 * custom/common/hal/ant/mt6628_ant_m1/mt6628_ant_m1.cfg
+		 * contains
+		 *
+		 *   coex_wmt_ant_mode=1
+		 *   sdio_driving_cfg=0x00077777
+		 *
+		 * and it is also the chip's own default antenna selection
+		 * (mt6628.defAnt=mt6628_ant_m1.cfg in
+		 * custom/common/hal/ant/WMT.cfg).  Every MT6628 project config
+		 * in the vendor tree selects m1; no other mode is used by any
+		 * of them.  The vendor driver passes both values straight
+		 * through - coex_wmt_ant_mode becomes byte 5 of the WMT coex
+		 * command (wmt_ic_6628.c:1323), and sdio_driving_cfg is split
+		 * into the DAT0/1, DAT2/3 and CMD drive nibbles
+		 * (wmt_ic_6628.c:1405-1411).  mtk-stp.c encodes both the same
+		 * way, in mt6628_wmt_coex_init() and
+		 * mt6628_wmt_set_sdio_driving().
+		 *
+		 * Without these the driver skips both commands and the chip
+		 * keeps whatever it powered up with.
+		 *
+		 * Caveat worth stating plainly: the one project config that
+		 * can be tied to a specific board in this tree is eastaeon89
+		 * (the bq Aquaris 5), and that board has no MT6628 node at
+		 * all - this dtsi is included only by the Lenovo B6000 and
+		 * B8000.  So for these particular boards the values rest on
+		 * "every MT6628 board the vendor ships uses m1", not on a
+		 * verified per-board config.  If a B6000 or B8000 antenna
+		 * layout ever differs, this is the property to re-check.  The
+		 * numeric meaning of the antenna modes is not documented
+		 * anywhere in the vendor tree.
+		 */
+		mediatek,coex-ant-mode = <1>;
+		mediatek,sdio-driving-cfg = <0x00077777>;
+
+		/*
+		 * Deliberately absent, with reasons:
+		 *
+		 *  - mediatek,crystal-trim is a per-board calibration value.
+		 *    The vendor reads it from NVRAM at offset 0x6D and its
+		 *    high bit says whether the trim is even enabled
+		 *    (wmt_ic_6628.c:1420-1470).  There is no NVRAM in this
+		 *    tree and no calibration data for this board, so any
+		 *    value here would be invented.
+		 *
+		 *  - mediatek,co-clock defaults to off because the vendor
+		 *    WMT.cfg for this board does not set co_clock_flag
+		 *    (wmt_lib.c:2039-2046 falls back to 0).  Leaving the
+		 *    property out produces exactly that behaviour.
+		 *
+		 *  - mediatek,fm-strap-mode has no counterpart in the vendor
+		 *    tree at all; the driver's default of 2 is what it has
+		 *    always used here.
+		 */
+		bluetooth {
+			compatible = "mediatek,mt6628-bt";
+		};
+
+		fm {
+			compatible = "mediatek,mt6628-fm";
+		};
+
+		gnss {
+			compatible = "mediatek,mt6628-gnss";
+		};
+	};
 };
 
 &keyboard {

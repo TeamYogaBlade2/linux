@@ -21,6 +21,17 @@
 	compatible = "mediatek,mt6589";
 	interrupt-parent = <&sysirq>;
 
+	aliases {
+		bls0 = &bls;
+		color0 = &color;
+		tdshp0 = &tdshp;
+		ovl0 = &ovl;
+		rdma0 = &rdma0;
+		rdma1 = &rdma1;
+		mutex0 = &mutex;
+		dsi0 = &dsi;
+	};
+
 	cpu_opp_table: opp-table-cpu {
 		compatible = "operating-points-v2";
 		opp-shared;
@@ -124,10 +135,40 @@
 		#size-cells = <0>;
 		enable-method = "mediatek,mt6589-smp";
 
+		/*
+		 * Every CPU below declares the same two clocks: the mux
+		 * itself as "cpu", and a safe clock to park on as
+		 * "intermediate" while ARMPLL is reprogrammed.
+		 *
+		 * "intermediate" must therefore be derived from that mux.
+		 * CLK_INFRA_ARMDIV1 divides the MUX1 output through
+		 * TOP_CKDIV1.clkdiv1_sel, bits [4:0] (datasheet
+		 * pp. 435-437).  These nodes used to name clk26m there,
+		 * which is not a rate on the CPU's own path at all but an
+		 * unrelated always-on oscillator - it was a placeholder
+		 * for a clock whose real name had not been worked out.
+		 *
+		 * mediatek-cpufreq.c is what consumes both names: it reads
+		 * "intermediate" by name, reparents the CPU onto it around
+		 * the ARMPLL write, and looks up an OPP matching the
+		 * intermediate rate to derive a safe intermediate voltage.
+		 * Pointing it at clk26m made both the reparent target and
+		 * that voltage lookup meaningless.
+		 *
+		 * Note also that MUX1's first parent is CLKSQ, the squared
+		 * 26 MHz from the clock squarer, not a raw 26 MHz tap
+		 * (TOP_CKMUXSEL.mux1_sel bits [3:2], datasheet p. 436), so
+		 * clk26m was not even the right name for what MUX1 selects.
+		 *
+		 * See Documentation/clk/mediatek-mt6589-unused-gates.rst.
+		 */
+
 		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -138,7 +179,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -148,6 +189,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x1>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -158,7 +201,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -168,6 +211,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x2>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -178,7 +223,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -188,6 +233,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x3>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -198,7 +245,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&clk26m>;
+				 <&infracfg CLK_INFRA_ARMDIV1>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -212,6 +259,54 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-unified;
+		};
+
+		/*
+		 * Idle states for the Cortex-A7 complex.
+		 *
+		 * The generic ARM cpuidle driver registers a plain WFI state at
+		 * index 0 and short-circuits it straight to cpu_do_idle(), so
+		 * only the state below is handled by the DCM backend in
+		 * drivers/soc/mediatek/mtk-dcm.c.
+		 *
+		 * The MT6589 has no second, deeper CPU-level state that can be
+		 * justified from the datasheet: the deep states in the vendor
+		 * driver (dpidle, slidle) are SPM power-domain states needing
+		 * the hand-written SPM sequences in mt_spm_sleep.c, which are not
+		 * ported here.
+		 *
+		 * What this state does: the "mediatek,mt6589-smp" enable-method
+		 * selects the cpuidle backend, which around the WFI enables DCM
+		 * on the top AXI fabric clock (hf_faxi_ck) by writing
+		 * TOPCK_DCM_CFG[7] dcm_enable with TOPCK_DCM_CFG[4:0]
+		 * dcm_full_fsel = 0xf (half speed), and clears the enable bit
+		 * again on the way out. Set bus_dcm_enabled=0 to skip that.
+		 *
+		 * Separately, and for every idle entry including state 0, the
+		 * same backend enables the Cortex-A7 clock DCM once at probe by
+		 * setting TOP_DCMCTL[1] arm_dcm_wfi_enable, with
+		 * TOP_CA7DCMFSEL[26:24] dcm_arm_divsel = 7 and
+		 * TOP_DCMDBC[6:0] topckgen_dcm_dbc_cnt = 1. The hardware itself
+		 * applies that once all cores are in WFI, dividing ARM_CK down
+		 * to 26MHz (MT6589 datasheet section 16.2.3, page 810).
+		 *
+		 * No state sets local-timer-stop: the ARM generic timer runs off
+		 * the always-on 13MHz system clock, so the tick keeps running
+		 * across this transition and does not need restarting.
+		 *
+		 * The latencies below are engineering estimates, not measured
+		 * figures - no MT6589 board was available to characterise them.
+		 * They are deliberately conservative, so a wrong estimate costs
+		 * power rather than correctness.
+		 */
+		idle-states {
+			cpu_idle_dcm: cpu-idle-dcm {
+				compatible = "arm,idle-state";
+				idle-state-name = "dcm";
+				entry-latency-us = <150>;
+				exit-latency-us = <250>;
+				min-residency-us = <2000>;
+			};
 		};
 	};
 
@@ -290,7 +385,7 @@
 		};
 	};
 
-	soc {
+	soc: soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "simple-bus";
@@ -651,16 +746,81 @@
 			reg = <0x10200000 0x1000>;
 		};
 
+		/*
+		 * #reset-cells advertises the reset controller that
+		 * drivers/clk/mediatek/clk-mt6589-mfg.c registers on this node
+		 * against MFG_RESET (0x1020600c, data sheet p. 2433).  The node
+		 * was missing it, which left a registered controller with no
+		 * #reset-cells and so unnameable from DT.  One bank means 32
+		 * resets: MFG_G3D_RESET at bit 0 and MFG_AXI_RESET at bit 1.
+		 */
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		apmixedsys: syscon@10209000 {
 			compatible = "mediatek,mt6589-apmixedsys", "syscon";
 			reg = <0x10209000 0x1000>;
 			#clock-cells = <1>;
+		};
+
+		/*
+		 * FHCTL sits in the perisys block at 0x11006000, not at
+		 * 0xf1005000.  The datasheet memory map lists FHCTL between
+		 * IRDA (0x11005000) and UART0 (0x11007000); 0xf1005000 maps
+		 * back to 0x11005000, which is IRDA.
+		 *
+		 * Pointing this at the wrong window is why hopping never
+		 * worked: PLL_HP_CON0 happens to exist at the right offset in
+		 * some other block, so hp_en read back plausibly, while every
+		 * FHCTLx register read as zero and the DDS monitor never
+		 * reached the new value - "FHCTL hopping timeout" on every
+		 * attempt.  The stock tree carries the same wrong constant
+		 * (FHCTL_BASE 0xF1005000 in mt_fhreg.h), so it cannot be used
+		 * as corroboration here.
+		 *
+		 * Two properties describe two different things and must not be
+		 * read as one:
+		 *
+		 *   mediatek,hopping-ssc-percent - how far to modulate the
+		 *   emitted clock around the nominal frequency.  It says nothing
+		 *   about whether the FHCTL hop works on the channel.
+		 *
+		 *   mediatek,fhctl-hopping-enabled - whether a rate change on
+		 *   that channel goes through the FHCTL hardware at all.  It is
+		 *   listed explicitly for every channel here precisely so that
+		 *   the answer is on the record; only MSDCPLL is on.
+		 *
+		 * The reference implementation confirms the two are independent:
+		 * it has a third state FH_FH_ENABLE_DFH, hopping with no SSC
+		 * (mt_freqhopping.h:42-46), and lists all five channels as
+		 * FH_PLL_ENABLE with "default SSC disable"
+		 * (mt_freqhopping.c:87-92) - the hopping path is expected to
+		 * exist for them but to be off by default.
+		 *
+		 * They are left off here because that is where measurement, not
+		 * the reference code, decides.  On ARMPLL, MAINPLL, TVDPLL and
+		 * LVDSPLL the hop has been observed not to complete: every
+		 * FHCTLx register read back zero and the DDS monitor never
+		 * reached the new value, so each attempt cost about a second at
+		 * boot.  Turning them on needs a boot log to show a completed
+		 * hop, not just a changed clock.  Until then they reprogram the
+		 * PCW field directly, which is what the data sheet describes for
+		 * these non-SDM PLLs.
+		 */
+		fhctl: clock-controller@11006000 {
+			compatible = "mediatek,mt6589-fhctl";
+			reg = <0x11006000 0x100>;
+			clocks = <&apmixedsys CLK_APMIXED_ARMPLL>,
+				 <&apmixedsys CLK_APMIXED_MAINPLL>,
+				 <&apmixedsys CLK_APMIXED_MSDCPLL>,
+				 <&apmixedsys CLK_APMIXED_TVDPLL>,
+				 <&apmixedsys CLK_APMIXED_LVDSPLL>;
+			mediatek,hopping-ssc-percent = <0>, <0>, <3>, <0>, <0>;
+			mediatek,fhctl-hopping-enabled = <0>, <0>, <1>, <0>, <0>;
 		};
 
 		auxadc: adc@11003000 {
@@ -712,12 +872,21 @@
 				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
 		};
 
-		afe_sram: sram@12004000 {
+		/*
+		 * AUDIO SRAM, 16 KiB: data sheet Table 3-9 (p.48) splits
+		 * 0x12000000..0x1200cfff into DISP SRAM (32 KiB,
+		 * 0x12000000..0x12007fff), AUDIO SRAM (16 KiB, this one) and
+		 * ISP SRAM (4 KiB, 0x1200c000..0x1200cfff).  It must not be
+		 * moved down into the DISP bank to keep the AFE's buffers near
+		 * the bank base - the AFE dereferences DL1_BASE/DL1_END
+		 * itself and only the AUDIO bank is wired to it.
+		 */
+		afe_sram: sram@12008000 {
 			compatible = "mmio-sram";
-			reg = <0x12004000 0x4000>;
+			reg = <0x12008000 0x4000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0 0x12004000 0x4000>;
+			ranges = <0 0x12008000 0x4000>;
 			no-memory-wc;
 		};
 
@@ -734,8 +903,6 @@
 				clock-names = "afe", "i2s";
 				iram = <&afe_sram>;
 				interrupts = <GIC_SPI 104 IRQ_TYPE_LEVEL_LOW>;
-
-				status = "disabled";
 			};
 		};
 
@@ -889,12 +1056,14 @@
 				 <&mfgsys CLK_MFG_MEM>,
 				 <&mfgsys CLK_MFG_AXI>;
 			clock-names = "core", "mem", "sys";
+			power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
 		};
 
 		dispsys: syscon@14000000 {
 			compatible = "mediatek,mt6589-dispsys", "syscon";
 			reg = <0x14000000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		bls: pwm@14008000 {
@@ -903,8 +1072,27 @@
 			#pwm-cells = <2>;
 			clocks = <&dispsys CLK_DISP0_BLS>;
 			clock-names = "main";
+			resets = <&dispsys MT6589_DISP_BLS_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 			status = "disabled";
+		};
+
+		color: color@1400a000 {
+			compatible = "mediatek,mt6589-disp-color";
+			reg = <0x1400a000 0x1000>;
+			interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_COLOR>;
+			resets = <&dispsys MT6589_DISP_COLOR_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		tdshp: tdshp@1400b000 {
+			compatible = "mediatek,mt6589-disp-tdshp";
+			reg = <0x1400b000 0x1000>;
+			interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_2DSHP>;
+			resets = <&dispsys MT6589_DISP_TDSHP_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
 		/* NAND flash controller */
@@ -986,11 +1174,34 @@
 			reset-names = "pwrap", "pwrap-bridge";
 		};
 
+		/*
+		 * MIPI DSI TX PHY and its DSI PLL.
+		 *
+		 * "clocks" here is the PLL's 26 MHz reference, which is
+		 * clk26m - correct, and not a mistake.  The DSI PLL is
+		 * self-contained: DSI_PLL0_CON0 (10012050) has PREDIV,
+		 * FBKDIV and TXDIV fields but no source-select mux, so it has
+		 * exactly one input and no second candidate to pick.  The
+		 * driver's rate formula confirms it, since mt6589_pll_rate() is
+		 * "26 * (fbk_div + 1) * fbk_sel * 2 / (txdiv0 * txdiv1 *
+		 * pre_div)" MHz - the 26 being this reference clock.  The
+		 * datasheet's own power-on value for the register,
+		 * DSI_PLL0_CON0 = 0xBE510026, decodes to the same
+		 * divider set.
+		 *
+		 * mipi_tx0_pll below is the *output* of this PLL, not its
+		 * source.  The vblank/HS lane clock is taken from it through
+		 * clock-output-names, and the DSI PLL must not be treated as
+		 * its own parent.  Every MediaTek SoC in this tree declares
+		 * exactly the same single clk26m parent for its mipi-tx node
+		 * (mt7623n.dtsi:248 and others), so devm_clk_get(dev, NULL)
+		 * in the generic probe - which resolves index 0 when there is
+		 * no clock-names - resolves correctly.
+		 */
 		mipi_tx0: dsi-phy@10012000 {
 			compatible = "mediatek,mt6589-mipi-tx";
 			reg = <0x10012000 0x90>;
 			clocks = <&clk26m>;
-			/* <&dispsys CLK_DISP1_DSI_DIGITAL_LANE> ? */
 			clock-output-names = "mipi_tx0_pll";
 			#clock-cells = <0>;
 			#phy-cells = <0>;
@@ -1041,6 +1252,52 @@
 			      <0x10212000 0x2000>,
 			      <0x10214000 0x2000>,
 			      <0x10216000 0x2000>;
+		};
+
+		/*
+		 * AP_DMA: the general purpose half of the AP DMA block (data
+		 * sheet chapter 18).  It contains eighteen engines, of which
+		 * only G_DMA0 and G_DMA1 are generic - the rest belong to HIF,
+		 * IrDA, I2C and UART and are described by the "apdma" node
+		 * below.  These two sit at 0x11000080 and 0x11000100 and are
+		 * the only engines with their own interrupt (GIC SPI 57/58,
+		 * data sheet Table 7-1).
+		 *
+		 * The window is 0x180 bytes: the global control registers end
+		 * at 0x78, and the block belonging to the next engine (HIF0)
+		 * starts at 0x180.
+		 *
+		 * Note there is deliberately no iommus and no power-domains
+		 * here.  AP_DMA sits directly on the peripheral AXI fabric
+		 * (data sheet p.869), so unlike the display engines it is not
+		 * behind an M4U or a LARB.  The datasheet's AP_DMA_PD is
+		 * PERICFG PDN0 bit 12, which is the very same bit as the
+		 * CLK_PERI0_APDMA clock gate below - it is a clock gate wearing
+		 * a power-down name, not a separate power domain.
+		 *
+		 * The interrupts are declared at the polarity the data sheet
+		 * gives (Table 7-1: both "Positive"), which contradicts the
+		 * vendor driver (it uses IRQF_TRIGGER_LOW).  That is unresolved
+		 * and is spelled out in mtk-gdma.c; nothing here depends on it
+		 * yet.
+		 *
+		 * status = "disabled" because nothing consumes these channels
+		 * yet - no DMAENGINE client in the tree names them, and
+		 * mtk-gdma.c at this stage only proves the clock, reset and
+		 * interrupt wiring rather than moving data.  Enabling the node
+		 * would claim a working DMA controller where there is not one.
+		 */
+		gdma: dma-controller@11000000 {
+			compatible = "mediatek,mt6589-gdma";
+			reg = <0x11000000 0x180>;
+			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "gdma0", "gdma1";
+			clocks = <&pericfg CLK_PERI0_APDMA>;
+			clock-names = "main";
+			resets = <&pericfg MT6589_PERI_DMA_SW_RS_RST>;
+			#dma-cells = <1>;
+			status = "disabled";
 		};
 
 		apdma: dma-controller@11000680 {
@@ -1219,6 +1476,263 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+		};
+
+		ovl: ovl@14003000 {
+			compatible = "mediatek,mt6589-disp-ovl";
+			reg = <0x14003000 0x1000>;
+			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>,
+				 <&dispsys CLK_DISP0_OVL_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_OVL_CH0>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH1>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH2>,
+				 <&iommu MT6589_M4U_PORT_OVL_CH3>;
+			resets = <&dispsys MT6589_DISP_OVL_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		/*
+		 * DISP_WDMA: the display subsystem's write-DMA engine.  It takes
+		 * a pixel stream from an upstream block and writes it out to
+		 * memory - the counterpart of RDMA, which reads from memory.
+		 * MT6589 has two instances, 4 KiB apart.
+		 *
+		 * Both are left status = "disabled" because neither has a
+		 * consumer on this board, and the routing table having entries
+		 * that mention WDMA is not the same thing as anything using
+		 * them.  mt6589-dispsys.h works the two cases out:
+		 *
+		 *  - WDMA1's consumer is panel readback: the vendor routes
+		 *    OVL0 -> WDMA1 for memory-out (ddp_path.c:566,
+		 *    disp_path_config_mem_out()) and for suspend-mode screen
+		 *    capture (ddp_path.c:649).  Both of those exist to feed a
+		 *    readback path, and the live route here is OVL0 -> BLS ->
+		 *    RDMA0 -> DSI0.  Panel readback needs the DBI block
+		 *    (mt6589-dispsys.h:33 notes 0x1400c000), and this panel is
+		 *    DSI video mode, which does not use DBI - there is no DBI
+		 *    node on this SoC and no DBI driver here.
+		 *
+		 *  - WDMA0's consumer is an SCL-to-memory leg that upstream
+		 *    marks as an unfinished HDMI feature ("FIXME: for hdmi
+		 *    temp", quoted at mt6589-dispsys.h:42-43).  The other two
+		 *    WDMA0 routes, COLOR0 -> WDMA0 and TDSHP -> WDMA0, start
+		 *    from blocks that are themselves off this board's display
+		 *    path (see mtk_drm_drv.c, and commits c9e543f22025 and
+		 *    2d59d9693be8 for why putting COLOR or TDSHP in a path
+		 *    array without a matching route silently disables the
+		 *    display rather than enabling anything).
+		 *
+		 * So there is nothing to enable.  Adding either node would be
+		 * a claim this board cannot back, and the register map itself
+		 * is trustworthy (data sheet ch. 41 matches the vendor
+		 * ddp_reg.h:442-474 exactly), so this is a missing driver,
+		 * not uncertain hardware.  Enabling one later needs the route
+		 * table and a path array to agree with each other first.
+		 *
+		 * Note there are no clock-names here even though both blocks
+		 * take two clocks.  mtk_disp_wdma.c uses devm_clk_bulk_get_all()
+		 * precisely because of that, matching mtk_disp_rdma.c.
+		 */
+		wdma0: wdma@14004000 {
+			compatible = "mediatek,mt6589-disp-wdma0";
+			reg = <0x14004000 0x1000>;
+			interrupts = <GIC_SPI 164 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_WDMA0_ENGINE>,
+				 <&dispsys CLK_DISP0_WDMA0_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_WDMA0>;
+			resets = <&dispsys MT6589_DISP_WDMA0_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			status = "disabled";
+		};
+
+		wdma1: wdma@14005000 {
+			compatible = "mediatek,mt6589-disp-wdma1";
+			reg = <0x14005000 0x1000>;
+			interrupts = <GIC_SPI 165 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_WDMA1_ENGINE>,
+				 <&dispsys CLK_DISP0_WDMA1_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_WDMA1>;
+			resets = <&dispsys MT6589_DISP_WDMA1_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			status = "disabled";
+		};
+
+		/*
+		 * G2D: a 2D blitter in the display subsystem.  RGB565/888,
+		 * ARGB8888, constant-colour fill and bitblt.  The hardware also
+		 * has flips, alpha blending and dithering, which the driver
+		 * does not yet use.
+		 *
+		 * The data sheet gives the base as 0x14013000, the interrupt
+		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE
+		 * and CLK_DISP0_G2D_SMI.
+		 *
+		 * "iommus" arms LARB2 port 11 (MT6589_M4U_PORT_G2D) and installs
+		 * the M4U's DMA ops on this platform device.  The port assignment
+		 * is real - G2D is a DMA client with its own SRC/W2M/DST
+		 * addresses - and the property is here because the driver gives
+		 * G2D a DMA identity to match: G2D is its own drm_device
+		 * (DRIVER_GEM | DRIVER_RENDER, no KMS), its dma_dev is this
+		 * platform device rather than OVL, and it owns its own GEM
+		 * namespace, importing display buffers through PRIME/dma-buf so
+		 * each engine's address is mapped in the address space that
+		 * engine reads.  A GEM dma_addr allocated against this device is
+		 * then an IOVA the engine can actually be handed, which is the
+		 * whole reason the property exists.
+		 *
+		 * The ordering is the point and it is not negotiable: this must
+		 * never be added to a driver still borrowing another device's
+		 * addresses.  Arming the port switches the engine to virtual
+		 * addressing - mtk-smi.c programs SMI_SECUR_CON_VAL_VIRT for
+		 * exactly those ports a domain attached - while a borrower would
+		 * still be programming the physical addresses its host produced,
+		 * and the engine would then read and write through a page table
+		 * that does not describe its buffers.
+		 *
+		 * One link in this chain is not closed by reading the code:
+		 * mtk-smi.c writes SMI_SECUR_CON_VAL_VIRT from
+		 * mtk_smi_larb_resume(), which runs on the LARB's pm_runtime
+		 * resume, while the port bit is armed by the IOMMU attaching this
+		 * device.  A port armed after the LARB's last resume would have
+		 * its mmu bit set without a matching SECUR_CON write.  That
+		 * ordering is identical for every display client that already
+		 * carries an "iommus" on this SoC (ovl, rdma0, rdma1), so this
+		 * node introduces no new class of problem; it is written down
+		 * because it is the part that can only be settled on hardware.
+		 */
+		g2d: g2d@14013000 {
+			compatible = "mediatek,mt6589-g2d";
+			reg = <0x14013000 0x1000>;
+			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_G2D_ENGINE>,
+				 <&dispsys CLK_DISP0_G2D_SMI>;
+			clock-names = "g2d-engine", "g2d-smi";
+			iommus = <&iommu MT6589_M4U_PORT_G2D>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		rdma0: rdma@14006000 {
+			compatible = "mediatek,mt6589-disp-rdma";
+			reg = <0x14006000 0x1000>;
+			interrupts = <GIC_SPI 166 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA0_ENGINE>,
+				 <&dispsys CLK_DISP0_RDMA0_SMI>,
+				 <&dispsys CLK_DISP0_RDMA0_OUTPUT>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA0>;
+			resets = <&dispsys MT6589_DISP_RDMA0_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		rdma1: rdma@14007000 {
+			compatible = "mediatek,mt6589-disp-rdma";
+			reg = <0x14007000 0x1000>;
+			interrupts = <GIC_SPI 167 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA1_ENGINE>,
+				 <&dispsys CLK_DISP0_RDMA1_SMI>,
+				 <&dispsys CLK_DISP0_RDMA1_OUTPUT>;
+			iommus = <&iommu MT6589_M4U_PORT_RDMA1>;
+			resets = <&dispsys MT6589_DISP_RDMA1_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		devapc: devapc@10010000 {
+			compatible = "mediatek,mt6589-devapc";
+			/*
+			 * Five DEVAPC instances, each an always-on (permission) window
+			 * followed by a power-down (violation) window, 0x100 apart.
+			 * Instance n uses reg entries 2n and 2n+1.
+			 */
+			reg = <0x10010000 0x100>,  /* DEVAPC0 AO */
+			      <0x10207000 0x100>,  /* DEVAPC0 PD */
+			      <0x10010100 0x100>,  /* DEVAPC1 AO */
+			      <0x10207100 0x100>,  /* DEVAPC1 PD */
+			      <0x10010200 0x100>,  /* DEVAPC2 AO */
+			      <0x10207200 0x100>,  /* DEVAPC2 PD */
+			      <0x10010300 0x100>,  /* DEVAPC3 AO */
+			      <0x10207300 0x100>,  /* DEVAPC3 PD */
+			      <0x10010400 0x100>,  /* DEVAPC4 AO */
+			      <0x10207400 0x100>;  /* DEVAPC4 PD */
+			interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&infracfg CLK_INFRA_DEVAPC>;
+			clock-names = "devapc-infra-clock";
+			/*
+			 * No power-domains property: DEVAPC is not part of
+			 * any switchable SPM domain.
+			 *
+			 * Both register windows are listed in Table 3-2
+			 * "Infrastructure System Memory Map" - 0x1001_0000 is
+			 * "Device APC AO" and 0x1020_7000 is "device_apc
+			 * monitor module" - whereas the display blocks live
+			 * in the separate multimedia map.  The datasheet has
+			 * no DEVAPC entry among the SPM *_PWR_CON registers
+			 * (CPU, DBG, MD1, MD2, MFG, VDE, VEN, IFR, ISP, DIS,
+			 * DPY, FC0-3) and no devapc bit in PWR_STATUS, so no
+			 * power domain controls this block.
+			 *
+			 * That makes MT6589_POWER_DOMAIN_DIS not merely
+			 * redundant but wrong: it is a real switchable domain
+			 * (SPM_DIS_PWR_CON, display SRAM power-down in
+			 * GENMASK(11,8)).  Claiming it would tie the lifetime
+			 * of a security-monitoring block to the display with
+			 * no hardware relationship, and risks leaving DEVAPC
+			 * without register access if DIS is powered down.
+			 * Its only gate is the infracfg clock above, which is
+			 * what actually has to be enabled before any register
+			 * is touched.
+			 *
+			 * Upstream agrees: the MT6779 devapc node also carries
+			 * no power-domains property.
+			 */
+		};
+
+		/*
+		 * DISP_MUTEX: six handshake registers arbitrating access to the
+		 * shadow registers, per the data sheet's DISP_MUTEX chapter
+		 * (ch. 52, p. 1897: "six independent mutex controllers for
+		 * maximum three independent linked paths").
+		 *
+		 * No clocks property, and that is deliberate - there is no gate
+		 * to give it.  The DISP0 gate register CG_CON0 (CG0) names 22
+		 * gates between bits 3 and 24 - SCL, OVL, color, 2DSHP, BLS,
+		 * WDMA0/1, RDMA0/1, gamma, command queue and G2D - with the
+		 * rest reserved, and none of them is a mutex.  Nothing in
+		 * drivers/clk/mediatek/ defines an MT6589 mutex gate either,
+		 * unlike the SoCs that do have one (CLK_MM_MUTEX on MT2701,
+		 * CLK_MDP_MUTEX0 on MT8186, and so on).  The block therefore
+		 * shares the display subsystem's own gating and lives in the
+		 * DIS power domain below.
+		 *
+		 * The previous "clocks = <&clk26m>" was a placeholder - the
+		 * comment beside it admitted "not found in clock list" - and
+		 * taking clk26m told the driver to pin an unrelated
+		 * always-on oscillator, which states nothing true about how this
+		 * block is clocked.  Better to declare no clock than a wrong one.
+		 *
+		 * interrupts is GIC_SPI 160, which the data sheet's interrupt
+		 * table (p. 417) names Disp_mutex_irq_b, active low - matching
+		 * the negative polarity and the GIC_SPI 160 declared here.
+		 */
+		mutex: mutex@14011000 {
+			compatible = "mediatek,mt6589-disp-mutex";
+			reg = <0x14011000 0x1000>;
+			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		dsi: dsi@1400d000 {
+			compatible = "mediatek,mt6589-dsi";
+			reg = <0x1400d000 0x1000>;
+			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP1_DSI_ENGINE>,
+				 <&dispsys CLK_DISP1_DSI_DIGITAL>,
+				 <&mipi_tx0>;
+			clock-names = "engine", "digital", "hs";
+			phys = <&mipi_tx0>;
+			phy-names = "dphy";
+			resets = <&dispsys MT6589_DISP_DSI_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			status = "disabled";
 		};
 
 		larb0: larb@17001000 {

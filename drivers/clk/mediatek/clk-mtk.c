@@ -416,9 +416,43 @@ int mtk_clk_register_dividers(struct device *dev,
 			continue;
 		}
 
-		hw = clk_hw_register_divider(dev, mcd->name, mcd->parent_name,
-			mcd->flags, base +  mcd->div_reg, mcd->div_shift,
-			mcd->div_width, mcd->clk_divider_flags, lock);
+		if (mcd->ops) {
+			struct clk_divider *div;
+			struct clk_init_data init = {
+				.name = mcd->name,
+				.ops = mcd->ops,
+				.flags = mcd->flags,
+				.parent_names = &mcd->parent_name,
+				.num_parents = 1,
+			};
+			int ret;
+
+			div = kzalloc_obj(*div);
+			if (!div) {
+				hw = ERR_PTR(-ENOMEM);
+				goto err;
+			}
+
+			div->reg = base + mcd->div_reg;
+			div->shift = mcd->div_shift;
+			div->width = mcd->div_width;
+			div->flags = mcd->clk_divider_flags;
+			div->lock = lock;
+			div->hw.init = &init;
+
+			ret = clk_hw_register(dev, &div->hw);
+			if (ret) {
+				kfree(div);
+				hw = ERR_PTR(ret);
+			} else {
+				hw = &div->hw;
+			}
+		} else {
+			hw = clk_hw_register_divider(dev, mcd->name,
+				mcd->parent_name, mcd->flags,
+				base + mcd->div_reg, mcd->div_shift,
+				mcd->div_width, mcd->clk_divider_flags, lock);
+		}
 
 		if (IS_ERR(hw)) {
 			pr_err("Failed to register clk %s: %pe\n", mcd->name,
@@ -603,7 +637,7 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 		r = mtk_register_reset_controller_with_dev(&pdev->dev,
 							   mcd->rst_desc);
 		if (r)
-			goto unregister_clks;
+			goto del_provider;
 	}
 
 	if (mcd->need_runtime_pm)
@@ -611,6 +645,8 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 
 	return r;
 
+del_provider:
+	of_clk_del_provider(node);
 unregister_clks:
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);

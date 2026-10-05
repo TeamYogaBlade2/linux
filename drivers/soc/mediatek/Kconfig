@@ -25,6 +25,11 @@ config MTK_DEVAPC
 	  unexpected transaction.
 	  The violation information is logged for further analysis or
 	  countermeasures.
+	  Some MediaTek SoCs additionally implement a per-slave permission
+	  field which decides, per bus master, whether a slave may be accessed
+	  at all.  Where the SoC supports this, the driver applies the
+	  "mediatek,devapc-forbid-slaves" property.  See the binding for the
+	  property format; slaves not named there stay unprotected.
 
 config MTK_DVFSRC
 	tristate "MediaTek DVFSRC Support"
@@ -36,6 +41,26 @@ config MTK_DVFSRC
 	  collecting DVFS requests from various SoC IPs, other than
 	  software, and performing bandwidth scaling to provide the
 	  best achievable performance-per-watt.
+
+config MTK_DCM
+	bool "MediaTek DCM Support"
+	depends on ARCH_MEDIATEK && CPU_IDLE
+	select REGMAP
+	help
+	  Say yes here to add support for the MediaTek Dynamic Clock Management
+	  (DCM) feature. DCM divides down the clock of a clock domain that
+	  would otherwise have to keep running while its consumer is idle,
+	  rather than gating that clock outright. It is what lets the
+	  Cortex-A7 complex and the top AXI fabric of an MT6589 save clock
+	  tree power while the system is idle.
+
+	  On MT6589 this registers a CPU idle operations backend for the
+	  "mediatek,mt6589-smp" enable-method, which the generic ARM cpuidle
+	  driver calls for every idle state described in the device tree.
+	  The device tree still owns the state names and latencies. Other
+	  MediaTek SoCs do not use this backend and are unaffected; the
+	  driver looks up the topckgen and infracfg nodes by compatible and
+	  stays inert if they are absent.
 
 config MTK_INFRACFG
 	bool "MediaTek INFRACFG Support"

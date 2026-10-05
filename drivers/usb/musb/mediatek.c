@@ -291,8 +291,7 @@ static int mtk_musb_set_mode(struct musb *musb, u8 mode)
 		return -EINVAL;
 	}
 
-	mtk_otg_switch_set(glue, new_role);
-	return 0;
+	return mtk_otg_switch_set(glue, new_role);
 }
 
 static int mtk_musb_init(struct musb *musb)

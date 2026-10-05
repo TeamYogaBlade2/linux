@@ -56,8 +56,14 @@
  * call, then restores it once the hook switch settles.
  */
 #define MT6320_ACCDET_DEBOUNCE0_BTN	0x0400
-/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
-#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
+/*
+ * Mic bias / AUXADC switch.  This board uses ACCDET_28V_MODE, where the
+ * downstream driver drives AUDENCSPARE_CON0 rather than the ACCDET_RSV
+ * (ACCDET_CON0) 1.9 V encoding.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_MICBIAS_ENABLE	0x01
+#define MT6320_ACCDET_MICBIAS_DISABLE	0x00
 
 struct mt6320_accdet {
 	struct device *dev;
@@ -239,9 +245,15 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 					   MT6320_ACCDET_PWM_WIDTH_VALUE);
 			if (ret)
 				return;
+			/*
+			 * The threshold keeps its own value.  Downstream
+			 * writes the width into this register too, but only
+			 * under ACCDET_PIN_RECOGNIZATION, which this board
+			 * does not enable.
+			 */
 			ret = regmap_write(priv->regmap,
 					   MT6320_ACCDET_PWM_THRESH,
-					   MT6320_ACCDET_PWM_WIDTH_VALUE);
+					   MT6320_ACCDET_PWM_THRESH_VALUE);
 			if (ret)
 				return;
 		}
@@ -475,21 +487,34 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		priv->plugged = true;
 
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_HIGH);
+				       IRQ_TYPE_EDGE_FALLING);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-in IRQ: %d\n",
 					    ret);
 	} else {
 		/*
-		 * Drop the micbias/AUXADC switch back to 1.9 V mode before
-		 * declaring the jack empty, otherwise the PMIC keeps
-		 * driving mic bias into an unpopulated connector.  The
-		 * AUXADC driver asserts the same switch for each voltage
-		 * read, so restore it here on the way out too.
+		 * Turn the micbias/AUXADC switch off before declaring the
+		 * jack empty, otherwise the PMIC keeps driving mic bias
+		 * into an unpopulated connector.  The AUXADC driver asserts
+		 * the same switch for each voltage read, so it has to be
+		 * dropped on the way out too.
+		 *
+		 * In ACCDET_28V_MODE, which is what this board is built with,
+		 * the vendor switch is a plain on/off write to
+		 * AUDENCSPARE_CON0: accdet_auxadc_switch() writes 0x01 to
+		 * enable and 0x00 to disable
+		 * (mediatek/platform/mt6589/kernel/drivers/accdet/accdet.c:159-176).
+		 * The 0x1090 word there belongs to the 1.9 V ACCDET_RSV
+		 * encoding, which that build does not use.  Writing the
+		 * ENABLE value here was therefore leaving the bias powered.
 		 */
-		regmap_write(priv->regmap, MT6320_ACCDET_CON0,
-			     MT6320_ACCDET_CON0_MICBIAS_1V9);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_DISABLE);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to disable mic bias: %d\n",
+					    ret);
 
 		ret = mt6320_accdet_disable(priv);
 		if (ret)
@@ -502,7 +527,7 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		mt6320_accdet_report(priv, 0);
 
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_LOW);
+				       IRQ_TYPE_EDGE_RISING);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-out IRQ: %d\n",
@@ -606,9 +631,20 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	priv->plugged = !!ret;
 	priv->last_state = 3;
 
+	/*
+	 * Arm for the edge that reports the *next* transition, not for the
+	 * level the line is already sitting at.  detect-gpios is
+	 * GPIO_ACTIVE_LOW, so the pin idles high with nothing plugged and is
+	 * pulled low on insertion: an unplugged jack needs EDGE_FALLING and a
+	 * plugged one needs EDGE_RISING.  Level-triggering on the current
+	 * level instead leaves the line asserted in the stable state, and the
+	 * handler is IRQF_ONESHOT, so it re-arms and immediately re-fires -
+	 * an interrupt storm that also drives the jack report and therefore
+	 * DAPM.
+	 */
 	ret = irq_set_irq_type(priv->eint_irq,
 			       priv->plugged ?
-			       IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_LEVEL_LOW);
+			       IRQ_TYPE_EDGE_RISING : IRQ_TYPE_EDGE_FALLING);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to configure detect IRQ\n");
