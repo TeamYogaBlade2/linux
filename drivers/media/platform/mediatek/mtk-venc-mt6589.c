@@ -110,6 +110,31 @@
  * there is no documented way to halt it -- but the buffers go back to userspace
  * immediately, with V4L2_BUF_FLAG_ERROR.
  *
+ * Buffer ownership
+ * ----------------
+ * One convention, followed by every path in this file.  device_run() PEEKS the source
+ * and the destination with v4l2_m2m_next_src_buf()/v4l2_m2m_next_dst_buf() and removes
+ * neither; v4l2_m2m_buf_done_and_job_finish() removes both and returns them, and
+ * reaches v4l2_m2m_job_finish() to clear TRANS_RUNNING.  This is the hantro driver's
+ * convention, and the reason to prefer it here is that this driver's completion is
+ * asynchronous -- it runs from a workqueue, from the watchdog, or from job_abort() --
+ * and so finds its buffers by peeking the ready list again instead of by carrying
+ * pointers from the submit.
+ *
+ * Mixing the two conventions is what the two bugs here used to be: removing the source
+ * in device_run() left the completion helper with a NULL source, so it warned, skipped
+ * _v4l2_m2m_job_finish(), returned neither buffer and left TRANS_RUNNING set, hanging
+ * STREAMOFF and close() in v4l2_m2m_cancel_job()'s wait_event().  Conversely, calling
+ * v4l2_m2m_buf_done() on a merely peeked buffer WARNs on vb->state !=
+ * VB2_BUF_STATE_ACTIVE and does nothing at all.
+ *
+ * Two rules follow, and both paths below depend on them.  Every buffer must be retired
+ * exactly once, and job_finish must be reached exactly once, on every path: normal
+ * completion, an error after the buffers were taken, and a ready list that turns out to
+ * be empty (where there is nothing to return but the job still has to be finished, so
+ * v4l2_m2m_job_finish() is called on its own).  Buffers that no job ever consumed are
+ * returned by stop_streaming(), which the framework reaches after cancel_job().
+ *
  * There is no hardware to test against, so none of the above is claimed to
  * work end to end.
  *
@@ -2585,12 +2610,44 @@ static void mtk_venc_job_abort(void *priv)
 /*
  * stop_streaming - STREAMOFF.
  *
- * Deliberately does nothing.  A frame may still be in flight; job_abort() has
- * already been told not to abandon it and the watchdog owns finishing it.  Freeing
- * or rewriting buffers here would be exactly wrong.
+ * Return whatever is still queued on this queue's ready list.
+ *
+ * A frame may still be in flight, but by the time this runs the framework has already
+ * called v4l2_m2m_cancel_job(), so job_abort() has retired it and its buffers are gone;
+ * there is nothing of this frame's left to touch.  What IS left is every buffer the
+ * client queued but that was never picked up by a job -- and those are still owned by
+ * the driver, because vb2 marks a buffer ACTIVE when buf_queue() hands it over and only
+ * clears that when v4l2_m2m_buf_done() is called for it.
+ *
+ * So doing nothing here is not a neutral choice.  vb2 checks after stop_streaming
+ * returns and WARN_ONs on a non-zero owned_by_drv_count, printing "driver bug:
+ * stop_streaming operation is leaving buffer N in active state" for each one it then
+ * has to reclaim itself (videobuf2-core.c, __vb2_queue_cancel()).  That is a kernel
+ * warning on the most ordinary STREAMOFF there is -- qbuf some buffers, never stream on,
+ * stream off again -- and it is this driver being told it leaked buffers it still owns.
+ *
+ * Removal, not a peek, and one v4l2_m2m_buf_done() per removed buffer: the count only
+ * falls when a buffer leaves the ready list, so this loop terminates.  Each buffer is
+ * returned as ERROR rather than as it was queued, since STREAMOFF has ended the stream
+ * and there is no frame behind them.  hantro_return_bufs() does exactly this.
  */
 static void mtk_venc_stop_streaming(struct vb2_queue *q)
 {
+	struct mtk_venc_ctx *ctx = q->drv_priv;
+
+	for (;;) {
+		struct vb2_v4l2_buffer *vbuf;
+
+		if (V4L2_TYPE_IS_OUTPUT(q->type))
+			vbuf = v4l2_m2m_src_buf_remove(ctx->m2m);
+		else
+			vbuf = v4l2_m2m_dst_buf_remove(ctx->m2m);
+
+		if (!vbuf)
+			break;
+
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+	}
 }
 
 /*
