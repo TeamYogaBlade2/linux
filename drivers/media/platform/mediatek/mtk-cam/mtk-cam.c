@@ -15,13 +15,26 @@
  *
  * WHAT IS STILL NOT HERE
  * ----------------------
- * The image processing itself -- the CPIPE stages, the memory sequencer, the
- * pixel-rate meters, the 3A statistics -- is a large register space with no
- * upstream MediaTek ISP driver to port and no way to test here.  None of the
- * CPIPE stage enables are programmed, because turning them on without writing
- * the pipeline would run blocks against unconfigured registers.  So CAM's
- * output is not a processed picture; the plumbing around the DMA engine is
- * complete and inert.
+ * The image processing itself -- the CPIPE stages, the TG (timing generator)
+ * and the 3A statistics -- is a large register space with no upstream MediaTek
+ * ISP driver to port and no way to test here.  None of the CPIPE stage enables
+ * are programmed, because turning them on without writing the pipeline would
+ * run blocks against unconfigured registers.  So CAM's output is not a
+ * processed picture; the plumbing around the DMA engine is complete and inert.
+ *
+ * Two things this driver is sometimes assumed to do, and does not:
+ *
+ *   - The memory sequencer.  There is no such register on this part.  The
+ *     closest thing chapter 54 documents is the command-queue base-address
+ *     registers (CAM_CTL_CQ0/CQ1/CQ2/CQ3/CQ0B/CQ0C_BASEADDR, pages 1985-1987,
+ *     each a single RW 32-bit field) plus the CQ0/CQ0B start strobes in
+ *     CAM_CTL_START (bits 5 and 6, page 1949).  The descriptor format those
+ *     base addresses point at is documented nowhere in the data sheet and lives
+ *     only in a vendor header absent from this tree, so no queue is armed and
+ *     neither strobe is used.  Only the PASS2 strobe (bit 0) is written.
+ *   - The TG.  CAM_CTL_EN1 bits 1 and 0 are TG2_EN_SET and TG1_EN_SET (page
+ *     1977) and nothing here sets them: without a sensor there are no pixel
+ *     clocks, and a TG that is never programmed has no frame to time.
  *
  * WHAT THIS BOARD ACTUALLY HAS
  * ---------------------------
@@ -38,8 +51,8 @@
  * THE IMGO BASE ADDRESS, AND A DATASHEET/CODE DIVERGENCE
  * -----------------------------------------------------
  * CAM_IMGO_BASE_ADDR is written here directly, at 0x15004300, which the data
- * sheet documents at cam.txt:1633-1635 as "CAM_IMGO_BASE_ADDR / DMA base
- * addres register".
+ * sheet documents at page 2032 as "CAM_IMGO_BASE_ADDR / DMA Base Address
+ * Register" (bit table BASE_ADDR[31:0], type RW).
  *
  * The vendor does NOT write it that way, and it is worth recording why, because
  * it looks like a contradiction and is not:
@@ -214,7 +227,7 @@ static int mtk_cam_sw_reset(struct mtk_cam *cam)
 /*
  * The single fourcc CAM's video node offers.
  *
- * CAM_OUT_FMT = 2 is YUV422 in one plane (cam.txt:5100-5104, and the vendor's
+ * CAM_OUT_FMT = 2 is YUV422 in one plane (data sheet page 1955, and the vendor's
  * own _FMT_YUV422_1P_ == 2 in isp_function.h:455), i.e. two bytes per pixel,
  * packed, no chroma subsampling in the vertical direction and no second
  * plane.  In V4L2 fourcc terms that is V4L2_PIX_FMT_UYVY.  One format is the
@@ -250,7 +263,7 @@ static u32 mtk_cam_image_size(u32 width, u32 height)
  * pixel the granularity is a 16-bit pair.
  *
  * The data sheet has NO bit table for CAM_IMGO_XSIZE (chapter 54.3 lists the
- * register as "DMA XSIZE" and stops, cam.txt:1644), so this whole derivation is
+ * register as "DMA XSIZE" and stops, page 1930), so this whole derivation is
  * vendor-sourced.  It is reproduced rather than replaced because there is
  * nothing to replace it with: inventing a simpler "width in pixels" would
  * produce a value the engine reads as something else.
@@ -528,7 +541,7 @@ static void mtk_cam_config_imgo(struct mtk_cam *cam, dma_addr_t addr,
 
 	/*
 	 * The buffer address.  See the long note in the file header: the data
-	 * sheet documents this register at cam.txt:1633 and the vendor's own
+	 * sheet documents this register at page 2032 and the vendor's own
 	 * RTBC path writes it with a CQ instruction of 0x00004300
 	 * (isp_drv.cpp:2471), but the vendor's normal path never writes it at
 	 * all.  Writing the documented register directly is the only choice
@@ -637,17 +650,20 @@ static void mtk_cam_disable_imgo(struct mtk_cam *cam)
  * Bring the block up and start it.
  *
  * The order is reset, then format selection, then channel enable, then start.
- * The vendor's pass2 path resets the block (isp_function.cpp:3159 area sets
- * CAM_CTL_START CQ0_START only after cam_cq_cfg() has pointed CAM_CTL_CQ0B_
- * BASEADDR at a descriptor in DRAM); this driver has no command queue to arm,
- * because the CQ descriptor format is only documented in a vendor header that
- * is not in this tree, so the format and geometry are written directly instead.
+ * The vendor's pass1 path resets the block and then strobes CQ0_START (bit 5)
+ * or CQ0B_START (bit 6) -- 0x00000020 at isp_function.cpp:3159 and 0x00000040
+ * at :3169 -- only after cam_cq_cfg() (isp_function.cpp:1538) has pointed a
+ * CAM_CTL_CQ*_BASEADDR at a descriptor queue in DRAM.  This driver arms no
+ * command queue, because the CQ descriptor format is documented only in a
+ * vendor header that is not in this tree, so the format and geometry are
+ * written directly instead and only the PASS2 strobe below is used.
  *
  * The format select is programmed before anything is enabled, because
  * cam_out_fmt and cam_in_fmt determine what the whole pipeline does and an
- * engine enabled against the reset value of 0 -- which cam.txt:4955 documents
- * as "0: Reserved" for a YUV cam_out_fmt -- would be running an unconfigured
- * path.
+ * engine enabled against the reset value of 0 would be running an
+ * unconfigured path: the data sheet's cam_out_fmt table (page 1955) lists
+ * 0 as "Reserved" for a YUV output, and its cam_in_fmt table (page 1955-1956)
+ * is only meaningful once sub_mode says which input format it is.
  */
 static int mtk_cam_start(struct mtk_cam *cam, u32 width, u32 height,
 			 dma_addr_t addr)
@@ -678,9 +694,9 @@ static int mtk_cam_start(struct mtk_cam *cam, u32 width, u32 height,
 	 * never enabled.
 	 *
 	 * Note scenario 0 is IC ("connect to a sensor"), not "no special
-	 * scenario": the data sheet's SCENARIO table at page 1956 has no entry
-	 * meaning "none", and 0 is ISP_SCENARIO_IC on the vendor side too
-	 * (isp_function.h:293).  0 is simply the right default here.
+	 * scenario": the data sheet's SCENARIO table at page 1956 has no
+	 * entry meaning "none", and 0 is ISP_SCENARIO_IC on the vendor side
+	 * too (isp_function.h:293).  0 is simply the right default here.
 	 */
 	cam_write(cam, CAM_CTL_FMT_SEL,
 		  CAM_SUB_MODE_RAW << CAM_CTL_FMT_SEL_SUB_MODE_SHIFT |
@@ -1065,8 +1081,8 @@ static int mtk_cam_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
 		goto err_upstream;
 
 	/*
- * Retain the buffer so it is not handed back to userspace while the engine may
- * still be writing to it.  Without a sensor it never completes, so this is the
+	 * Retain the buffer so it is not handed back to userspace while the engine
+	 * may still be writing to it.  Without a sensor it never completes, so this is the
  * buffer that sits in VB2_BUF_STATE_ACTIVE until STREAMOFF, and
  * stop_streaming() is what returns it.
  *
@@ -1420,7 +1436,7 @@ static bool mtk_cam_irq(struct mtk_cam *cam)
 	/*
 	 * A plain read.  CAM_CTL_INT_EN bit 31 (INT_WCLR_EN) is left at its reset
 	 * value of 0, which the data sheet documents as "0: Read clear"
-	 * (cam.txt:5770-5780), so reading CAM_CTL_DMA_INT is what clears the
+	 * (data sheet page 1958), so reading CAM_CTL_DMA_INT is what clears the
 	 * status bits.  Reading into a local and testing that local is what makes
 	 * the clearing happen exactly once, and it has to happen before anything
 	 * else so an interrupt for another channel is still cleared.

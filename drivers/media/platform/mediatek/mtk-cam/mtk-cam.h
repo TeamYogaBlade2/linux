@@ -163,8 +163,9 @@
  *   150040B8  CAM_CTL_CQ0B_BASEADDR
  *   150040BC  CAM_CTL_CQ0C_BASEADDR
  *
- * (cam.txt:9562-9604 is the full bit table for CQ0; CQ0B and CQ0C are listed
- * with the same 32-bit RW field at cam.txt:1177-1181.)  The offsets are
+ * (data sheet page 1985 carries the full bit table for CQ0, one RW field
+ * CTL_CQ0_BASEADDR[31:0] described as "CQ0 base address"; CQ0B is on page
+ * 1987 and CQ0C on the same, with the same 32-bit RW field.)  The offsets are
  * corroborated by the vendor register block at isp_reg.h:8866-8871, whose
  * comments read "// 40A8", "// 40B8" and "// 40BC".
  */
@@ -199,11 +200,11 @@
  *
  *   sub_mode = CAM_SUB_MODE_RAW, cam_in_fmt = CAM_FMT_SEL_BAYER10.
  *
- * That is the only pair that matches what is wired up.  SCAM is a CSD parser
- * that does not convert the payload (see mtk-scam.c), so CAM's sink carries the
- * sensor's own Bayer 10 bits, and the data sheet's Bayer table is the one that
- * applies.  The vendor agrees on the value from the other direction:
- * isp_function.h:328-330 spells out
+ * That is the only pair that matches what is actually wired up.  SCAM is a CSD
+ * parser that does not convert the payload (see mtk-scam.c), so CAM's sink
+ * carries the sensor's own Bayer 10 bits, and the data sheet's Bayer table is
+ * the one that applies.  The vendor agrees on the value from the other
+ * direction: isp_function.h:328-330 spells out
  *
  *	#define CAM_FMT_SEL_BAYER8       0
  *	#define CAM_FMT_SEL_BAYER10      1
@@ -211,7 +212,7 @@
  *
  * matching page 1956 exactly, and PostProcPipe.cpp:781-785 is what selects it
  * (CAM_FMT_SEL_BAYER10 for a eImgFmt_BAYER10 IMGI port), in the same switch
- * whose YUV arm at :715 selected the pair used before.
+ * whose YUV arm at :715 is what selected the pair used before.
  *
  * The vendor spells out the same bit layout in stIspTopFmtSel
  * (isp_function.h:517-541: scenario:3, sub_mode:3, cam_in_fmt:4,
@@ -251,9 +252,9 @@
  * the vendor names the same two ISP_SUB_MODE_RAW / ISP_SUB_MODE_YUV at
  * isp_function.h:303-304, both 0 and 1 respectively.
  *
- * This was CAM_SUB_MODE_YUV (1) paired with a Bayer sink bus code, which is the
- * contradiction this driver carried: sub_mode=1 would have made the data sheet
- * select the *YUV* input table for a Bayer sensor.
+ * This was CAM_SUB_MODE_YUV (1) paired with the Bayer cam_in_fmt value, which
+ * is the contradiction this driver carried: sub_mode=1 would have made the
+ * data sheet select the *YUV* input table for a Bayer sensor.
  */
 #define CAM_SUB_MODE_RAW			0
 
@@ -292,10 +293,11 @@
  *
  * THE DATA SHEET HAS NO BIT TABLE FOR THIS REGISTER.  Chapter 54.3 lists
  * CAM_IMGO_CON at 0x15004314 with the function "DMA control register" and
- * then stops; there is no field description for it anywhere in cam.txt (grep
- * for "burst" in cam.txt returns nothing at all).  So the fields below are
- * NOT traceable to cam.txt and are recorded here explicitly as vendor-derived,
- * with the vendor line that establishes each one.
+ * then stops (chapter 54.3 register table, page 1930); there is no bit table
+ * for it anywhere in chapter 54 -- searching the whole chapter for "burst"
+ * returns nothing.  So the fields below are NOT traceable to the data sheet
+ * and are recorded here explicitly as vendor-derived, with the vendor line
+ * that establishes each one.
  *
  * The vendor writes this register as a single literal, isp_function.cpp:2122
  * and :2145:
@@ -333,7 +335,7 @@
 /*
  * CAM_IMGO_CON2.  The vendor sets it to 0 for the "ultra-high" case
  * (isp_function.cpp:2117) and to a nonzero value alongside the tuned CON
- * (isp_function.cpp:2123).  There is no field table for it in cam.txt either.
+ * (isp_function.cpp:2123).  There is no field table for it in chapter 54 either.
  * Zero is the value the vendor pairs with the CON this driver uses, and it is
  * the register's documented reset value, so it is written as a plain 0.
  */
@@ -399,16 +401,15 @@ enum {
  * S_FMT on CAM's sink cannot conflict with SCAM's source, and CAM answers
  * CAM_OUT_FMT (post-CDP, processed) on its source pad.
  *
- * The sink code is the sensor's, and it is Bayer 10-bit packed.  The only
- * sensor this platform shipped is the A5142, which is
+ * The sink code is the sensor's, and it is Bayer 10-bit packed: the only
+ * sensor this platform ever shipped is the A5142, which is
  * SENSOR_OUTPUT_FORMAT_RAW_B over MIPI with a 10-bit payload
- * (aquaris-5/.../imgsensor/a5142_mipi_raw/a5142mipi_Sensor.h:79-81), and the
- * data sheet says the same thing about the block: chapter 54.1 (page 1926)
- * states that "MT6589 camera receives RAW and SOC sensor image data ...
- * and outputting YUV data to DRAM", i.e. RAW in, YUV out.  So the sink is RAW
- * and the source is YUV, which is exactly what CAM_SUB_MODE_RAW below selects
- * for the sink.  The driver had these two declarations contradicting each
- * other: a Bayer sink code paired with a YUV sub_mode.
+ * (aquaris-5/.../imgsensor/a5142_mipi_raw/a5142mipi_Sensor.h:79-81), and
+ * MT6589 data sheet chapter 54.1 states outright that "MT6589 camera receives
+ * RAW and SOC sensor image data ... and outputting YUV data to DRAM" (p.1926),
+ * i.e. RAW in and YUV out.  CAM_CTL_FMT_SEL's own sub_mode field agrees:
+ * CAM_SUB_MODE_RAW below, not CAM_SUB_MODE_YUV.  The YUV reading was never
+ * right and is gone.
  */
 #define CAM_MBUS_CODE_SINK			MEDIA_BUS_FMT_SBGGR10_1X10
 #define CAM_MBUS_CODE_SRC			MEDIA_BUS_FMT_YUYV8_1X16
@@ -418,14 +419,16 @@ enum {
  *
  * The MT6589 data sheet's TPIPE width/height fields (CAM_CTL_TPIPE,
  * page 1967-1968) are 10-bit and 12-bit fields but the CAM_CTL_*_SIZE
- * registers are described in cam.txt's own summary as pixel counts with no
- * stated limit, so there is no datasheet-derived bound to quote here.  The
- * upper bound below is instead the DMA engine's own practical limit: the
- * destination scan window fields in the neighbouring G2D block are documented
- * as "range:[1, 2048]" (cam.txt:34-46), and the IMGO XSIZE field shares that
- * block's addressing width.  2048 is therefore used as the ceiling on both
- * axes, and the 1280x960 seed matches mtk-scam.h's SCAM_DEFAULT_*
- * so the graph starts out consistent across the bridge.
+ * registers are described in chapter 54.3's register summary as "DMA XSIZE" /
+ * "DMA YSIZE" with no stated limit, so there is no datasheet-derived bound to
+ * quote here.  The upper bound below is instead a self-imposed one: 2048 is the
+ * documented range of the neighbouring G2D block's destination scan window
+ * ("WIDTH ... Unit: Pixel. 12-bit unsigned integer, range:[1, 2048]" and the
+ * same for HEIGHT, G2D_DST_CON, data sheet page 1919), and it is the widest
+ * geometry this driver's own untested DMA programming should be trusted with.
+ * It is a guard rail, not a hardware limit, and nothing in the data sheet says
+ * the IMGO engine could not do more.  The 1280x960 seed matches mtk-scam.h's
+ * SCAM_DEFAULT_* so the graph starts out consistent across the bridge.
  */
 #define CAM_MIN_WIDTH			16
 #define CAM_MIN_HEIGHT			16
@@ -437,10 +440,24 @@ enum {
 /*
  * Bytes per pixel on the IMGO path.
  *
- * CAM_OUT_FMT = 2 is YUV422 in one plane (cam.txt:5100-5104), i.e. two
- * bytes per pixel.  That matches the vendor's pixel_byte for IMGO, which
- * PostProcPipe.cpp:551 derives as 2 << CAM_ISP_PIXEL_BYTE_FP for IMG2O and
- * passes to configDmaPort() the same way for IMGO (PostProcPipe.cpp:1241).
+ * CAM_OUT_FMT = 2 is documented as "422 1 plane" for a YUV output (data sheet
+ * page 1955, and the vendor's own _FMT_YUV422_1P_ == 2 at
+ * isp_function.h:455), i.e. two bytes per pixel packed into one plane.  That is
+ * the format of CAM's *output*, which is what IMGO writes, so it is what sizes
+ * the buffer.
+ *
+ * Note this is NOT the same quantity as the sensor's input pixel: cam_in_fmt is
+ * Bayer 10 (see CAM_FMT_SEL_BAYER10 above) and the two are deliberately
+ * different, because the bytes that reach DRAM come out of the pipeline, not in
+ * off the sensor.  Nothing in between is implemented, so on this board the
+ * engine never actually converts one into the other.
+ *
+ * The vendor corroborates the two-byte IMGO output the same way, but only for
+ * IMG2O: PostProcPipe.cpp:551 sets pixel_byte_img2o to "2<<CAM_ISP_PIXEL_BYTE_FP"
+ * and passes it to configDmaPort() at :1254-1260.  For IMGO proper the vendor
+ * leaves pixel_byte_imgo at its initialiser of 1 (PostProcPipe.cpp:550), which
+ * is a different channel configured differently; so this constant rests on the
+ * cam_out_fmt encoding above, not on that line.
  */
 #define CAM_IMGO_BYTES_PER_PIXEL	2
 
