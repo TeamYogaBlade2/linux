@@ -159,6 +159,17 @@ static const struct mfd_cell mt6320_devs[] = {
 		.name = "mt6320-regulator",
 		.of_compatible = "mediatek,mt6320-regulator",
 	}, {
+		/*
+		 * The ISINK and keypad backlight sinks live in ISINKS_CONx and
+		 * KPLED_CON0 inside the PMIC, so like the regulator this cell
+		 * needs no resources of its own: the driver takes the parent's
+		 * regmap with dev_get_drvdata().  Without this cell the board's
+		 * "leds" child is never instantiated, because the PMIC node is
+		 * not a bus and of_platform_populate() cannot reach it.
+		 */
+		.name = "mt6320-led",
+		.of_compatible = "mediatek,mt6320-led",
+	}, {
 		.name = "mt6320-clk",
 		.of_compatible = "mediatek,mt6320-clk",
 	}, {
