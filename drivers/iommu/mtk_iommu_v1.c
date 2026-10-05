@@ -236,6 +236,20 @@ struct mtk_iommu_v1_data {
 	struct mtk_smi_larb_iommu larb_imu[MTK_LARB_NR_MAX];
 
 	struct mtk_iommu_v1_suspend_reg reg;
+
+	/*
+	 * Guards @mapping, which is shared by *every* client of this M4U: the
+	 * hardware has a single page table and a single IOVA space, so one
+	 * mapping is created and then attached to each device in turn.  That
+	 * makes the lazy "create it if nobody has yet" step a read-modify-write
+	 * on state every client races for, and the clients are probed from
+	 * different contexts (the bus notifier, the iommu_device_register()
+	 * replay over the bus, and an explicit iommu_probe_device() from a
+	 * driver binding late), so the check and the creation have to be one
+	 * critical section.  Sleeping is fine and required: the creation
+	 * allocates a 4 MiB page table bitmap under GFP_KERNEL.
+	 */
+	struct mutex mapping_lock;
 };
 
 struct mtk_iommu_v1_domain {
@@ -722,6 +736,17 @@ static const struct iommu_ops mtk_iommu_v1_ops;
  * a second mapping would be a second page-table bitmap over the same IOVA range
  * and a second domain the hardware cannot translate with.
  *
+ * The creation is under data->mapping_lock and the NULL test is inside that
+ * lock, because the clients are probed concurrently - from the bus notifier,
+ * from the replay bus_iommu_probe() runs at iommu_device_register(), and from
+ * any late iommu_probe_device() a driver binding late triggers - and they all
+ * share this one @data.  An unsynchronised "if (!data->mapping)" lets two
+ * clients each build a mapping: one wins and the other is silently orphaned,
+ * leaking its bitmap and its 4 MiB page table, while the loser still attaches
+ * the winner's.  Check-and-create in one critical section makes the second
+ * caller wait and then find the mapping already there, so exactly one mapping
+ * exists for the lifetime of the M4U and every client attaches that same
+ * pointer.
  *
  * Returns the shared mapping, or an error pointer.
  */
@@ -731,6 +756,8 @@ mtk_iommu_v1_get_mapping(struct device *dev)
 	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
 	struct dma_iommu_mapping *mtk_mapping;
 	int ret;
+
+	mutex_lock(&data->mapping_lock);
 
 	mtk_mapping = data->mapping;
 	if (!mtk_mapping) {
@@ -746,13 +773,20 @@ mtk_iommu_v1_get_mapping(struct device *dev)
 			 */
 			ret = IS_ERR(mtk_mapping) ? PTR_ERR(mtk_mapping) :
 						     -ENODEV;
-			return ERR_PTR(ret);
+			goto err_unlock;
 		}
 
 		data->mapping = mtk_mapping;
 	}
 
+	mutex_unlock(&data->mapping_lock);
+
 	return mtk_mapping;
+
+err_unlock:
+	mutex_unlock(&data->mapping_lock);
+
+	return ERR_PTR(ret);
 }
 
 /**
@@ -863,12 +897,13 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
  *
  * So the shape is: of_xlate collects the master ids, probe_device validates
  * them and links the consumer to its LARB, and this creates the one mapping
- * the M4U has (see mtk_iommu_v1_get_mapping()) and attaches it to this
- * device.  Every client ends up attached to the same mapping, which is what
- * "one page table, one IOVA space" requires.
+ * the M4U has (under a lock, see mtk_iommu_v1_get_mapping()) and attaches it
+ * to this device.  Every client ends up attached to the same mapping, which is
+ * what "one page table, one IOVA space" requires.
  *
- * Both the create and the attach sleep, so this may run in process context; the
- * core calls it from probe_finalize with no lock of its own held.
+ * Both the create and the attach are void-context-and-sleeping operations
+ * here, so taking data->mapping_lock inside the getter is safe; the core calls
+ * this from probe_finalize with no lock of its own held.
  */
 static void mtk_iommu_v1_probe_finalize(struct device *dev)
 {
@@ -1072,6 +1107,8 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	data->dev = dev;
 	soc = of_device_get_match_data(dev);
 	data->soc = soc;
+
+	mutex_init(&data->mapping_lock);
 
 	/* Protect memory. HW will access here while translation fault.*/
 	protect = devm_kcalloc(dev, 2, MTK_PROTECT_PA_ALIGN,
