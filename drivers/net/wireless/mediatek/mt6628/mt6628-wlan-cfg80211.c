@@ -781,7 +781,8 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 
 	sinfo->filled = BIT_ULL(NL80211_STA_INFO_SIGNAL) |
 			 BIT_ULL(NL80211_STA_INFO_TX_PACKETS) |
-			 BIT_ULL(NL80211_STA_INFO_TX_RETRIES);
+			 BIT_ULL(NL80211_STA_INFO_TX_RETRIES) |
+			 BIT_ULL(NL80211_STA_INFO_TX_FAILED);
 
 	/* The firmware reports RCPI, which is not a dBm value. */
 	sinfo->signal = mt6628_rcpi_to_dbm(stats.rcpi);
@@ -790,9 +791,25 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 	sinfo->tx_retries = le32_to_cpu(stats.tx_life_timeout_count);
 
 	/*
-	 * The link speed is reported in units of 0.5 Mbit/s.  This cfg80211
-	 * vintage has no bitrate field in struct rate_info, so it is left
-	 * for userspace to derive from the scan results.
+	 * tx_fail_count is the firmware's own count of frames that exhausted
+	 * their retries and were never acknowledged.  It is a separate counter
+	 * from tx_life_timeout_count above and is reported independently by
+	 * the vendor's own reader (nic_cmd_event.c:1737), so the two are not
+	 * double-counting the same frames.
+	 */
+	sinfo->tx_failed = le32_to_cpu(stats.tx_fail_count);
+
+	/*
+	 * The link speed is reported in units of 0.5 Mbit/s - the vendor
+	 * driver multiplies it by 5000 to get bps
+	 * (nic_cmd_event.c:598).  This cfg80211 vintage has no bitrate field
+	 * in struct rate_info, so there is nowhere honest to put it; see
+	 * Downstream-Gaps.md section 2.5 for why no substitute is published.
+	 *
+	 * rx_bytes and tx_bytes are not filled either: EVENT_ID_STA_STATISTICS
+	 * carries no byte counters at all, and no other query command returns
+	 * one for a station.  Publishing a number the firmware never sent
+	 * would be worse than leaving the field out.
 	 */
 	return 0;
 }

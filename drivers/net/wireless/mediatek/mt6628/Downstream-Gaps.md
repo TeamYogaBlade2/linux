@@ -304,6 +304,139 @@ downstream does (`nic/que_mgt.c:3363-3369`); the bound is `CFG_STA_REC_NUM` = 20
 If host-side reordering is ever wanted, a reorder *flag* has to be decoded out of
 the HIF RX header first. That is separate work, not an extension of this one.
 
+### Station statistics: what the firmware actually returns
+
+`get_station()` reports signal, `tx_packets`, `tx_retries` and now `tx_failed`.
+That is the whole of what can honestly be published, and it is worth saying why,
+because each obvious candidate turned out to be unavailable:
+
+| Wanted | Available? | Why |
+|---|---|---|
+| `tx_failed` | **yes, now added** | `EVENT_ID_STA_STATISTICS.u4TxFailCount` |
+| `rx_bytes`, `tx_bytes` | no | the event carries no byte counter of any kind |
+| link quality | no | see below |
+| `connected_time` | no | not tracked host-side, and the event has no field for it |
+| tx/rx bitrate | no | no field to put it in, see below |
+
+**No byte counters exist.** `EVENT_ID_STA_STATISTICS_T`
+(`nic_cmd_event.h:1690-1724`) carries `u4TxCount`, `u4TxFailCount`,
+`u4TxLifeTimeoutCount` and `u4TxDoneAirTime` — all packet or airtime counts, none
+of them bytes. Searching the whole downstream tree for a byte counter turned up
+only `u2TxByteCount_UserPriority`, which is a HIF *transmit descriptor* field
+describing the packet about to be sent (`nic_cmd_event.h:830`), not a statistic.
+No query command in `ENUM_CMD_ID_T` (`nic_cmd_event.h:723-760`) returns one for a
+station. So `rx_bytes`/`tx_bytes` are left unfilled rather than approximated.
+
+**`tx_failed` is a genuinely separate counter, not a restatement of
+`tx_retries`.** The firmware keeps `u4TxFailCount` (retries exhausted, never
+acknowledged) and `u4TxLifeTimeoutCount` (aged out in the queue) apart, and the
+vendor's own reader treats them as independent — `gl_cfg80211.c:1623` adds them
+into a single error total rather than substituting one for the other, and
+`:1668-1669` exports them as two separate netlink attributes. `tx_retries` keeps
+its existing `tx_life_timeout_count` mapping and `tx_failed` takes
+`tx_fail_count`.
+
+**No link quality is published, and the obvious candidate is a trap.**
+`EVENT_ID_STA_STATISTICS_T` does have a `ucLinkQuality` byte, and it would be a
+one-line change to report it. It should not be. Grepping the entire vendor tree
+for `ucLinkQuality` returns only its definition — nothing reads it out of this
+event, anywhere, ever. The field the vendor *does* consume is
+`EVENT_LINK_QUALITY.cLinkQuality`, which arrives via a different command
+(`CMD_ID_GET_LINK_QUALITY`) and whose scale is likewise undocumented. Publishing a
+byte whose scale and provenance are unknown would hand userspace a plausible-
+looking but meaningless 0-100 number.
+
+The vendor *does* compute a real 0-100 link score
+(`gl_cfg80211.c:1621-1662`), and it is a good metric — but it cannot be
+reproduced here. Its two main inputs, `u4TxTotalCount` and
+`u4TxExceedThresholdCount`, are marked **"From driver"** in
+`PARAM_GET_STA_STATISTICS` (`wlan_lib.h:576-583`) and are filled from
+`prStaRec->u4TotalTxPktsNumber` and `prStaRec->u4ThresholdCounter`
+(`wlan_lib.c:5732-5733`), which the downstream driver maintains in its own TX
+completion hook. That hook does not exist in this port, so reimplementing the
+score would mean inventing a packet-time threshold the vendor defines elsewhere.
+
+`ucPer` (base 128) and `u4PhyMode` are likewise reported verbatim to userspace by
+the vendor without ever being interpreted, so there is no scale to publish.
+
+**The bitrate has nowhere to go.** `u2LinkSpeed` is in units of 0.5 Mbit/s — the
+vendor multiplies by 5000 for bps (`nic_cmd_event.c:598`) — but this cfg80211
+vintage's `struct rate_info` (`include/net/cfg80211.h`) has no bitrate member, so
+there is no honest destination for it. Deriving a value from `u4PhyMode` would
+mean writing an MCS/BW-to-rate table the vendor does not ship.
+
+One caveat applies to all of it: `CMD_ID_GET_STA_STATISTICS` is only sent when
+the firmware advertises `COMPILE_FLAG0_GET_STA_LINK_STATUS`
+(`wlan_lib.c:5762`, flag defined `config.h:1521`), and this tree has no way to
+read `u4FwCompileFlag0`. On a firmware that does not advertise it, the command
+never completes, `get_station()` returns `-EOPNOTSUPP`, and none of the above is
+published at all.
+
+### Unhandled events that remain unhandled, with the reason
+
+The list at the top of this section is a list of what the firmware *may* raise,
+not of what this driver should act on. Each remaining entry was checked against
+the MT6628 downstream dispatch (`nic_rx.c:1636-2220`) and the MT6628-specific
+`config.h`; the ones that survive are genuinely not actionable here:
+
+- **`EVENT_ID_STA_AGING_TIMEOUT` (0x21)** is an **AP-mode** event and cannot
+  apply to a station-only driver. Downstream removes the STA_REC from the AP's
+  client list (`nic_rx.c:2070-2097` → `bssRemoveStaRecFromClientList()`,
+  `bss.c:2037`), which requires a `rStaRecOfClientList` that the vendor itself
+  documents as "For IBSS/AP Mode, all known STAs in current BSS"
+  (`adapter.h:774`). There is no client list to remove anything from, and the
+  event cannot fire: the only peer this firmware has is the AP it is associated
+  with, and from the AP's perspective that is not an aged client.
+  It was also suggested this be delivered via `cfg80211_inform_bss_frame()`:
+  that function takes a **beacon or probe response** (`net/wireless/scan.c:3253`),
+  it has no station-timeout concept at all, and cfg80211 ages *BSS entries* purely
+  by time (`cfg80211_bss_expire()`, `scan.c:1393`) — never by a firmware event.
+  Feeding it this event would be meaningless. So it stays unhandled, by design.
+- **`EVENT_ID_RX_FLUSH` (0x16)** and **`EVENT_ID_SEC_CHECK_RSP` (0x22)** have
+  **no handler at all** in the MT6628 downstream dispatch — they are declared in
+  `nic_cmd_event.h:784` and `:797` and appear in no `case` label anywhere in the
+  tree. There is no downstream semantics to reproduce, and guessing at one would
+  be inventing it. Left unhandled.
+- **`EVENT_ID_UPDATE_NOA_PARAMS` (0x1C)** and **`EVENT_ID_AP_OBSS_STATUS` (0x1D)**
+  are P2P/AP concepts. Both downstream handlers are behind `if
+  (prAdapter->fgIsP2PRegistered)` (`nic_rx.c:2052`, `:2105`), and the NOA body is
+  only accepted when `ucNetTypeIndex == NETWORK_TYPE_P2P_INDEX`. This radio is
+  STA-only; there is no P2P interface for them to describe. (Note that
+  `CFG_ENABLE_WIFI_DIRECT` is 1 in this build — `config.h:1339` — but P2P is not
+  implemented by this driver, so `fgIsP2PRegistered` can never be true.) The
+  remain-on-channel path in this driver reports *the driver's own* window to
+  cfg80211 and is never fed by the firmware, so there is nothing here to forward.
+- **`EVENT_ID_STA_CHANGE_PS_MODE` (0x1A)** only updates
+  `prStaRec->fgIsInPS` and the per-STA free quota (`que_mgt.c:4625-4660`).
+  In station mode there is exactly one STA_REC — the AP — and the free quota it
+  adjusts is a queue-reservation mechanism for servicing *many* stations. This
+  driver has no per-STA PS state and no quota table to mirror the value into, so
+  there is nothing for the event to change.
+- **`EVENT_ID_BSS_ABSENCE_PRESENCE` (0x19)** sets
+  `prBssInfo->fgIsNetAbsent` and `ucBssFreeQuota` (`que_mgt.c:4580-4611`), which
+  downstream then uses to *withhold transmit queue space* while the BSS is absent
+  (`que_mgt.c:4466-4477`, and six further call sites). This driver does no
+  transmit queue accounting in the firmware — the SDIO FIFO cap in `mtk-stp.c`
+  is a transport concern, unaware of BSS presence — so mirroring the flag would
+  add state nothing reads. Link loss is already handled directly, through
+  `EVENT_ID_BSS_BEACON_TIMEOUT` and the driver-driven roam in §2.5.
+- **`EVENT_ID_SLEEPY_NOTIFY` (0x0e)** only sets `fgWiFiInSleepyState`, which the
+  vendor reads to gate its *own* power-management state machine
+  (`pwr_mgt.h:129`, `wlan_lib.c:5213`). This driver has no such state machine to
+  gate — its runtime idle path is driven by the WMT Driver Own/Firmware Own
+  handshake, and the firmware's sleepy flag has no equivalent host-side meaning.
+  Recording it would add state nothing reads.
+- The remaining entries (debug, test and build-date paths: `SW_DBG_CTRL`,
+  `DUMP_MEM`, `RX_ERR`, `UPDATE_RDD_STATUS`, `UPDATE_BWCS_STATUS`,
+  `UPDATE_BCM_DEBUG`, `BUILD_DATE_CODE`, `STA_STATISTICS_UPDATE`) have either no
+  downstream handler or handlers behind `CFG_SUPPORT_RDD_TEST_MODE`, which is `0`
+  in this configuration (`config.h:1397`).
+
+So the driver now acts on the events that have a well-defined kernel-side meaning
+in station mode — beacon timeout, deauth, Block Ack notification, scan done — and
+deliberately drops the rest. The dispatcher frees what it does not claim, so an
+unhandled event costs one `kfree_skb()` and nothing else.
+
 ### 2.5 Behavioural notes
 
 - **Roaming:** driver-driven, not firmware-driven. `EVENT_ID_ROAMING_STATUS`
