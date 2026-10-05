@@ -59,6 +59,24 @@ struct mt6628_wlan {
 	 * interrupt, transmit or command.
 	 */
 	bool pm_idle;
+	/*
+	 * Set when the firmware reports EVENT_ID_SLEEPY_NOTIFY, i.e. that it
+	 * has no more work queued and the host may take the radio.
+	 *
+	 * This is the firmware's half of the hand-off and is deliberately not
+	 * pm_idle: pm_idle means "we have already given the chip up", which is
+	 * the decision, while this means "we are allowed to make that
+	 * decision". Collapsing the two would let a firmware notification
+	 * look like a completed hand-off.
+	 *
+	 * Downstream gates the same exchange on the same flag: with
+	 * CFG_ENABLE_FULL_PM=1, RECLAIM_POWER_CONTROL_TO_PM calls
+	 * nicpmSetFWOwn() precisely while fgWiFiInSleepyState is set
+	 * (pwr_mgt.h:122-131), and nicpmSetFWOwn is the same WHLPCR
+	 * set/read-back/clear sequence mt6628_wlan_give_firmware_own() issues
+	 * (nic_pwr_mgt.c:265-301).
+	 */
+	bool fw_sleepy;
 	struct delayed_work pm_work;
 	/* Remain-on-channel state, including the request we granted it with. */
 	u64 roc_cookie;

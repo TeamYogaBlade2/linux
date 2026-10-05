@@ -186,6 +186,50 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			goto drop;
 		}
 
+		/*
+		 * EVENT_ID_SLEEPY_NOTIFY: the firmware has no more work queued
+		 * and the host may take the radio.  Its body is a single byte
+		 * saying which side is entering the sleepy state
+		 * (nic_cmd_event.h:1176-1179).
+		 *
+		 * Downstream uses exactly this as the condition for handing the
+		 * chip over: with CFG_ENABLE_FULL_PM=1, RECLAIM_POWER_CONTROL_TO_PM
+		 * calls nicpmSetFWOwn() while fgWiFiInSleepyState is set
+		 * (pwr_mgt.h:122-131), and nicpmSetFWOwn is the WHLPCR
+		 * set/read-back/clear sequence mt6628_wlan_give_firmware_own()
+		 * already performs (nic_pwr_mgt.c:265-301).  Recording it and
+		 * letting the idle path act on it makes our hand-off happen
+		 * when the firmware says it can, rather than only when our own
+		 * timer happens to expire.
+		 *
+		 * A byte of 0 means the firmware is the one going to sleep, not
+		 * that it is ours to take, so only a non-zero value grants it.
+		 */
+		if (event->eid == MT6628_EVENT_ID_SLEEPY_NOTIFY) {
+			if (body_len < 1)
+				goto drop;
+
+			wl->fw_sleepy = skb->data[MT6628_WIFI_EVENT_HEADER_LEN];
+			if (wl->fw_sleepy) {
+				/*
+				 * The firmware has said it is idle, so take
+				 * the radio now rather than waiting for the
+				 * idle timer to expire.  This refuses while
+				 * any queue is non-empty, which is the same
+				 * condition downstream's block count
+				 * enforces, so it is a cheap no-op in the
+				 * common case and never a wait.
+				 *
+				 * pm_idle is left alone: it belongs to the
+				 * armed timer, and clearing it here would
+				 * make the timer's own reclaim path run
+				 * instead of this one.
+				 */
+				mt6628_wlan_give_firmware_own(wl);
+			}
+			goto drop;
+		}
+
 		if (wl->event_handler && wl->event_handler(wl, skb))
 			continue;
 
@@ -1122,6 +1166,12 @@ out_release:
 int mt6628_wlan_pm_resume(struct mt6628_wlan *wl)
 {
 	int ret;
+
+	/*
+	 * The firmware's sleepy notification described the state before we took
+	 * the radio, so it is stale the moment ownership comes back.
+	 */
+	wl->fw_sleepy = false;
 
 	if (!wl->runtime_started || !wl->pm_idle)
 		return 0;
