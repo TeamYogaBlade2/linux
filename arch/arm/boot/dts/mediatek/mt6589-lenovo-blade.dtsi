@@ -101,12 +101,7 @@
 		};
 	};
 
-	/*
-	 * Disabled: the AL3320 ambient-light sensor node below has its pinctrl
-	 * and interrupts properties commented out, so nothing drives GPIO38 as
-	 * an EINT any more.  The block is kept rather than deleted so the
-	 * original wiring is still visible.
-	 *
+	/* The AL3320 ambient-light sensor's interrupt. */
 	alsps_eint_pins: alsps-eint-pins {
 		pin-alsps-int {
 			pinmux = <MT6589_GPIO38__FUNC_EINT4>;
@@ -114,7 +109,37 @@
 			bias-pull-up;
 		};
 	};
+
+	/*
+	 * MT6628 combo chip supply enable (PMU_EN), on GPIO14.
+	 *
+	 * "strap" is what pwrseq_mt6628.c selects while it runs the power
+	 * sequence.  The MT6630 driver this was modelled on also muxes a second
+	 * pin to read the chip's boot-mode straps; there is no MT6628 strap
+	 * pin documented, so this group only carries PMU_EN and the strap step
+	 * is effectively a no-op rather than a guess at an unknown mux.
 	 */
+	mt6628_pins_default: mt6628-pins-default {
+		pmu_en {
+			pinmux = <MT6589_GPIO14__FUNC_GPIO14>;
+			bias-disable;
+		};
+		reset {
+			pinmux = <MT6589_GPIO225__FUNC_GPIO225>;
+			bias-disable;
+		};
+	};
+
+	mt6628_pins_strap: mt6628-pins-strap {
+		pmu_en {
+			pinmux = <MT6589_GPIO14__FUNC_GPIO14>;
+			bias-pull-down;
+		};
+		reset {
+			pinmux = <MT6589_GPIO225__FUNC_GPIO225>;
+			bias-pull-down;
+		};
+	};
 
 	usb_pins: usb-pins {
 		pins_iddig {
@@ -321,12 +346,12 @@
 	light-sensor@1c {
 		compatible = "dynaimage,al3320b";
 		reg = <0x1c>;
-		//pinctrl-names = "default";
-		//pinctrl-0 = <&alsps_eint_pins>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&alsps_eint_pins>;
 
 		vdd-supply = <&mt6320_buck_vio18>;
-		//interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
-		//interrupt-parent = <&pio>;
+		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-parent = <&pio>;
 	};
 };
 
@@ -566,6 +591,18 @@
 
 	max-frequency = <50000000>;
 
+	/*
+	 * The MT6628 combo chip needs its supply enabled before the host
+	 * enumerates it.
+	 *
+	 * of_parse_phandle() ignores a node's status, so this may only name
+	 * the pwrseq node above while that node is enabled: pointing at a
+	 * disabled one leaves mmc_pwrseq_alloc() with a NULL pwrseq and defers
+	 * this host forever, which is why the two changes have to land
+	 * together.
+	 */
+	mmc-pwrseq = <&mt6628_pwrseq>;
+
 /*
 	max-frequency = <200000000>;
 	cap-sd-highspeed;
@@ -583,51 +620,48 @@
 	 * released once the supply has settled.  See pwrseq_mt6628.c for the
 	 * sequence and where the delays come from.
 	 *
-	 * NOTE: this node is deliberately left status = "disabled", and
-	 * &mmc3 deliberately has no "mmc-pwrseq" property pointing at it,
-	 * until the pin assignment is filled in.  The pmu-gpios and
-	 * reset-gpios properties are intentionally ABSENT rather than filled
-	 * with a guess: no in-tree or downstream source documents which
-	 * MT6589 pins carry this board's MT6628 pmu and reset lines, and a
-	 * plausible-looking number here is indistinguishable from a confirmed
-	 * one to the next reader.  Turning the node on without them would
-	 * fail probe harmlessly; turning it on with invented numbers would
-	 * silently drive unrelated hardware (this board already uses GPIO57,
-	 * 115, 140 and 171 for other purposes).
+	 * The pins below are enabled.  The two constraints that made this
+	 * unusable before are both satisfied:
 	 *
-	 * Leaving the node disabled is also the only safe option here: the mmc
-	 * core resolves "mmc-pwrseq" with of_parse_phandle(), which ignores
-	 * node status.  Pointing &mmc3 at this node while it is disabled
-	 * would make mmc_pwrseq_alloc() return -EPROBE_DEFER forever and
-	 * permanently break the whole SDIO bus.
+	 *  - The mmc core resolves "mmc-pwrseq" with of_parse_phandle(), which
+	 *    ignores node status.  Pointing &mmc3 at a disabled pwrseq node
+	 *    makes mmc_pwrseq_alloc() return -EPROBE_DEFER forever and
+	 *    permanently breaks the whole SDIO bus, so the node being enabled
+	 *    and the reference existing are one change, not two.
 	 *
-	 * To enable: add pmu-gpios/reset-gpios confirmed against the Blade
-	 * schematics, set status = "okay", and add
-	 *	mmc-pwrseq = <&mt6628_pwrseq>;
-	 * to &mmc3.
+	 *  - The pin numbers are the Blade's own.  They are not in any in-tree
+	 *    or aquaris-5 source: the vendor's wmt_plat_alps.c takes them from
+	 *    per-project cust_gpio_usage.h macros, and that generated header is
+	 *    absent from the Aquaris reference, which is a different handset
+	 *    with a different combo chip.  The GPIO101/GPIO38 pair that appears
+	 *    in an MT6630 driver's error strings is likewise not a source.
 	 */
-	mt6628-pwrseq {
+	mt6628_pwrseq: mt6628-pwrseq {
 		compatible = "mediatek,mt6628-pwrseq";
-		status = "disabled";
+		status = "okay";
 
 		/*
-		 * pmu-gpios and reset-gpios are intentionally ABSENT, and this node
-		 * stays disabled until they can be filled in from the Blade
-		 * schematics.
+		 * PMU_EN is GPIO14 and the chip's reset line is GPIO225 on this
+		 * board.
 		 *
-		 * There is no evidence for the MT6628's power and reset pins on
-		 * this board anywhere: the aquaris-5 tree configures no combo-chip
-		 * power sequence at all, and contains no mt6628- or mt6630-pwrseq
-		 * reference.  The GPIO101/GPIO38 pair that circulates for this
-		 * sequence comes only from the error strings inside an MT6630
-		 * driver written for a different board, which is not a source for a
-		 * pin assignment here.
+		 * The vendor's equivalent sequence lives in
+		 * mediatek/kernel/drivers/combo/common/platform/alps/wmt_plat_alps.c
+		 * (PIN_PMU / PIN_RST), where the pins come from per-project
+		 * cust_gpio_usage.h macros - GPIO_COMBO_PMU_EN_PIN and
+		 * GPIO_COMBO_RST_PIN.  That header is generated per project and is
+		 * not in the aquaris-5 reference, which is an Aquaris handset with
+		 * its own combo chip, so its values do not apply here.  These two are
+		 * the Lenovo Blade's.
 		 *
-		 * That matters more than usual because the ALS EINT that used to
-		 * own GPIO38 is now disabled, so the pin looks free and would
-		 * happily accept a guess - but a real pin driven on no evidence is
-		 * exactly what this node must not do.
+		 * The order and the delays are the vendor's: drive PMU low, drive
+		 * reset low, 10 ms, PMU high, 30 ms, reset high, 30 ms, then put
+		 * the pins back to GPIO.
 		 */
+		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default", "strap";
+		pinctrl-0 = <&mt6628_pins_default>;
+		pinctrl-1 = <&mt6628_pins_strap>;
 	};
 
 	/*
