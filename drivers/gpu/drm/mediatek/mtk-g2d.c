@@ -407,12 +407,14 @@ static int g2d_check_rect(u32 pitch, u32 bpp, u32 x, u32 y,
 	if (!height || height > G2D_MAX_HEIGHT)
 		return -EINVAL;
 
-	/* The sum is evaluated in u64 so a large x cannot wrap past the check
-	 * on a configuration where dma_addr_t is 32 bits wide.
+	/* Widen before the add, not after: (u64)(x + width) would evaluate the
+	 * sum in u32 first and wrap there, so a large x passes a check whose
+	 * whole purpose is to keep the rectangle inside the row.  Both operands
+	 * are u32 from the caller, so that is reachable.
 	 */
 	if (pitch > G2D_PITCH_MAX)
 		return -EINVAL;
-	if ((u64)(x + width) * bpp > pitch || pitch % bpp)
+	if (((u64)x + width) * bpp > pitch || pitch % bpp)
 		return -EINVAL;
 
 	/* Cap the origin at the same scan-window bound the size is checked
@@ -575,14 +577,18 @@ static bool g2d_rects_overlap(dma_addr_t src, u32 src_bpp,
 			       u32 dst_x, u32 dst_y,
 			       u32 width, u32 height)
 {
-	u32 y_start, y_end;
+	u64 y_start, y_end;
 	u64 s, d;
 
 	if (src != dst)
 		return false;
 
-	y_start = max(src_y, dst_y);
-	y_end = min(src_y + height, dst_y + height);
+	y_start = max_t(u64, src_y, dst_y);
+	/* Widen each operand before the add: src_y + height is a u32 sum that
+	 * wraps for a large origin, which would make the y ranges look disjoint
+	 * and report a same-surface blit as safe.
+	 */
+	y_end = min((u64)src_y + height, (u64)dst_y + height);
 	if (y_start >= y_end)
 		return false;
 

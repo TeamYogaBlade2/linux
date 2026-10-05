@@ -238,7 +238,14 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 		return -EINVAL;
 
 	/* 3. One row, origin included. */
-	row_end = (u64)(s->x + rect_w) * out->bpp;
+	/*
+	 * Widen before the add, not after: (u64)(x + rect_w) evaluates the sum
+	 * in u32 first, so a large x wraps there and the check then compares a
+	 * small number against the pitch and passes.  Both operands are u32
+	 * from userspace, so that is reachable, and this check exists to keep
+	 * the rectangle inside the row.
+	 */
+	row_end = ((u64)s->x + rect_w) * out->bpp;
 	if (row_end > s->pitch)
 		return -EINVAL;
 
@@ -275,7 +282,10 @@ static int mtk_g2d_uapi_resolve(struct drm_device *dev,
 	}
 
 	/* 5. The real allocation, which is the check that actually protects it. */
-	if ((u64)(s->y + rect_h) * s->pitch > out->size) {
+	/* Same widen-before-add reasoning as check 3: this is the check that is
+	 * supposed to stop the engine writing past the end of a buffer.
+	 */
+	if (((u64)s->y + rect_h) * s->pitch > out->size) {
 		ret = -EINVAL;
 		goto err_put;
 	}
