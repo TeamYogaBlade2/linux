@@ -1243,9 +1243,11 @@ sdio_driving_cfg=0x00077777
 ```
 
 The vendor driver passes those two through unchanged: `coex_wmt_ant_mode` becomes
-byte 5 of the WMT coex command (`wmt_ic_6628.c:1323`), and `sdio_driving_cfg` is
+byte 5 of the WMT coex command (`wmt_ic_6628.c:1368`), and `sdio_driving_cfg` is
 split into the DAT0/1, DAT2/3 and CMD drive nibbles
-(`wmt_ic_6628.c:1405-1411`). `mtk-stp.c` already does the same thing at
+(`wmt_ic_6628.c:1455-1457`, the DAT0/1, DAT2/3 and CMD nibble masks). The same
+code also appears in the conn_soc copy at `wmt_ic_soc.c:1597-1603`.
+`mtk-stp.c` already does the same thing at
 `mt6628_wmt_coex_init()` and `mt6628_wmt_set_sdio_driving()`, so the values arrive
 in the chip in the same encoding the vendor uses. Note the *meaning* of the
 antenna modes is documented nowhere in the vendor tree — only that every MT6628
