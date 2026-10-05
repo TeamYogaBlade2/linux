@@ -1480,12 +1480,37 @@
 			 */
 		};
 
+		/*
+		 * DISP_MUTEX: six handshake registers arbitrating access to the
+		 * shadow registers, per the data sheet's DISP_MUTEX chapter
+		 * (ch. 52, p. 1897: "six independent mutex controllers for
+		 * maximum three independent linked paths").
+		 *
+		 * No clocks property, and that is deliberate - there is no gate
+		 * to give it.  The DISP0 gate register CG_CON0 (CG0) names 22
+		 * gates between bits 3 and 24 - SCL, OVL, color, 2DSHP, BLS,
+		 * WDMA0/1, RDMA0/1, gamma, command queue and G2D - with the
+		 * rest reserved, and none of them is a mutex.  Nothing in
+		 * drivers/clk/mediatek/ defines an MT6589 mutex gate either,
+		 * unlike the SoCs that do have one (CLK_MM_MUTEX on MT2701,
+		 * CLK_MDP_MUTEX0 on MT8186, and so on).  The block therefore
+		 * shares the display subsystem's own gating and lives in the
+		 * DIS power domain below.
+		 *
+		 * The previous "clocks = <&clk26m>" was a placeholder - the
+		 * comment beside it admitted "not found in clock list" - and
+		 * taking clk26m told the driver to pin an unrelated
+		 * always-on oscillator, which states nothing true about how this
+		 * block is clocked.  Better to declare no clock than a wrong one.
+		 *
+		 * interrupts is GIC_SPI 160, which the data sheet's interrupt
+		 * table (p. 417) names Disp_mutex_irq_b, active low - matching
+		 * the negative polarity and the GIC_SPI 160 declared here.
+		 */
 		mutex: mutex@14011000 {
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;
 			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
-			/* not found in clock list */
-			clocks = <&clk26m>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
