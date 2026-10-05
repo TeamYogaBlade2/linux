@@ -144,9 +144,9 @@ struct mt6628_wmt {
  * regenerating the table from the polynomial and comparing all 256 entries.
  *
  * The downstream driver computes this only on the BTIF/UART transport, where
- * it writes the trailer (stp_core.c:901-963) and verifies it on receive
- * (stp_core.c:2362-2380).  Over SDIO it writes a hard zero
- * (stp_core.c:869-871) and never verifies.  See Downstream-Gaps.md for why
+ * it writes the trailer (stp_core.c:949-952) and verifies it on receive
+ * (stp_core.c:2352).  Over SDIO it writes a hard zero
+ * (stp_core.c:898-899) and never verifies.  See Downstream-Gaps.md for why
  * this driver does compute it on both directions anyway.
  */
 static u16 mt6628_stp_crc16(const u8 *buf, size_t len)
@@ -472,7 +472,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 
 		/*
 		 * Scan for the frame marker one byte at a time, the way the
-		 * downstream MTKSTP_SYNC state does (stp_core.c:1690-1757).
+		 * downstream MTKSTP_SYNC state does (stp_core.c:1696-1757).
 		 * Downstream only commits once a whole 4-byte header is in
 		 * hand; this driver instead requires that the length the header
 		 * declares actually fits in what is left of the buffer, which
@@ -495,7 +495,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 			 * downstream parser rejects a header that fails it
 			 * (stp_core.c:2240-2244); over SDIO the chip is
 			 * documented to write zero there instead
-			 * (stp_core.c:871), so this is not enforced here.
+			 * (stp_core.c:889), so this is not enforced here.
 			 */
 			if (len < 2000 && frame_len <= end - pos) {
 				payload = hdr + MT6628_STP_HEADER_SIZE;
@@ -512,7 +512,7 @@ static void mt6628_stp_parse_rx(struct mt6628_wmt *wmt, u16 bus_len)
 				 * This is stricter than the downstream SDIO
 				 * path, which discards the two trailer bytes
 				 * without looking at them
-				 * (stp_core.c:1873-1882).  It costs one pass
+				 * (stp_core.c:1873-1877).  It costs one pass
 				 * over the payload and it cannot reject a frame
 				 * that is actually intact, because the checksum
 				 * is computed the same way it is written.
@@ -649,8 +649,8 @@ static int __mt6628_stp_send(struct mt6628_wmt *wmt,
 
 	/*
 	 * The trailer covers the payload only, exactly as downstream does on
-	 * the BTIF/UART transport (stp_core.c:948-951).  The SDIO branch
-	 * writes zeros there instead (stp_core.c:869-871).
+	 * the BTIF/UART transport (stp_core.c:950-952).  The SDIO branch
+	 * writes zeros there instead (stp_core.c:898-899).
 	 */
 	crc = mt6628_stp_crc16(buf, len);
 	frame[MT6628_STP_SDIO_HDR_SIZE + MT6628_STP_HEADER_SIZE + len] =
