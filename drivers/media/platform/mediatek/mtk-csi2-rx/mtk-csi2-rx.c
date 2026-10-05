@@ -50,9 +50,13 @@ struct mtk_csi2_rx {
 	/*
 	 * The D-PHY that sits below this receiver.  Obtained from the DT
 	 * "phys" property, exactly as the MT6589 DSI does with its TX PHY,
-	 * so the two are consistent.  Initialised on power_on() and
-	 * released on power_off(), because the PHY is what makes the
-	 * receiver's lanes able to receive anything at all.
+	 * so the two are consistent.
+	 *
+	 * The lifetime is bracketed by phy_init() in probe and phy_exit() in
+	 * remove; the per-resume power is phy_power_on()/phy_power_off(), which
+	 * is what mtk_csi2_rx_power_on()/power_off() do.  This comment used to
+	 * say the PHY was initialised and released by power_on()/power_off(),
+	 * which is not what the code does anywhere.
 	 */
 	struct phy *phy;
 
@@ -61,8 +65,8 @@ struct mtk_csi2_rx {
 	struct clk *seninf_tg_clk;
 	struct reset_control *seninf_rst;
 
-struct v4l2_subdev sd;
-struct mutex lock;
+	struct v4l2_subdev sd;
+	struct mutex lock;
 
 	/*
 	 * The media pads, indexed as CSI2_PAD_SINK / CSI2_PAD_SRC below.  The
@@ -1230,28 +1234,42 @@ static void mtk_csi2_rx_remove(struct platform_device *pdev)
 	v4l2_subdev_cleanup(&priv->sd);
 
 	/*
-	 * probe enabled runtime PM (pm_runtime_enable()).  Disable it now,
-	 * before the PHY goes away, and that order is the point: the PM core
-	 * waits for a resume that is already in flight and refuses any new
-	 * pm_runtime_resume_and_get(), so mtk_csi2_rx_power_on() can no longer
-	 * touch the D-PHY after phy_exit() has run.  Disabling it afterwards, as
-	 * this used to, left a window in which a resume could call phy_power_on()
-	 * on a PHY that was being exited.  It also stops the PM core being left
-	 * holding a state machine for a device that no longer exists, so the
-	 * devm cleanup runs with PM off and cannot fire a resume.
+	 * Take the hardware down explicitly.  pm_runtime_disable() on its own
+	 * does NOT power the block off: all it does is forbid further resumes,
+	 * leaving whatever state the device was in untouched.  A usage counter
+	 * above zero at this point therefore leaves the receiver powered, the
+	 * SENINF clocks running and the D-PHY up -- and phy_exit() below would
+	 * then run against a powered PHY.
 	 *
-	 * There is no power_off() to do here: remove only runs once the device
-	 * has been unbound and the last reference dropped, so runtime PM owns
-	 * the power state and has already taken it down.
+	 * The counter CAN be non-zero here.  mtk_csi2_rx_start_stream() takes a
+	 * reference with pm_runtime_resume_and_get() and returns it only in
+	 * mtk_csi2_rx_stop_stream(), so every instant between a STREAMON and the
+	 * matching STREAMOFF holds one.  This driver's only downstream is CAM,
+	 * whose vb2 stop_streaming() does call
+	 * mtk_cam_set_upstream_streaming(cam, false) -- but mtk_cam_remove()
+	 * stops CAM itself and does NOT stop the upstream chain, and an unbind of
+	 * this node is not ordered against CAM's teardown at all.  So "the last
+	 * reference was already dropped" is an assumption about an ordering that
+	 * nothing here enforces.
+	 *
+	 * pm_runtime_force_suspend() is what actually calls runtime_suspend() ->
+	 * mtk_csi2_rx_power_off(), dropping the clocks, re-asserting the reset and
+	 * calling phy_power_off().  It disables runtime PM as its first action, so
+	 * it replaces the pm_runtime_disable() this used to do rather than
+	 * preceding it, and it returns early only when the device is *already*
+	 * suspended -- precisely the case that needs no work.  It is what
+	 * drivers/media/platform/sunxi/sun8i-rotate.c:840 and sun8i-di.c:913 do
+	 * from .remove for the same reason.
 	 */
-	pm_runtime_disable(&pdev->dev);
+	pm_runtime_force_suspend(&pdev->dev);
 
 	/*
 	 * Close the PHY lifetime that probe opened with phy_init().  Without
 	 * this the PHY was initialised at probe and never released; see the
 	 * long note on the phy_init() call above.  This is last because it is
-	 * the step that makes the PHY unusable, and everything above has to
-	 * have stopped touching it first.
+	 * the step that makes the PHY unusable, and everything above has to have
+	 * stopped touching it first -- including the power_off() that
+	 * pm_runtime_force_suspend() just ran, which is what calls phy_power_off().
 	 *
 	 * This driver requests no IRQ, so there is no free_irq() to order
 	 * against; if one is added, it must be freed at the very top, before
