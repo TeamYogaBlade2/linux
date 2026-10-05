@@ -167,16 +167,32 @@
  * DL1_CUR never advances past the base while the period interrupt still
  * fires off the counter, so ALSA sees a healthy stream carrying no audio.
  *
- * AFE_INTERNAL_SRAM_PHY_BASE in the stock header is written
- * (AUDIO_HW_PHYSICAL_BASE - 0x70000 + 0x8000), which evaluates to
- * 0x12008000, yet the comment immediately above it states the range is
- * 0x12004000..0x12007fff.  The comment is right: 0x12008000 is not in the
- * audsys window (reg = <0x12070000 0x1000>, ending at 0x12070fff) and no
- * vendor code ever allocates from it, whereas the DT sram@12004000 matches
- * the comment exactly.  So use 0x12004000.
+ * The base is 0x12008000.  The data sheet, Table 3-9 "Multimedia system
+ * memory map" (p.48), splits 0x12000000..0x1200cfff into three banks whose
+ * sizes sum exactly to the 52 KiB span the table's thirteen 4 KiB rows
+ * cover: DISP SRAM (32 KiB) = 0x12000000..0x12007fff, AUDIO SRAM (16 KiB) =
+ * 0x12008000..0x1200bfff, ISP SRAM (4 KiB) = 0x1200c000..0x1200cfff.  The
+ * bank names are set as two-line labels vertically centred over the group
+ * of rows each covers, so the boundary is the halfway point of the table,
+ * not the row a given label happens to sit beside.
+ *
+ * Two vendor headers agree on 0x12008000 and are what the shipping code
+ * runs.  AudDrv_Afe.h:410,419 derives AFE_INTERNAL_SRAM_PHY_BASE as
+ * (AUDIO_HW_PHYSICAL_BASE - 0x70000 + 0x8000) with AUDIO_HW_PHYSICAL_BASE
+ * 0x12070000, i.e. 0x12008000, and AudDrv_Kernel.c:926,1457 ioremap()s
+ * that macro and hands it straight to the DL1 buffer allocation.  The LDVT
+ * header AudioAfe.h:415,426 reaches the same address the other way round,
+ * AUDIO_HW_PHYSICAL_BASE + 0x4000 off a 0x12000000 base - an offset of
+ * exactly one 32 KiB DISP bank, which only makes sense if the audio bank
+ * starts where the DISP bank ends.
+ *
+ * The one dissenting source is the comment on AudDrv_Afe.h:418 itself
+ * ("0x12004000~0x12007FFF (16K)"), which contradicts the macro sitting
+ * directly beneath it - and 0x12004000 is a quarter-way address inside the
+ * DISP bank, not a bank start, which is what gives the comment away.
  */
-#define AFE_SRAM_PHYS_BASE	0x12004000
-#define AFE_SRAM_PHYS_END	0x12007fff	/* inclusive */
+#define AFE_SRAM_PHYS_BASE	0x12008000
+#define AFE_SRAM_PHYS_END	0x1200bfff	/* inclusive */
 /*
  * There is no NEWIF (AFE<->PMIC serial link) register on MT6589.  The
  * offsets this driver used to program - 0x0138 and 0x013c - are MT6797

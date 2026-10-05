@@ -779,12 +779,21 @@
 				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
 		};
 
-		afe_sram: sram@12004000 {
+		/*
+		 * AUDIO SRAM, 16 KiB: data sheet Table 3-9 (p.48) splits
+		 * 0x12000000..0x1200cfff into DISP SRAM (32 KiB,
+		 * 0x12000000..0x12007fff), AUDIO SRAM (16 KiB, this one) and
+		 * ISP SRAM (4 KiB, 0x1200c000..0x1200cfff).  It must not be
+		 * moved down into the DISP bank to keep the AFE's buffers near
+		 * the bank base - the AFE dereferences DL1_BASE/DL1_END
+		 * itself and only the AUDIO bank is wired to it.
+		 */
+		afe_sram: sram@12008000 {
 			compatible = "mmio-sram";
-			reg = <0x12004000 0x4000>;
+			reg = <0x12008000 0x4000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0 0x12004000 0x4000>;
+			ranges = <0 0x12008000 0x4000>;
 			no-memory-wc;
 		};
 
