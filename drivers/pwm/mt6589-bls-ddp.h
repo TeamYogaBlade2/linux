@@ -5,7 +5,9 @@
  * On MT6589 BLS is both the backlight PWM generator and a stage of the
  * display data path (OVL -> COLOR -> BLS -> RDMA0 -> DSI0), so the DRM
  * side drives it as a DDP component while the PWM driver owns the
- * mapping, the clock and the registers.
+ * mapping, the clock and the registers.  Every entry point below reads the
+ * instance kept in pwm-mt6589-disp.c, not dev_get_drvdata(), which is NULL
+ * on the component device.
  *
  * Copyright (c) 2026 MediaTek Inc.
  */
