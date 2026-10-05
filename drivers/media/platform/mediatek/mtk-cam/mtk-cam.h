@@ -203,8 +203,17 @@
 #define CAM_CTL_FMT_SEL_SUB_MODE_SHIFT		4
 #define CAM_CTL_FMT_SEL_CAM_IN_FMT_SHIFT	8
 #define CAM_CTL_FMT_SEL_CAM_OUT_FMT_SHIFT	12
-#define CAM_CTL_FMT_SEL_CAM_IN_FMT_MASK		GENMASK(3, 8)
-#define CAM_CTL_FMT_SEL_CAM_OUT_FMT_MASK	GENMASK(3, 12)
+/*
+ * The matching masks.  GENMASK() takes (hi, lo) -- see include/linux/bits.h,
+ * where the BUILD_BUG_ON in GENMASK_RANGE_REV_CHECK fires precisely because a
+ * hi < lo pair is the mistake everyone makes at least once.  Both of these were
+ * previously GENMASK(3, 8) and GENMASK(3, 12), i.e. hi < lo with the two digits
+ * transposed.  Neither mask is referenced anywhere in the driver (CAM_CTL_FMT_SEL
+ * is written as one whole word, see mtk_cam_start()), so the reversal was inert
+ * and merely a trap for the first future caller.
+ */
+#define CAM_CTL_FMT_SEL_CAM_IN_FMT_MASK		GENMASK(11, 8)
+#define CAM_CTL_FMT_SEL_CAM_OUT_FMT_MASK	GENMASK(15, 12)
 
 /* CAM_CTL_FMT_SEL cam_in_fmt value: 422 1 plane (imgi). */
 #define CAM_FMT_SEL_YUV422_1P			2
