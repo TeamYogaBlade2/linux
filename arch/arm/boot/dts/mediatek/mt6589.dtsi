@@ -1354,6 +1354,72 @@
 		};
 
 		/*
+		 * DISP_WDMA: the display subsystem's write-DMA engine.  It takes
+		 * a pixel stream from an upstream block and writes it out to
+		 * memory - the counterpart of RDMA, which reads from memory.
+		 * MT6589 has two instances, 4 KiB apart.
+		 *
+		 * Both are left status = "disabled" because neither has a
+		 * consumer on this board, and the routing table having entries
+		 * that mention WDMA is not the same thing as anything using
+		 * them.  mt6589-dispsys.h works the two cases out:
+		 *
+		 *  - WDMA1's consumer is panel readback: the vendor routes
+		 *    OVL0 -> WDMA1 for memory-out (ddp_path.c:566,
+		 *    disp_path_config_mem_out()) and for suspend-mode screen
+		 *    capture (ddp_path.c:649).  Both of those exist to feed a
+		 *    readback path, and the live route here is OVL0 -> BLS ->
+		 *    RDMA0 -> DSI0.  Panel readback needs the DBI block
+		 *    (mt6589-dispsys.h:33 notes 0x1400c000), and this panel is
+		 *    DSI video mode, which does not use DBI - there is no DBI
+		 *    node on this SoC and no DBI driver here.
+		 *
+		 *  - WDMA0's consumer is an SCL-to-memory leg that upstream
+		 *    marks as an unfinished HDMI feature ("FIXME: for hdmi
+		 *    temp", quoted at mt6589-dispsys.h:42-43).  The other two
+		 *    WDMA0 routes, COLOR0 -> WDMA0 and TDSHP -> WDMA0, start
+		 *    from blocks that are themselves off this board's display
+		 *    path (see mtk_drm_drv.c, and commits c9e543f22025 and
+		 *    2d59d9693be8 for why putting COLOR or TDSHP in a path
+		 *    array without a matching route silently disables the
+		 *    display rather than enabling anything).
+		 *
+		 * So there is nothing to enable.  Adding either node would be
+		 * a claim this board cannot back, and the register map itself
+		 * is trustworthy (data sheet ch. 41 matches the vendor
+		 * ddp_reg.h:442-474 exactly), so this is a missing driver,
+		 * not uncertain hardware.  Enabling one later needs the route
+		 * table and a path array to agree with each other first.
+		 *
+		 * Note there are no clock-names here even though both blocks
+		 * take two clocks.  mtk_disp_wdma.c uses devm_clk_bulk_get_all()
+		 * precisely because of that, matching mtk_disp_rdma.c.
+		 */
+		wdma0: wdma@14004000 {
+			compatible = "mediatek,mt6589-disp-wdma0";
+			reg = <0x14004000 0x1000>;
+			interrupts = <GIC_SPI 164 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_WDMA0_ENGINE>,
+				 <&dispsys CLK_DISP0_WDMA0_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_WDMA0>;
+			resets = <&dispsys MT6589_DISP_WDMA0_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			status = "disabled";
+		};
+
+		wdma1: wdma@14005000 {
+			compatible = "mediatek,mt6589-disp-wdma1";
+			reg = <0x14005000 0x1000>;
+			interrupts = <GIC_SPI 165 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_WDMA1_ENGINE>,
+				 <&dispsys CLK_DISP0_WDMA1_SMI>;
+			iommus = <&iommu MT6589_M4U_PORT_WDMA1>;
+			resets = <&dispsys MT6589_DISP_WDMA1_RST>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			status = "disabled";
+		};
+
+		/*
 		 * G2D: a 2D blitter in the display subsystem.  RGB565/888,
 		 * ARGB8888, constant-colour fill and bitblt.  The hardware also
 		 * has flips, alpha blending and dithering, which the driver
