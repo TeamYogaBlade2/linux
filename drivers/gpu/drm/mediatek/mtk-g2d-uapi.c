@@ -622,6 +622,8 @@ static void mtk_g2d_uapi_unlock(struct mtk_g2d_uapi_surf *surf)
  * mtk_g2d_uapi_lock_pair - lock two surfaces in a deadlock-free order.
  * @a: first surface
  * @b: second surface
+ * @ctx: the transaction to acquire them in, already ww_acquire_init()ed by
+ *	the caller
  *
  * Both buffers must be held for the whole operation - the engine reads the
  * source while it writes the destination, so locking only one would leave the
@@ -634,12 +636,22 @@ static void mtk_g2d_uapi_unlock(struct mtk_g2d_uapi_surf *surf)
  * forever.
  *
  * Returns 0, or the error from the first lock that could not be taken, in
- * which case anything already taken has been released again.
+ * which case anything already taken has been released again and the
+ * transaction closed with ww_acquire_fini().
+ *
+ * On success the transaction is closed with ww_acquire_done() but *not*
+ * ww_acquire_fini()ed, because the locks are still held: fini() while locks
+ * remain is premature - it releases the transaction's lockdep state and clears
+ * its acquired count while the mutexes stay locked, so a later ww_mutex_lock()
+ * on this class no longer knows the task holds them and can no longer order
+ * against them.  The matching mtk_g2d_uapi_unlock_pair() is what finis it,
+ * which is why @ctx is passed in by the caller rather than kept on this
+ * function's stack, where the unlock side could not reach it.
  */
 static int mtk_g2d_uapi_lock_pair(struct mtk_g2d_uapi_surf *a,
-				  struct mtk_g2d_uapi_surf *b)
+				  struct mtk_g2d_uapi_surf *b,
+				  struct ww_acquire_ctx *ctx)
 {
-	struct ww_acquire_ctx ctx;
 	struct mtk_g2d_uapi_surf *first, *second;
 	int ret;
 
@@ -663,25 +675,19 @@ static int mtk_g2d_uapi_lock_pair(struct mtk_g2d_uapi_surf *a,
 	}
 
 	/*
-	 * The acquire context is a transaction, not bookkeeping the caller
-	 * owns.  ww_acquire_init() ... ww_acquire_fini() brackets it, and
-	 * ww_acquire_fini() while @ctx still holds locks is premature: it
-	 * releases the transaction's lockdep state and clears its acquired
-	 * count while the mutexes stay locked, so a later ww_mutex_lock() on
-	 * this class no longer knows the task already holds them and can no
-	 * longer order against them.  The documented order is init, lock every
-	 * object, ww_acquire_done(), release the locks, then fini - so fini()
-	 * belongs to the unlock side, not to the end of the lock side, and the
-	 * lock side must close the transaction with ww_acquire_done() first.
+	 * The acquire context is a transaction, not bookkeeping the caller owns
+	 * casually: ww_acquire_init() ... ww_acquire_fini() brackets it, and
+	 * fini() while @ctx still holds locks is premature.  The documented order
+	 * is init, lock every object, ww_acquire_done(), release the locks, then
+	 * fini - so fini belongs to the unlock side, and @ctx is the caller's so
+	 * that mtk_g2d_uapi_unlock_pair() can finish what this opened.
 	 */
-	ww_acquire_init(&ctx, &reservation_ww_class);
-
-	ret = mtk_g2d_uapi_lock(first, &ctx);
+	ret = mtk_g2d_uapi_lock(first, ctx);
 	if (ret)
 		goto err_fini;
 
 	if (second) {
-		ret = mtk_g2d_uapi_lock(second, &ctx);
+		ret = mtk_g2d_uapi_lock(second, ctx);
 
 		/*
 		 * reservation_ww_class is a DEFINE_WD_CLASS, so the ww mutex
@@ -710,9 +716,9 @@ static int mtk_g2d_uapi_lock_pair(struct mtk_g2d_uapi_surf *a,
 			mtk_g2d_uapi_unlock(first);
 
 			/* Cannot fail: the slowpath is an uninterruptible wait. */
-			dma_resv_lock_slow(second->obj->resv, &ctx);
+			dma_resv_lock_slow(second->obj->resv, ctx);
 
-			ret = mtk_g2d_uapi_lock(first, &ctx);
+			ret = mtk_g2d_uapi_lock(first, ctx);
 			if (ret) {
 				/*
 				 * Only reachable if @first itself is now
@@ -727,15 +733,16 @@ static int mtk_g2d_uapi_lock_pair(struct mtk_g2d_uapi_surf *a,
 		}
 	}
 
-	ww_acquire_done(&ctx);
+	ww_acquire_done(ctx);
 
 	return 0;
 
 err_fini:
 	/*
-	 * Nothing is held on this path, so the transaction is simply closed.
+	 * Nothing is held on this path, so the transaction is simply closed
+	 * here and mtk_g2d_uapi_unlock_pair() has nothing left to finish.
 	 */
-	ww_acquire_fini(&ctx);
+	ww_acquire_fini(ctx);
 
 	return ret;
 }
@@ -744,26 +751,36 @@ err_fini:
  * mtk_g2d_uapi_unlock_pair - release both, in the reverse of the order taken.
  * @a: first surface passed to the lock
  * @b: second surface passed to the lock
+ * @ctx: the transaction mtk_g2d_uapi_lock_pair() acquired them in
  *
  * Strict reverse of the order mtk_g2d_uapi_lock_pair() took them in, which is
  * what makes the order it chose a real one rather than a convention.
+ *
+ * This is also where the transaction is closed, because that is the only place
+ * that can be done correctly: ww_acquire_fini() must come *after* every lock
+ * the context holds has been released, and the locks are released here.  The
+ * lock side calls ww_acquire_done() - marking the end of the acquire phase -
+ * but cannot fini, because its locks are still held at that point.  Doing it
+ * there, as this used to, leaves the lockdep state for the transaction torn
+ * down while the mutexes are still locked, so a later ww_mutex_lock() on
+ * reservation_ww_class no longer knows this task already holds them.
  */
 static void mtk_g2d_uapi_unlock_pair(struct mtk_g2d_uapi_surf *a,
-				     struct mtk_g2d_uapi_surf *b)
+				     struct mtk_g2d_uapi_surf *b,
+				     struct ww_acquire_ctx *ctx)
 {
 	if (a->obj && a->obj == b->obj) {
 		mtk_g2d_uapi_unlock(a);
-		return;
-	}
-
-	/* Strict reverse of the order mtk_g2d_uapi_lock_pair() took them in. */
-	if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+	} else if (a->obj && b->obj && a->obj->resv > b->obj->resv) {
+		/* Strict reverse of the order mtk_g2d_uapi_lock_pair() took. */
 		mtk_g2d_uapi_unlock(a);
 		mtk_g2d_uapi_unlock(b);
 	} else {
 		mtk_g2d_uapi_unlock(b);
 		mtk_g2d_uapi_unlock(a);
 	}
+
+	ww_acquire_fini(ctx);
 }
 
 /**
@@ -853,6 +870,7 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 	struct mtk_g2d_uapi_surf src = {}, dst = {};
 	struct mtk_g2d_drm_private *priv = dev->dev_private;
 	struct mtk_g2d_blt arg;
+	struct ww_acquire_ctx ctx;
 	int idx;
 	int ret;
 
@@ -930,8 +948,16 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 		goto err_dst;
 	}
 
-	/* Both buffers are held for the whole engine operation. */
-	ret = mtk_g2d_uapi_lock_pair(&src, &dst);
+	/*
+	 * Both buffers are held for the whole engine operation.  The acquire
+	 * context belongs to this function, not to the helpers: the lock side
+	 * opens the transaction and the unlock side has to close it, because
+	 * ww_acquire_fini() may only be called once every lock the context holds
+	 * has been released, and that is what the unlock side does.
+	 */
+	ww_acquire_init(&ctx, &reservation_ww_class);
+
+	ret = mtk_g2d_uapi_lock_pair(&src, &dst, &ctx);
 	if (ret)
 		goto err_dst;
 
@@ -944,7 +970,7 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 			       dst.addr, dst.pitch, dst.fmt, dst.x, dst.y,
 			       arg.rect_width, arg.rect_height);
 
-	mtk_g2d_uapi_unlock_pair(&src, &dst);
+	mtk_g2d_uapi_unlock_pair(&src, &dst, &ctx);
 
 	if (ret)
 		drm_dbg(dev, "G2D blit of %ux%u failed: %d\n",
