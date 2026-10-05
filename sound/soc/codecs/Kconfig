@@ -2773,8 +2773,12 @@ config SND_SOC_MT6320
 	depends on MFD_MT6397
 	select SND_SOC_MEDIATEK
 	help
-	  Enable support for the platform which uses MT6320 as
-	  external codec device.
+	  Enable support for the MT6320 PMIC analog codec, which sits
+	  behind the MT6397 MFD parent rather than on its own I2C
+	  address. The codec provides the headphone, speaker and
+	  microphone analog paths and the AFE-side serial link; the
+	  external headset detection cell is a separate option,
+	  SND_SOC_MT6320_ACCDET.
 
 config SND_SOC_MT6320_ACCDET
 	tristate "MediaTek MT6320 ACCDET"
