@@ -609,17 +609,22 @@ static int g2d_program_blt(struct mtk_g2d *g2d,
 	 * The address registers are 32 bits wide, which is also the width of
 	 * dma_addr_t on this configuration (LPAE and HIGHMEM are both off), and
 	 * g2d_check_offset() has already refused anything that would not fit.
+	 * dma_set_mask_and_coherent(DMA_BIT_MASK(32)) in probe states the same
+	 * bound to the DMA API, so nothing allocated for this device can
+	 * produce an address the register cannot hold.
 	 *
-	 * The addresses written here are in the *DMA address space of the DRM
-	 * master*, not this engine's own: the buffers are drm_gem objects
-	 * allocated by the mediatek-drm master, since the G2D ioctls resolve a
-	 * GEM handle in that device's namespace (mtk-g2d-uapi.c:255-260).  On
-	 * this tree no M4U domain is attached to that master or to any display
-	 * engine, so that address space is the physical one and equals what the
-	 * engine programs.  This is a property of the whole display path, not of
-	 * G2D: OVL and RDMA take dma_obj->dma_addr the same way and are
-	 * MT6589-proven with it.  See the G2D node comment in mt6589.dtsi for
-	 * why attaching the M4U port here in isolation would corrupt memory.
+	 * The addresses written here are IOVAs, and they belong to this engine.
+	 * They come from a drm_gem_dma_object owned by G2D's own DRM device,
+	 * whose dma_dev is this platform device (drm_dev_set_dma_dev() in
+	 * mtk_g2d_register_drm()), so with the M4U port attached to this node
+	 * each one is a range in the page table this engine reads through.
+	 *
+	 * That is precisely why the ioctls resolve the handle against G2D's
+	 * device rather than the display device's: dma_obj->dma_addr is only
+	 * meaningful to the engine that asked for the mapping.  When there was
+	 * no IOMMU here the two spaces coincided, which is why borrowing an
+	 * address used to look correct.  See the G2D node comment in
+	 * mt6589.dtsi.
 	 */
 	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
 	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
@@ -881,17 +886,30 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 		return PTR_ERR(g2d->regs);
 
 	/*
-	 * No dma_set_mask() call, deliberately.  This engine does no DMA of its
-	 * own: it is handed addresses that the DRM master already allocated (see
-	 * the G2D node comment in mt6589.dtsi), so a mask here would not bound
-	 * anything it can see.
+	 * This engine does DMA of its own now, and the window is a real 32-bit
+	 * one.  The data sheet defines G2D_W2M_ADDR, G2D_SRC_ADDR and
+	 * G2D_DST_ADDR as full [31:0] registers (ch. 53, p. 1914), so the
+	 * (u32) casts in g2d_program_blt() are not narrowing anything, and
+	 * anything wider than 32 bits could not be programmed at all.  What is
+	 * narrow besides that is the pitch - [13:0], maximum 0x2000 - and the
+	 * scan window, 12 bits, maximum 2,048x2,048.
 	 *
-	 * The window is a real 32-bit one, not 28: the data sheet defines
-	 * G2D_W2M_ADDR, G2D_SRC_ADDR and G2D_DST_ADDR as full [31:0] registers
-	 * (ch. 53, p. 1914), so the (u32) casts in g2d_program_blt() are not
-	 * narrowing anything.  What is narrow is the pitch - [13:0], maximum
-	 * 0x2000 - and the scan window, 12 bits, maximum 2,048x2,048.
+	 * dma_set_mask_and_coherent() states that to the DMA API, so a
+	 * mapping allocated for this device cannot be handed back an address
+	 * the register cannot hold.  With the M4U attached (iommus in the node
+	 * comment), the binding constraint is the same 32 bits: the mapping
+	 * this driver creates is 1ULL << 32 of IOVA, so an IOVA above 4G is not
+	 * reachable by this engine whatever the physical address behind it is.
+	 *
+	 * Failure is fatal for the probe rather than warned about.  A device
+	 * whose DMA mask is 64-bit here is a configuration in which this
+	 * driver's addressing is wrong, and continuing would mean accepting
+	 * buffers whose addresses get silently truncated by the (u32) casts.
 	 */
+	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to set 32-bit DMA mask\n");
 
 	g2d->clk_engine = devm_clk_get(dev, "g2d-engine");
 	if (IS_ERR(g2d->clk_engine))

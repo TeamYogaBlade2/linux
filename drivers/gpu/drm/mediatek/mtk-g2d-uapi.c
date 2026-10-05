@@ -996,6 +996,37 @@ void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d)
 	}
 
 	/*
+	 * The decisive line for this driver.
+	 *
+	 * Everything this DRM device allocates - a dumb buffer through the
+	 * GEM helper, or a PRIME import mapped through it - is allocated
+	 * against @dev, the G2D platform device.  That is what makes
+	 * dma_obj->dma_addr an address produced for *this* engine, rather
+	 * than one borrowed from whatever device the display pipeline happens
+	 * to use.
+	 *
+	 * Before the M4U was attached, DMA address and physical address were
+	 * the same number on this SoC, so borrowing produced working output
+	 * by accident.  They are no longer the same number: this device has
+	 * an M4U port, so an address allocated here is an IOVA in the page
+	 * table this engine reads through, and the display device's addresses
+	 * are IOVAs for a different engine.
+	 *
+	 * Set before drm_dev_register(), because from the moment the minor
+	 * is published a client can allocate a buffer through it.
+	 */
+	drm_dev_set_dma_dev(drm, dev);
+
+	/*
+	 * Contiguous IOVA for imported PRIME buffers.  G2D is handed one base
+	 * address and a pitch with no descriptor, so a buffer whose segments
+	 * are merely consecutive in length would be read from the wrong
+	 * place.  This is the same call the display driver makes, for the same
+	 * reason.
+	 */
+	dma_set_max_seg_size(dev, UINT_MAX);
+
+	/*
 	 * dev_private is what every ioctl handler in this file reads to find
 	 * the engine, so it must be set before the device is registered:
 	 * drm_dev_register() publishes the minor, and from that moment the
