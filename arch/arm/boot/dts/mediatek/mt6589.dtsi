@@ -1338,7 +1338,40 @@
 		 *
 		 * The data sheet gives the base as 0x14013000, the interrupt
 		 * as 0xb1 (177), and the two clock gates as CLK_DISP0_G2D_ENGINE
-		 * and CLK_DISP0_G2D_SMI.  The M4U port is on LARB2.
+		 * and CLK_DISP0_G2D_SMI.
+		 *
+		 * No "iommus" property, deliberately, even though the block is
+		 * on LARB2 port 11 (MT6589_M4U_PORT_G2D).  Attaching the M4U
+		 * here would be actively wrong, not merely redundant:
+		 *
+		 *  - G2D does no DMA of its own.  The buffers it programs are
+		 *    drm_gem objects belonging to the mediatek-drm master (the
+		 *    dispsys node), because the G2D ioctls live on the DRM
+		 *    device and resolve a GEM handle in its namespace.  Their
+		 *    dma_addr comes from whichever device allocated them, not
+		 *    from this node.
+		 *
+		 *  - The M4U port is programmed in the opposite direction by
+		 *    mtk-smi.c: mtk_smi_larb_config_port_gen0() sets the port to
+		 *    virtual mode (SMI_SECUR_CON_VAL_VIRT, mtk-smi.c:84) only for
+		 *    ports whose shadow bit in larb_mmu->mmu is set, and that bit
+		 *    is set in mtk_iommu_v1_config() when a domain is attached.
+		 *
+		 * So arming port 11 alone would switch the engine to virtual
+		 * addresses while the DRM master kept handing out physical ones,
+		 * and the engine would read and write through an unmapped page
+		 * table.  The whole display path - OVL, RDMA and G2D - programs
+		 * the master's addresses unchanged, and MT6589's M4U is in
+		 * bypass for those ports.  MTE would be a separate, all-or-
+		 * nothing change covering the DRM master and every engine at
+		 * once, not a per-node one.
+		 *
+		 * Note this is not currently observable at all: the in-tree
+		 * mtk_iommu_v1_ops (drivers/iommu/mtk_iommu_v1.c) has no
+		 * .of_xlate, so of_iommu_xlate() returns -ENODEV and an "iommus"
+		 * property registers no fwspec at all.  The property is left out
+		 * rather than left in as a decoration that would silently become
+		 * live - and wrong - if an .of_xlate were ever added.
 		 */
 		g2d: g2d@14013000 {
 			compatible = "mediatek,mt6589-g2d";
@@ -1347,7 +1380,6 @@
 			clocks = <&dispsys CLK_DISP0_G2D_ENGINE>,
 				 <&dispsys CLK_DISP0_G2D_SMI>;
 			clock-names = "g2d-engine", "g2d-smi";
-			iommus = <&iommu MT6589_M4U_PORT_G2D>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 

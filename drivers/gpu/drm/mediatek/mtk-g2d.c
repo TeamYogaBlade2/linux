@@ -540,6 +540,17 @@ static int g2d_program_blt(struct mtk_g2d *g2d,
 	 * dma_addr_t on this configuration: LPAE and HIGHMEM are both off, and
 	 * the part tops out at 2 GB of LPDDR2.  So no truncation can occur.
 	 * g2d_check_offset() has already refused anything that would not fit.
+	 *
+	 * The addresses written here are in the *DMA address space of the DRM
+	 * master*, not this engine's own: the buffers are drm_gem objects
+	 * allocated by the mediatek-drm master, since the G2D ioctls resolve a
+	 * GEM handle in that device's namespace (mtk-g2d-uapi.c).  On this tree
+	 * no M4U domain is attached to that master or to any display engine,
+	 * so that address space is the physical one and equals what the engine
+	 * programs.  This is a property of the whole display path, not of G2D:
+	 * OVL and RDMA take dma_obj->dma_addr the same way and are MT6589-proven
+	 * with it.  See the G2D node comment in mt6589.dtsi for why attaching
+	 * the M4U port here in isolation would corrupt memory.
 	 */
 	writel((u32)src_addr, g2d->regs + G2D_SRC_ADDR);
 	writel(src_pitch & G2D_PITCH_MASK, g2d->regs + G2D_SRC_PITCH);
@@ -833,6 +844,24 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	g2d->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(g2d->regs))
 		return PTR_ERR(g2d->regs);
+
+	/*
+	 * No dma_set_mask() call, deliberately.  This engine does no DMA of its
+	 * own: it is handed addresses that the DRM master already allocated
+	 * (see the G2D node comment in mt6589.dtsi), so a mask here would not
+	 * bound anything it can see.  Where a mask would matter is the master,
+	 * and the relevant limit is already enforced there.
+	 *
+	 * The window itself is a real 32-bit one, not 28: the data sheet
+	 * defines G2D_W2M_ADDR, G2D_SRC_ADDR and G2D_DST_ADDR as full [31:0]
+	 * registers (ch. 53, p. 1914), so the (u32) casts in
+	 * g2d_program_blt() are not narrowing anything.  The pitch registers
+	 * are the narrow ones - [13:0], maximum 0x2000, which is what
+	 * G2D_PITCH_MASK and G2D_PITCH_MAX encode - and the scan window is
+	 * 12 bits, maximum 2,048x2,048.  MT6589 has at most 2 GB of LPDDR2 and
+	 * this kernel builds without LPAE or HIGHMEM, so dma_addr_t is 32 bits
+	 * and every reachable address fits.
+	 */
 
 	g2d->clk_engine = devm_clk_get(dev, "g2d-engine");
 	if (IS_ERR(g2d->clk_engine))
