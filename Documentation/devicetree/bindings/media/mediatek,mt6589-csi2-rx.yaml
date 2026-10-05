@@ -67,7 +67,6 @@ properties:
       0x15008180.  On the Lenovo YOGA Tablet 8/10 port 0 is the main (rear)
       camera and port 1 is the front camera.
     enum: [0, 1]
-    default: 0
 
   clocks:
     description: |
@@ -109,9 +108,11 @@ properties:
 
   phys:
     description: |
-      The MIPI CSI-2 D-PHY this receiver sits on top of.  The driver
-      initialises and powers it on with the receiver and releases it on
-      power-off.
+      The MIPI CSI-2 D-PHY this receiver sits on top of.  The driver holds
+      the PHY's whole lifetime: phy_init() once in the probe function and
+      phy_exit() once in remove, with phy_power_on()/phy_power_off() per
+      runtime-PM resume and suspend.  On remove the block is taken down
+      explicitly before phy_exit() runs, so the PHY is never left powered.
 
       There is no in-tree D-PHY driver for the MT6589 - see the description at
       the top of this file - so this property cannot currently name anything

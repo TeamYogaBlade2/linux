@@ -11,14 +11,16 @@ maintainers:
 
 description: >
   The CAM block on the MT6589 is the image signal processor.  Its control
-  registers are at 0x15004000; the image processing itself runs in the
-  CPIPE stages and the memory sequencer that follow.
+  registers are at 0x15004000; the image processing itself runs in the TG
+  and CPIPE stages that follow.
 
-  WARNING: the driver behind this binding is a survey-level scaffold.  It
-  maps the control registers and implements the documented start/stop
-  strobes, but the image pipeline is not written and the sub-module enable
-  bit positions have not been recovered from the data sheet.  Loading it
-  will not produce a picture.  See the driver source and README.md.
+  WARNING: the driver behind this binding is a scaffold.  It programs the
+  control plane (software reset, block enable, start/stop strobes) and the
+  IMGO output DMA, and it implements one capture video node.  The image
+  pipeline is NOT implemented: no CPIPE stage is enabled, no TG is started
+  and no command queue is armed.  Loading it will not produce a picture, and
+  on a board with no sensor attached STREAMON succeeds while DQBUF blocks
+  forever.  See the driver source.
 
 properties:
   compatible:
@@ -46,6 +48,11 @@ properties:
     maxItems: 1
 
   # One sink pad, fed by the SCAM adaptor that follows the CSI-2 receiver.
+  #
+  # The driver also creates a source pad, and a capture video node behind it,
+  # which is where the IMGO DMA lands.  That pad needs no endpoint here: the
+  # video node is not described by the device tree, and the core creates the
+  # interface link between the two itself when the node registers.
   ports:
     $ref: /schemas/graph/ports.yaml#
 
