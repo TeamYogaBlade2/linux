@@ -139,6 +139,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -159,6 +161,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x1>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -179,6 +183,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x2>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -199,6 +205,8 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x3>;
+			enable-method = "mediatek,mt6589-smp";
+			cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -223,6 +231,54 @@
 			cache-line-size = <64>;
 			cache-sets = <2048>;
 			cache-unified;
+		};
+
+		/*
+		 * Idle states for the Cortex-A7 complex.
+		 *
+		 * The generic ARM cpuidle driver registers a plain WFI state at
+		 * index 0 and short-circuits it straight to cpu_do_idle(), so
+		 * only the state below is handled by the DCM backend in
+		 * drivers/soc/mediatek/mtk-dcm.c.
+		 *
+		 * The MT6589 has no second, deeper CPU-level state that can be
+		 * justified from the datasheet: the deep states in the vendor
+		 * driver (dpidle, slidle) are SPM power-domain states needing
+		 * the hand-written SPM sequences in mt_spm_sleep.c, which are not
+		 * ported here.
+		 *
+		 * What this state does: the "mediatek,mt6589-smp" enable-method
+		 * selects the cpuidle backend, which around the WFI enables DCM
+		 * on the top AXI fabric clock (hf_faxi_ck) by writing
+		 * TOPCK_DCM_CFG[7] dcm_enable with TOPCK_DCM_CFG[4:0]
+		 * dcm_full_fsel = 0xf (half speed), and clears the enable bit
+		 * again on the way out. Set bus_dcm_enabled=0 to skip that.
+		 *
+		 * Separately, and for every idle entry including state 0, the
+		 * same backend enables the Cortex-A7 clock DCM once at probe by
+		 * setting TOP_DCMCTL[1] arm_dcm_wfi_enable, with
+		 * TOP_CA7DCMFSEL[26:24] dcm_arm_divsel = 7 and
+		 * TOP_DCMDBC[6:0] topckgen_dcm_dbc_cnt = 1. The hardware itself
+		 * applies that once all cores are in WFI, dividing ARM_CK down
+		 * to 26MHz (MT6589 datasheet section 16.2.3, page 810).
+		 *
+		 * No state sets local-timer-stop: the ARM generic timer runs off
+		 * the always-on 13MHz system clock, so the tick keeps running
+		 * across this transition and does not need restarting.
+		 *
+		 * The latencies below are engineering estimates, not measured
+		 * figures - no MT6589 board was available to characterise them.
+		 * They are deliberately conservative, so a wrong estimate costs
+		 * power rather than correctness.
+		 */
+		idle-states {
+			cpu_idle_dcm: cpu-idle-dcm {
+				compatible = "arm,idle-state";
+				idle-state-name = "dcm";
+				entry-latency-us = <150>;
+				exit-latency-us = <250>;
+				min-residency-us = <2000>;
+			};
 		};
 	};
 
