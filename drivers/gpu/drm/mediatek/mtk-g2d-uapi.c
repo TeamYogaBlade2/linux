@@ -992,17 +992,20 @@ static int mtk_g2d_ioctl_blt(struct drm_device *dev, void *data,
 	 *
 	 * See mtk_g2d_uapi_retain() for what a retained reference
 	 * does and does not buy.
+	 * falls through to err_dst, so the srcu lock taken above is dropped on
+	 * every path out, including this one.
 	 */
 	if (mtk_g2d_wedged(priv->g2d)) {
 		mtk_g2d_uapi_retain(&src);
 		mtk_g2d_uapi_retain(&dst);
-		return ret;
+		goto out;
 	}
 
 err_dst:
 	mtk_g2d_uapi_release(&dst);
 err_src:
 	mtk_g2d_uapi_release(&src);
+out:
 	drm_dev_exit(idx);
 
 	return ret;
@@ -1069,14 +1072,17 @@ static int mtk_g2d_ioctl_fill(struct drm_device *dev, void *data,
 		drm_dbg(dev, "G2D fill of %ux%u failed: %d\n",
 			arg.rect_width, arg.rect_height, ret);
 
-	/* As in mtk_g2d_ioctl_blt(): retained only if the engine is wedged. */
+	/* As in mtk_g2d_ioctl_blt(): retained only if the engine is wedged, and
+	 * still dropped out through err_dst so the srcu lock is released.
+	 */
 	if (mtk_g2d_wedged(priv->g2d)) {
 		mtk_g2d_uapi_retain(&dst);
-		return ret;
+		goto out;
 	}
 
 err_dst:
 	mtk_g2d_uapi_release(&dst);
+out:
 	drm_dev_exit(idx);
 
 	return ret;
