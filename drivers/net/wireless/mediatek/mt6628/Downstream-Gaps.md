@@ -459,3 +459,248 @@ function 2 on the same controller. Both function nodes must exist in the
 device tree or the function is never enumerated and the radio never
 probes. A missing function 1 node produces no MMC or SDIO messages at
 all in the boot log, which is easy to mistake for a driver hang.
+
+---
+
+# MT6628 FM, STP and GNSS — downstream gap analysis
+
+Companion to the WLAN analysis above, covering
+
+- `drivers/net/wireless/mediatek/mt6628/mtk-fm.c` (the V4L2 radio device)
+- `drivers/net/wireless/mediatek/mt6628/mtk-stp.c` (SDIO function 2 transport)
+- `drivers/gnss/gnss-mt6628.c` (the GNSS relay)
+
+Downstream references are to `./aquaris-5`:
+
+| This tree | Downstream |
+|---|---|
+| `mtk-fm.c` | `mediatek/kernel/drivers/fmradio/mt6628/` and `mediatek/kernel/drivers/fmradio/core/` |
+| `mtk-stp.c` | `mediatek/kernel/drivers/combo/common/core/stp_core.c` |
+| `gnss-mt6628.c` | `mediatek/kernel/drivers/conn_soc/common/linux/pub/stp_chrdev_gps.c` |
+
+**None of these three drivers has been validated on hardware.** Neither the
+operator nor the project has ever run them on the tablet: they compile, they
+were written against the downstream source, and that is the entire extent of
+the evidence behind them. Every register field, opcode and scaling factor used
+below was taken from the vendor source and is cited so it can be re-checked, but
+no claim here has been confirmed against a real chip. The same caveat that
+applies to the WLAN section applies with equal force here.
+
+## FM radio — what is implemented
+
+Tune, seek (bounded and wrapping, with 50/100/200 kHz spacing selection), stereo
+and mono selection, the frequency range and unit handling, mute
+(`V4L2_CID_AUDIO_MUTE`), and a reported signal level. Power-up follows the
+downstream sequence including the ROM-version probe, and the patch and
+coefficient download policy matches
+`mt6628/pub/mt6628_fm_lib.c:294-320`.
+
+Two things worth stating explicitly because they were defects:
+
+- `VIDIOC_G_TUNER` now decodes the RSSI field and reports `tuner->signal`
+  (before this it left the field untouched, so userspace read back whatever it
+  had put there). The field is bits 9:0 of FM_RSSI_IND (0x6c,
+  `inc/mt6628_fm_reg.h:16`), signed with a 1024 bias and an LSB of 6/16 dB, per
+  `mt6628_GetCurRSSI` at `mt6628/pub/mt6628_fm_lib.c:1072-1092` and the
+  identical mask and bias in the CQI path at `:1414`. Downstream has no
+  0..65535 mapping and no calibration constant that would justify converting to
+  dBuV, so the value is scaled linearly across the register's full range.
+- `tuner->afc` is always 0. The MT6628 has no AFC: downstream only uses `AFC_ON`
+  to select an alternative power-on value (`inc/mt6628_fm.h:48-52`) and never
+  computes or reports an AFC number.
+
+## FM radio — gaps
+
+### No RDS, despite hardware support
+
+This is the largest functional gap. The hardware has RDS — ten registers in
+`inc/mt6628_fm_reg.h:20-27` and `:34-35`, plus the `RDS_MASK` bit in
+FM_MAIN_CTRL at `:64` — and downstream implements it in
+
+- `mediatek/kernel/drivers/fmradio/mt6628/pub/mt6628_fm_rds.c` (317 lines)
+- `mediatek/kernel/drivers/fmradio/core/fm_rds_parser.c` (1920 lines)
+
+with `FM_IOCTL_RDS_ONOFF`, `FM_IOCTL_RDS_SUPPORT` and `FM_IOCTL_RDS_TX`
+(`core/inc/fm_ioctl.h:31-32`, `:36`). This tree implements none of it:
+`V4L2_TUNER_CAP_RDS` is not advertised and there is no `VIDIOC_G_RDS`/
+`VIDIOC_S_RDS` support. Porting it means the parser above plus a control and
+event design on top of it, which is far beyond what can be done safely without
+hardware — the group's block layout and error handling cannot be validated by
+inspection. Deliberately not attempted.
+
+### No scan / CQI
+
+Downstream has `FM_IOCTL_SCAN`, `FM_IOCTL_STOP_SCAN`, `FM_IOCTL_SCAN_NEW` and
+`FM_IOCTL_SCAN_GETRSSI` (`core/inc/fm_ioctl.h:17-18`, `:63`, `:82`) built on the
+full-CQI command (`mt6628_fm_lib.c:1382-1450`). This driver has no scan ioctl
+and does not issue the CQI read; `mtk_fm_tune()` uses only the single-channel
+tune command. A userspace can still find channels by stepping frequencies and
+reading `tuner->signal`, but there is no single-call channel search.
+
+### No volume, antenna switch or de-emphasis controls
+
+- Volume: `FM_IOCTL_SETVOL`/`FM_IOCTL_GETVOL` (`core/inc/fm_ioctl.h:13-14`) and a
+  16-entry volume table at `mt6628/pub/mt6628_fm_lib.c:1095-1099`. Not ported.
+- Antenna switch: `FM_IOCTL_ANA_SWITCH` (`core/inc/fm_ioctl.h:51`), with the
+  short/long antenna selection visible in
+  `mt6628_GetAntennaType()` at `mt6628/pub/mt6628_fm_lib.c:199-210`. Not ported.
+- De-emphasis: `mtk_fm_s_tuner()` (`mtk-fm.c`) hardcodes de-emphasis 0 in the
+  power-up sequence (`mtk-fm.c:472`, applied at `:489`). That matches the
+  downstream default `FM_RX_DEEMPHASIS_MT6628 = 0` (50 us, China Mainland) at
+  `mt6628/inc/mt6628_fm_cust_cfg.h:64`, so the default is right — but it is a
+  constant, not a user control, and cannot be changed at runtime.
+
+### No audio path
+
+As §2.1 records for the AWB/I2S2/hardware-gain chain, there is no producer for
+FM audio on this board. The driver advertises only
+
+```c
+fm->vdev.device_caps = V4L2_CAP_RADIO |
+                       V4L2_CAP_TUNER |
+                       V4L2_CAP_HW_FREQ_SEEK;
+```
+
+with no `V4L2_CAP_AUDIO` and no PCM device. The `V4L2_CID_AUDIO_MUTE` control
+added here is therefore the **tuner-side** mute: it gates the chip's own mute bit
+in FM_MAIN_CTRL, which is the same bit the downstream `FM_IOCTL_MUTE` drove
+(`mt6628/pub/mt6628_fm_lib.c:212-229`). It silences the chip rather than
+attenuating a capture stream, because there is no stream to attenuate.
+
+## STP transport — what is implemented
+
+Full SDIO framing for function 2, WMT command and event handling, combo patch
+download with the multi-patch E1/E2 selection, the coex (desense) path driven
+from the FM and WLAN frequency changes, and GPS_SYNC.
+
+## STP transport — gaps
+
+### No CRC16 on transmit or receive — deliberate, and it matches the SDIO reference
+
+This driver writes no CRC on TX and checks none on RX. That is a deliberate
+divergence from the downstream BTIF/UART path, not an oversight:
+
+- On the downstream SDIO path, the two CRC bytes are written as hard zeros —
+  `temp[0] = 0x00; temp[1] = 0x00;` at `stp_core.c:869-871` — and the SDIO RX
+  parser discards the trailing CRC bytes without checking them
+  (`stp_core.c:1873-1882`).
+- CRC is only ever computed and verified on the BTIF/UART transport, where the
+  header carries real sequence bits (`stp_core.c:901-963`) and RX runs a
+  `MTKSTP_CRC1`/`MTKSTP_CRC2` state pair that validates the checksum
+  (`stp_core.c:2399-2418`).
+
+Since the MT6628 in this tree is driven exclusively over SDIO function 2, there
+is no CRC anywhere on the wire to check. Matching the SDIO reference exactly is
+the correct behaviour; adding a CRC the firmware does not expect would be a
+regression.
+
+### No sequence numbering or ACK windowing — the largest remaining protocol gap
+
+STP header byte 0 carries the sequence and acknowledge fields, but this driver
+always writes the constant `0x80` (`mtk-stp.c:486`) and never sends an ACK frame.
+Downstream, by contrast, maintains `txseq`, `txack`, `rxack`, `winspace` and
+`expected_rxseq`, uses them to build header byte 0 as
+`0x80 + (txseq << 3) + txack` (`stp_core.c:901`), and re-synchronises the whole
+context through `stp_rest_ctx_state()` (`stp_core.c:318-347`) after a host or MCU
+reset.
+
+From a cold boot, with the host always the only initiator, this is very likely
+benign — which is presumably why the SDIO reference can get away with it. But
+nothing in this driver re-synchronises after the far end restarts: there is no
+window accounting, no retransmission timer, no ACK to detect a lost or
+duplicated frame. If the MCU resets while the radio is in use, this driver has no
+mechanism to notice and recover. This is the one gap here that a hardware bring-up
+should specifically exercise. Fixing it is a high-risk change with no hardware to
+validate against, so it is documented rather than attempted.
+
+### No PSM, in-band reset or paged dump
+
+Downstream can put the transport into power-save mode, force an in-band reset and
+request a paged memory dump for debug. None of that is ported.
+
+### Five optional DT properties are absent from every dts/dtsi
+
+`mtk_fm_probe`-time reads in `mtk-stp.c` pick up these properties when present:
+
+| Property | Line |
+|---|---|
+| `mediatek,coex-ant-mode` | `mtk-stp.c:1380` |
+| `mediatek,co-clock` | `mtk-stp.c:1386` |
+| `mediatek,sdio-driving-cfg` | `mtk-stp.c:1389` |
+| `mediatek,fm-strap-mode` | `mtk-stp.c:1395` |
+| `mediatek,crystal-trim` | `mtk-stp.c:1399` |
+
+**None of them appear in any `.dts` or `.dtsi` in this tree.** They are all
+optional, so this is not a probe failure, but it means coex, the FM strap mode
+and the crystal trim all run on the driver's built-in defaults on this board.
+Since there is no hardware validation either, these defaults are untested as
+well. Recorded here rather than papered over by adding properties to the DTS.
+
+## GNSS — what is implemented
+
+`gnss-mt6628.c` is a raw byte relay: it registers with the generic GNSS
+framework, forwards writes to the MT6628_STP_TASK_GNSS channel and delivers
+received data back through the framework's read path.
+
+Note that this is a faithful port, not a shortcut. The downstream kernel side
+is *also* only a raw pipe — `stp_chrdev_gps.c` hands bytes to and from the chip
+without interpreting them — so there is no STT or MDTS parser to port, in-tree or
+downstream. Anything that turns those bytes into NMEA lives above the kernel, in
+the vendor userspace, which is out of scope.
+
+## GNSS — gaps
+
+### No reset callback, no suspend/resume
+
+The driver defines neither a `reset` nor a `suspend`/`resume` hook, so the GPS
+function is simply left enabled across a system suspend. It is released on
+`.remove` only.
+
+### The optional `gps-sync` pinctrl state does not exist
+
+`gnss-mt6628.c` looks up a `gps-sync` pinctrl state and warns when it is absent.
+No device tree in this tree defines such a state, so that branch is dead code on
+this board. The real synchronisation path is the WMT register write in the STP
+driver, not the pinctrl state.
+
+### The downstream GPS ioctls are gone, and the hw version is not as unused as it looks
+
+Downstream exposes `COMBO_IOC_GPS_HWVER`, `COMBO_IOC_RTC_FLAG` and
+`COMBO_IOC_CO_CLOCK_FLAG` through a `/dev/mtk_stp_gps` character device
+(`conn_soc/common/linux/pub/stp_chrdev_gps.c:36-38`, `:252-268`). None of that exists
+here: the generic GNSS framework's `struct gnss_operations`
+(`include/linux/gnss.h:29-33`) has only `open`, `close` and `write_raw` and **no
+ioctl hook at all**, so there is nowhere to route these without changing the
+framework, which is outside this driver's scope.
+
+On the hardware version: `mt6628_wmt_read_versions()` at `mtk-stp.c:798-818` does
+read the HW version, and the value is *not* discarded — it is passed straight
+into `mt6628_wmt_patch_download(wmt, hw_ver, rom_ver)`, where it selects the E1
+versus E2 multi-patch set, and both versions are logged at probe. So the GPS
+`GPS_HWVER` ioctl is redundant rather than missing: the same value is already
+obtained and used, just not re-exposed to userspace.
+
+## Summary
+
+| Area | State |
+|---|---|
+| FM tune / seek / mono-stereo | complete |
+| FM signal level (`tuner->signal`) | reported from FM_RSSI_IND, linearly scaled |
+| FM `tuner->afc` | always 0 — no AFC on this chip |
+| FM mute | complete — `V4L2_CID_AUDIO_MUTE` → FM_MAIN_CTRL[5] |
+| FM RDS | not implemented — hardware present, parser not ported |
+| FM scan / CQI | not implemented |
+| FM volume / antenna / de-emphasis | not implemented — de-emphasis fixed at the downstream default |
+| FM audio path | no producer on this board (see §2.1) |
+| STP SDIO framing / WMT / patch download | complete |
+| STP coex and GPS_SYNC | complete |
+| STP CRC16 | absent by design — matches the downstream SDIO reference |
+| STP seq/ack windowing | absent — the largest remaining protocol gap |
+| STP PSM / in-band reset / paged dump | not implemented |
+| STP optional DT properties | all five absent from every DTS; defaults untested |
+| GNSS raw relay | complete, and matches downstream (which is also just a pipe) |
+| GNSS reset / suspend / resume | not implemented |
+| GNSS `gps-sync` pinctrl state | dead code — no DTS defines it |
+| GNSS ioctls (`GPS_HWVER` / `RTC_FLAG` / `CO_CLOCK_FLAG`) | absent — no ioctl hook in the generic framework |
+
+Nothing in this section has been run on hardware.
