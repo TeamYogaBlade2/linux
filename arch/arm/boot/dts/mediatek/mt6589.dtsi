@@ -746,10 +746,19 @@
 			reg = <0x10200000 0x1000>;
 		};
 
+		/*
+		 * #reset-cells advertises the reset controller that
+		 * drivers/clk/mediatek/clk-mt6589-mfg.c registers on this node
+		 * against MFG_RESET (0x1020600c, data sheet p. 2433).  The node
+		 * was missing it, which left a registered controller with no
+		 * #reset-cells and so unnameable from DT.  One bank means 32
+		 * resets: MFG_G3D_RESET at bit 0 and MFG_AXI_RESET at bit 1.
+		 */
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
 			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		apmixedsys: syscon@10209000 {
