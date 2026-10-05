@@ -27,12 +27,37 @@
 #define DISP_REG_MUTEX(n)			(0x24 + 0x20 * (n))
 #define DISP_REG_MUTEX_RST(n)			(0x28 + 0x20 * (n))
 /*
- * MUTEX interrupt enable, one bit per mutex ID.  The downstream driver
- * programs this before releasing the mutex and refuses to continue if it
- * does not match, because the completion status is only latched while the
- * matching interrupt is unmasked.  Mainline never writes this register.
+ * DISP_MUTEX_INTEN (14011000) and DISP_MUTEX_INTSTA (14011004), from the
+ * data sheet's DISP_MUTEX chapter (ch. 52, register table p. 1897, field
+ * descriptions p. 1898-1899).  INTEN is one bit per mutex ID, and the
+ * chapter splits those twelve bits in two:
+ *
+ *	bits  0- 5: MUTEX0..5 register update interrupt
+ *	bits  6-11: MUTEX0..5 register update time-out interrupt
+ *
+ * INTSTA mirrors the same layout.
+ *
+ * MT6589 is the only SoC here whose data sheet documents this block, which
+ * is why it is the only one flagged .needs_mutex_inten.
  */
 #define DISP_REG_MUTEX_INTEN			0x00
+/*
+ * Downstream's baseline value, verified as DISP_MUTEX_INTR_ENABLE_BIT in
+ * the MT6589 tree (drivers/dispsys/ddp_reg.h:162) and used there in
+ * disp_power_on() to restore the register after a power cycle.  It is not
+ * all twelve documented bits: 0x3cf is bits 0-3 and 6-9, i.e. update and
+ * time-out interrupts for MUTEX0..MUTEX3 only.  MT6589 has six mutex IDs
+ * (MUTEX0_EN at 0x20 steps to MUTEX5_EN at 0xa0) and the register is 12
+ * bits wide, so 0xfff would be the fully unmasked equivalent.
+ *
+ * Keeping 0x3cf is deliberate rather than an oversight: it is the value the
+ * vendor driver ships, so it reproduces the hardware's reset-time
+ * programming rather than second-guessing it.  The two ID groups it omits
+ * (MUTEX4, MUTEX5) are unused on this configuration - the only path built
+ * is the single main CRTC, which takes MUTEX0 - so no interrupt this driver
+ * depends on is left masked.  Do not "fix" this to 0xfff without also
+ * re-checking which mutex IDs are actually in use.
+ */
 #define DISP_REG_MUTEX_INTEN_ALL		0x3cf
 /*
  * Some SoCs may have multiple MUTEX_MOD registers as more than 32 mods
@@ -55,6 +80,18 @@
 })
 #define DISP_REG_MUTEX_SOF(mutex_sof_reg, n)	(mutex_sof_reg + 0x20 * (n))
 
+/*
+ * Bit 1 of DISP_MUTEX(n) is the hardware grant, INT_MUTEX0, and is exactly
+ * BIT(1) on MT6589: the data sheet's DISP_MUTEX0 register (14011024, p. 1900)
+ * is two bits wide - bit 0 MUTEX0 (RW, the software request) and bit 1
+ * INT_MUTEX0 (RU, "0: internal mutex is released, 1: taken by software").
+ * The chapter also states the protocol this driver implements: software sets
+ * bit 0 to request, hardware sets bit 1 to grant, and software may then
+ * modify the modules in that stream.
+ *
+ * On the SoCs whose data sheet was not available to check, BIT(1) is the
+ * long-standing upstream value and is left alone.
+ */
 #define INT_MUTEX				BIT(1)
 
 #define MT8186_MUTEX_MOD_DISP_OVL0		0
@@ -777,6 +814,14 @@ static const struct mtk_mutex_data mt6589_mutex_driver_data = {
 	.mutex_mod1_reg = MT2701_MUTEX0_MOD1,
 	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
 	.needs_mutex_inten = true,
+	/*
+	 * The DISP0 gate register on MT6589 (CG_CON0, data sheet p. 1450-1451)
+	 * has no mutex gate - bits 3 through 24 are SCL, OVL, color, 2DSHP,
+	 * BLS, WDMA, RDMA, gamma, command queue and G2D, and the rest are
+	 * reserved - so the node declares no clocks and none may be requested
+	 * here.  This matches the other SoCs whose data sheet shows no gate.
+	 */
+	.no_clk = true,
 };
 
 static const struct mtk_mutex_data mt6795_mutex_driver_data = {
@@ -1015,12 +1060,19 @@ void mtk_mutex_enable(struct mtk_mutex *mutex)
 	WARN_ON(&mtx->mutex[mutex->id] != mutex);
 
 	/*
-	 * Unmask the mutex completion interrupt for this ID first.  The
-	 * downstream driver refuses to release a mutex whose INTEN does not
-	 * match, and a mutex that never signals completion makes
-	 * mtk_mutex_acquire() spin for its full 10ms timeout and then carry
-	 * on anyway, which shows up as a pipeline that is programmed but
-	 * never updates.
+	 * Restore the mutex interrupt enable mask.  The data sheet gives this
+	 * register a power-on value of 0 and notes the block is reset when the
+	 * display power domain is cycled, which is why the downstream driver
+	 * re-writes DDP_MUTEX_INTR_ENABLE_BIT in disp_power_on() "because this
+	 * reg will be reset if power is off".
+	 *
+	 * Note that the grant itself does NOT depend on this: DISP_MUTEX(n)
+	 * bit 1 is set by hardware regardless of INTEN, so an unmasked INTEN
+	 * is what makes the *interrupt* arrive, not what makes the mutex work.
+	 * mtk_mutex_acquire() reads that bit directly and is unaffected either
+	 * way.  Writing the mask here keeps the block in the state the vendor
+	 * driver leaves it in, so a DISP_MUTEX_INTSTA-based path would see the
+	 * interrupts it expects.
 	 */
 	if (mtx->data->needs_mutex_inten)
 		writel(DISP_REG_MUTEX_INTEN_ALL,
@@ -1060,6 +1112,38 @@ void mtk_mutex_disable(struct mtk_mutex *mutex)
 }
 EXPORT_SYMBOL_GPL(mtk_mutex_disable);
 
+/*
+ * Acquire a mutex by polling the hardware grant bit rather than by waiting
+ * for an interrupt.  The data sheet does document the interrupt path -
+ * DISP_MUTEX_INTEN/INTSTA at 14011000/14011004, interrupt 160
+ * (Disp_mutex_irq_b, negative polarity, interrupt table p. 417) - and the
+ * DT node declares it, but this stays a poll for two reasons.
+ *
+ * First, INTSTA's access type is given as "RU", which the data sheet's
+ * preface (p. 12) does not define: it lists R/W, RO and RC - the last being
+ * "read only, and each bit which is HIGH is cleared to LOW automatically" -
+ * and RU is never introduced.  Since RU appears on 406 register fields
+ * throughout the document it clearly means read-to-unset, i.e. read-to-clear,
+ * but that is an inference from the name and from its pairing with RC, not
+ * something the chapter states.  An interrupt handler cannot be written
+ * correctly without knowing it, so it is not written speculatively.
+ *
+ * Second, the grant is already visible in DISP_MUTEX(n) bit 1 without any
+ * interrupt at all, and that is what is polled.  The data sheet's own
+ * description of INT_MUTEX0 and of the protocol (software sets bit 0 to
+ * request, hardware sets bit 1 to grant) makes the register the source of
+ * truth, so the interrupt would only save the spin, not change the
+ * semantics.
+ *
+ * The context permits sleeping - the only callers are atomic-commit helpers
+ * (mtk_crtc_plane_disable, mtk_crtc_async_update, mtk_crtc_atomic_disable
+ * and mtk_crtc_atomic_flush, all reached from drm_atomic_helper_commit_tail
+ * with no runtime PM on this driver) and the poll is atomic anyway - so an
+ * interrupt-driven version is feasible once the RU semantics are confirmed.
+ * It is a known future improvement, not a 10ms wait for the hardware: the
+ * grant arrives within a few microseconds, and the timeout only ever fires
+ * when the display pipeline is not running at all.
+ */
 void mtk_mutex_acquire(struct mtk_mutex *mutex)
 {
 	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
