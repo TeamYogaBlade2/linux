@@ -6,6 +6,7 @@
 #include "mt6589-lenovo-blade.dtsi"
 
 / {
+	// This is unnecessary if MediaTek DRM is working correctly.
 	framebuffer0: framebuffer@bf600000 {
 		compatible = "simple-framebuffer";
 		memory-region = <&framebuffer_reserved>;
