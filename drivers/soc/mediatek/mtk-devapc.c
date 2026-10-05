@@ -50,17 +50,13 @@ struct mtk_devapc_data {
 	/* numbers of violation index */
 	u32 vio_idx_num;
 	const struct mtk_devapc_regs_ofs *regs_ofs;
-	/*
-	 * Number of independent DEVAPC instances.  1 for the monolithic
-	 * MT6779/MT8186 blocks, MT6589_DEVPAPC_INSTANCES for MT6589.
-	 */
+	/* 1 for the monolithic MT6779/MT8186 blocks, 5 for MT6589. */
 	u32 nr_instances;
 };
 
-/*
- * MT6589 supports multiple independent DEVAPC instances, each split across an
- * always-on (permission) window and a power-down (violation) window.  The
- * single-instance SoCs reuse infra_base for both.
+/* One MT6589 DEVAPC instance: an always-on permission window and a
+ * power-down violation window.  The single-instance SoCs have neither and
+ * use infra_base for both.
  */
 struct mtk_devapc_instance {
 	void __iomem *ao_base;
@@ -128,16 +124,6 @@ static void mask_module_irq(struct mtk_devapc_context *ctx, bool mask)
 
 #define PHY_DEVAPC_TIMEOUT	0x10000
 
-/*
- * devapc_sync_vio_dbg - do "shift" mechansim" to get full violation information.
- *                       shift mechanism is depends on devapc hardware design.
- *                       Mediatek devapc set multiple slaves as a group.
- *                       When violation is triggered, violation info is kept
- *                       inside devapc hardware.
- *                       Driver should do shift mechansim to sync full violation
- *                       info to VIO_DBGs registers.
- *
- */
 static int devapc_sync_vio_dbg(struct mtk_devapc_context *ctx)
 {
 	void __iomem *pd_vio_shift_sta_reg;
@@ -154,17 +140,14 @@ static int devapc_sync_vio_dbg(struct mtk_devapc_context *ctx)
 	pd_vio_shift_con_reg = ctx->infra_base +
 			       ctx->data->regs_ofs->vio_shift_con_offset;
 
-	/* Find the minimum shift group which has violation */
 	val = readl(pd_vio_shift_sta_reg);
 	if (!val)
 		return false;
 
 	min_shift_group = __ffs(val);
 
-	/* Assign the group to sync */
 	writel(0x1 << min_shift_group, pd_vio_shift_sel_reg);
 
-	/* Start syncing */
 	writel(0x1, pd_vio_shift_con_reg);
 
 	ret = readl_poll_timeout(pd_vio_shift_con_reg, val, val == 0x3, 0,
@@ -174,19 +157,13 @@ static int devapc_sync_vio_dbg(struct mtk_devapc_context *ctx)
 		return false;
 	}
 
-	/* Stop syncing */
 	writel(0x0, pd_vio_shift_con_reg);
 
-	/* Write clear */
 	writel(0x1 << min_shift_group, pd_vio_shift_sta_reg);
 
 	return true;
 }
 
-/*
- * devapc_extract_vio_dbg - extract full violation information after doing
- *                          shift mechanism.
- */
 static void devapc_extract_vio_dbg(struct mtk_devapc_context *ctx)
 {
 	struct mtk_devapc_vio_dbgs vio_dbgs;
@@ -199,7 +176,6 @@ static void devapc_extract_vio_dbg(struct mtk_devapc_context *ctx)
 	vio_dbgs.vio_dbg0 = readl(vio_dbg0_reg);
 	vio_dbgs.vio_dbg1 = readl(vio_dbg1_reg);
 
-	/* Print violation information */
 	if (vio_dbgs.dbg0_bits.vio_w)
 		dev_info(ctx->dev, "Write Violation\n");
 	else if (vio_dbgs.dbg0_bits.vio_r)
@@ -210,11 +186,6 @@ static void devapc_extract_vio_dbg(struct mtk_devapc_context *ctx)
 		 vio_dbgs.vio_dbg1);
 }
 
-/*
- * devapc_violation_irq - the devapc Interrupt Service Routine (ISR) will dump
- *                        violation information including which master violates
- *                        access slave.
- */
 static irqreturn_t devapc_violation_irq(int irq_number, void *data)
 {
 	struct mtk_devapc_context *ctx = data;
@@ -228,10 +199,6 @@ static irqreturn_t devapc_violation_irq(int irq_number, void *data)
 }
 
 
-/*
- * mt6589_write_perm - program one slave's permission for each requested domain
- *		       master of one instance.
- */
 static void mt6589_write_perm(struct mtk_devapc_instance *in,
 			      const struct mtk_devapc_forbid *f)
 {
@@ -257,32 +224,17 @@ static void mt6589_write_perm(struct mtk_devapc_instance *in,
  * MT6589 has two independent policies that must not be conflated:
  *
  *  - Permission policy: which masters may touch which slave, and at what
- *    level (L0..L3).  That is programmed into the per-domain APC registers
- *    from the DT "mediatek,devapc-forbid-slaves" table by
- *    mt6589_apply_forbid().
+ *    level (L0..L3).  Programmed into the per-domain APC registers from the DT
+ *    "mediatek,devapc-forbid-slaves" table by mt6589_apply_forbid().
  *
- *  - Interrupt-monitoring policy: which slaves, if any, raise an interrupt
- *    when a violation occurs.  That is the D<d>_VIO_MASK register, and it is
- *    completely independent of the permission level - a slave can be locked
- *    to L3 and still be masked out (no interrupt, violation still logged in
- *    the status bit), or left at L0 and unmasked.
- *
- * By default we unmask everything so bring-up logs violations on any slave.
- * Set "mediatek,vio-mask-interrupts" in DT to mask all interrupts instead
- * (permissions still apply; violations are still latched in D<d>_VIO_STA but
- * no interrupt is raised).
+ *  - Interrupt-monitoring policy: which slaves, if any, raise an interrupt on
+ *    a violation.  That is D<d>_VIO_MASK, and it is independent of the
+ *    permission level - a slave locked to L3 can still be masked out (no
+ *    interrupt, violation still logged in the status bit), or left at L0 and
+ *    unmasked.  D<d>_VIO_STA and D<d>_VIO_MASK are cleared unconditionally at
+ *    probe; only the mask honours mediatek,vio-mask-interrupts.
  */
 
-/*
- * mt6589_prepare_inst - clear stale violation status and apply the
- *			 interrupt-monitoring policy for one instance.
- *
- * Clearing D<d>_VIO_STA is unconditional and is a status-register write, not
- * a permission change: it just drops violations latched before this driver
- * took over.  The VIO_MASK write below is the *only* thing that decides
- * whether violations generate interrupts, and it is driven by the DT policy
- * rather than being hardcoded.
- */
 static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 				bool vio_irq_mask)
 {
@@ -291,17 +243,19 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 	u32 irq_mask = vio_irq_mask ? GENMASK(in->nr_modules - 1, 0) : 0;
 
 	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
-		/* Drop stale latched violations (status, not permission). */
+		/* Status write, not a permission change: drops violations
+		 * latched before this driver took over.
+		 */
 		writel(sta_clr, in->pd_base + MT6589_DEVPAPC_VIO_STA_REG(dom));
 
-		/* Interrupt-monitoring policy, independent of permission. */
 		writel(irq_mask, in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom));
 	}
 
 	/*
 	 * Clear APC_CON bit2 ("stop") in both windows.  The downstream driver
-	 * does this in init_devpac() for all five instances; leaving the bit set
-	 * means the instance never raises an interrupt.
+	 * does this in init_devpac() for all five instances
+	 * (aquaris-5 .../devapc/devapc.c:737-746); leaving the bit set means
+	 * the instance never raises an interrupt.
 	 */
 	writel(readl(in->ao_base + MT6589_DEVPAPC_APC_CON) &
 	       ~MT6589_DEVPAPC_APC_CON_STOP,
@@ -311,12 +265,6 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 	       in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
 }
 
-/*
- * mt6589_vio_dbg - decoded VIO_DBG0/VIO_DBG1 pair from one instance.
- *
- * The values are captured into this struct so they can be reported before
- * the caller clears the debug latch; see MT6589_DEVPAPC_VIO_DBG0_CLR.
- */
 struct mtk_devapc_vio_dbg {
 	u32 master_id;
 	u32 domain_id;
@@ -324,13 +272,6 @@ struct mtk_devapc_vio_dbg {
 	bool is_write;
 };
 
-/*
- * mt6589_read_vio_dbg - latch and decode the violation debug registers.
- *
- * VIO_DBG0 is read only - it is NOT cleared by a read, so this is safe to
- * call before the clear.  Decode first, clear later: writing bit31 releases
- * the latch and the information cannot be recovered afterwards.
- */
 static void mt6589_read_vio_dbg(struct mtk_devapc_instance *in,
 				struct mtk_devapc_vio_dbg *vio)
 {
@@ -346,9 +287,6 @@ static void mt6589_read_vio_dbg(struct mtk_devapc_instance *in,
 	vio->addr = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG1);
 }
 
-/*
- * mt6589_report_vio_dbg - hand a decoded violation to the log.
- */
 static void mt6589_report_vio_dbg(struct mtk_devapc_context *ctx,
 				  unsigned int idx,
 				  const struct mtk_devapc_vio_dbg *vio)
@@ -359,11 +297,6 @@ static void mt6589_report_vio_dbg(struct mtk_devapc_context *ctx,
 		 vio->master_id, vio->domain_id);
 }
 
-/*
- * mt6589_extract_vio_dbg - decode VIO_DBG0/VIO_DBG1 from one instance and
- *			   report it.  Everything is reported here, before the
- *			   caller clears the latch.
- */
 static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
 				   struct mtk_devapc_instance *in,
 				   unsigned int idx)
@@ -384,7 +317,8 @@ static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
  * Order matters and must not be rearranged: read the latch, decode and
  * report it, and only then clear the latch and acknowledge the instance
  * status.  Clearing first destroys the evidence the diagnostic exists to
- * provide, so a violation would be reported as all zeroes.
+ * provide, so a violation would be reported as all zeroes.  VIO_DBG0 is not
+ * cleared by a read, so reading it here is safe.
  */
 static irqreturn_t mt6589_violation_irq(int irq, void *data)
 {
@@ -394,19 +328,18 @@ static irqreturn_t mt6589_violation_irq(int irq, void *data)
 	for (i = 0; i < ctx->data->nr_instances; i++) {
 		struct mtk_devapc_instance *in = &ctx->inst[i];
 
-		/* Does this instance have a pending violation? */
 		if (!(readl(in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA) &
 		      in->dxs_vio_sta_bit))
 			continue;
 
-		/* 1. Read and decode, 2. report, in that order. */
+		/* Read and decode, then report, in that order. */
 		mt6589_extract_vio_dbg(ctx, in, i);
 
-		/* 3. Only now release the debug latch (write-1-to-clear). */
+		/* Only now release the debug latch (write-1-to-clear). */
 		writel(MT6589_DEVPAPC_VIO_DBG0_CLR,
 		       in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
 
-		/* 4. Acknowledge the instance-level status. */
+		/* Acknowledge the instance-level status. */
 		writel(in->dxs_vio_sta_bit,
 		       in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA);
 	}
@@ -485,8 +418,7 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
  * mt6589_start - prepare every instance and apply the DT permission table.
  *
  * This runs exactly once, from probe.  There is deliberately no PM runtime
- * suspend/resume callback, and that is a correctness decision rather than an
- * oversight:
+ * suspend/resume callback:
  *
  *  - The permission windows are in the always-on (AO) window and the violation
  *    windows are in a separately clocked PD window, but neither is in a
@@ -498,12 +430,8 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
  *  - Re-programming the permission windows from a resume callback would be
  *    actively wrong while MT6589_DEVPAPC_APC_LOCK is unused: if that register
  *    is ever found to lock the windows one way at first write, a resume that
- *    rewrites them would silently fail to restore the policy it thought it
- *    was restoring.  See the header for the full evidence that its polarity
- *    is unknown.
- *
- * Violations therefore keep being reported across suspend/resume with the
- * policy configured here, and nothing re-touches it.
+ *    rewrites them would silently stop restoring the policy it thought it was
+ *    restoring.  See the header for the evidence that its polarity is unknown.
  */
 static void mt6589_start(struct mtk_devapc_context *ctx)
 {
@@ -511,21 +439,16 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 	bool mask_irqs;
 
 	/*
-	 * Interrupt-monitoring policy, read from DT.  This is a boolean, not a
-	 * bitmask: VIO_MASK is per-slave and per-domain, so a scalar would
-	 * imply a precision this driver does not have.
+	 * Interrupt-monitoring policy, read from DT.  A boolean, not a bitmask:
+	 * VIO_MASK is per-slave and per-domain, so a scalar would imply a
+	 * precision this driver does not have.
 	 *
-	 * Unmasked (the default) is the bring-up setting: every violation on
-	 * every slave raises an interrupt so an unexpected access shows up in
-	 * the log immediately.  That is the right choice while the slave
-	 * permission table is still being discovered, and the wrong choice for
-	 * production, where a denied access is expected traffic and would
-	 * otherwise turn into interrupt load.  Boards that have settled their
-	 * mediatek,devapc-forbid-slaves table should set
-	 * mediatek,vio-mask-interrupts to mask the notifications; the
-	 * permissions and the D<d>_VIO_STA status bits keep working either way,
-	 * so masking costs observability of a policy that is already settled
-	 * and nothing more.
+	 * Unmasked is the bring-up default: every violation on every slave
+	 * raises an interrupt, so an unexpected access shows up in the log
+	 * immediately.  That is wrong for production, where a denied access is
+	 * expected traffic and would become interrupt load; boards that have
+	 * settled their mediatek,devapc-forbid-slaves table should set
+	 * mediatek,vio-mask-interrupts.
 	 */
 	mask_irqs = of_property_read_bool(ctx->dev->of_node,
 					  "mediatek,vio-mask-interrupts");
@@ -541,7 +464,7 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 	mt6589_apply_forbid(ctx);
 
 	/*
-	 * This is the one point where a policy lock would have to go, after
+	 * This is where a policy lock would have to go, after
 	 * mt6589_apply_forbid() has programmed every permission window.  It is
 	 * deliberately not done: the polarity of APC_LOCK is undocumented, and
 	 * guessing it risks permanently freezing or widening the policy just
@@ -655,18 +578,14 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 
 	if (ctx->data->nr_instances > 1) {
 		/*
-		 * MT6589 describes each instance as a pair of reg entries: the
-		 * always-on permission window followed by the power-down
-		 * violation window, so instance n uses reg 2n and 2n+1.
+		 * Instance n uses reg entries 2n (permission window) and 2n+1
+		 * (violation window).  devm_platform_ioremap_resource()
+		 * validates each against its own entry, so a missing or
+		 * malformed region is reported here instead of faulting later.
 		 */
 		for (i = 0; i < ctx->data->nr_instances; i++) {
 			struct mtk_devapc_instance *in = &ctx->inst[i];
 
-			/*
-			 * devm_platform_ioremap_resource() validates each window
-			 * against its own "reg" entry, so a missing or malformed
-			 * region is reported here instead of faulting later.
-			 */
 			in->ao_base = devm_platform_ioremap_resource(pdev,
 								      i * 2);
 			if (IS_ERR(in->ao_base)) {
@@ -705,17 +624,15 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * The violation interrupt is level sensitive: the MT6589 DTS declares
-	 * IRQ_TYPE_LEVEL_LOW, and the downstream driver requests it with
-	 * IRQF_TRIGGER_LOW | IRQF_SHARED.  Derive the trigger from the DT
-	 * specifier rather than hardcoding one, so a board that wires it
-	 * edge triggered still works.
+	 * Derive the trigger from the DT specifier rather than hardcoding one,
+	 * so a board that wires it edge triggered still works.
 	 *
-	 * IRQF_SHARED is deliberately NOT set.  The vendor shares the line
-	 * because its driver is paired with a userspace cdev control
-	 * interface that also claims it; in mainline nothing else claims
-	 * GIC SPI 94 on this platform, and claiming it shared would require
-	 * every other owner to be equally correct.
+	 * IRQF_SHARED is deliberately NOT set, although the vendor requests it
+	 * with IRQF_TRIGGER_LOW | IRQF_SHARED (aquaris-5 .../devapc/devapc.c:
+	 * 1086) because its driver is paired with a userspace cdev control
+	 * interface that also claims the line.  Nothing else claims GIC SPI 94
+	 * on this platform, and claiming it shared would require every other
+	 * owner to be equally correct.
 	 */
 	ret = of_irq_parse_one(node, 0, &oirq);
 	if (!ret && oirq.args_count > 1)

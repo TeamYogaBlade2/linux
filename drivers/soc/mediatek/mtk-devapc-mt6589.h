@@ -10,12 +10,18 @@
  *
  * Each instance watches up to 32 slave modules per domain master, and there
  * are four domain masters: AP (0), MD1 (1), MD2 (2) and MM (3).  A slave's
- * permission is a 2-bit field selecting one of:
+ * permission is a 2-bit field per master:
  *
  *   0 L0  no protection
  *   1 L1  only RW for secure access
  *   2 L2  only RW for secure access, non-secure read allowed
  *   3 L3  forbidden - any access raises a violation
+ *
+ * Only the vendor's own use of the levels is known - L0 in stop_usb_protection()
+ * and L3 in start_devapc()/start_usb_protection(), .../devapc/devapc.c.  The
+ * wording above is borrowed from EMI_MPU's APC field, which shares the
+ * encoding scheme but is 3 bits wide with six levels; it is NOT documented
+ * for this block.
  *
  * Copyright (c) 2026 MediaTek Inc.
  */
@@ -32,8 +38,10 @@
 #define MT6589_DEVPAPC_INSTANCES	5
 
 /*
- * Worst case module count across the five instances.  DEVAPC0 has 24 modules
- * and DEVAPC2 has 30, so 30 is what has to be programmed.
+ * Worst case module count across the five instances.  The vendor's per-
+ * instance device tables are 24 entries for DEVAPC0, 19 for DEVAPC1, 30 for
+ * DEVAPC2, 21 for DEVAPC3 and 24 for DEVAPC4 (aquaris-5 .../devapc/devapc.h:
+ * D_APC0..4_Devices), so 30 is what has to be programmed.
  */
 #define MT6589_DEVPAPC_MAX_MODULES	30
 
@@ -46,12 +54,15 @@ enum mt6589_devapc_domain {
 	MT6589_DOMAIN_COUNT	= 4,
 };
 
-/* Permission levels, matching the hardware encoding. */
+/*
+ * Permission levels, matching the hardware encoding the vendor uses
+ * (E_L0..E_L3, .../devapc/devapc.h:9-16).
+ */
 enum mt6589_devapc_perm {
 	MT6589_APC_L0	= 0,	/* no protection */
 	MT6589_APC_L1	= 1,	/* secure RW only */
 	MT6589_APC_L2	= 2,	/* secure RW, non-secure read */
-	MT6589_APC_L3	= 3,	/* forbidden */
+	MT6589_APC_L3	= 3,	/* forbidden - the vendor's lockdown level */
 };
 
 /* AO window register offsets, relative to an instance's AO base. */
@@ -68,35 +79,38 @@ enum mt6589_devapc_perm {
  * MT6589_DEVPAPC_APC_LOCK - deliberately NOT written by this driver.
  *
  * Locking the permission windows after programming them is the obvious thing
- * to do here, and it is deliberately left undone because the polarity of this
- * register could not be established from any reliable source.  Writing a
- * guessed bit pattern to a security-policy register is worse than leaving the
- * policy mutable, because a wrong guess can freeze a half-configured policy or
- * widen access irreversibly.
+ * to do here.  It is left undone because the polarity of this register could
+ * not be established from any reliable source, and writing a guessed bit
+ * pattern to a security-policy register is worse than leaving the policy
+ * mutable: a wrong guess can freeze a half-configured policy or widen access
+ * irreversibly.
  *
- * What the investigation actually found:
+ * What the investigation found:
  *
  *  - The MT6589 datasheet has no Device APC register-definition chapter at
- *    all.  It lists the windows in the memory map ("Device APC AO" at
- *    0x1001_0000, "device_apc monitor module" at 0x1020_7000) and provides
- *    the DEVAPC clock gate (devapc_pdn, SPM INFRA_PDN0 bit 6), but documents
- *    none of the APC_* registers.  Every R<n>D<m>_APC / R<n>_LOCK field in
- *    the text belongs to EMI_MPU (EMI_MPUI/J/K at 0x102031A0..0x102031B0), a
- *    different block that happens to share the 3-bit APC encoding; its
- *    R<n>_LOCK at bit 31 is NOT this register and must not be copied here.
+ *    all.  It lists the windows in the memory map (Table 3-2: "Device APC AO"
+ *    at 0x1001_0000, "device_apc monitor module" at 0x1020_7000) and gives
+ *    the DEVAPC clock gate (devapc_pdn, SPM INFRA_PDN0 bit 6, p. 439), but
+ *    documents none of the APC_* registers.  Every R<n>D<m>_APC / R<n>_LOCK
+ *    field in the text belongs to EMI_MPU (EMI_MPUI/J/K at 0x102031A0..B0,
+ *    pp. 613-614) - a different block that happens to share the 3-bit APC
+ *    encoding.  Its R1_LOCK at bit 31 and R0_LOCK at bit 15 are NOT this
+ *    register and must not be copied here.
  *
- *  - In the vendor tree, DEVAPC0..4_APC_LOCK (AO base + 0x0094) exists only
- *    as an address macro in core/include/mach/mt_device_apc.h and in the
- *    preloader header.  Nothing in the LK, the preloader or the kernel driver
- *    ever writes it - not at probe, not at resume.
+ *  - In the vendor tree DEVAPC0..4_APC_LOCK (AO base + 0x0094) exists only as
+ *    an address macro: core/include/mach/mt_device_apc.h and the preloader
+ *    header preloader/src/drivers/inc/device_apc.h.  Nothing in the LK, the
+ *    preloader or the kernel driver ever writes it - not at probe, not at
+ *    resume.
  *
  *  - The vendor driver argues against the "irreversible write-1-to-lock"
  *    assumption outright: devapc_resume() calls start_devapc(), which re-runs
- *    the full set_module_apc() L0/L3 loops.  If the register locked the windows
- *    one way at first write, the vendor's own suspend/resume cycle would
- *    silently stop re-applying its permission policy.  The vendor further
- *    EXPORT_SYMBOLs start_usb_protection()/stop_usb_protection() and changes
- *    permissions at runtime, so a hard lock at probe would break that
+ *    the full set_module_apc() L0/L3 loops (aquaris-5 .../devapc/devapc.c:
+ *    1009-1021 -> 756-838).  If the register locked the windows one way at
+ *    first write, the vendor's own suspend/resume cycle would silently stop
+ *    re-applying its permission policy.  The vendor further EXPORT_SYMBOLs
+ *    start_usb_protection()/stop_usb_protection() (devapc.c:1119-1120) and
+ *    changes permissions at runtime, so a hard lock at probe would break that
  *    product feature.  Either way the register is not one-way in the way this
  *    finding assumes.
  *
@@ -114,11 +128,9 @@ enum mt6589_devapc_perm {
 #define MT6589_DEVPAPC_MAS_SEC		0x00a4
 
 /*
- * PD window register offsets, relative to an instance's PD base.
- *
- * There is no VIO_SHIFT_* register pair on this block: VIO_DBG0 and VIO_DBG1
- * are latched directly, so the shift mechanism the MT6779 driver relies on
- * must not be attempted here.
+ * PD window register offsets, relative to an instance's PD base.  There is no
+ * VIO_SHIFT_* register pair on this block, so the shift mechanism the MT6779
+ * driver relies on must not be attempted here.
  */
 #define MT6589_DEVPAPC_D0_VIO_MASK	0x0020
 #define MT6589_DEVPAPC_D1_VIO_MASK	0x0024
@@ -137,33 +149,31 @@ enum mt6589_devapc_perm {
 #define MT6589_DEVPAPC_DEC_ERR_ADDR	0x00b8
 #define MT6589_DEVPAPC_DEC_ERR_ID	0x00bc
 
-/* APC_CON bit2 must be cleared for an instance to report violations. */
+/* APC_CON bit2 must be cleared for an instance to report violations; the
+ * vendor clears it for all five instances in init_devpac()
+ * (aquaris-5 .../devapc/devapc.c:737-746).
+ */
 #define MT6589_DEVPAPC_APC_CON_STOP	BIT(2)
 
 /*
  * VIO_DBG0 - latched violation descriptor (per DEVAPC instance, PD window).
- *
- * NOTE: this layout is NOT the MT6779/MT8186 one.  The upstream in-tree
- * comment claiming it was "shared with the other MediaTek DEVAPC blocks"
- * was wrong; the fields below are what MT6589 hardware actually decodes.
+ * This layout is NOT the MT6779/MT8186 one; the upstream in-tree comment
+ * claiming it was "shared with the other MediaTek DEVAPC blocks" was wrong.
  *
  *   Bit(s)   Field       Description
  *   ------   ----------  ----------------------------------------------
- *   10:0     MASTER_ID   Violation master ID {AXI ID:8, Port ID:3}.
- *                       Identifies which domain master attempted the
- *                       access that was refused.
- *   13:12    DOMAIN_ID   Violation domain ID (2 bits): which of the four
- *                       domain masters (AP/MD1/MD2/MM) was the master.
+ *   10:0     MASTER_ID   Violation master ID {AXI ID:8, Port ID:3}
+ *   13:12    DOMAIN_ID   Violation domain ID: AP/MD1/MD2/MM
  *   28       W_VIO       Set if the abort was caused by a WRITE.
  *   29       R_VIO       Set if the abort was caused by a READ.
- *   31       CLR         Write-1-to-clear; SW clears the whole debug latch.
- *                       (Reading this register does NOT clear it - decode
- *                       before clearing or the information is lost forever.)
+ *   31       CLR         Write-1-to-clear; clears the whole debug latch.
  *
  * Bits 30, 27:14 are reserved/unused.
  *
- * VIO_DBG1 is the full 32-bit faulting address (the vendor prints it
- * directly; no split address field exists in VIO_DBG0 on this block).
+ * Reading VIO_DBG0 does NOT clear the latch: decode before clearing or the
+ * information is lost.  VIO_DBG1 is the full 32-bit faulting address (the
+ * vendor prints it directly); no split address field exists in VIO_DBG0 on
+ * this block.
  *
  * Evidence for every field:
  *   - aquaris-5 mediatek/platform/mt6589/kernel/drivers/devapc/devapc.c
@@ -171,12 +181,12 @@ enum mt6589_devapc_perm {
  *       domain_ID    = (dbg0 >> 12) & 0x3           -> [13:12]
  *       r_w_violation= (dbg0 >> 28) & 0x3           -> [29:28]  (1=W, else R)
  *       writes 0x80000000 to VIO_DBG0 to clear      -> bit31 CLR
- *   - MT6589 datasheet, EMI MPU EMI_MPUQ/S/T VIO_DBG0 (same block family
- *     and same latch semantics, section 18.x / EMI MPUS ~p.622):
+ *   - MT6589 datasheet ch. 12 (External Memory Interface), EMI_MPUS/T
+ *     VIO_DBG0 (same latch semantics, pp. 621-622):
  *       "13:12 DOMAIN_ID  Violation domain ID"
  *       "10:0  MASTER_ID  Records the violation master ID {AXI ID, Port ID}"
- *       "29    R_VID      Read violation"
- *       "28    W_VID      Write violation"
+ *       "29    R_VIO      Read violation"
+ *       "28    W_VIO      Write violation"
  *       "31    CLR        SW write CLR to 1 will clear ... to be 0"
  */
 #define MT6589_DEVPAPC_VIO_DBG0_MSTID	GENMASK(10, 0)
