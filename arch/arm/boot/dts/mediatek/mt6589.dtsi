@@ -1086,6 +1086,20 @@
 			 */
 			mediatek,display-path = "ovl0", "bls", "rdma0", "dsi0";
 			mediatek,display-routes =
+			/*
+			 * Fixed links: wired together in hardware, with no
+			 * register choosing between them.  They need an entry so
+			 * that they are stated rather than merely absent, and so
+			 * that a path containing one counts as fully wired up.
+			 * The datasheet path-debug registers show them at
+			 * DISP_PATH_DEBUG0 bit 7 "bls -> rdma0" and bit 0
+			 * "rot -> scl", and DISP_PATH_DEBUG1 bit 2
+			 * "rdma1 -> gamma" (p. 1446).
+			 */
+			"bls rdma0 0x0 0x0 0x0",
+			"rot scl 0x0 0x0 0x0",
+			"rdma1 gamma 0x0 0x0 0x0",
+			/* SCL -> WDMA0 */
 				/* SCL -> WDMA0 */
 				"scl wdma0 0x20 0x1 0x1",
 				"scl wdma0 0x40 0x3 0x0",

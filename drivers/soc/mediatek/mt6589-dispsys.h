@@ -16,7 +16,8 @@
  *
  * Registers 0x020..0x05c are the display crossbar controls. MOUT_EN fields
  * enable output ports and *_SEL fields select the input consumed by a block.
- * Fixed datapath links do not need entries in the routing table below.
+ * Fixed datapath links need no register, and are stated in the device tree
+ * route table with a zero offset; see the end of this file.
  *
  * Blocks with no driver
  * ---------------------
@@ -103,9 +104,10 @@
  *    The vendor trees disagree, the LK topology is the one this driver follows,
  *    and COLOR has never been exercised on hardware here. Note that putting
  *    COLOR0 into the CRTC component array without also adding a (COLOR0, BLS)
- *    route silently disables the display: mtk_mmsys_ddp_connect() only wires
- *    ADJACENT pairs and returns void, so a missing route becomes a no-op
- *    rather than an error. Both halves have to change together.
+ *    route used to disable the display silently, because
+ *    mtk_mmsys_ddp_connect() only wires ADJACENT pairs and returns void.
+ *    Both halves now live in the device tree next to each other, and
+ *    mtk_crtc_ddp_hw_init() rejects the enable rather than missing it.
  *
  * DISP_MISC (0x060) holds the DPI0/1/2 and DBI C/IO select bits. It is defined
  * here and written by nothing, because only DPI and DBI would use it.
@@ -251,185 +253,29 @@
 #define MT6589_DISP_MISC_DBI_C_IO_SEL  BIT(12)
 
 /*
- * Routes used by the MT6589 display paths. When a connection needs both an
- * output-port enable and an input selector, both registers are represented by
- * separate entries with the same (from, to) pair.
+ * The routing table itself now lives in the device tree, as
+ * "mediatek,display-routes" on the dispsys node in mt6589.dtsi, next to the
+ * "mediatek,display-path" it has to agree with.  The defines above are where
+ * the offsets, masks and values in that property come from, and the MT6589
+ * datasheet crossbar description at the top of this file is what they were
+ * derived from; they are kept because they are the only statement of what
+ * each field means.
  *
- * The MT6589 datasheet path-debug registers show fixed links that therefore
- * need no route entry (DISP_PATH_DEBUG0 p. 1446): bit 00 "rot -> scl" and bit
- * 07 "bls -> rdma0"; plus DISP_PATH_DEBUG1 bit 02 "rdma1 -> gamma".
+ * Two things the table cannot express, which the property does:
+ *
+ *  - The fixed links.  The MT6589 datasheet path-debug registers show
+ *    connections that therefore need no route entry at all: DISP_PATH_DEBUG0
+ *    p. 1446, bit 00 "rot -> scl" and bit 07 "bls -> rdma0", and
+ *    DISP_PATH_DEBUG1 bit 02 "rdma1 -> gamma".  Those three are written in the
+ *    device tree as entries with a zero offset, so that a path containing one
+ *    is still complete and a fixed link is stated rather than merely absent.
+ *
+ *  - A missing route.  mtk_mmsys_ddp_connect() only writes registers for the
+ *    pairs its table lists and returns void, so a pair it does not know was a
+ *    silent no-op: the display came up with the crossbar as the bootloader
+ *    left it and nothing in the logs said so.  That is what commit 2d59d9693be8
+ *    hit when it had to drop COLOR0 from the path, and what c9e543f22025 hit
+ *    with TDSHP.  mtk_crtc_ddp_hw_init() now rejects the enable instead.
  */
-static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
-	/* SCL -> WDMA0 */
-	MMSYS_ROUTE(SCL, WDMA0,
-		    MT6589_DISP_SCL_MOUT_EN,
-		    MT6589_SCL_MOUT_EN_WDMA0, MT6589_SCL_MOUT_EN_WDMA0),
-	MMSYS_ROUTE(SCL, WDMA0,
-		    MT6589_DISP_WDMA0_SEL,
-		    MT6589_WDMA0_SEL_MASK, MT6589_WDMA0_SEL_SCL),
-
-	/* SCL -> OVL */
-	MMSYS_ROUTE(SCL, OVL0,
-		    MT6589_DISP_SCL_MOUT_EN,
-		    MT6589_SCL_MOUT_EN_OVL, MT6589_SCL_MOUT_EN_OVL),
-	MMSYS_ROUTE(SCL, OVL0,
-		    MT6589_DISP_OVL_SEL,
-		    MT6589_OVL_SEL_MASK, MT6589_OVL_SEL_SCL),
-
-	/* SCL -> COLOR */
-	MMSYS_ROUTE(SCL, COLOR0,
-		    MT6589_DISP_SCL_MOUT_EN,
-		    MT6589_SCL_MOUT_EN_COLOR, MT6589_SCL_MOUT_EN_COLOR),
-	MMSYS_ROUTE(SCL, COLOR0,
-		    MT6589_DISP_COLOR_SEL,
-		    MT6589_COLOR_SEL_MASK, MT6589_COLOR_SEL_SCL),
-
-	/* SCL -> TDSHP */
-	MMSYS_ROUTE(SCL, TDSHP,
-		    MT6589_DISP_SCL_MOUT_EN,
-		    MT6589_SCL_MOUT_EN_TDSHP, MT6589_SCL_MOUT_EN_TDSHP),
-	MMSYS_ROUTE(SCL, TDSHP,
-		    MT6589_DISP_TDSHP_SEL,
-		    MT6589_TDSHP_SEL_MASK, MT6589_TDSHP_SEL_SCL),
-
-	/* OVL -> WDMA1 */
-	MMSYS_ROUTE(OVL0, WDMA1,
-		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_WDMA1, MT6589_OVL_MOUT_EN_WDMA1),
-
-	/* OVL -> BLS */
-	MMSYS_ROUTE(OVL0, BLS,
-		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_BLS, MT6589_OVL_MOUT_EN_BLS),
-	MMSYS_ROUTE(OVL0, BLS,
-		    MT6589_DISP_BLS_SEL,
-		    MT6589_BLS_SEL_MASK, MT6589_BLS_SEL_OVL),
-
-	/* OVL -> COLOR */
-	MMSYS_ROUTE(OVL0, COLOR0,
-		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_COLOR, MT6589_OVL_MOUT_EN_COLOR),
-	MMSYS_ROUTE(OVL0, COLOR0,
-		    MT6589_DISP_COLOR_SEL,
-		    MT6589_COLOR_SEL_MASK, MT6589_COLOR_SEL_OVL_POST),
-
-	/* OVL -> TDSHP */
-	MMSYS_ROUTE(OVL0, TDSHP,
-		    MT6589_DISP_OVL_MOUT_EN,
-		    MT6589_OVL_MOUT_EN_TDSHP, MT6589_OVL_MOUT_EN_TDSHP),
-	MMSYS_ROUTE(OVL0, TDSHP,
-		    MT6589_DISP_TDSHP_SEL,
-		    MT6589_TDSHP_SEL_MASK, MT6589_TDSHP_SEL_OVL_POST),
-
-	/* COLOR -> WDMA0 */
-	MMSYS_ROUTE(COLOR0, WDMA0,
-		    MT6589_DISP_COLOR_MOUT_EN,
-		    MT6589_COLOR_MOUT_EN_WDMA0, MT6589_COLOR_MOUT_EN_WDMA0),
-	MMSYS_ROUTE(COLOR0, WDMA0,
-		    MT6589_DISP_WDMA0_SEL,
-		    MT6589_WDMA0_SEL_MASK, MT6589_WDMA0_SEL_COLOR),
-
-	/* COLOR -> OVL direct input */
-	MMSYS_ROUTE(COLOR0, OVL0,
-		    MT6589_DISP_COLOR_MOUT_EN,
-		    MT6589_COLOR_MOUT_EN_OVL, MT6589_COLOR_MOUT_EN_OVL),
-	MMSYS_ROUTE(COLOR0, OVL0,
-		    MT6589_DISP_OVL_SEL,
-		    MT6589_OVL_SEL_MASK, MT6589_OVL_SEL_COLOR),
-
-	/* COLOR -> TDSHP */
-	MMSYS_ROUTE(COLOR0, TDSHP,
-		    MT6589_DISP_COLOR_MOUT_EN,
-		    MT6589_COLOR_MOUT_EN_TDSHP, MT6589_COLOR_MOUT_EN_TDSHP),
-	MMSYS_ROUTE(COLOR0, TDSHP,
-		    MT6589_DISP_TDSHP_SEL,
-		    MT6589_TDSHP_SEL_MASK, MT6589_TDSHP_SEL_COLOR),
-
-	/* COLOR -> BLS */
-	MMSYS_ROUTE(COLOR0, BLS,
-		    MT6589_DISP_COLOR_MOUT_EN,
-		    MT6589_COLOR_MOUT_EN_BLS, MT6589_COLOR_MOUT_EN_BLS),
-	MMSYS_ROUTE(COLOR0, BLS,
-		    MT6589_DISP_BLS_SEL,
-		    MT6589_BLS_SEL_MASK, MT6589_BLS_SEL_COLOR),
-
-	/* TDSHP -> WDMA0 */
-	MMSYS_ROUTE(TDSHP, WDMA0,
-		    MT6589_DISP_TDSHP_MOUT_EN,
-		    MT6589_TDSHP_MOUT_EN_WDMA0, MT6589_TDSHP_MOUT_EN_WDMA0),
-	MMSYS_ROUTE(TDSHP, WDMA0,
-		    MT6589_DISP_WDMA0_SEL,
-		    MT6589_WDMA0_SEL_MASK, MT6589_WDMA0_SEL_TDSHP),
-
-	/* TDSHP -> COLOR */
-	MMSYS_ROUTE(TDSHP, COLOR0,
-		    MT6589_DISP_TDSHP_MOUT_EN,
-		    MT6589_TDSHP_MOUT_EN_COLOR, MT6589_TDSHP_MOUT_EN_COLOR),
-	MMSYS_ROUTE(TDSHP, COLOR0,
-		    MT6589_DISP_COLOR_SEL,
-		    MT6589_COLOR_SEL_MASK, MT6589_COLOR_SEL_TDSHP),
-
-	/* TDSHP -> OVL direct input */
-	MMSYS_ROUTE(TDSHP, OVL0,
-		    MT6589_DISP_TDSHP_MOUT_EN,
-		    MT6589_TDSHP_MOUT_EN_OVL, MT6589_TDSHP_MOUT_EN_OVL),
-	MMSYS_ROUTE(TDSHP, OVL0,
-		    MT6589_DISP_OVL_SEL,
-		    MT6589_OVL_SEL_MASK, MT6589_OVL_SEL_TDSHP),
-
-	/* TDSHP -> BLS */
-	MMSYS_ROUTE(TDSHP, BLS,
-		    MT6589_DISP_TDSHP_MOUT_EN,
-		    MT6589_TDSHP_MOUT_EN_BLS, MT6589_TDSHP_MOUT_EN_BLS),
-	MMSYS_ROUTE(TDSHP, BLS,
-		    MT6589_DISP_BLS_SEL,
-		    MT6589_BLS_SEL_MASK, MT6589_BLS_SEL_TDSHP),
-
-	/* RDMA0 -> DSI */
-	MMSYS_ROUTE(RDMA0, DSI0,
-		    MT6589_DISP_RDMA0_OUT_SEL,
-		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DSI),
-
-	/* RDMA0 -> DBI */
-	MMSYS_ROUTE(RDMA0, DBI0,
-		    MT6589_DISP_RDMA0_OUT_SEL,
-		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DBI),
-	MMSYS_ROUTE(RDMA0, DBI0,
-		    MT6589_DISP_DBI_SEL,
-		    MT6589_DBI_SEL_MASK, MT6589_DBI_SEL_RDMA0),
-
-	/* RDMA0 -> DPI0 */
-	MMSYS_ROUTE(RDMA0, DPI0,
-		    MT6589_DISP_RDMA0_OUT_SEL,
-		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DPI0),
-	MMSYS_ROUTE(RDMA0, DPI0,
-		    MT6589_DISP_DPI0_SEL,
-		    MT6589_DPI0_SEL_MASK, MT6589_DPI0_SEL_RDMA0),
-
-	/* RDMA1 -> DBI */
-	MMSYS_ROUTE(RDMA1, DBI0,
-		    MT6589_DISP_RDMA1_OUT_SEL,
-		    MT6589_RDMA1_OUT_SEL_MASK, MT6589_RDMA1_OUT_SEL_DBI),
-	MMSYS_ROUTE(RDMA1, DBI0,
-		    MT6589_DISP_DBI_SEL,
-		    MT6589_DBI_SEL_MASK, MT6589_DBI_SEL_RDMA1),
-
-	/* RDMA1 -> DPI0 */
-	MMSYS_ROUTE(RDMA1, DPI0,
-		    MT6589_DISP_RDMA1_OUT_SEL,
-		    MT6589_RDMA1_OUT_SEL_MASK, MT6589_RDMA1_OUT_SEL_DPI0),
-	MMSYS_ROUTE(RDMA1, DPI0,
-		    MT6589_DISP_DPI0_SEL,
-		    MT6589_DPI0_SEL_MASK, MT6589_DPI0_SEL_RDMA1),
-	MMSYS_ROUTE(RDMA1, DPI0,
-		    MT6589_DISP_MISC,
-		    MT6589_DISP_MISC_DPI0_MODE_EN,
-		    MT6589_DISP_MISC_DPI0_MODE_EN),
-
-	/* RDMA1 -> DPI1 */
-	MMSYS_ROUTE(RDMA1, DPI1,
-		    MT6589_DISP_RDMA1_OUT_SEL,
-		    MT6589_RDMA1_OUT_SEL_MASK, MT6589_RDMA1_OUT_SEL_DPI1),
-};
 
 #endif /* __SOC_MEDIATEK_MT6589_DISPSYS_H */

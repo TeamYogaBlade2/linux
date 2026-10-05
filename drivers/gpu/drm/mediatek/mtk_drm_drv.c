@@ -74,37 +74,6 @@ static const unsigned int mt2701_mtk_ddp_ext[] = {
 	DDP_COMPONENT_DPI0,
 };
 
-/*
- * Main path: OVL0 -> BLS -> RDMA0 -> DSI0.
- *
- * COLOR is deliberately NOT in this list.  mtk_mmsys_ddp_connect() only
- * applies a route when (cur, next) is an ADJACENT pair in this array, and
- * mtk_crtc_ddp_hw_init() generates exactly those consecutive pairs.  With
- * COLOR0 between OVL0 and BLS, the pair (OVL0, BLS) never occurs, so the
- * routes that select the real topology - DISP_OVL_MOUT_EN bit 1 (output to
- * BLS) and DISP_BLS_SEL = "from overlay" - were never programmed at all.
- * DISP_OVL_MOUT_EN kept whatever the bootloader left in it, which is why
- * this only appeared to work: LK writes 0x2 (bit 1) for its own path.
- *
- * Dropping COLOR makes (OVL0, BLS) adjacent so the route fires, and it is
- * also what the hardware does.  Both vendor trees agree the main path does
- * not pass through COLOR: the bootloader writes OVL_MOUT_EN = 0x2 and
- * BLS_SEL = 0 for DSI_VDO, while the BSP kernel's COLOR route is a
- * different topology entirely.
- *
- * COLOR's registers are still documented and its clock gate still exists;
- * it is simply not part of this path.  If a mode ever needs the colour
- * engine, put COLOR0 back here AND add the (COLOR0, BLS) route using
- * MT6589_COLOR_MOUT_EN_BLS_MASK - the two lists must agree, and neither
- * half alone does anything.
- */
-static const unsigned int mt6589_mtk_ddp_main[] = {
-	DDP_COMPONENT_OVL0,
-	DDP_COMPONENT_BLS,
-	DDP_COMPONENT_RDMA0,
-	DDP_COMPONENT_DSI0,
-};
-
 static const unsigned int mt7623_mtk_ddp_main[] = {
 	DDP_COMPONENT_OVL0,
 	DDP_COMPONENT_RDMA0,
@@ -273,9 +242,15 @@ static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {
 	.mmsys_dev_num = 1,
 };
 
+/*
+ * No main_path: MT6589's pipeline is "mediatek,display-path" in the device
+ * tree, read by mtk_drm_probe() through mtk_mmsys_ddp_display_path().  Keeping
+ * it in C meant two independent lists - this and the crossbar routing table -
+ * that had to describe the same pipeline and that nothing checked, so a
+ * component added to one and not the other compiled, probed, and displayed
+ * nothing.
+ */
 static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
-	.main_path = mt6589_mtk_ddp_main,
-	.main_len = ARRAY_SIZE(mt6589_mtk_ddp_main),
 	.shadow_register = true,
 	.mmsys_dev_num = 1,
 };
@@ -1151,9 +1126,48 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		/* No devicetree graphs support: go with hardcoded paths if present */
-		dev_dbg(dev, "Using hardcoded paths for MMSYS %u\n", mtk_drm_data->mmsys_id);
+		/* No devicetree graphs support: paths come from C or from DT */
+		dev_dbg(dev, "Building display pipeline without graphs for MMSYS %u\n",
+			mtk_drm_data->mmsys_id);
 		private->data = mtk_drm_data;
+
+		/*
+		 * An SoC can name its pipeline in the device tree instead of C,
+		 * as MT6589 does.  The result has to be stored per device, so
+		 * take the copy before filling it in; mtk_drm_data itself is
+		 * shared by every mmsys using this driver.
+		 */
+		{
+			unsigned int path[DDP_COMPONENT_DRM_ID_MAX], len;
+
+			ret = mtk_mmsys_ddp_display_path(private->mmsys_dev, path,
+							 ARRAY_SIZE(path), &len);
+			if (ret && ret != -ENOENT) {
+				dev_err(dev, "Failed to read mediatek,display-path: %d\n",
+					ret);
+				return ret;
+			}
+
+			if (!ret) {
+				private->data = devm_kmemdup(dev, mtk_drm_data,
+							     sizeof(*mtk_drm_data),
+							     GFP_KERNEL);
+				if (!private->data)
+					return -ENOMEM;
+
+				dev_dbg(dev, "Display path from DT: ");
+				for (i = 0; i < len; i++)
+					dev_dbg(dev, "%s%s", mtk_ddp_comp_name(path[i]),
+						i + 1 < len ? " -> " : "\n");
+
+				private->data->main_path =
+					devm_kmemdup(dev, path,
+						      len * sizeof(path[0]), GFP_KERNEL);
+				if (!private->data->main_path)
+					return -ENOMEM;
+				private->data->main_len = len;
+			}
+		}
 	}
 
 	private->all_drm_private = devm_kmalloc_array(dev, private->data->mmsys_dev_num,
