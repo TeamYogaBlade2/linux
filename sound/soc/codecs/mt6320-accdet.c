@@ -494,14 +494,27 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 					    ret);
 	} else {
 		/*
-		 * Drop the micbias/AUXADC switch back to 1.9 V mode before
-		 * declaring the jack empty, otherwise the PMIC keeps
-		 * driving mic bias into an unpopulated connector.  The
-		 * AUXADC driver asserts the same switch for each voltage
-		 * read, so restore it here on the way out too.
+		 * Turn the micbias/AUXADC switch off before declaring the
+		 * jack empty, otherwise the PMIC keeps driving mic bias
+		 * into an unpopulated connector.  The AUXADC driver asserts
+		 * the same switch for each voltage read, so it has to be
+		 * dropped on the way out too.
+		 *
+		 * In ACCDET_28V_MODE, which is what this board is built with,
+		 * the vendor switch is a plain on/off write to
+		 * AUDENCSPARE_CON0: accdet_auxadc_switch() writes 0x01 to
+		 * enable and 0x00 to disable
+		 * (mediatek/platform/mt6589/kernel/drivers/accdet/accdet.c:159-176).
+		 * The 0x1090 word there belongs to the 1.9 V ACCDET_RSV
+		 * encoding, which that build does not use.  Writing the
+		 * ENABLE value here was therefore leaving the bias powered.
 		 */
-		regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
-			     MT6320_ACCDET_MICBIAS_ENABLE);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_DISABLE);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to disable mic bias: %d\n",
+					    ret);
 
 		ret = mt6320_accdet_disable(priv);
 		if (ret)
