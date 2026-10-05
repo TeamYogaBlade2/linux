@@ -13,11 +13,13 @@
  * display device - the display DRM must not own a block it does not program
  * - so the whole of it lives here, next to the ABI it implements.
  *
- * Nothing here is registered anywhere yet: the G2D block owns no DRM device,
- * so there is no ioctl table in any &drm_driver and no node to reach this
- * through.  Until it gets a render node of its own these ioctls are dead code,
- * deliberately kept compiling rather than deleted so the ABI does not have to
- * be rewritten twice.
+ * The G2D block owns a DRM render node of its own, created here:
+ * mtk_g2d_register_drm() allocates a &drm_device with no parent and
+ * registers it with .ioctls = mtk_g2d_ioctls and DRIVER_GEM | DRIVER_RENDER.
+ * That is what makes GEM handles in this file mean what they say - they are
+ * looked up against *this* device's namespace, so the address resolved from
+ * one belongs to the DMA space of the G2D platform device and to no other
+ * engine's.
  *
  * Three things this file does *not* do, each for a reason:
  *
@@ -49,17 +51,22 @@
  */
 
 #include <drm/drm_device.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_file.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_ioctl.h>
+#include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #include <drm/drm_prime.h>
 #include <linux/dma-mapping.h>
 #include <linux/dma-resv.h>
 #include <linux/err.h>
+#include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
+#include <linux/module.h>
 #include <linux/types.h>
 
 #include <drm/mtk_g2d.h>
@@ -871,3 +878,169 @@ const struct drm_ioctl_desc mtk_g2d_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(MTK_G2D_BLT, mtk_g2d_ioctl_blt, DRM_AUTH),
 	DRM_IOCTL_DEF_DRV(MTK_G2D_FILL, mtk_g2d_ioctl_fill, DRM_AUTH),
 };
+
+/*
+ * ---------------------------------------------------------------------------
+ * The DRM device.
+ *
+ * G2D gets a device of its own rather than being reached through the display
+ * DRM device, for one reason: the addresses it programs have to come from a
+ * DMA space G2D itself owns.  As long as the ioctls lived on the display
+ * device, a handle resolved in *that* device's namespace and yielded an
+ * address that device's dma_dev had produced - which is correct only while
+ * there is no IOMMU in the path, because then physical and DMA addresses
+ * coincide.  The moment either engine gets an M4U port, the two diverge and
+ * the borrower is handed a number the borrower cannot translate.
+ *
+ * A device of its own fixes that at the root: GEM handles here are this
+ * device's own, dma_addr values come from this device's dma_dev, and a
+ * buffer shared with the display pipeline arrives as a dma-buf fd that this
+ * device imports and maps into *its* address space.  Each engine then reads
+ * an address from the page table that engine has.
+ *
+ * What it deliberately does not have:
+ *
+ *  - No KMS.  There are no connectors, CRTCs or planes; DRIVER_MODESET is not
+ *    set and there is no mode_config, no fbops and no fbdev emulation.  A
+ *    display device can have a render node as well as a primary one; this one
+ *    has *only* a render node, because there is nothing a primary node could
+ *    show.
+ *
+ *  - No master.  DRIVER_MASTER is not set, so no ioctl here requires it, and
+ *    drm_dev_set_master() has nothing to hand out.  A compositor's helper
+ *    opens a render node and has no master at all, which is exactly the client
+ *    this exists to serve.
+ *
+ *  - No fences.  The operations are synchronous, so there is nothing to wait
+ *    on and no timeline to install.
+ */
+
+/*
+ * Major/minor 1/0 is this driver's own slot in the DRM minor registry.  It
+ * has to differ from the display driver's (mtk_drm_drv.c, also 1/0) only in
+ * the sense that they are separate entries in separate drivers; the core
+ * allocates the render minor number itself from a global registry, so the
+ * (major, minor) pair is an identity here, not an allocation, and two drivers
+ * may hold the same values.
+ */
+#define MTK_G2D_DRM_NAME	"mtk-g2d"
+#define MTK_G2D_DRM_DESC	"MediaTek MT6589 G2D"
+#define MTK_G2D_DRM_MAJOR	1
+#define MTK_G2D_DRM_MINOR	0
+
+/*
+ * The core GEM mmap handler, and nothing KMS: there is no fbops here and
+ * nothing can be mapped through a framebuffer, only through a GEM handle.
+ * This is the same shape the display driver uses (DEFINE_DRM_GEM_FOPS there,
+ * DEFINE_DRM_GEM_DMA_FOPS here because this device's GEM objects are DMA
+ * objects, not shmem ones).
+ */
+DEFINE_DRM_GEM_DMA_FOPS(mtk_g2d_fops);
+
+static const struct drm_driver mtk_g2d_drm_driver = {
+	/*
+	 * DRIVER_RENDER and DRIVER_GEM, and nothing else.  Deliberately no
+	 * DRIVER_MODESET (no KMS, no primary node), no DRIVER_MASTER
+	 * (render-node clients have no master) and no DRIVER_ATOMIC (there is
+	 * no display state).
+	 */
+	.driver_features	= DRIVER_GEM | DRIVER_RENDER,
+
+	DRM_GEM_DMA_DRIVER_OPS,
+
+	.fops			= &mtk_g2d_fops,
+
+	/*
+	 * The only ioctls this node answers are the G2D ones above.
+	 * DRM_IOCTL_DEF_DRV places each at its own number in the
+	 * DRM_COMMAND_BASE space, so they cannot collide with a core ioctl or
+	 * another driver's; PRIME, GEM and the dumb-buffer ioctls come from
+	 * the core and are not listed here.
+	 */
+	.ioctls			= mtk_g2d_ioctls,
+	.num_ioctls		= ARRAY_SIZE(mtk_g2d_ioctls),
+
+	.name			= MTK_G2D_DRM_NAME,
+	.desc			= MTK_G2D_DRM_DESC,
+	.major			= MTK_G2D_DRM_MAJOR,
+	.minor			= MTK_G2D_DRM_MINOR,
+};
+
+void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d)
+{
+	struct mtk_g2d_drm_private *priv;
+	struct drm_device *drm;
+	int ret;
+
+	/*
+	 * Allocated here rather than as a field of the &drm_device, because
+	 * this tree's drm_dev_alloc() takes no private size - mtk_drm_drv.c
+	 * does the same, assigning drm->dev_private from its own structure.
+	 *
+	 * Not devres, deliberately.  devres would free it when the platform
+	 * device is unbound, and unbind happens at remove() *after*
+	 * drm_dev_unregister(), so the ordering happens to be right - but an
+	 * open file can still hold the node at that point, and the ioctl
+	 * handlers dereference dev->dev_private without a reference of their
+	 * own.  It is instead released from mtk_g2d_unregister_drm(), which
+	 * runs when the last reference to the DRM device goes away.
+	 */
+	priv = kzalloc_obj(*priv);
+	if (!priv)
+		return ERR_PTR(-ENOMEM);
+
+	drm = drm_dev_alloc(&mtk_g2d_drm_driver, dev);
+	if (IS_ERR(drm)) {
+		ret = PTR_ERR(drm);
+		goto err_free_priv;
+	}
+
+	/*
+	 * dev_private is what every ioctl handler in this file reads to find
+	 * the engine, so it must be set before the device is registered:
+	 * drm_dev_register() publishes the minor, and from that moment the
+	 * node can be opened and the ioctls reached.  Assigning it after
+	 * registration would leave a window in which an ioctl saw NULL.
+	 */
+	drm->dev_private = priv;
+	priv->g2d = g2d;
+
+	ret = drm_dev_register(drm, 0);
+	if (ret) {
+		drm->dev_private = NULL;
+		drm_dev_put(drm);
+		goto err_free_priv;
+	}
+
+	return drm;
+
+err_free_priv:
+	kfree(priv);
+
+	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_GPL(mtk_g2d_register_drm);
+
+void mtk_g2d_unregister_drm(void *drm)
+{
+	struct mtk_g2d_drm_private *priv;
+	struct drm_device *dev = drm;
+
+	/* NULL when probe never got as far as registering. */
+	if (!dev)
+		return;
+
+	drm_dev_unregister(dev);
+
+	/*
+	 * Taken out here rather than through devres.  drm_dev_put() drops the
+	 * driver's reference, which is the last one once drm_dev_unregister()
+	 * has seen every file close, so the free cannot race a handler that
+	 * has already read dev->dev_private.
+	 */
+	priv = dev->dev_private;
+	dev->dev_private = NULL;
+	drm_dev_put(dev);
+	kfree(priv);
+}
+EXPORT_SYMBOL_GPL(mtk_g2d_unregister_drm);

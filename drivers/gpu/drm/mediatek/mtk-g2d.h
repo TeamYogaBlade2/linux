@@ -17,19 +17,55 @@ struct mtk_g2d;
  *
  * It lives here, and holds nothing but the engine pointer, because
  * mtk-g2d.c must stay free of DRM dependencies: it owns the hardware and the
- * programming sequence, while mtk-g2d-uapi.c owns the ioctls.  The node's
- * &struct drm_device is not referenced at all - no field of it is needed by
- * either file - so the two can be built without DRM headers seeing each other.
+ * programming sequence, while mtk-g2d-uapi.c owns the DRM device and the
+ * ioctls.  The node's &struct drm_device is not referenced at all - no field
+ * of it is needed by either file - so the two can be built without DRM
+ * headers seeing each other.
  *
  * This is deliberately not a second route to the engine from elsewhere in the
  * tree.  The old mtk_g2d_get() walked the device tree looking for a sibling
  * G2D on behalf of the display DRM device, which existed only because the
- * display device was reaching a block it does not own; with the ioctls off that
- * device there is no caller left that would need it.
+ * display device was reaching a block it does not own.  G2D now owns a DRM
+ * device of its own, so the engine is reached only from the node that was
+ * created with it, and nothing outside mtk-g2d-uapi.c has a pointer to it.
  */
 struct mtk_g2d_drm_private {
 	struct mtk_g2d *g2d;
 };
+
+/**
+ * mtk_g2d_register_drm - register G2D's own DRM render node.
+ * @dev: the G2D platform device
+ * @g2d: the engine, already probed and idle
+ *
+ * Allocates a &drm_device with no parent - G2D is not a component of
+ * anything, and giving it a parent would imply a device tree topology it does
+ * not have - and registers it as DRIVER_GEM | DRIVER_RENDER with the G2D
+ * ioctls and PRIME.  The result is a /dev/dri/renderD* node and nothing else:
+ * no KMS, no primary node, no master.
+ *
+ * Returns an opaque handle to pass to mtk_g2d_unregister_drm(), or an error
+ * pointer.  The handle is void * rather than &drm_device so that this header,
+ * and with it mtk-g2d.c, can stay free of DRM types; mtk-g2d-uapi.c is the
+ * only object that interprets it.
+ *
+ * Implemented in mtk-g2d-uapi.c, not here: that is the only one of the two
+ * objects that includes DRM headers.
+ */
+void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d);
+
+/**
+ * mtk_g2d_unregister_drm - take the render node back down.
+ * @drm: handle from mtk_g2d_register_drm(), or NULL
+ *
+ * Unpublishes the minor and drops the driver reference.  Must run while the
+ * engine's clocks are still on, because drm_dev_unregister() closes the node
+ * and waits for the last open file, so nothing may be programmed into an
+ * engine whose clock is being gated off underneath it.  A NULL handle is
+ * ignored, which is what makes this safe to call unconditionally from
+ * mtk_g2d_remove() when probe may have stopped before registration.
+ */
+void mtk_g2d_unregister_drm(void *drm);
 
 /* CLRFMT encodings, from the data sheet's SRC_CON/DST_CON description. */
 enum g2d_format {

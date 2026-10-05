@@ -163,6 +163,15 @@ struct mtk_g2d {
 	 * this before it touches a register.
 	 */
 	bool wedged;
+	/*
+	 * The handle returned by mtk_g2d_register_drm() for this engine, or
+	 * NULL if registration failed and the driver is running without a
+	 * node.  It is an opaque pointer rather than a &drm_device because
+	 * this file deliberately includes no DRM header; mtk-g2d-uapi.c is
+	 * the only object that knows what it points at, and the only one that
+	 * dereferences it.
+	 */
+	void *drm;
 };
 
 /* Formats the CLRFMT field encodes. */
@@ -926,6 +935,27 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, g2d);
 
+	/*
+	 * Published last, once the hardware is usable.  The DRM device must
+	 * never exist while the engine could still be programmed by someone
+	 * who cannot see that it is not ready: mtk_g2d_register_drm() makes
+	 * the render node openable, and from that point a BLT or FILL can
+	 * arrive.  Registering before the clocks, the interrupt and the
+	 * wedge flag are all in place would open a window where a request is
+	 * accepted and programmed into an engine that is not running.
+	 *
+	 * On failure the DRM device is dropped again (drm_dev_put() inside the
+	 * callee) and the driver keeps probing as a bare engine, which is
+	 * strictly better than a node that exists and fails every ioctl.
+	 */
+	g2d->drm = mtk_g2d_register_drm(dev, g2d);
+	ret = IS_ERR(g2d->drm) ? PTR_ERR(g2d->drm) : 0;
+	if (ret) {
+		g2d->drm = NULL;
+		ret = dev_err_probe(dev, ret, "failed to register DRM device\n");
+		goto disable_clocks;
+	}
+
 	return 0;
 
 disable_clocks:
@@ -950,6 +980,15 @@ disable_clocks:
 static void mtk_g2d_remove(struct platform_device *pdev)
 {
 	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+
+	/*
+	 * Before the clocks go.  drm_dev_unregister() closes the render node
+	 * and waits for the last open file to finish, so after it returns no
+	 * ioctl can be in flight and the engine can be powered down without
+	 * a programmed address being left behind on a block whose clock is
+	 * about to be gated off.
+	 */
+	mtk_g2d_unregister_drm(g2d->drm);
 
 	clk_disable_unprepare(g2d->clk_smi);
 	clk_disable_unprepare(g2d->clk_engine);
