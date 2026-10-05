@@ -1094,27 +1094,35 @@ void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d)
 	struct drm_device *drm;
 	int ret;
 
-	/*
-	 * Allocated here rather than as a field of the &drm_device, because
-	 * this tree's drm_dev_alloc() takes no private size - mtk_drm_drv.c
-	 * does the same, assigning drm->dev_private from its own structure.
-	 *
-	 * Not devres, deliberately.  devres would free it when the platform
-	 * device is unbound, and unbind happens at remove() *after*
-	 * drm_dev_unregister(), so the ordering happens to be right - but an
-	 * open file can still hold the node at that point, and the ioctl
-	 * handlers dereference dev->dev_private without a reference of their
-	 * own.  It is instead released from mtk_g2d_unregister_drm(), which
-	 * runs when the last reference to the DRM device goes away.
-	 */
-	priv = kzalloc_obj(*priv);
-	if (!priv)
-		return ERR_PTR(-ENOMEM);
-
 	drm = drm_dev_alloc(&mtk_g2d_drm_driver, dev);
-	if (IS_ERR(drm)) {
-		ret = PTR_ERR(drm);
-		goto err_free_priv;
+	if (IS_ERR(drm))
+		return drm;
+
+	/*
+	 * A &drm_device managed allocation, and that is the whole point of it:
+	 * drm_managed_release() frees it from the *final* drm_dev_put(), which
+	 * cannot happen until every open file has closed.  dev->dev_private is
+	 * read by every ioctl handler in this file with no reference of its own,
+	 * so it has to live as long as the DRM device does.
+	 *
+	 * The two obvious alternatives are both shorter-lived than that.  devres
+	 * would free it when the platform device is unbound, and remove() can
+	 * return while a renderD fd is still open.  A plain kfree() in
+	 * mtk_g2d_unregister_drm() is a use-after-free waiting to happen, because
+	 * drm_dev_unregister() does not wait for open files at all: it clears
+	 * ->registered, unregisters the client/panic/compat links, removes the
+	 * minors and calls drm_debugfs_dev_fini(), and returns while an ioctl
+	 * that had already read dev->dev_private can still be running.
+	 *
+	 * This tree does have the drmm_* helpers (include/drm/drm_managed.h), so
+	 * the idiomatic mechanism is available and is what is used.  Note that
+	 * the allocation has to come after drm_dev_alloc() - drmm_kzalloc() takes
+	 * the &drm_device, which does not exist before it.
+	 */
+	priv = drmm_kzalloc(drm, sizeof(*priv), GFP_KERNEL);
+	if (!priv) {
+		ret = -ENOMEM;
+		goto err_put_drm;
 	}
 
 	/*
@@ -1162,13 +1170,13 @@ void *mtk_g2d_register_drm(struct device *dev, struct mtk_g2d *g2d)
 	if (ret) {
 		drm->dev_private = NULL;
 		drm_dev_put(drm);
-		goto err_free_priv;
+		return ERR_PTR(ret);
 	}
 
 	return drm;
 
-err_free_priv:
-	kfree(priv);
+err_put_drm:
+	drm_dev_put(drm);
 
 	return ERR_PTR(ret);
 }
@@ -1176,7 +1184,6 @@ EXPORT_SYMBOL_GPL(mtk_g2d_register_drm);
 
 void mtk_g2d_unregister_drm(void *drm)
 {
-	struct mtk_g2d_drm_private *priv;
 	struct drm_device *dev = drm;
 
 	/* NULL when probe never got as far as registering. */
@@ -1186,14 +1193,17 @@ void mtk_g2d_unregister_drm(void *drm)
 	drm_dev_unregister(dev);
 
 	/*
-	 * Taken out here rather than through devres.  drm_dev_put() drops the
-	 * driver's reference, which is the last one once drm_dev_unregister()
-	 * has seen every file close, so the free cannot race a handler that
-	 * has already read dev->dev_private.
+	 * drm_dev_put() drops the driver's reference.  That is the last one only
+	 * once every open file has closed: each holds its own reference, taken
+	 * by drm_minor_acquire() and given back by drm_minor_release() from
+	 * drm_release_noglobal().  drm_dev_unregister() above does not wait for
+	 * those files, so this put is what actually ends the &drm_device's
+	 * lifetime - and with it, through drm_managed_release(), dev_private.
+	 *
+	 * dev_private is therefore still valid for as long as any ioctl can run,
+	 * which is the property the handlers depend on and the one a kfree() here
+	 * did not have.
 	 */
-	priv = dev->dev_private;
-	dev->dev_private = NULL;
 	drm_dev_put(dev);
-	kfree(priv);
 }
 EXPORT_SYMBOL_GPL(mtk_g2d_unregister_drm);
