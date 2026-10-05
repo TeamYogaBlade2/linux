@@ -136,31 +136,33 @@
 		enable-method = "mediatek,mt6589-smp";
 
 		/*
-		 * Every CPU below declares the same two clocks: the mux
-		 * itself as "cpu", and a safe clock to park on as
-		 * "intermediate" while ARMPLL is reprogrammed.
+		 * Every CPU below declares the same two clocks: the CPU clock mux
+		 * itself as "cpu", and the clock to park on as "intermediate" while
+		 * ARMPLL is being reprogrammed.
 		 *
-		 * "intermediate" must therefore be derived from that mux.
-		 * CLK_INFRA_ARMDIV1 divides the MUX1 output through
-		 * TOP_CKDIV1.clkdiv1_sel, bits [4:0] (datasheet
-		 * pp. 435-437).  These nodes used to name clk26m there,
-		 * which is not a rate on the CPU's own path at all but an
-		 * unrelated always-on oscillator - it was a placeholder
-		 * for a clock whose real name had not been worked out.
+		 * The second one must be a PARENT of the first, because that is what
+		 * mediatek-cpufreq does with it: before changing ARMPLL's rate it
+		 * calls clk_set_parent(cpu_clk, inter_clk), and afterwards
+		 * clk_set_parent(cpu_clk, armpll).  CLK_INFRA_MUX1 has exactly four
+		 * parents - clk26m, armpll, mainpll and mmpll_d2
+		 * (clk-mt6589-infracfg.c, infra_mux1_parents[]) - and the switch is
+		 * rejected unless the target is one of them.
 		 *
-		 * mediatek-cpufreq.c is what consumes both names: it reads
-		 * "intermediate" by name, reparents the CPU onto it around
-		 * the ARMPLL write, and looks up an OPP matching the
-		 * intermediate rate to derive a safe intermediate voltage.
-		 * Pointing it at clk26m made both the reparent target and
-		 * that voltage lookup meaningless.
+		 * So "intermediate" cannot be CLK_INFRA_ARMDIV1, which looks like the
+		 * natural choice but is the mux's own CHILD: it divides the mux output
+		 * through TOP_CKDIV1.clkdiv1_sel.  A child is not a legal parent, and
+		 * naming it here makes every DVFS transition fail with
 		 *
-		 * Note also that MUX1's first parent is CLKSQ, the squared
-		 * 26 MHz from the clock squarer, not a raw 26 MHz tap
-		 * (TOP_CKMUXSEL.mux1_sel bits [3:2], datasheet p. 436), so
-		 * clk26m was not even the right name for what MUX1 selects.
+		 *   cpu0: failed to re-parent cpu clock!
+		 *   cpufreq: __target_index: Failed to change cpu frequency: -22
 		 *
-		 * See Documentation/clk/mediatek-mt6589-unused-gates.rst.
+		 * with the CPU then left at whatever rate it booted at, which is the
+		 * exact failure this was meant to avoid.
+		 *
+		 * It must also not be armpll itself: the whole point of the parking
+		 * step is to be OFF the PLL that is being reprogrammed.  clk26m is the
+		 * always-on 26 MHz oscillator and is the one parent that satisfies both
+		 * constraints, so the original text was right and stays.
 		 */
 
 		cpu0: cpu@0 {
@@ -179,7 +181,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&infracfg CLK_INFRA_ARMDIV1>;
+				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -201,7 +203,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&infracfg CLK_INFRA_ARMDIV1>;
+				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -223,7 +225,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&infracfg CLK_INFRA_ARMDIV1>;
+				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -245,7 +247,7 @@
 			next-level-cache = <&l2>;
 
 			clocks = <&infracfg CLK_INFRA_MUX1>,
-				 <&infracfg CLK_INFRA_ARMDIV1>;
+				 <&clk26m>;
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cpu_opp_table>;
 			nvmem-cells = <&chip_grade>;
@@ -1064,6 +1066,90 @@
 			reg = <0x14000000 0x1000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+
+			/*
+			 * The display path and the crossbar settings that wire
+			 * it up live together because they are one decision.
+			 * The path is the sequence of components, and every
+			 * consecutive pair of it needs a route below, or
+			 * mtk_crtc_ddp_hw_init() refuses to enable the CRTC
+			 * instead of quietly leaving the crossbar alone.
+			 *
+			 * A route reads "<from> <to> <reg offset> <mask>
+			 * <value>".  An offset of 0 means the two are wired
+			 * together in hardware and no register selects it.
+			 *
+			 * Most of the routes below name blocks that have no
+			 * driver and are unused today; see the note on COLOR and
+			 * TDSHP in drivers/soc/mediatek/mt6589-dispsys.h,
+			 * which also derives each offset, mask and value here.
+			 */
+			mediatek,display-path = "ovl0", "bls", "rdma0", "dsi0";
+			mediatek,display-routes =
+				/* SCL -> WDMA0 */
+				"scl wdma0 0x20 0x1 0x1",
+				"scl wdma0 0x40 0x3 0x0",
+				/* SCL -> OVL */
+				"scl ovl0 0x20 0x2 0x2",
+				"scl ovl0 0x44 0x3 0x0",
+				/* SCL -> COLOR */
+				"scl color0 0x20 0x4 0x4",
+				"scl color0 0x4c 0x3 0x3",
+				/* SCL -> TDSHP */
+				"scl tdshp 0x20 0x8 0x8",
+				"scl tdshp 0x50 0x3 0x3",
+				/* OVL -> WDMA1 */
+				"ovl0 wdma1 0x24 0x1 0x1",
+				/* OVL -> BLS */
+				"ovl0 bls 0x24 0x2 0x2",
+				"ovl0 bls 0x54 0x3 0x0",
+				/* OVL -> COLOR */
+				"ovl0 color0 0x24 0x4 0x4",
+				"ovl0 color0 0x4c 0x3 0x1",
+				/* OVL -> TDSHP */
+				"ovl0 tdshp 0x24 0x8 0x8",
+				"ovl0 tdshp 0x50 0x3 0x1",
+				/* COLOR -> WDMA0 */
+				"color0 wdma0 0x28 0x4 0x4",
+				"color0 wdma0 0x40 0x3 0x1",
+				/* COLOR -> OVL direct input */
+				"color0 ovl0 0x28 0x10 0x10",
+				"color0 ovl0 0x44 0x3 0x1",
+				/* COLOR -> TDSHP */
+				"color0 tdshp 0x28 0x2 0x2",
+				"color0 tdshp 0x50 0x3 0x2",
+				/* COLOR -> BLS */
+				"color0 bls 0x28 0x8 0x8",
+				"color0 bls 0x54 0x3 0x1",
+				/* TDSHP -> WDMA0 */
+				"tdshp wdma0 0x2c 0x4 0x4",
+				"tdshp wdma0 0x40 0x3 0x2",
+				/* TDSHP -> COLOR */
+				"tdshp color0 0x2c 0x2 0x2",
+				"tdshp color0 0x4c 0x3 0x2",
+				/* TDSHP -> OVL direct input */
+				"tdshp ovl0 0x2c 0x10 0x10",
+				"tdshp ovl0 0x44 0x3 0x2",
+				/* TDSHP -> BLS */
+				"tdshp bls 0x2c 0x8 0x8",
+				"tdshp bls 0x54 0x3 0x2",
+				/* RDMA0 -> DSI */
+				"rdma0 dsi0 0x34 0x3 0x0",
+				/* RDMA0 -> DBI */
+				"rdma0 dbi0 0x34 0x3 0x1",
+				"rdma0 dbi0 0x58 0x1 0x0",
+				/* RDMA0 -> DPI0 */
+				"rdma0 dpi0 0x34 0x3 0x2",
+				"rdma0 dpi0 0x5c 0x1 0x0",
+				/* RDMA1 -> DBI */
+				"rdma1 dbi0 0x38 0x3 0x0",
+				"rdma1 dbi0 0x58 0x1 0x1",
+				/* RDMA1 -> DPI0 */
+				"rdma1 dpi0 0x38 0x3 0x1",
+				"rdma1 dpi0 0x5c 0x1 0x1",
+				"rdma1 dpi0 0x60 0x1 0x1",
+				/* RDMA1 -> DPI1 */
+				"rdma1 dpi1 0x38 0x3 0x2";
 		};
 
 		bls: pwm@14008000 {
