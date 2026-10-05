@@ -29,18 +29,42 @@
  *    down, and this file asks it rather than restating it.  That is what keeps
  *    "the ABI accepted a pitch the register truncates" from being possible.
  *
- *  - It does not import DMA-BUFs or map memory.  Buffers are named by GEM
- *    handle, which covers a DRM-allocated buffer directly and a buffer shared
- *    with another driver after DRM_IOCTL_PRIME_FD_TO_HANDLE has imported its fd.
- *    A GEM handle pins the allocation for the life of the file, and the prime
- *    import path already rejects a non-contiguous scatterlist - the one property
- *    the engine cannot work without, since it takes a single base address and
- *    a pitch with no descriptor.
+ *  - It does not map memory, and it does not hand out DMA-BUF fds of its own.
+ *    Buffers are named by GEM handle, which covers a buffer this device
+ *    allocated directly and a buffer shared with another driver after
+ *    DRM_IOCTL_PRIME_FD_TO_HANDLE has imported its fd.  A GEM handle pins the
+ *    allocation for the life of the file, and the prime import path already
+ *    rejects a non-contiguous scatterlist - the one property the engine cannot
+ *    work without, since it takes a single base address and a pitch with no
+ *    descriptor.
  *
  *  - It does not use a DMA-BUF fd in the ABI.  A user pointer is meaningless
  *    here (G2D is a DMA engine, and the display path hands it DMA addresses),
  *    and a raw fd would be a second, parallel way of naming the same buffers
  *    that the GEM namespace already covers.
+ *
+ * Why a GEM handle in *this* device's namespace is the whole design
+ *
+ * The handle is resolved with drm_gem_object_lookup() against this DRM
+ * device, so dma_obj->dma_addr was produced by *this* device's dma_dev - the
+ * G2D platform device, which owns the M4U port.  That is the only
+ * requirement that makes the number programmable into G2D_SRC_ADDR and
+ * G2D_W2M_ADDR: an address is meaningful to the engine that asked for the
+ * mapping, and with an M4U in the path it is an IOVA in that engine's page
+ * table, not a physical address.
+ *
+ * The sharing path therefore runs through PRIME, not through a shared
+ * namespace:
+ *
+ *   display DRM   GEM handle -> PRIME_HANDLE_TO_FD -> dma-buf fd
+ *   G2D DRM      PRIME_FD_TO_HANDLE -> G2D GEM handle -> mapped in G2D's
+ *                 DMA space -> G2D IOVA
+ *
+ * drm_gem_dma_prime_import_sg_table() maps the exporter's pages through this
+ * device's dma_dev and stores the resulting address in dma_obj->dma_addr, so
+ * the import produces a G2D IOVA rather than reusing the exporter's.  The
+ * exporter's dma_addr is never read here, and could not be: it belongs to
+ * whichever engine exported it.
  *
  * The file's job is *strictness*.  Every bound the engine imposes is
  * re-checked here and reported as -EINVAL, rather than being clipped to what
@@ -303,11 +327,23 @@ static int mtk_g2d_uapi_resolve(struct drm_file *file_priv,
 	/*
 	 * Look the buffer up last, so every purely numeric rejection happens
 	 * without touching the object table at all.
+	 *
+	 * drm_gem_object_lookup() against *this* file's device is what makes
+	 * the dma_addr below this engine's: a handle from another DRM device
+	 * is not in this namespace at all, and a handle this file imported
+	 * through PRIME_FD_TO_HANDLE is a drm_gem_dma_object whose dma_addr was
+	 * produced by this device's dma_dev.  Either way the address belongs
+	 * to G2D, which is the only thing that makes it programmable here.
 	 */
 	out->obj = drm_gem_object_lookup(file_priv, s->handle);
 	if (!out->obj)
 		return -ENOENT;
 
+	/*
+	 * This device only ever creates drm_gem_dma_objects - through the GEM
+	 * DMA helper, or through drm_gem_dma_prime_import_sg_table() - so the
+	 * container_of is sound for anything a handle here can name.
+	 */
 	dma_obj = to_drm_gem_dma_obj(out->obj);
 	out->addr = dma_obj->dma_addr;
 	out->size = out->obj->size;
