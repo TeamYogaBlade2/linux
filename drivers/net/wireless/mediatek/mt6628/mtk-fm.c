@@ -20,6 +20,7 @@
 #include <linux/completion.h>
 #include <linux/kernel.h>
 #include <linux/mfd/mt6628.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
@@ -56,6 +57,22 @@
 #define FM_REG_FORCE_MS			0x75
 #define FM_FORCE_MS			0x0008
 #define FM_STEREO_IND			BIT(12)
+/*
+ * FM_RSSI_IND[9:0] is a signed 10-bit field whose LSB is 6/16 = 0.375 dB,
+ * so the raw code is a signal level in 1/16 dB steps.
+ * aquaris-5/mediatek/kernel/drivers/fmradio/mt6628/pub/mt6628_fm_lib.c:1072-1092
+ * (mt6628_GetCurRSSI) masks 0x03ff and converts with
+ *	(RS > 511) ? ((RS - 1024) * 6) >> 4 : (RS * 6) >> 4
+ * and the same mask and 1024 bias appear in the CQI path at :1414.
+ * Read as a signed code the range is -512 .. 511, i.e.
+ * -3072 .. +3066 in 1/16 dB units.
+ */
+#define FM_RSSI_MASK			0x03ff
+#define FM_RSSI_SIGN_BIT		0x0200
+#define FM_RSSI_BIAS			1024
+#define FM_RSSI_ONE_LSB_NUM		6	/* 1/16 dB per raw code */
+#define FM_RSSI_MIN_16			(-512 * FM_RSSI_ONE_LSB_NUM)
+#define FM_RSSI_SPAN_16			(1023 * FM_RSSI_ONE_LSB_NUM)
 
 #define FM_PATCH_SEG_LEN		512
 #define FM_CMD_TIMEOUT_MS		3000
@@ -228,6 +245,35 @@ static int mtk_fm_write_reg(struct mtk_fm *fm, u8 addr, u16 value)
 
 	return mtk_fm_send_cmd(fm, cmd, sizeof(cmd),
 			       FM_FSPI_WRITE_OPCODE, FM_CMD_TIMEOUT_MS);
+}
+
+/*
+ * Convert a raw FM_RSSI_IND register value into the V4L2 tuner->signal
+ * range of 0 .. 65535.
+ *
+ * The downstream driver returns the signed value produced by
+ * mt6628_GetCurRSSI() to userspace unchanged
+ * (aquaris-5/mediatek/platform/mt6589/external/meta/fm/meta_fm.c:1000-1009
+ * copies it straight into the signal level field), so there is no vendor
+ * 0 .. 65535 mapping to reproduce and no calibration constant that would
+ * let the value be reported in dBuV.  The mapping below is therefore a
+ * plain linear scale across the full range the register can express,
+ * with 0 at the noise floor and 65535 at the strongest signal.
+ */
+static u16 mtk_fm_rssi_to_signal(u16 rssi_ind)
+{
+	s32 rssi_16;
+
+	rssi_ind &= FM_RSSI_MASK;
+
+	/* Sign extend bits 9:0, then scale to 1/16 dB units. */
+	if (rssi_ind & FM_RSSI_SIGN_BIT)
+		rssi_16 = ((s32)rssi_ind - FM_RSSI_BIAS) * FM_RSSI_ONE_LSB_NUM;
+	else
+		rssi_16 = (s32)rssi_ind * FM_RSSI_ONE_LSB_NUM;
+
+	return div_u64((u64)(rssi_16 - FM_RSSI_MIN_16) * U16_MAX,
+		       FM_RSSI_SPAN_16);
 }
 
 static int mtk_fm_download(struct mtk_fm *fm, u8 opcode,
@@ -981,6 +1027,14 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	tuner->audmode = (force_ms & FM_FORCE_MS) ?
 			 V4L2_TUNER_MODE_MONO :
 			 V4L2_TUNER_MODE_STEREO;
+	tuner->signal = mtk_fm_rssi_to_signal(rssi_ind);
+	/*
+	 * The MT6628 has no AFC: downstream only uses AFC_ON to pick an
+	 * alternative FM_MAIN_CTRL power-on value
+	 * (aquaris-5/.../mt6628/inc/mt6628_fm.h:48-52) and never computes
+	 * or reports an AFC value, so there is nothing to return here.
+	 */
+	tuner->afc = 0;
 
 	return 0;
 }
