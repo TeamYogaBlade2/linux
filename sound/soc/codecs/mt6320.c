@@ -1115,6 +1115,41 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		/*
+		 * The analog input multiplexer is NOT programmed here.
+		 *
+		 * AUXADC_CON0.CHSEL below does not select the capture input.
+		 * It picks which auxiliary ADC (ACC_DET, TP, etc.) the
+		 * accessory-detection logic reads; this codec has no separate
+		 * ACCDET cell, so it is parked on the ACCDET channel and
+		 * plays no part in capture.  The register that does select the
+		 * analog mic input is AUDPREAMP_CON0 (0x071c), in the two
+		 * 3-bit fields RG_AUDPREAMPLINPUTSEL (mask 0x7, shift 2) for
+		 * the left channel and RG_AUDPREAMPRINPUTSEL (mask 0x7, shift
+		 * 5) for the right - positions confirmed from the vendor
+		 * setters upmu_set_rg_audpreamplinputsel() /
+		 * upmu_set_rg_audpreamprinputsel(), which wrap those exact
+		 * mask/shift pairs around a write to AUDPREAMP_CON0.
+		 *
+		 * The *encoding* of those three bits - which value selects the
+		 * headset mic, which the wired mic, and so on - is not
+		 * establishable from anything available here, so no value is
+		 * written.  The MT6589 data sheet states of the MT6320 analog
+		 * blocks that "these parts are not included in the scope of
+		 * this document and will be covered in MT6320 spec" (p.791,
+		 * Chapter 16); that MT6320 spec is not in this tree, and the
+		 * vendor setters have no callers anywhere in it, not even from
+		 * the vendor audio driver, so no in-tree code exercises them
+		 * and none of them reveals the encoding.  The register's reset
+		 * value is likewise unpublished.
+		 *
+		 * So capture is left running whatever the reset default of
+		 * AUDPREAMP_CON0 selects.  This is a real limitation, not a
+		 * verified-working input path: if the board's mic is not the
+		 * reset-selected one, capture records the wrong analog source
+		 * (or a floating one) while still looking healthy to ALSA.
+		 * Adding a selector needs the MT6320 spec, not a guess - an
+		 * invented bit value here would silently mux to the wrong pin.
+		 *
 		 * Mic bias / accessory-detect switch first, then the vendor's
 		 * capture power-up sequence, following
 		 * AudioPlatformDevice::AnalogOpen() for
