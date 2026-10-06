@@ -99,27 +99,44 @@ static const struct drm_gem_object_funcs prismrv_gem_funcs = {
 	.vm_ops = &drm_gem_shmem_vm_ops,
 };
 
-static int prismrv_bo_pin_and_map(struct prismrv_device *pv,
-				  struct prismrv_bo *bo)
+/*
+ * Pin the BO's pages and DMA-map them (shmem sg table).  This takes the
+ * BO's reservation lock internally, so it must run BEFORE submit_rwsem is
+ * taken: a submit that waits for a reservation lock while holding the
+ * read side of submit_rwsem can deadlock against recovery, which wants the
+ * write side while the lock's owner is itself waiting for the semaphore.
+ */
+int prismrv_gem_prepare(struct drm_gem_object **objs, u32 count)
 {
-	struct drm_gem_shmem_object *shmem = &bo->base;
-	struct sg_table *sgt;
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		struct sg_table *sgt =
+			drm_gem_shmem_get_pages_sgt(to_drm_gem_shmem_obj(objs[i]));
+
+		if (IS_ERR(sgt))
+			return PTR_ERR(sgt);
+	}
+	return 0;
+}
+
+/*
+ * Write the BO's PTEs.  Needs the MMU alive, so it runs under submit_rwsem
+ * (read); it uses the sg table prismrv_gem_prepare() created and takes only
+ * mmu_lock - no reservation lock, nothing that can sleep for long.
+ */
+static int prismrv_bo_map(struct prismrv_device *pv, struct prismrv_bo *bo)
+{
+	struct sg_table *sgt = bo->base.sgt;
 	struct scatterlist *sg;
 	unsigned int i;
 	size_t va_off = 0;
 	int ret;
 
-	/*
-	 * Fast path: mapped by a previous submit and the mapping is still
-	 * live.  Re-check under mmu_lock below to close the window between
-	 * concurrent submits referencing the same BO.
-	 */
 	if (READ_ONCE(bo->mapped))
 		return 0;
-
-	sgt = drm_gem_shmem_get_pages_sgt(shmem);
-	if (IS_ERR(sgt))
-		return PTR_ERR(sgt);
+	if (WARN_ON(!sgt))
+		return -EINVAL;
 
 	mutex_lock(&pv->mmu_lock);
 	if (bo->mapped) {
@@ -149,115 +166,6 @@ err_unmap:
 	return ret;
 }
 
-/*
- * shmem helper callback: allocate the driver BO wrapper so that the
- * helper initialises its state inside prismrv_bo (container_of layout).
- * This replaces a previous open-coded drm_gem_object_init() call that
- * left the drm_gem_shmem_object state uninitialised.
- */
-struct drm_gem_object *
-prismrv_gem_create_object(struct drm_device *dev, size_t size)
-{
-	struct prismrv_device *pv = to_prismrv(dev);
-	struct prismrv_bo *bo;
-
-	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
-	if (!bo)
-		return ERR_PTR(-ENOMEM);
-
-	bo->base.base.funcs = &prismrv_gem_funcs;
-	INIT_LIST_HEAD(&bo->bo_node);
-
-	spin_lock(&pv->bo_list_lock);
-	list_add(&bo->bo_node, &pv->bo_list);
-	spin_unlock(&pv->bo_list_lock);
-
-	return &bo->base.base;
-}
-
-/**
- * prismrv_bo_create() - allocate a BO with a fixed GPU VA range.
- * @flags: PRISMRV_BO_*
- *
- * Used by the create ioctl and, with no GEM handle, for the kernel-owned
- * command-stream snapshots that userspace can neither map nor modify.
- */
-struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
-					 size_t size, u32 flags)
-{
-	struct drm_gem_shmem_object *shmem;
-	struct prismrv_bo *bo;
-	int ret;
-
-	size = PAGE_ALIGN(size);
-	shmem = drm_gem_shmem_create(&pv->drm, size);
-	if (IS_ERR(shmem))
-		return ERR_CAST(shmem);
-
-	bo = to_prbo(&shmem->base);
-	mutex_lock(&pv->va_lock);
-	ret = drm_mm_insert_node_generic(&pv->va_mm, &bo->va_node, size,
-					 SZ_4K, 0, DRM_MM_INSERT_BEST);
-	mutex_unlock(&pv->va_lock);
-	if (ret) {
-		drm_gem_object_put(&shmem->base);
-		return ERR_PTR(ret);
-	}
-	bo->va_allocated = true;
-
-	/* write-combine must be set before the first vmap */
-	if (flags & PRISMRV_BO_UNCACHED)
-		shmem->map_wc = true;
-	return &shmem->base;
-}
-
-int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
-			     struct drm_file *file)
-{
-	struct prismrv_device *pv = to_prismrv(dev);
-	struct drm_prismrv_gem_create *args = data;
-	struct drm_gem_object *obj;
-	int ret;
-
-	if (args->flags & ~PRISMRV_BO_UNCACHED || args->pad)
-		return -EINVAL;
-	if (args->size == 0 || args->size > SZ_256M)
-		return -EINVAL;
-	args->size = PAGE_ALIGN(args->size);
-
-	obj = prismrv_bo_create(pv, args->size, args->flags);
-	if (IS_ERR(obj))
-		return PTR_ERR(obj);
-
-	args->gpu_va = to_prbo(obj)->va_node.start;
-	args->pad = 0;
-	ret = drm_gem_handle_create(file, obj, &args->handle);
-	drm_gem_object_put(obj);
-	return ret;
-}
-
-int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
-				  struct drm_file *file)
-{
-	struct drm_prismrv_gem_mmap_offset *args = data;
-	struct drm_gem_object *obj;
-	int ret;
-
-	obj = drm_gem_object_lookup(file, args->handle);
-	if (!obj)
-		return -ENOENT;
-
-	ret = drm_gem_create_mmap_offset(obj);
-	if (ret == 0)
-		args->offset = drm_vma_node_offset_addr(&obj->vma_node);
-	drm_gem_object_put(obj);
-	return ret;
-}
-
-/**
- * prismrv_gem_populate() — pin, DMA-map and MMU-map a BO before submit.
- * Called on the list of BOs referenced by a submission.
- */
 int prismrv_gem_populate(struct prismrv_device *pv, struct drm_gem_object **objs,
 			 u32 count)
 {
@@ -265,9 +173,7 @@ int prismrv_gem_populate(struct prismrv_device *pv, struct drm_gem_object **objs
 	int ret;
 
 	for (i = 0; i < count; i++) {
-		struct prismrv_bo *bo = to_prbo(objs[i]);
-
-		ret = prismrv_bo_pin_and_map(pv, bo);
+		ret = prismrv_bo_map(pv, to_prbo(objs[i]));
 		if (ret)
 			return ret;
 	}
@@ -364,4 +270,33 @@ void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj)
 	if (shmem->sgt && !shmem->map_wc)
 		dma_sync_sgtable_for_cpu(obj->dev->dev, shmem->sgt,
 					 DMA_BIDIRECTIONAL);
+}
+
+int prismrv_gem_wait_ioctl(struct drm_device *dev, void *data,
+			   struct drm_file *file)
+{
+	struct drm_prismrv_gem_wait *args = data;
+	struct drm_gem_object *obj;
+	unsigned long timeout;
+	long ret;
+
+	if (args->flags)
+		return -EINVAL;
+
+	obj = drm_gem_object_lookup(file, args->handle);
+	if (!obj)
+		return -ENOENT;
+
+	timeout = args->timeout_ns >= (u64)jiffies_to_nsecs(MAX_JIFFY_OFFSET) ?
+		  MAX_SCHEDULE_TIMEOUT : nsecs_to_jiffies(args->timeout_ns);
+	/*
+	 * Every job installs its fence with WRITE usage (see submit), so
+	 * waiting for WRITE covers all users of the BO.
+	 */
+	ret = dma_resv_wait_timeout(obj->resv, DMA_RESV_USAGE_WRITE, true,
+				    timeout);
+	drm_gem_object_put(obj);
+	if (ret < 0)
+		return ret == -ERESTARTSYS ? -EINTR : ret;
+	return ret ? 0 : -ETIME;
 }

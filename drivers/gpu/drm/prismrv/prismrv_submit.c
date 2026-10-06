@@ -208,38 +208,21 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 
 	spin_lock(&pv->ccb_lock);
 
+	/*
+	 * The submitter waited for room BEFORE taking submit_rwsem
+	 * (prismrv_wait_ccb_space()), and submit_order keeps other
+	 * submitters out, so only a concurrent retirement can have changed
+	 * the count since - towards "more room".  Waiting here would mean
+	 * sleeping with the read side of submit_rwsem held, which blocks
+	 * recovery - the very thing that frees a wedged ring.
+	 */
 	if (prismrv_ccb_full(pv)) {
-		unsigned long deadline = jiffies +
-			msecs_to_jiffies(PRISMRV_CCB_DRAIN_TIMEOUT_MS);
-
 		spin_unlock(&pv->ccb_lock);
-		do {
-			writel(EUR_CR_EVENT_KICK_NOW_MASK,
-			       pv->regs + EUR_CR_EVENT_KICK);
-			usleep_range(500, 1000);
-			if (time_after(jiffies, deadline)) {
-				dev_err(pv->drm.dev,
-					"CCB full for %dms — scheduling recovery\n",
-					PRISMRV_CCB_DRAIN_TIMEOUT_MS);
-				if (READ_ONCE(pv->hw_ready))
-					prismrv_request_recovery(pv);
-
-				/*
-				 * Signal the fence with -ETIMEDOUT using the
-				 * fence's own spinlock (required by
-				 * dma_fence_signal_locked).  The fence has NOT
-				 * yet been added to pending_fences, so no
-				 * concurrent IRQ path can race here.
-				 */
-				spin_lock(&pf->lock);
-				dma_fence_set_error(&pf->base, -ETIMEDOUT);
-				dma_fence_signal_locked(&pf->base);
-				spin_unlock(&pf->lock);
-
-				return -ETIMEDOUT;
-			}
-			spin_lock(&pv->ccb_lock);
-		} while (prismrv_ccb_full(pv));
+		spin_lock(&pf->lock);
+		dma_fence_set_error(&pf->base, -EBUSY);
+		dma_fence_signal_locked(&pf->base);
+		spin_unlock(&pf->lock);
+		return -EBUSY;
 	}
 
 	slot = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
@@ -450,6 +433,46 @@ out_free:
 	return ret;
 }
 
+/*
+ * Wait, WITHOUT submit_rwsem, until the ring has room.  Only the software
+ * counters are consulted (no CCB memory is touched, so this is safe while a
+ * recovery is tearing the ring down).  A wedged GPU is cleared by the hang
+ * watchdog / recovery, which retire the jobs and wake us.  Caller holds
+ * submit_order, so nobody else can take the room we see.
+ */
+static int prismrv_wait_ccb_space(struct prismrv_device *pv)
+{
+	unsigned long deadline = jiffies +
+		msecs_to_jiffies(PRISMRV_CCB_DRAIN_TIMEOUT_MS);
+	long r;
+
+	for (;;) {
+		unsigned long flags;
+		u32 outstanding;
+
+		spin_lock_irqsave(&pv->event_lock, flags);
+		outstanding = pv->ccb_submitted - pv->ccb_completed;
+		spin_unlock_irqrestore(&pv->event_lock, flags);
+		if (outstanding < PRISMRV_CCB_MAX_OUTSTANDING)
+			return 0;
+
+		if (time_after(jiffies, deadline)) {
+			dev_err(pv->drm.dev, "CCB full for %dms\n",
+				PRISMRV_CCB_DRAIN_TIMEOUT_MS);
+			if (READ_ONCE(pv->hw_ready))
+				prismrv_request_recovery(pv);
+			return -EBUSY;
+		}
+		r = wait_event_interruptible_timeout(
+			pv->ccb_wq,
+			READ_ONCE(pv->ccb_submitted) - READ_ONCE(pv->ccb_completed) <
+				PRISMRV_CCB_MAX_OUTSTANDING,
+			msecs_to_jiffies(100));
+		if (r < 0)
+			return r;
+	}
+}
+
 int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file)
 {
@@ -462,6 +485,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	u32 __user *in_fds;
 	__le32 cmd_data[6] = {};
 	int ret = 0, fd = -1;
+	bool exec_active = false, rwsem_held = false;
 	unsigned int i;
 
 	ret = pm_runtime_resume_and_get(pv->drm.dev);
@@ -546,35 +570,55 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		goto err_objs;
 
 	/* ----------------------------------------------------------------
-	 * Allocate the fence and sync_file before taking the lock.
-	 * fd_install() is deferred until CCB publish succeeds so that a
-	 * failing ioctl never leaks a userspace-visible fd.
+	 * Phase 2 — still no submit_rwsem.  Everything that can sleep for a
+	 * long time happens here, in this order:
+	 *   pages / sg tables  (takes reservation locks internally)
+	 *   submit_order       (one submitter at a time: seqno == CCB order)
+	 *   ring room          (waits for retirement / recovery)
+	 *   reservation locks of every BO (drm_exec) + wait for their fences
+	 * Phase 3 then takes submit_rwsem (read) for a short, non-sleeping
+	 * stretch.  submit_rwsem must never be held across any wait above:
+	 * recovery takes its write side and has to be able to run while a job
+	 * is hung - the job whose fence we may be waiting for.
 	 * ---------------------------------------------------------------- */
+	ret = prismrv_gem_prepare(objs, args->num_bos + 1);
+	if (ret)
+		goto err_objs;
+
+	ret = mutex_lock_interruptible(&pv->submit_order);
+	if (ret)
+		goto err_objs;
+	ret = prismrv_wait_ccb_space(pv);
+	if (ret)
+		goto err_unlock_order;
+
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
 	if (!f) {
 		ret = -ENOMEM;
-		goto err_objs;
+		goto err_unlock_order;
 	}
 	spin_lock_init(&f->lock);
 	INIT_LIST_HEAD(&f->node);
 	f->ccb_slot = 0xFFFF;
 	/*
 	 * One timeline for the whole device: the CCB runs jobs in order, so
-	 * fences share a context and seqno order must equal CCB order.
-	 * submit_order serialises "take seqno" .. "publish in CCB"; it is
-	 * dropped on every exit path below.
+	 * fences share a context and seqno order equals CCB order
+	 * (submit_order is held until the command is published).
 	 */
-	mutex_lock(&pv->submit_order);
 	dma_fence_init(&f->base, &prismrv_fence_ops, &f->lock,
 		       pv->fence_context,
 		       atomic64_inc_return(&pv->fence_seqno));
 	/* ref #1: held by this function; transferred to sync_file below */
 
+	/* BO references now belong to the fence */
+	f->bos     = objs;
+	f->num_bos = args->num_bos + 1;
+	objs       = NULL;
+
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
 		ret = fd;
-		mutex_unlock(&pv->submit_order);
-		goto err_fence_put;
+		goto err_fence_bos;
 	}
 
 	/* sync_file_create() takes its own reference on the fence */
@@ -587,72 +631,30 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	dma_fence_put(&f->base);
 	/* f is still valid: sf holds a ref, and we have ref #2 and #3 below */
 
-	/* ----------------------------------------------------------------
-	 * Phase 2 — inside submit_rwsem (read): hw_ready check + enqueue.
-	 * Nothing that blocks on a GPU fence may run here.
-	 * ---------------------------------------------------------------- */
-	down_read(&pv->submit_rwsem);
-
-	if (!pv->hw_ready) {
-		ret = -ENODEV;
-		goto err_unlock;
-	}
-
-	ret = prismrv_gem_populate(pv, objs, args->num_bos + 1);
-	if (ret)
-		goto err_unlock;
-
-	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(objs[0]));
-	cmd_data[1] = cpu_to_le32(args->cmd_size);
-	if (args->num_bos >= 1 && objs[1])
-		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(objs[1]));
-
 	/*
-	 * Transfer BO refs to the fence (ref #3 path for BO lifetime).
-	 * objs is set to NULL so err_unlock does not double-put them.
+	 * Take every reservation lock (drm_exec: ww_mutex deadlock
+	 * avoidance, duplicates tolerated) and reserve one fence slot each;
+	 * slots only survive while the lock is held.
 	 */
-	f->bos     = objs;
-	f->num_bos = args->num_bos + 1;
-	objs       = NULL;
-
-	/*
-	 * Register the completion fence on every BO's dma_resv.
-	 *
-	 * dma_resv_reserve_fences() slots are only guaranteed while the
-	 * reservation object stays locked: unlocking between reserve and
-	 * dma_resv_add_fence() lets another submitter consume the slot
-	 * (the API requires re-reserving in that case).  Take all
-	 * reservation locks together with drm_exec (ww_mutex deadlock
-	 * avoidance, duplicates handled), reserve one slot on each, add
-	 * the fence while everything is still locked, then drop the locks.
-	 *
-	 * dma_resv_add_fence() takes its own reference on the fence per BO;
-	 * no extra dma_fence_get() is needed for that.
-	 */
-	/* userspace may list a BO more than once: tolerate duplicates */
 	drm_exec_init(&exec,
 		      DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES,
 		      f->num_bos);
+	exec_active = true;
 	drm_exec_until_all_locked(&exec) {
 		for (i = 0; i < f->num_bos; i++) {
 			ret = drm_exec_prepare_obj(&exec, f->bos[i], 1);
 			drm_exec_retry_on_contention(&exec);
-			if (ret) {
-				drm_exec_fini(&exec);
-				goto err_unlock_bos_set;
-			}
+			if (ret)
+				goto err_unlock;
 		}
 	}
 	/*
 	 * Implicit sync, atomically with the fence installation: wait for
 	 * the fences already on each BO while its reservation is held, so
 	 * no other submitter can slip a fence in between our wait and our
-	 * add (a wait done before taking the locks would let two
-	 * submitters both see "idle").  dma_resv_wait_timeout() is legal
-	 * with the lock held.  The waited-for fences are signalled by the
-	 * IRQ path, which never takes a reservation lock.  (Jobs of this
-	 * driver also run in CCB order, so the wait only matters for CPU
-	 * visibility and for future imported fences.)
+	 * add.  The fences waited for are signalled by the IRQ thread or by
+	 * recovery, neither of which takes a reservation lock or
+	 * submit_order, and we hold no submit_rwsem here.
 	 */
 	for (i = 0; i < f->num_bos; i++) {
 		long r = dma_resv_wait_timeout(f->bos[i]->resv,
@@ -661,14 +663,36 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 
 		if (r < 0) {
 			ret = r;
-			drm_exec_fini(&exec);
-			goto err_unlock_bos_set;
+			goto err_unlock;
 		}
 	}
+
+	/* ----------------------------------------------------------------
+	 * Phase 3 — submit_rwsem (read): hardware state is stable.  Short
+	 * and non-sleeping apart from mmu_lock.
+	 * ---------------------------------------------------------------- */
+	down_read(&pv->submit_rwsem);
+	rwsem_held = true;
+
+	if (!pv->hw_ready) {
+		ret = -ENODEV;
+		goto err_unlock;
+	}
+
+	ret = prismrv_gem_populate(pv, f->bos, f->num_bos);
+	if (ret)
+		goto err_unlock;
+
+	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(f->bos[0]));
+	cmd_data[1] = cpu_to_le32(args->cmd_size);
+	if (args->num_bos >= 1 && f->bos[1])
+		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(f->bos[1]));
+
 	for (i = 0; i < f->num_bos; i++)
 		dma_resv_add_fence(f->bos[i]->resv, &f->base,
 				   DMA_RESV_USAGE_WRITE);
 	drm_exec_fini(&exec);
+	exec_active = false;
 
 	/*
 	 * Take ref #3 for pending_fences before ccb_schedule() publishes
@@ -697,8 +721,7 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		 * pending list) and release BO refs.
 		 */
 		dma_fence_put(&f->base);	/* drop ref #3 */
-		prismrv_fence_release_bos(f);
-		/* PM ref released below at err_unlock */
+		/* BOs, sync_file, PM ref: released at err_unlock */
 		goto err_unlock;
 	}
 
@@ -710,36 +733,33 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	args->out_fence_fd = fd;
 	fd_install(fd, sf->file);
 
-	mutex_unlock(&pv->submit_order);
 	up_read(&pv->submit_rwsem);
+	mutex_unlock(&pv->submit_order);
 	/* PM ref is kept; handle_completion() / hw_fini() will release it */
 	return 0;
 
-err_unlock_bos_set:
-	/* f->bos was set but dma_resv registration failed mid-loop.
-	 * Release the BO refs now; f itself will be freed when sf drops ref. */
-	prismrv_fence_release_bos(f);
 err_unlock:
+	if (rwsem_held)
+		up_read(&pv->submit_rwsem);
+	if (exec_active)
+		drm_exec_fini(&exec);
 	mutex_unlock(&pv->submit_order);
-	up_read(&pv->submit_rwsem);
+	/* f owns the BOs; sf owns the fence */
+	prismrv_fence_release_bos(f);
 	fput(sf->file);		/* drops sf + its fence ref */
 	put_unused_fd(fd);
-	pm_runtime_mark_last_busy(pv->drm.dev);
-	pm_runtime_put_autosuspend(pv->drm.dev);
-	/* objs may have been transferred to f->bos; only free if still set */
-	if (objs) {
-		for (i = 0; i <= args->num_bos; i++)
-			if (objs[i])
-				drm_gem_object_put(objs[i]);
-		kvfree(objs);
-	}
-	return ret;
+	goto err_pm;
 
 err_put_fd:
-	mutex_unlock(&pv->submit_order);
 	put_unused_fd(fd);
-err_fence_put:
+err_fence_bos:
+	prismrv_fence_release_bos(f);
+	mutex_unlock(&pv->submit_order);
 	dma_fence_put(&f->base);	/* drop ref #1 */
+	goto err_pm;
+
+err_unlock_order:
+	mutex_unlock(&pv->submit_order);
 err_objs:
 	if (objs) {
 		for (i = 0; i <= args->num_bos; i++)

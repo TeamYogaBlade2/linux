@@ -380,6 +380,7 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	 * hw_init() (if called afterwards) can arm the interrupt again.
 	 */
 	prismrv_hw_irq_quiesce(pv);
+	wake_up_all(&pv->ccb_wq);
 
 	/* stop the hang watchdog before tearing the rings down */
 	cancel_delayed_work_sync(&pv->hang_work);

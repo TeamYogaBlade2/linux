@@ -94,6 +94,7 @@ static int prismrv_submit_ioctl_guarded(struct drm_device *dev, void *data,
 	return ret;
 }
 PRISMRV_GUARDED_IOCTL(prismrv_get_param_ioctl)
+PRISMRV_GUARDED_IOCTL(prismrv_gem_wait_ioctl)
 
 static const struct drm_ioctl_desc prismrv_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_CREATE, prismrv_gem_create_ioctl_guarded,
@@ -103,6 +104,8 @@ static const struct drm_ioctl_desc prismrv_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(PRISMRV_SUBMIT, prismrv_submit_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(PRISMRV_GET_PARAM, prismrv_get_param_ioctl_guarded,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_WAIT, prismrv_gem_wait_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 };
 
@@ -236,6 +239,7 @@ static int prismrv_probe(struct platform_device *pdev)
 	pv->irq = irq;
 	pv->fence_context = dma_fence_context_alloc(1);
 	mutex_init(&pv->submit_order);
+	init_waitqueue_head(&pv->ccb_wq);
 	ret = devm_request_threaded_irq(&pdev->dev, irq, prismrv_irq_handler,
 					prismrv_irq_thread, IRQF_SHARED,
 					dev_name(&pdev->dev), pv);

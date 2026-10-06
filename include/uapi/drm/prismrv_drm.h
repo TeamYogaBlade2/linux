@@ -12,7 +12,7 @@
 #include <linux/types.h>
 
 /* Incremented when ABI-incompatible changes are made. */
-#define PRISMRV_UAPI_VERSION		3
+#define PRISMRV_UAPI_VERSION		4
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -62,6 +62,7 @@ struct drm_prismrv_get_param {
  * userspace that queries "GPU_ID" now silently receives CORE_ID, so it
  * must check PRISMRV_PARAM_UAPI_VERSION (v3+) before trusting values.
  * v3 added GEM_CREATE.gpu_va, PARAM_UAPI_VERSION and PARAM_CMD_ABI.
+ * v4 added GEM_WAIT.
  */
 #define PRISMRV_PARAM_CORE_ID		1 /* raw EUR_CR_CORE_ID register */
 #define PRISMRV_PARAM_CORE_REVISION	5 /* raw EUR_CR_CORE_REVISION register */
@@ -132,6 +133,7 @@ struct drm_prismrv_get_param {
 #define DRM_PRISMRV_GEM_MMAP_OFFSET	0x01
 #define DRM_PRISMRV_SUBMIT		0x02
 #define DRM_PRISMRV_GET_PARAM		0x03
+#define DRM_PRISMRV_GEM_WAIT		0x04
 
 #define DRM_IOCTL_PRISMRV_GEM_CREATE \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_CREATE, struct drm_prismrv_gem_create)
@@ -139,6 +141,24 @@ struct drm_prismrv_get_param {
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_MMAP_OFFSET, struct drm_prismrv_gem_mmap_offset)
 #define DRM_IOCTL_PRISMRV_SUBMIT \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_SUBMIT, struct drm_prismrv_submit)
+/*
+ * GEM_WAIT (UAPI v4): wait until the GPU has finished every job that uses
+ * the BO, from ANY context or process - the BO's reservation object carries
+ * the fences of all of them.  CPU access to a BO the GPU may touch (readback,
+ * upload over data still being read) must be preceded by this; waiting for
+ * the caller's own last job is not enough once a BO is shared.
+ *  timeout_ns: relative; 0 polls.  Returns 0, -ETIME on timeout, -EINTR.
+ * The data written by the GPU is CPU-visible once this returns (the kernel
+ * does the cache maintenance before it signals).
+ */
+struct drm_prismrv_gem_wait {
+	__u32 handle;
+	__u32 flags;		/* must be 0 */
+	__u64 timeout_ns;
+};
+
+#define DRM_IOCTL_PRISMRV_GEM_WAIT \
+	_IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_WAIT, struct drm_prismrv_gem_wait)
 #define DRM_IOCTL_PRISMRV_GET_PARAM \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GET_PARAM, struct drm_prismrv_get_param)
 

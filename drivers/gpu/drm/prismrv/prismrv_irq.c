@@ -159,6 +159,7 @@ static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 	}
 
 	if (retired || advanced) {
+		wake_up(&pv->ccb_wq);
 		WRITE_ONCE(pv->last_progress, jiffies);
 		atomic_set(&pv->missed_completions, 0);
 	}

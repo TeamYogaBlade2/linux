@@ -265,6 +265,7 @@ struct prismrv_device {
 	bool hw_recovery;		/* next hw_init() follows a recovery (MCI reset) */
 	bool hw_inited_once;
 	bool hw_powered;		/* clocks on + reset released: registers are safe to touch */
+	wait_queue_head_t ccb_wq;	/* woken when CCB slots free up */
 	atomic_t devfreq_paused;	/* see prismrv_devfreq_pause() */
 	atomic_t irq_events;		/* event bits latched by the hard IRQ */
 	struct work_struct recovery_work;
@@ -331,6 +332,9 @@ void prismrv_mmu_unmap_locked(struct prismrv_device *pv, u32 vaddr,
 irqreturn_t prismrv_irq_handler(int irq, void *data);
 irqreturn_t prismrv_irq_thread(int irq, void *data);
 int prismrv_hw_reinit(struct prismrv_device *pv);
+int prismrv_gem_wait_ioctl(struct drm_device *dev, void *data,
+			   struct drm_file *file);
+int prismrv_gem_prepare(struct drm_gem_object **objs, u32 count);
 int prismrv_wait_in_fences(u32 num_fds, const u32 __user *user_fds);
 void prismrv_hw_irq_quiesce(struct prismrv_device *pv);
 void prismrv_power_down_irq(struct prismrv_device *pv);
