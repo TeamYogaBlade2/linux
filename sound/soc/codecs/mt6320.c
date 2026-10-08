@@ -1262,7 +1262,45 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		priv->capture_active = true;
 		return 0;
 	case SND_SOC_DAPM_POST_PMD:
-		/* ACCDET/AUXADC shared state is owned by the ACCDET driver. */
+		/*
+		 * Mirror AnalogClose(DEVICE_IN_ADC1/ADC2).  These are capture-only
+		 * blocks, so they must be shut down even when the playback analog
+		 * path remains active.  Shared LDO/bias cleanup is deferred until no
+		 * output path is using it.
+		 */
+		ret = regmap_clear_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
+					 MT6320_AUDPREAMP_POWER);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AUDADC_CON0, 0x00b4);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_AUDDIGMI_CON0, 0x0080);
+		if (ret)
+			return ret;
+
+		{
+			unsigned int cid;
+
+			ret = regmap_read(priv->regmap, MT6320_CID, &cid);
+			if (ret)
+				return ret;
+
+			if (cid >= MT6320_E2_CID) {
+				ret = regmap_clear_bits(priv->regmap, MT6320_AUD_NCP0,
+							 BIT(12));
+				if (ret)
+					return ret;
+			}
+		}
+
+		ret = regmap_clear_bits(priv->regmap, MT6320_AUDLSBUF_CON0,
+					 BIT(0) | BIT(1));
+		if (ret)
+			return ret;
+
 		ret = regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
 					 MT6320_ADCCLK_ENABLE);
 		if (ret)
