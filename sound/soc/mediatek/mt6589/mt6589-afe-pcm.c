@@ -421,17 +421,12 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 };
 
 /*
- * Memory-interface power event for the DL1 and VUL widgets.
+ * DAPM graph helper for the DL1 and VUL memory-interface widgets.
  *
- * The interconnect bits and the DAC_CON0 enables are programmed in
- * prepare() and trigger(); this only turns the memory interface on and off
- * as DAPM walks the graph, matching what the stock driver does between
- * SetMEMIFEnable() and the stream teardown.
- *
- * AFE_ON (AFE_DAC_CON0 bit 0) is global to the AFE.  Playback and capture
- * use independent memory interfaces, so either one may remain active while
- * the other stops.  Derive the shared enable from the two stream pointers
- * rather than clearing it unconditionally from either stop path.
+ * The memory-interface enable bits are owned by the PCM trigger path.  That
+ * gives each stream one clear hardware owner and keeps the start sequence in
+ * the same place as CUR/CONN/I2S programming.  AFE_ON remains derived from
+ * the active stream pointers by mt6589_afe_update_afe_on().
  */
 static int mt6589_afe_update_afe_on(struct mt6589_afe *afe)
 {
@@ -446,55 +441,11 @@ static int mt6589_afe_update_afe_on(struct mt6589_afe *afe)
 static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 				  struct snd_kcontrol *kcontrol, int event)
 {
-	struct mt6589_afe *afe = snd_soc_component_get_drvdata(
-					snd_soc_dapm_to_component(w->dapm));
-	int ret;
-	bool capture;
-
-	if (!afe)
-		return -ENODEV;
-
 	/*
-	 * The two widgets carrying this handler are "DL1" and "VUL" (see
-	 * mt6589_afe_widgets below); "VUL Capture" and "DL1 Playback" are
-	 * DAI widgets that ASoC creates automatically, and they never reach
-	 * this function, so matching them here would be dead code.  Only "VUL"
-	 * is capture.
+	 * The DAPM widgets only model the memory-interface graph.  The actual
+	 * AFE_DAC_CON0 enable sequence belongs to the PCM trigger callbacks,
+	 * where CUR/CONN/I2S configuration has already been completed.
 	 */
-	capture = !strcmp(w->name, "VUL");
-
-	switch (event) {
-	case SND_SOC_DAPM_PRE_PMU:
-		if (capture)
-			ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
-						 AFE_DAC_CON0_VUL_ON,
-						 AFE_DAC_CON0_VUL_ON);
-		else
-			ret = regmap_update_bits(afe->regmap, AFE_DAC_CON0,
-						 AFE_DAC_CON0_DL1_ON,
-						 AFE_DAC_CON0_DL1_ON);
-		if (ret)
-			return ret;
-
-		return regmap_update_bits(afe->regmap, AFE_DAC_CON0,
-					 AFE_DAC_CON0_AFE_ON,
-					 AFE_DAC_CON0_AFE_ON);
-	case SND_SOC_DAPM_POST_PMD:
-		if (capture) {
-			ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-						AFE_DAC_CON0_VUL_ON);
-			if (ret)
-				return ret;
-		} else {
-			ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-						AFE_DAC_CON0_DL1_ON);
-			if (ret)
-				return ret;
-		}
-
-		return mt6589_afe_update_afe_on(afe);
-	}
-
 	return 0;
 }
 
