@@ -174,6 +174,10 @@
  */
 #define MT6320_AFUNC_AUD_CON2		MT6320_AFE_AFUNC_AUD_CON2
 
+/* ACCDET state is also used to select the wired-headset capture input. */
+#define MT6320_ACCDET_STATE_RG		MT6320_ACCDET_CON13
+#define MT6320_ACCDET_STATE_MASK	GENMASK(7, 6)
+#define MT6320_ACCDET_STATE_HEADSET_MIC	1
 /* AUXADC and AUDENCSPARE_CON0 are owned by the ACCDET/AUXADC drivers. */
 
 /*
@@ -1099,6 +1103,8 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 {
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	unsigned int accdet_state;
+	bool headset_mic;
 	int ret;
 
 	switch (event) {
@@ -1122,15 +1128,29 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
+		/*
+		 * ACCDET_STATE_RG[7:6] is the vendor cable-class state:
+		 *   0 = no-mic headset, 1 = headset with microphone, 3 = empty.
+		 * A wired headset feeds MIC2 into both preamps; the internal dual-mic
+		 * path remains MIC1/MIC3.
+		 */
+		ret = regmap_read(priv->regmap, MT6320_ACCDET_STATE_RG,
+				  &accdet_state);
+		if (ret)
+			return ret;
+
+		headset_mic = FIELD_GET(MT6320_ACCDET_STATE_MASK, accdet_state) ==
+			      MT6320_ACCDET_STATE_HEADSET_MIC;
+
 		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
 					 MT6320_AUDPREAMP_L_INPUT_SEL,
-					 MT6320_AUDPREAMP_L_MIC1);
+					 headset_mic ? (2U << 2) : MT6320_AUDPREAMP_L_MIC1);
 		if (ret)
 			return ret;
 
 		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
 					 MT6320_AUDPREAMP_R_INPUT_SEL,
-					 MT6320_AUDPREAMP_R_MIC3);
+					 headset_mic ? (2U << 5) : MT6320_AUDPREAMP_R_MIC3);
 		if (ret)
 			return ret;
 
