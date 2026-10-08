@@ -497,14 +497,25 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 			goto out;
 		}
 
-		priv->plugged = true;
-
+		/* Active-low detect: insertion was falling, so removal is rising. */
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_EDGE_FALLING);
-		if (ret)
+				       IRQ_TYPE_EDGE_RISING);
+		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-in IRQ: %d\n",
 					    ret);
+			priv->plugged = false;
+			if (mt6320_accdet_disable(priv))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back ACCDET after IRQ setup failure\n");
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back mic bias switch\n");
+			goto out;
+		}
+
+		priv->plugged = true;
 	} else {
 		/*
 		 * Turn the micbias/AUXADC switch off before declaring the
@@ -539,11 +550,12 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		priv->last_state = 3;
 		mt6320_accdet_report(priv, 0);
 
+		/* Active-low detect: removal was rising, so insertion is falling. */
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_EDGE_RISING);
+				       IRQ_TYPE_EDGE_FALLING);
 		if (ret)
 			dev_err_ratelimited(priv->dev,
-					    "failed to configure plug-out IRQ: %d\n",
+					    "failed to configure next plug-in IRQ: %d\n",
 					    ret);
 	}
 
