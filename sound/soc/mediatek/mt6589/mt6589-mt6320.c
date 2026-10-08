@@ -54,7 +54,10 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	struct snd_soc_component *component;
 	int ret;
 
-	ret = snd_soc_card_jack_new_pins(card, "Headphone Jack", SND_JACK_HEADSET,
+	ret = snd_soc_card_jack_new_pins(card, "Headphone Jack",
+					 SND_JACK_HEADSET |
+					 SND_JACK_BTN_0 | SND_JACK_BTN_1 |
+					 SND_JACK_BTN_2,
 					 &mt6589_mt6320_hp_jack,
 					 mt6589_mt6320_jack_pins,
 					 ARRAY_SIZE(mt6589_mt6320_jack_pins));
