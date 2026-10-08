@@ -173,29 +173,21 @@
 /*
  * DL1 -> interconnect -> I2S2 DAC path.
  *
- * AFE_I2S_CON (0x0018) is the AFE's *first* I2S block and is the ADC-side
- * input path; AFE_I2S_CON1 (0x0034) is the second block and drives the
- * playback DAC.  Chapter 63 is explicit that the 3rd I2S (AFE_I2S_CON2,
- * 0x0038) is input-only (p.2476), while this block is bidirectional:
- * I2S_DIR at bit 4 selects input (1) or output (0) mode and I2S_EN at bit 0
- * enables the path (p.2464).
- *
- * Capture needs this one turned on; playback does not, which is why the
- * playback path only ever touches AFE_I2S_CON1 below.
+ * AFE_I2S_CON1 (0x0034) is the playback I2S block. The ADC input uses the
+ * third, input-only I2S block at AFE_I2S_CON2 (0x0038), matching the Lenovo
+ * BSP's SetI2SAdcIn()/SetI2SAdcEnable() implementation.
  */
-#define AFE_I2S_CON		0x0018
-#define AFE_I2S_CON_PHASE_SHIFT_FIX BIT(31)
-#define AFE_I2S_CON_RATE	GENMASK(11, 8)
-#define AFE_I2S_CON_INV_LRCK	BIT(5)
-#define AFE_I2S_CON_DIR		BIT(4)		/* 0: output, 1: input */
-#define AFE_I2S_CON_FMT		BIT(3)		/* 0: EIAJ, 1: I2S */
-#define AFE_I2S_CON_SRC		BIT(2)		/* 0: master, 1: slave */
-#define AFE_I2S_CON_WLEN		BIT(1)		/* 0: 16 bits, 1: 32 bits */
-#define AFE_I2S_CON_EN		BIT(0)
 #define AFE_I2S_CON1		0x0034
 #define AFE_I2S_CON1_BASE	0x00000008	/* I2S2_FMT: 0=EIAJ, 1=I2S; select I2S */
 #define AFE_I2S_CON1_RATE	GENMASK(11, 8)
 #define AFE_I2S_CON1_ON		BIT(0)
+#define AFE_I2S_CON2		0x0038
+#define AFE_I2S_CON2_BUFFER_UPDATE_WORD GENMASK(27, 24)
+#define AFE_I2S_CON2_RATE	GENMASK(11, 8)
+#define AFE_I2S_CON2_INV_LRCK	BIT(23)
+#define AFE_I2S_CON2_FMT	BIT(3)
+#define AFE_I2S_CON2_WLEN	BIT(1)
+#define AFE_I2S_CON2_EN		BIT(0)
 #define AFE_CONN1		0x0024
 #define AFE_CONN1_DL1_O3	BIT(21)		/* DL1 ch1 -> O3 */
 #define AFE_CONN2		0x0028
@@ -867,72 +859,14 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 		return ret;
 
 	/*
-	 * Turn the AFE's I2S input path on.  Without this the capture path
-	 * never runs, and nothing reports it: the VUL memif still fetches,
-	 * IRQ2 still counts, and arecord returns a perfectly healthy stream
-	 * of silence.
-	 *
-	 * Why AFE_I2S_CON and not the ADDA registers the vendor writes:
-	 * SetI2SAdcEnable() and SetI2SAdcIn() in the vendor driver program
-	 * AFE_ADDA_UL_SRC_CON0, AFE_ADDA_UL_DL_CON0, AFE_ADDA_TOP_CON0 and
-	 * AFE_ADDA_NEWIF_CFG0/1 (mt_soc_afe_control.c:573-593, 761-775), and
-	 * SetI2SAdcIn() only ever writes AFE_I2S_CON2 (0x0038) in its
-	 * *external* ADC branch - which is dead code in that tree, because
-	 * the selector it tests, AudioAdcI2SStatus, is hardcoded false
-	 * (mt_soc_afe_control.c:128).  So the vendor capture sequence writes
-	 * no I2S register at all.
-	 *
-	 * Those ADDA addresses do not exist on this part.  "ADDA" appears
-	 * zero times as a register name anywhere in the MT6589 data sheet,
-	 * and chapter 63's register map has nothing at all between
-	 * AFE_MEMIF_MON4 (0x00e0) and AFE_FOC_CON (0x0170) - so 0x0114,
-	 * 0x0120, 0x0124, 0x0138 and 0x013c are unmapped.  This is the same
-	 * class of cross-SoC error already found and fixed for the ADDA
-	 * PREDIS offsets; the vendor tree here is a fork shared with parts
-	 * that do have an ADDA block, and its capture path is the part that
-	 * was never adapted.
-	 *
-	 * What this part actually provides is the first I2S block,
-	 * AFE_I2S_CON: it is bidirectional (I2S_DIR, bit 4) and it is the
-	 * block the data sheet's own block diagram wires to adc_I2S_data,
-	 * which lands on interconnect inputs I03/I04 (p.2453).  Chapter 63
-	 * lists "Audio recording / Supports 8, 16, 32, 48 kHz sampling
-	 * rate recording / Supports stereo recording" (p.2452) alongside
-	 * "I2S / Supports master/slave input mode", i.e. the recording
-	 * feature is built on this input.
-	 *
-	 * The bit pattern below is the data sheet's own "Suggested value:
-	 * 0x1d" for this register (p.2463) - and that is the strongest
-	 * single piece of evidence available here, because it is not a
-	 * vendor value but MediaTek's own recommendation for the register
-	 * the recording feature depends on.  It decodes as:
-	 *
-	 *	bit 4  I2S_DIR  = 1  input mode
-	 *	bit 3  I2S_FMT  = 1  I2S, not EIAJ
-	 *	bit 2  I2S_SRC  = 1  slave
-	 *	bit 1  I2S_WLEN = 0  16-bit samples
-	 *	bit 0  I2S_EN   = 1  enable
-	 *
-	 * I2S_EN is the point of the whole thing; the rest are the other
-	 * five bits of 0x1d, reproduced exactly.  phase_shift_fix (bit 31)
-	 * is deliberately NOT set: the data sheet's suggested value leaves it
-	 * 0, its reset value is 0, and the vendor's own 2nd-I2S input
-	 * routine sets it (mt_soc_afe_control.c:1281) but the recording path
-	 * does not, so there is no evidence here that capture wants it.
-	 *
-	 * Slave mode is the coherent choice, and it is the one the data
-	 * sheet recommends: the MT6320 codec's AIF1 generates the serial
-	 * clock and drives the data into the AFE's ADC I2S pins, so the
-	 * AFE must receive its own bit clock rather than source one.  This
-	 * register also carries the sampling rate the ADC side runs at
-	 * (bits [11:8], the same sparse ladder used everywhere else), which
-	 * has to be told to the same code as the VUL memif above or the
-	 * interconnect would sample the incoming stream at the wrong rate.
+	 * Configure the dedicated ADC I2S input block like the Lenovo BSP:
+	 * buffer-update word 8, I2S framing, 16-bit samples, no LR swap/invert
+	 * or loopback. Enable is asserted by the VUL trigger path.
 	 */
-	ret = regmap_write(afe->regmap, AFE_I2S_CON,
-			   AFE_I2S_CON_EN | AFE_I2S_CON_DIR | AFE_I2S_CON_FMT |
-			   AFE_I2S_CON_SRC |
-			   FIELD_PREP(AFE_I2S_CON_RATE, rate_code));
+	ret = regmap_write(afe->regmap, AFE_I2S_CON2,
+			   FIELD_PREP(AFE_I2S_CON2_BUFFER_UPDATE_WORD, 8) |
+			   FIELD_PREP(AFE_I2S_CON2_RATE, rate_code) |
+			   AFE_I2S_CON2_FMT);
 	if (ret)
 		return ret;
 
@@ -979,6 +913,10 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 		goto err;
 
 	ret = regmap_set_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O10);
+	if (ret)
+		goto err;
+
+	ret = regmap_set_bits(afe->regmap, AFE_I2S_CON2, AFE_I2S_CON2_EN);
 	if (ret)
 		goto err;
 
@@ -1031,7 +969,7 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	 * the rate and format fields keep whatever they held and the next
 	 * open reprograms them (vul_prepare() does).
 	 */
-	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON, AFE_I2S_CON_EN);
+	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON2, AFE_I2S_CON2_EN);
 	if (ret && !first_err)
 		first_err = ret;
 
