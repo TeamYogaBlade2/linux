@@ -26,8 +26,8 @@
  * Copyright (c) 2026 MediaTek Inc.
  */
 
-#ifndef _MTK_DEVPAPC_MT6589_H
-#define _MTK_DEVPAPC_MT6589_H
+#ifndef _MTK_DEVAPC_MT6589_H
+#define _MTK_DEVAPC_MT6589_H
 
 #include <linux/bits.h>
 
@@ -38,10 +38,14 @@
 #define MT6589_DEVPAPC_INSTANCES	5
 
 /*
- * Worst case module count across the five instances.  The vendor's per-
- * instance device tables are 24 entries for DEVAPC0, 19 for DEVAPC1, 30 for
- * DEVAPC2, 21 for DEVAPC3 and 24 for DEVAPC4 (aquaris-5 .../devapc/devapc.h:
- * D_APC0..4_Devices), so 30 is what has to be programmed.
+ * Maximum number of real slave modules in any one DEVAPC instance.
+ * The actual counts are instance-specific:
+ *
+ *   DEVAPC0: 24
+ *   DEVAPC1: 19
+ *   DEVAPC2: 30
+ *   DEVAPC3: 21
+ *   DEVAPC4: 24
  */
 #define MT6589_DEVPAPC_MAX_MODULES	30
 
@@ -148,6 +152,12 @@ enum mt6589_devapc_perm {
 #define MT6589_DEVPAPC_DEC_ERR_CON	0x00b4
 #define MT6589_DEVPAPC_DEC_ERR_ADDR	0x00b8
 #define MT6589_DEVPAPC_DEC_ERR_ID	0x00bc
+
+/*
+ * DXS_VIO_STA/MASK in DEVAPC0 is the shared summary for all five
+ * DEVAPC instances.  Bits 0..4 correspond to DEVAPC0..DEVAPC4.
+ */
+#define MT6589_DEVPAPC_DXS_INSTANCE_MASK	GENMASK(4, 0)
 
 /* APC_CON bit2 must be cleared for an instance to report violations; the
  * vendor clears it for all five instances in init_devpac()

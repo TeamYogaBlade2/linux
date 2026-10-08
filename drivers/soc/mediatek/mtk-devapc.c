@@ -50,7 +50,7 @@ struct mtk_devapc_data {
 	/* numbers of violation index */
 	u32 vio_idx_num;
 	const struct mtk_devapc_regs_ofs *regs_ofs;
-	/* 1 for the monolithic MT6779/MT8186 blocks, 5 for MT6589. */
+	bool mt6589;
 	u32 nr_instances;
 };
 
@@ -62,15 +62,15 @@ struct mtk_devapc_instance {
 	void __iomem *ao_base;
 	void __iomem *pd_base;
 	u32 nr_modules;
-	u32 dxs_vio_sta_bit;
+	u32 dxs_vio_sta_bit;	/* bit in DEVAPC0_DXS_VIO_STA */
 };
 
 /* A slave whose permission the DT asks us to program. */
 struct mtk_devapc_forbid {
-	u8 instance;
-	u8 module;
-	u8 dom_mask;	/* bitmask of enum mt6589_devapc_domain */
-	u8 perm;	/* enum mt6589_devapc_perm */
+	u32 instance;
+	u32 module;
+	u32 dom_mask;	/* bitmask of enum mt6589_devapc_domain */
+	u32 perm;	/* enum mt6589_devapc_perm */
 };
 
 struct mtk_devapc_context {
@@ -220,6 +220,26 @@ static void mt6589_write_perm(struct mtk_devapc_instance *in,
 	}
 }
 
+static const u8 mt6589_devapc_nr_modules[MT6589_DEVPAPC_INSTANCES] = {
+	24, 19, 30, 21, 24,
+};
+
+
+static void mt6589_clear_vio_status(struct mtk_devapc_instance *in)
+{
+	enum mt6589_devapc_domain dom;
+	u32 valid_mask = GENMASK(in->nr_modules - 1, 0);
+
+	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
+		void __iomem *reg = in->pd_base +
+				    MT6589_DEVPAPC_VIO_STA_REG(dom);
+		u32 val = readl(reg);
+
+		if (val)
+			writel(val & valid_mask, reg);
+	}
+}
+
 /*
  * MT6589 has two independent policies that must not be conflated:
  *
@@ -240,16 +260,34 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 {
 	enum mt6589_devapc_domain dom;
 	u32 sta_clr = GENMASK(in->nr_modules - 1, 0);
-	u32 irq_mask = vio_irq_mask ? GENMASK(in->nr_modules - 1, 0) : 0;
 
 	for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++) {
+		void __iomem *mask_reg;
+		u32 val;
+
 		/* Status write, not a permission change: drops violations
 		 * latched before this driver took over.
 		 */
 		writel(sta_clr, in->pd_base + MT6589_DEVPAPC_VIO_STA_REG(dom));
 
-		writel(irq_mask, in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom));
+		mask_reg = in->pd_base + MT6589_DEVPAPC_VIO_MASK_REG(dom);
+		val = readl(mask_reg);
+
+		if (vio_irq_mask)
+			val |= sta_clr;
+		else
+			val &= ~sta_clr;
+
+		/*
+		 * Keep reserved/unused mask bits intact.  The instances have
+		 * different numbers of implemented slave modules.
+		 */
+		writel(val, mask_reg);
 	}
+
+	/* Do not leave a pre-driver violation descriptor latched. */
+	writel(MT6589_DEVPAPC_VIO_DBG0_CLR,
+	       in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
 
 	/*
 	 * Clear APC_CON bit2 ("stop") in both windows.  The downstream driver
@@ -265,11 +303,39 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 	       in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
 }
 
+static void mt6589_prepare_global(struct mtk_devapc_context *ctx)
+{
+	void __iomem *dxs_mask;
+	void __iomem *dxs_sta;
+	u32 val;
+
+	/*
+	 * DXS_VIO_* is physically present in every PD window, but the
+	 * functional summary consumed by the MT6589 interrupt path is the
+	 * DEVAPC0 register.  Vendor code always reads/writes this instance
+	 * for the DEVAPC0..4 summary bits.
+	 *
+	 * This is deliberately handled separately from per-domain VIO_MASK:
+	 * the latter selects slave violations, while DXS selects the
+	 * instance-level interrupt source.
+	 */
+	dxs_mask = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_MASK;
+	dxs_sta = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_STA;
+
+	/* Drop stale summary bits before enabling the interrupt source. */
+	writel(MT6589_DEVPAPC_DXS_INSTANCE_MASK, dxs_sta);
+
+	val = readl(dxs_mask);
+	val &= ~MT6589_DEVPAPC_DXS_INSTANCE_MASK;
+	writel(val, dxs_mask);
+}
+
 struct mtk_devapc_vio_dbg {
 	u32 master_id;
 	u32 domain_id;
 	u32 addr;
 	bool is_write;
+	bool is_read;
 };
 
 static void mt6589_read_vio_dbg(struct mtk_devapc_instance *in,
@@ -284,6 +350,7 @@ static void mt6589_read_vio_dbg(struct mtk_devapc_instance *in,
 	vio->domain_id = (dbg0 & MT6589_DEVPAPC_VIO_DBG0_DMNID) >>
 			       __bf_shf(MT6589_DEVPAPC_VIO_DBG0_DMNID);
 	vio->is_write = !!(dbg0 & MT6589_DEVPAPC_VIO_DBG0_VIO_W);
+	vio->is_read = !!(dbg0 & MT6589_DEVPAPC_VIO_DBG0_VIO_R);
 	vio->addr = readl(in->pd_base + MT6589_DEVPAPC_VIO_DBG1);
 }
 
@@ -291,9 +358,20 @@ static void mt6589_report_vio_dbg(struct mtk_devapc_context *ctx,
 				  unsigned int idx,
 				  const struct mtk_devapc_vio_dbg *vio)
 {
+	const char *rw;
+
+	if (vio->is_write && vio->is_read)
+		rw = "RW";
+	else if (vio->is_write)
+		rw = "W";
+	else if (vio->is_read)
+		rw = "R";
+	else
+		rw = "?";
+
 	dev_info(ctx->dev,
 		 "DEVAPC%u violation: %s addr 0x%08x, master ID 0x%03x, domain ID 0x%x\n",
-		 idx, vio->is_write ? "W" : "R", vio->addr,
+		 idx, rw, vio->addr,
 		 vio->master_id, vio->domain_id);
 }
 
@@ -323,25 +401,46 @@ static void mt6589_extract_vio_dbg(struct mtk_devapc_context *ctx,
 static irqreturn_t mt6589_violation_irq(int irq, void *data)
 {
 	struct mtk_devapc_context *ctx = data;
+	void __iomem *dxs_sta;
+	u32 pending;
 	unsigned int i;
+
+	dxs_sta = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_STA;
+	pending = readl(dxs_sta) & MT6589_DEVPAPC_DXS_INSTANCE_MASK;
+
+	/*
+	 * MT6589 shares this line with other bus-protection blocks.
+	 * Do not claim an unrelated interrupt.
+	 */
+	if (!pending)
+		return IRQ_NONE;
 
 	for (i = 0; i < ctx->data->nr_instances; i++) {
 		struct mtk_devapc_instance *in = &ctx->inst[i];
 
-		if (!(readl(in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA) &
-		      in->dxs_vio_sta_bit))
+		if (!(pending & in->dxs_vio_sta_bit))
 			continue;
 
-		/* Read and decode, then report, in that order. */
+		/*
+		 * Read the instance-local debug latch selected by the global
+		 * DXS summary, not its local DXS_VIO_STA.
+		 */
 		mt6589_extract_vio_dbg(ctx, in, i);
 
-		/* Only now release the debug latch (write-1-to-clear). */
+		/*
+		 * We don't have the violating slave number in VIO_DBG0.
+		 * Clear every currently latched slave status in the instance
+		 * after reporting the debug latch, otherwise the global DXS bit
+		 * can remain asserted and cause an IRQ storm.
+		 */
+		mt6589_clear_vio_status(in);
+
+		/* Release the debug latch. */
 		writel(MT6589_DEVPAPC_VIO_DBG0_CLR,
 		       in->pd_base + MT6589_DEVPAPC_VIO_DBG0);
 
-		/* Acknowledge the instance-level status. */
-		writel(in->dxs_vio_sta_bit,
-		       in->pd_base + MT6589_DEVPAPC_DXS_VIO_STA);
+		/* Acknowledge the shared instance-level status. */
+		writel(in->dxs_vio_sta_bit, dxs_sta);
 	}
 
 	return IRQ_HANDLED;
@@ -362,6 +461,7 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 	struct mtk_devapc_forbid f;
 	u32 val;
 	int n = 0;
+	unsigned int applied = 0;
 
 	while (n < 64 &&
 	       !of_property_read_u32_index(node,
@@ -402,16 +502,26 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 			continue;
 		}
 
+		if (!f.dom_mask ||
+		    f.dom_mask & ~GENMASK(MT6589_DOMAIN_COUNT - 1, 0)) {
+			dev_warn(ctx->dev,
+				 "forbid: invalid domain mask 0x%x\n",
+				 f.dom_mask);
+			continue;
+		}
+
 		if (f.perm > MT6589_APC_L3) {
 			dev_warn(ctx->dev, "forbid: bad perm %u\n", f.perm);
 			continue;
 		}
 
 		mt6589_write_perm(&ctx->inst[f.instance], &f);
+		applied++;
 	}
 
-	if (n)
-		dev_info(ctx->dev, "forbidding %d slave permission field(s)\n", n);
+	if (applied)
+		dev_info(ctx->dev, "programmed %u DEVAPC permission field(s)\n",
+			 applied);
 }
 
 /*
@@ -453,6 +563,8 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 	mask_irqs = of_property_read_bool(ctx->dev->of_node,
 					  "mediatek,vio-mask-interrupts");
 
+	mt6589_prepare_global(ctx);
+
 	dev_info(ctx->dev, "violation interrupts %s%s\n",
 		 mask_irqs ? "masked for all slaves" :
 			     "unmasked for all slaves",
@@ -477,7 +589,7 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
  */
 static void start_devapc(struct mtk_devapc_context *ctx)
 {
-	if (ctx->data->nr_instances > 1) {
+	if (ctx->data->mt6589) {
 		mt6589_start(ctx);
 		return;
 	}
@@ -492,17 +604,35 @@ static void start_devapc(struct mtk_devapc_context *ctx)
  */
 static void stop_devapc(struct mtk_devapc_context *ctx)
 {
-	if (ctx->data->nr_instances > 1) {
+	if (ctx->data->mt6589) {
 		unsigned int i;
 
 		for (i = 0; i < ctx->data->nr_instances; i++) {
 			struct mtk_devapc_instance *in = &ctx->inst[i];
 			enum mt6589_devapc_domain dom;
+			u32 module_mask;
+			u32 val;
 
-			for (dom = MT6589_DOMAIN_AP; dom < MT6589_DOMAIN_COUNT; dom++)
-				writel(GENMASK(31, 0),
-				       in->pd_base +
-				       MT6589_DEVPAPC_VIO_MASK_REG(dom));
+			module_mask = GENMASK(in->nr_modules - 1, 0);
+
+			for (dom = MT6589_DOMAIN_AP;
+			     dom < MT6589_DOMAIN_COUNT; dom++) {
+				void __iomem *reg;
+
+				reg = in->pd_base +
+				      MT6589_DEVPAPC_VIO_MASK_REG(dom);
+				val = readl(reg);
+				val |= module_mask;
+				writel(val, reg);
+			}
+
+			val = readl(in->ao_base + MT6589_DEVPAPC_APC_CON);
+			val |= MT6589_DEVPAPC_APC_CON_STOP;
+			writel(val, in->ao_base + MT6589_DEVPAPC_APC_CON);
+
+			val = readl(in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
+			val |= MT6589_DEVPAPC_APC_CON_STOP;
+			writel(val, in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
 		}
 
 		return;
@@ -527,17 +657,20 @@ static const struct mtk_devapc_regs_ofs devapc_regs_ofs_mt6779 = {
 static const struct mtk_devapc_data devapc_mt6779 = {
 	.vio_idx_num = 511,
 	.regs_ofs = &devapc_regs_ofs_mt6779,
+	.nr_instances = 1,
 };
 
 static const struct mtk_devapc_data devapc_mt8186 = {
 	.vio_idx_num = 519,
 	.regs_ofs = &devapc_regs_ofs_mt6779,
+	.nr_instances = 1,
 };
 
 static const struct mtk_devapc_data devapc_mt6589 = {
 	/* MT6589 has no flat violation index space; modules are per instance. */
 	.vio_idx_num = 0,
 	.regs_ofs = NULL,
+	.mt6589 = true,
 	.nr_instances = MT6589_DEVPAPC_INSTANCES,
 };
 
@@ -602,7 +735,7 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 				goto err_unmap_inst;
 			}
 
-			in->nr_modules = MT6589_DEVPAPC_MAX_MODULES;
+			in->nr_modules = mt6589_devapc_nr_modules[i];
 			in->dxs_vio_sta_bit = BIT(i);
 		}
 	} else {
@@ -624,19 +757,13 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * Derive the trigger from the DT specifier rather than hardcoding one,
-	 * so a board that wires it edge triggered still works.
-	 *
-	 * IRQF_SHARED is deliberately NOT set, although the vendor requests it
-	 * with IRQF_TRIGGER_LOW | IRQF_SHARED (aquaris-5 .../devapc/devapc.c:
-	 * 1086) because its driver is paired with a userspace cdev control
-	 * interface that also claims the line.  Nothing else claims GIC SPI 94
-	 * on this platform, and claiming it shared would require every other
-	 * owner to be equally correct.
+	 * Derive the trigger from the DT specifier.  For MT6589 the same
+	 * interrupt is shared by DEVAPC, SMI SPC and EMI MPU, so the line
+	 * must remain shareable.
 	 */
 	ret = of_irq_parse_one(node, 0, &oirq);
-	if (!ret && oirq.args_count > 1)
-		switch (oirq.args[1]) {
+	if (!ret && oirq.args_count > 2)
+		switch (oirq.args[2]) {
 		case IRQ_TYPE_EDGE_FALLING:
 			devapc_irq_flags = IRQF_TRIGGER_FALLING;
 			break;
@@ -651,8 +778,11 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	else
 		devapc_irq_flags = IRQF_TRIGGER_LOW;
 
+	if (ctx->data->mt6589)
+		devapc_irq_flags |= IRQF_SHARED;
+
 	ret = devm_request_irq(&pdev->dev, devapc_irq,
-			       ctx->data->nr_instances > 1 ?
+			       ctx->data->mt6589 ?
 			       mt6589_violation_irq : devapc_violation_irq,
 			       devapc_irq_flags, "devapc", ctx);
 	if (ret)
