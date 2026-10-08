@@ -1332,8 +1332,7 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 			return ret;
 
 		priv->capture_active = false;
-		if (!priv->analog_output_active)
-			return mt6320_analog_idle(priv);
+		/* Shared analog idle is owned by the Analog supply's POST_PMD. */
 		return 0;
 	}
 
