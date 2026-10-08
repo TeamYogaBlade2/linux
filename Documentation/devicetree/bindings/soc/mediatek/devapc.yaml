@@ -58,16 +58,9 @@ properties:
 
       This is entirely independent of mediatek,vio-mask-interrupts: a slave
       can be locked to L3 yet raise no interrupt.
+    type: array
     items:
-      - description: DEVAPC instance index (0..4)
-        maximum: 4
-      - description: Slave module index within the instance
-        maximum: 31
-      - description: Bitmask of the domain masters to program
-        minimum: 1
-        maximum: 15
-      - description: Permission level, 0 (L0) to 3 (L3)
-        maximum: 3
+      type: integer
     minItems: 4
     maxItems: 256
 
@@ -118,7 +111,7 @@ examples:
 
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>
-    #include <dt-bindings/clock/mt6589-clk.h>
+    #include <dt-bindings/clock/mediatek,mt6589-clk.h>
 
     devapc: devapc@10010000 {
       compatible = "mediatek,mt6589-devapc";
