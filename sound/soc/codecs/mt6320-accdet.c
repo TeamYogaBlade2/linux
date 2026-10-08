@@ -476,11 +476,24 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		goto out;
 
 	if (!!inserted) {
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_ENABLE);
+		if (ret) {
+			dev_err_ratelimited(priv->dev,
+					    "failed to enable mic bias switch: %d\n",
+					    ret);
+			goto out;
+		}
+
 		ret = mt6320_accdet_enable(priv);
 		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to enable ACCDET: %d\n",
 					    ret);
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back mic bias switch\n");
 			goto out;
 		}
 
@@ -658,10 +671,20 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 				     "failed to request detect IRQ\n");
 
 	if (priv->plugged) {
-		ret = mt6320_accdet_enable(priv);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_ENABLE);
 		if (ret)
 			return dev_err_probe(&pdev->dev, ret,
+					     "failed to enable mic bias switch\n");
+
+		ret = mt6320_accdet_enable(priv);
+		if (ret) {
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err(&pdev->dev, "failed to roll back mic bias switch\n");
+			return dev_err_probe(&pdev->dev, ret,
 					     "failed to enable ACCDET\n");
+		}
 	} else {
 		ret = clk_prepare_enable(priv->clk_accdet);
 		if (!ret) {
