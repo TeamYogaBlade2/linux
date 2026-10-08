@@ -9,7 +9,6 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
-#include <linux/of_irq.h>
 #include <linux/of_address.h>
 #include <linux/property.h>
 
@@ -460,34 +459,41 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 	struct device_node *node = ctx->dev->of_node;
 	struct mtk_devapc_forbid f;
 	u32 val;
-	int n = 0;
+	int count, n;
 	unsigned int applied = 0;
 
-	while (n < 64 &&
-	       !of_property_read_u32_index(node,
+	count = of_property_count_elems_of_size(
+		node, "mediatek,devapc-forbid-slaves", sizeof(u32));
+	if (count < 0)
+		return;
+
+	if (count % 4) {
+		dev_err(ctx->dev,
+			"forbid: property has %d cells, expected a multiple of 4\n",
+			count);
+		return;
+	}
+
+	for (n = 0; n < count; n += 4) {
+		if (of_property_read_u32_index(node,
 					"mediatek,devapc-forbid-slaves",
-					n * 4, &val)) {
-		f.instance = val;
+					n, &f.instance))
+			break;
 
 		if (of_property_read_u32_index(node,
 					       "mediatek,devapc-forbid-slaves",
-					       n * 4 + 1, &val))
+					       n + 1, &f.module))
 			break;
-		f.module = val;
 
 		if (of_property_read_u32_index(node,
 					       "mediatek,devapc-forbid-slaves",
-					       n * 4 + 2, &val))
+					       n + 2, &f.dom_mask))
 			break;
-		f.dom_mask = val;
 
 		if (of_property_read_u32_index(node,
 					       "mediatek,devapc-forbid-slaves",
-					       n * 4 + 3, &val))
+					       n + 3, &f.perm))
 			break;
-		f.perm = val;
-
-		n++;
 
 		if (f.instance >= ctx->data->nr_instances) {
 			dev_warn(ctx->dev, "forbid: instance %u out of range\n",
@@ -520,8 +526,30 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 	}
 
 	if (applied)
-		dev_info(ctx->dev, "programmed %u DEVAPC permission field(s)\n",
+		dev_info(ctx->dev, "programmed %u DEVAPC permission entrie(s)\n",
 			 applied);
+}
+
+static void mt6589_set_dxs_irq_mask(struct mtk_devapc_context *ctx,
+				    bool mask)
+{
+	void __iomem *reg;
+	u32 val;
+
+	/*
+	 * DXS_VIO_MASK bit 0..4 controls the five DEVAPC instance
+	 * interrupt sources.  The remaining bits are shared with other
+	 * protection logic, so preserve them.
+	 */
+	reg = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_MASK;
+	val = readl(reg);
+
+	if (mask)
+		val |= MT6589_DEVPAPC_DXS_INSTANCE_MASK;
+	else
+		val &= ~MT6589_DEVPAPC_DXS_INSTANCE_MASK;
+
+	writel(val, reg);
 }
 
 /*
@@ -563,7 +591,11 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 	mask_irqs = of_property_read_bool(ctx->dev->of_node,
 					  "mediatek,vio-mask-interrupts");
 
-	mt6589_prepare_global(ctx);
+	/*
+	 * Keep the shared DEVAPC summary masked until all instance-local
+	 * state and permission registers have been initialized.
+	 */
+	mt6589_set_dxs_irq_mask(ctx, true);
 
 	dev_info(ctx->dev, "violation interrupts %s%s\n",
 		 mask_irqs ? "masked for all slaves" :
@@ -574,6 +606,15 @@ static void mt6589_start(struct mtk_devapc_context *ctx)
 		mt6589_prepare_inst(&ctx->inst[i], mask_irqs);
 
 	mt6589_apply_forbid(ctx);
+
+	/*
+	 * Drop violations that raced with the initialization sequence before
+	 * finally exposing the DEVAPC summary to the interrupt controller.
+	 */
+	writel(MT6589_DEVPAPC_DXS_INSTANCE_MASK,
+	       ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_STA);
+
+	mt6589_set_dxs_irq_mask(ctx, mask_irqs);
 
 	/*
 	 * This is where a policy lock would have to go, after
@@ -606,6 +647,8 @@ static void stop_devapc(struct mtk_devapc_context *ctx)
 {
 	if (ctx->data->mt6589) {
 		unsigned int i;
+
+		mt6589_set_dxs_irq_mask(ctx, true);
 
 		for (i = 0; i < ctx->data->nr_instances; i++) {
 			struct mtk_devapc_instance *in = &ctx->inst[i];
@@ -693,9 +736,8 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
 	struct mtk_devapc_context *ctx;
-	struct of_phandle_args oirq;
-	unsigned long devapc_irq_flags;
-	u32 devapc_irq;
+	unsigned long irq_flags = 0;
+	int devapc_irq;
 	unsigned int i;
 	int ret;
 
@@ -744,9 +786,9 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 			return -EINVAL;
 	}
 
-	devapc_irq = irq_of_parse_and_map(node, 0);
-	if (!devapc_irq) {
-		ret = -EINVAL;
+	devapc_irq = platform_get_irq(pdev, 0);
+	if (devapc_irq < 0) {
+		ret = devapc_irq;
 		goto err_unmap_inst;
 	}
 
@@ -757,34 +799,17 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * Derive the trigger from the DT specifier.  For MT6589 the same
-	 * interrupt is shared by DEVAPC, SMI SPC and EMI MPU, so the line
-	 * must remain shareable.
+	 * The IRQ domain has already applied the trigger type from DT.
+	 * MT6589 additionally shares this line with the other bus-protection
+	 * blocks, so only the shared flag is required here.
 	 */
-	ret = of_irq_parse_one(node, 0, &oirq);
-	if (!ret && oirq.args_count > 2)
-		switch (oirq.args[2]) {
-		case IRQ_TYPE_EDGE_FALLING:
-			devapc_irq_flags = IRQF_TRIGGER_FALLING;
-			break;
-		case IRQ_TYPE_EDGE_RISING:
-			devapc_irq_flags = IRQF_TRIGGER_RISING;
-			break;
-		default:
-			/* Level sensitive, the MT6589 default. */
-			devapc_irq_flags = IRQF_TRIGGER_LOW;
-			break;
-		}
-	else
-		devapc_irq_flags = IRQF_TRIGGER_LOW;
-
 	if (ctx->data->mt6589)
-		devapc_irq_flags |= IRQF_SHARED;
+		irq_flags = IRQF_SHARED;
 
 	ret = devm_request_irq(&pdev->dev, devapc_irq,
 			       ctx->data->mt6589 ?
 			       mt6589_violation_irq : devapc_violation_irq,
-			       devapc_irq_flags, "devapc", ctx);
+			       irq_flags, "devapc", ctx);
 	if (ret)
 		goto err_unmap_inst;
 

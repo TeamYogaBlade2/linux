@@ -12,16 +12,15 @@
  * are four domain masters: AP (0), MD1 (1), MD2 (2) and MM (3).  A slave's
  * permission is a 2-bit field per master:
  *
- *   0 L0  no protection
- *   1 L1  only RW for secure access
- *   2 L2  only RW for secure access, non-secure read allowed
- *   3 L3  forbidden - any access raises a violation
+ *   0 L0
+ *   1 L1
+ *   2 L2
+ *   3 L3
  *
- * Only the vendor's own use of the levels is known - L0 in stop_usb_protection()
- * and L3 in start_devapc()/start_usb_protection(), .../devapc/devapc.c.  The
- * wording above is borrowed from EMI_MPU's APC field, which shares the
- * encoding scheme but is 3 bits wide with six levels; it is NOT documented
- * for this block.
+ * The numeric encoding is directly present in the vendor driver.  The
+ * MT6589 vendor code uses L0 to remove protection and L3 to forbid access;
+ * the precise semantics of L1/L2 are not established by an MT6589 DEVAPC
+ * register specification and must not be inferred from EMI_MPU.
  *
  * Copyright (c) 2026 MediaTek Inc.
  */
