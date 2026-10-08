@@ -236,6 +236,8 @@ struct mt6320_codec_priv {
 	 * different one from the downlink - see mt6320_ul_src_rate_code().
 	 */
 	unsigned int ul_rate_code;
+	bool analog_output_active;
+	bool capture_active;
 };
 
 /*
@@ -404,12 +406,43 @@ static int mt6320_apply_hp_trim(struct mt6320_codec_priv *priv)
 				  GENMASK(12, 0), trim);
 }
 
+static int mt6320_analog_idle(struct mt6320_codec_priv *priv)
+{
+	unsigned int cid;
+	int ret;
+
+	ret = regmap_read(priv->regmap, MT6320_CID, &cid);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0001);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(priv->regmap, MT6320_AUD_NCP0,
+			   cid >= MT6320_E2_CID ? 0x8000 : 0x9000);
+	if (ret)
+		return ret;
+
+	if (cid >= MT6320_E2_CID) {
+		ret = regmap_write(priv->regmap, MT6320_AUDNVREGGLB_CFG0, 0x0006);
+		if (ret)
+			return ret;
+		return regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0192);
+	}
+
+	ret = regmap_write(priv->regmap, MT6320_AUDNVREGGLB_CFG0, 0x0004);
+	if (ret)
+		return ret;
+	return regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0992);
+}
+
+
 static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 			       struct snd_kcontrol *kcontrol, int event)
 {
 	struct mt6320_codec_priv *priv =
 		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
-	unsigned int cid;
 	int ret;
 
 	switch (event) {
@@ -486,45 +519,10 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
-		ret = regmap_read(priv->regmap, MT6320_CID, &cid);
-		if (ret)
-			return ret;
+		if (priv->analog_output_active || priv->capture_active)
+			return 0;
 
-		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0001);
-		if (ret)
-			return ret;
-
-		/*
-		 * Return NCP to the documented idle value for this silicon
-		 * revision, which is also what power_init() leaves behind.
-		 *
-		 * Write the whole word rather than just the idle bits, as the
-		 * vendor's power_init() does (AudDrv_Kernel.c:286 writes
-		 * 0x8000, :292 writes 0x9000).  These values differ only in
-		 * bit 15 and both leave bits [14:13] clear, which is the
-		 * point: those are DA_HCLDO_EN_VA33 / DA_LCLDO_EN_VA33
-		 * (upmu_hw.h:4328-4331) and the analog supplies have to be
-		 * released once the path is down.  power_init() is what
-		 * re-asserts them, via the PRE_PMU branch above.
-		 */
-		ret = regmap_write(priv->regmap, MT6320_AUD_NCP0,
-				   cid >= MT6320_E2_CID ? 0x8000 : 0x9000);
-		if (ret)
-			return ret;
-
-		if (cid >= MT6320_E2_CID) {
-			ret = regmap_write(priv->regmap,
-					   MT6320_AUDNVREGGLB_CFG0, 0x0006);
-			if (ret)
-				return ret;
-			ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0192);
-		} else {
-			ret = regmap_write(priv->regmap,
-					   MT6320_AUDNVREGGLB_CFG0, 0x0004);
-			if (ret)
-				return ret;
-			ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0992);
-		}
+		ret = mt6320_analog_idle(priv);
 		if (ret)
 			return ret;
 
@@ -716,7 +714,10 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		 * dropped rather than restored on POST_PMD for the same reason:
 		 * there is no power-sequence state on this register to restore.
 		 */
-		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0003);
+		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0003);
+		if (!ret)
+			priv->analog_output_active = true;
+		return ret;
 
 	case SND_SOC_DAPM_POST_PMD:
 		/*
@@ -725,7 +726,10 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		 * Nothing else: no AUDBUF_CFG4 restore, because there is
 		 * nothing on this register for a power sequence to restore.
 		 */
-		return regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0000);
+		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0000);
+		if (!ret)
+			priv->analog_output_active = false;
+		return ret;
 	}
 	return 0;
 }
@@ -1250,12 +1254,24 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 
 		usleep_range(600, 600);
 
-		return regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
-				    0x0201);
+		ret = regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
+				   0x0201);
+		if (ret)
+			return ret;
+
+		priv->capture_active = true;
+		return 0;
 	case SND_SOC_DAPM_POST_PMD:
 		/* ACCDET/AUXADC shared state is owned by the ACCDET driver. */
-		return regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
+		ret = regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
 					 MT6320_ADCCLK_ENABLE);
+		if (ret)
+			return ret;
+
+		priv->capture_active = false;
+		if (!priv->analog_output_active)
+			return mt6320_analog_idle(priv);
+		return 0;
 	}
 
 	return 0;
