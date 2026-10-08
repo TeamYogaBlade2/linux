@@ -74,6 +74,7 @@ struct mt6320_accdet {
 	struct snd_soc_jack *jack;
 	struct mutex lock;
 	struct delayed_work key_work;
+	struct delayed_work eint_work;
 	int accdet_irq;
 	int eint_irq;
 	int last_state;
@@ -446,6 +447,39 @@ static irqreturn_t mt6320_accdet_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t mt6320_accdet_eint(int irq, void *data);
+
+static void mt6320_accdet_eint_work(struct work_struct *work)
+{
+	struct mt6320_accdet *priv =
+		container_of(to_delayed_work(work), struct mt6320_accdet,
+				     eint_work);
+	int inserted;
+	int ret;
+
+	inserted = gpiod_get_value_cansleep(priv->detect);
+	if (inserted < 0)
+		goto retry;
+
+	mutex_lock(&priv->lock);
+	if (!!inserted != priv->plugged) {
+		/* Recover a transition missed while switching the IRQ edge. */
+		mutex_unlock(&priv->lock);
+		mt6320_accdet_eint(priv->eint_irq, priv);
+		return;
+	}
+
+	ret = irq_set_irq_type(priv->eint_irq,
+				       priv->plugged ? IRQ_TYPE_EDGE_RISING :
+				       IRQ_TYPE_EDGE_FALLING);
+	mutex_unlock(&priv->lock);
+	if (!ret)
+		return;
+
+retry:
+	schedule_delayed_work(&priv->eint_work, msecs_to_jiffies(100));
+}
+
 static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 {
 	struct mt6320_accdet *priv = data;
@@ -512,6 +546,8 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 					 MT6320_ACCDET_MICBIAS_DISABLE))
 				dev_err_ratelimited(priv->dev,
 						    "failed to roll back mic bias switch\n");
+			schedule_delayed_work(&priv->eint_work,
+					      msecs_to_jiffies(100));
 			goto out;
 		}
 
@@ -553,10 +589,13 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		/* Active-low detect: removal was rising, so insertion is falling. */
 		ret = irq_set_irq_type(priv->eint_irq,
 				       IRQ_TYPE_EDGE_FALLING);
-		if (ret)
+		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure next plug-in IRQ: %d\n",
 					    ret);
+			schedule_delayed_work(&priv->eint_work,
+					      msecs_to_jiffies(100));
+		}
 	}
 
 out:
@@ -609,6 +648,7 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 
 	mutex_init(&priv->lock);
 	INIT_DELAYED_WORK(&priv->key_work, mt6320_accdet_key_work);
+	INIT_DELAYED_WORK(&priv->eint_work, mt6320_accdet_eint_work);
 	platform_set_drvdata(pdev, priv);
 
 	priv->detect = devm_gpiod_get(&pdev->dev, "detect", GPIOD_IN);
@@ -719,6 +759,7 @@ static void mt6320_accdet_remove(struct platform_device *pdev)
 	int ret = 0;
 
 	cancel_delayed_work_sync(&priv->key_work);
+	cancel_delayed_work_sync(&priv->eint_work);
 
 	mutex_lock(&priv->lock);
 	if (priv->plugged)
