@@ -493,12 +493,14 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 	 */
 	if (dma < AFE_SRAM_PHYS_BASE ||
 	    dma > AFE_SRAM_PHYS_END ||
-	    dma + bytes - 1 > AFE_SRAM_PHYS_END)
+	    dma + bytes - 1 > AFE_SRAM_PHYS_END) {
+		phys_addr_t sram_base = AFE_SRAM_PHYS_BASE;
+		phys_addr_t sram_end = AFE_SRAM_PHYS_END;
+
 		return dev_err_probe(comp->dev, -EINVAL,
 				     "PCM buffer at %pa (%u bytes) is outside the AFE SRAM window %pa..%pa; the AFE cannot fetch it\n",
-				     &dma, bytes,
-				     (phys_addr_t *)AFE_SRAM_PHYS_BASE,
-				     (phys_addr_t *)AFE_SRAM_PHYS_END);
+				     &dma, bytes, &sram_base, &sram_end);
+	}
 
 	/* Program this direction's memif DMA ring, in the AFE on-chip SRAM. */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
