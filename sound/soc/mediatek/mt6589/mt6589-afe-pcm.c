@@ -271,12 +271,15 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 				struct snd_pcm_substream *substream);
 static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
 					 struct snd_pcm_substream *substream);
+static int mt6589_afe_sync_stop(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream);
 
 struct mt6589_afe {
 	struct device *dev;
 	struct regmap *regmap;
 	struct clk *clk;
 	struct clk *clk_i2s;
+	int irq;
 	struct snd_pcm_substream *dl1_substream;	/* active DL1 stream */
 	struct snd_pcm_substream *vul_substream;	/* active VUL stream */
 };
@@ -432,7 +435,8 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
  */
 static int mt6589_afe_update_afe_on(struct mt6589_afe *afe)
 {
-	bool active = afe->dl1_substream || afe->vul_substream;
+	bool active = READ_ONCE(afe->dl1_substream) ||
+			      READ_ONCE(afe->vul_substream);
 
 	return regmap_update_bits(afe->regmap, AFE_DAC_CON0,
 				 AFE_DAC_CON0_AFE_ON,
@@ -691,11 +695,11 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	 * can see an xrun on the first buffer after a stop/start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_OWNED);
+			   AFE_IRQ_MCU_STATUS_IRQ1);
 	if (ret && !first_err)
 		first_err = ret;
 
-	afe->dl1_substream = NULL;
+	WRITE_ONCE(afe->dl1_substream, NULL);
 	ret = mt6589_afe_update_afe_on(afe);
 	if (ret && !first_err)
 		first_err = ret;
@@ -728,7 +732,7 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 		 * Publish the substream before enabling IRQ1 so the first
 		 * period interrupt cannot race with this assignment.
 		 */
-		afe->dl1_substream = substream;
+		WRITE_ONCE(afe->dl1_substream, substream);
 
 		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
 		ret = regmap_set_bits(afe->regmap, AFE_I2S_CON1,
@@ -890,7 +894,7 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	if (rate_code < 0)
 		return -EINVAL;
 
-	afe->vul_substream = substream;
+	WRITE_ONCE(afe->vul_substream, substream);
 
 	ret = regmap_write(afe->regmap, AFE_VUL_CUR, base);
 	if (ret)
@@ -979,11 +983,11 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	 * fire again on the next start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_OWNED);
+			   AFE_IRQ_MCU_STATUS_IRQ2);
 	if (ret && !first_err)
 		first_err = ret;
 
-	afe->vul_substream = NULL;
+	WRITE_ONCE(afe->vul_substream, NULL);
 	ret = mt6589_afe_update_afe_on(afe);
 	if (ret && !first_err)
 		first_err = ret;
@@ -1062,6 +1066,7 @@ static const struct snd_soc_component_driver mt6589_afe_component = {
 	.hw_params = mt6589_afe_pcm_hw_params,
 	.prepare = mt6589_afe_pcm_prepare,
 	.trigger = mt6589_afe_pcm_trigger,
+	.sync_stop = mt6589_afe_sync_stop,
 	.pointer = mt6589_afe_pcm_pointer,
 	.pcm_new = mt6589_afe_pcm_new,
 };
@@ -1081,6 +1086,7 @@ static const struct snd_soc_component_driver mt6589_afe_component = {
 static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
 	struct mt6589_afe *afe = dev_id;
+	struct snd_pcm_substream *dl1, *vul;
 	unsigned int status;
 	int ret;
 
@@ -1119,13 +1125,25 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 				    "failed to clear AFE IRQ status: %d\n",
 				    ret);
 
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
-		snd_pcm_period_elapsed(afe->dl1_substream);
+	dl1 = READ_ONCE(afe->dl1_substream);
+	vul = READ_ONCE(afe->vul_substream);
 
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && afe->vul_substream)
-		snd_pcm_period_elapsed(afe->vul_substream);
+	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && dl1)
+		snd_pcm_period_elapsed(dl1);
+
+	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && vul)
+		snd_pcm_period_elapsed(vul);
 
 	return IRQ_HANDLED;
+}
+
+static int mt6589_afe_sync_stop(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+
+	synchronize_irq(afe->irq);
+	return 0;
 }
 
 static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
@@ -1198,6 +1216,7 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
+	afe->irq = irq;
 	/*
 	 * Flags 0 is deliberate: it leaves the trigger type exactly as the
 	 * device tree declared it (IRQ_TYPE_LEVEL_LOW for this node), and the
