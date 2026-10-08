@@ -1130,6 +1130,7 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	struct component_match		*match = NULL;
 	void				*protect;
 	int				larb_nr, ret, i;
+	bool				larb_defer = false;
 
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
@@ -1267,7 +1268,8 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 			continue;
 		}
 
-		dev_warn(dev, "larb %d has no driver, skipping\n", i);
+		larb_defer = true;
+		dev_dbg(dev, "larb %d has no driver, deferring\n", i);
 		put_device(&plarbdev->dev);
 		of_node_put(larbnode);
 	}
@@ -1297,9 +1299,14 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	 * nothing here that could translate an address.
 	 */
 	if (!match) {
-		dev_err(dev,
-			"no usable LARB: every listed one is unavailable, nothing to aggregate\n");
-		ret = -ENODEV;
+		if (larb_defer) {
+			dev_dbg(dev, "LARBs are not ready yet, deferring IOMMU probe\n");
+			ret = -EPROBE_DEFER;
+		} else {
+			dev_err(dev,
+				"no usable LARB: every listed one is unavailable, nothing to aggregate\n");
+			ret = -ENODEV;
+		}
 		goto out_dev_unreg;
 	}
 
