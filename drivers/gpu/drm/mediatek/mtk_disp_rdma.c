@@ -123,6 +123,12 @@ struct mtk_disp_rdma_data {
 	 */
 	unsigned int int_enable_mask;
 	/*
+	 * Some old RDMA blocks have a target-specific FIFO configuration rather
+	 * than the generic output-valid threshold used by the common driver.
+	 * Zero means use the generic calculation below.
+	 */
+	u32 fifo_con;
+	/*
 	 * direct_link_no_plane says this RDMA is chained behind a layer
 	 * block that feeds it, and no plane is ever attached to it, so
 	 * mtk_rdma_layer_config() never runs for it.  mtk_rdma_config() then
@@ -438,6 +444,8 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	reg = RDMA_FIFO_UNDERFLOW_EN |
 	      RDMA_FIFO_PSEUDO_SIZE(rdma_fifo_size) |
 	      RDMA_OUTPUT_VALID_FIFO_THRESHOLD(threshold);
+	if (rdma->data->fifo_con)
+		reg = rdma->data->fifo_con;
 	mtk_ddp_write(cmdq_pkt, reg, &rdma->cmdq_reg, rdma->regs, DISP_REG_RDMA_FIFO_CON);
 
 	/*
@@ -828,6 +836,8 @@ static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
 	.size_con1 = 0xfffff,
 	.fmt_convert = rdma_fmt_convert_mt6589,
 	.mem_start_addr_reg = 0x0028,
+	/* ddp_rdma.c:95 / RDMAReset(). */
+	.fifo_con = 0x80f00008,
 	/*
 	 * Unsourced: the data sheet gives MEM_GMC_SETTING_0 a reset value of
 	 * 0x0a0a0a0a, the shared upstream default RDMA_MEM_GMC is 0x40402020,
