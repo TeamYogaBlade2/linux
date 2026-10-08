@@ -211,10 +211,13 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 	if (!RDMA_INT_ALL || !(status & RDMA_INT_ALL))
 		return IRQ_NONE;
 
-	if (!priv->vblank_cb)
-		return IRQ_NONE;
-
-	priv->vblank_cb(priv->vblank_cb_data);
+	/*
+	 * Only FRAME_END denotes a completed display frame.  Register-update,
+	 * frame-start, target-line and error interrupts are diagnostics/events
+	 * for RDMA itself and must not be presented to the CRTC as vblank.
+	 */
+	if (priv->vblank_cb && (status & RDMA_FRAME_END_INT))
+		priv->vblank_cb(priv->vblank_cb_data);
 
 	return IRQ_HANDLED;
 }

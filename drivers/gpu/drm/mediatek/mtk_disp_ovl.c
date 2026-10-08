@@ -1104,16 +1104,17 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	mtk_ddp_write_relaxed(cmdq_pkt, con, &ovl->cmdq_reg, ovl->regs,
 			      DISP_REG_OVL_CON(idx));
 	/*
- * OVL_PITCH counts pixels per line, not bytes.  The stock driver
- * computes the layer address as
+ * OVL_PITCH is the source pitch in bytes on MT6589.  The Lenovo BSP
+ * passes src_pitch directly to DISP_REG_OVL_L<n>_PITCH, while the
+ * layer address uses src_y * src_pitch together with src_x * bpp.
+ * DRM's pending->pitch is already the byte pitch from fb->pitches[0],
+ * so dividing it by cpp would make every line advance too little.
  *
- *	addr + src_x * bpp + src_y * src_pitch
- *
- * scaling src_pitch by a line index while src_x is scaled by
- * bytes-per-pixel, so the pitch can only be in pixels.  The value
- * handed to us is drm's fb->pitches[0], which is in bytes.
+	 * For example, a 1280x800 RGB565 framebuffer has a DRM pitch of
+	 * 2560 bytes; programming 1280 here shears the image after the
+	 * first line.
 	 */
-	pitch_lsb = (pending->pitch / pending->cpp) & GENMASK(15, 0);
+	pitch_lsb = pending->pitch & GENMASK(15, 0);
 
 	mtk_ddp_write_relaxed(cmdq_pkt, pitch_lsb | ignore_pixel_alpha,
 			      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_PITCH(idx));

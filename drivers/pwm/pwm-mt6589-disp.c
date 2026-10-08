@@ -30,6 +30,7 @@
 #define BLS_EN				0x0000
 #define BLS_RST				0x0004
 #define BLS_BLS_SETTING			0x0008
+#define BLS_HIS_SETTING			0x000C
 #define BLS_INTEN			0x0010
 #define BLS_INTSTA			0x0014
 #define BLS_SRC_SIZE			0x0018
@@ -90,20 +91,6 @@
 /* BLS_EN bit definitions */
 #define BLS_EN_PWM_ONLY			BIT(31)			/* Enable PWM, others off */
 
-/*
- * 0x80010001 = BLS_En (bit 0) + HIS_En (bit 16) + PWM_En (bit 31) - the
- * datasheet's own three BLS_EN enables (ch. 45.3, p. 1655), none of them a
- * read-back latch.  This is the value the stock driver writes when BLS is on
- * for display, and it is what it polls for when resuming AAL
- * (aquaris-5 .../dispsys/ddp_bls.c:171 and ddp_drv.c:1722).
- *
- * BLS_En matters: writing only PWM_En (0x80000000, what this driver used to
- * do) leaves the scaling stage disabled, and on the OVL -> COLOR -> BLS ->
- * RDMA0 -> DSI0 path the block RDMA0 fetches from is then not running, so no
- * frame completes.
- */
-#define BLS_EN_DISPLAY			0x80010001
-
 /* BLS_PWM_DUTY format */
 #define PWM_DUTY_MIN_LEVEL		BIT(19)			/* Lower bound = 1 */
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
@@ -117,7 +104,6 @@ struct mt6589_bls_pwm {
 	unsigned int max_level;
 	struct reset_control *rstc;
 	bool clk_enabled;
-	bool bls_enabled;
 };
 
 static inline struct mt6589_bls_pwm *to_mt6589_bls_pwm(struct pwm_chip *chip)
@@ -207,24 +193,18 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
 
-		/* The backlight PWM and the data path share BLS_EN, so
-		 * PWM-only here would disable the stage the pipeline needs.
-		 */
-		writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
-		bls->bls_enabled = true;
+		/* Lenovo's MT6589 BSP uses BLS as PWM-only on this display path. */
+		writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
 	} else {
 		/*
-		 * Brightness zero stops the PWM duty but must leave the data
-		 * path alone: writing 0 to BLS_EN would take the block out of
-		 * the display pipeline, so a merely dark panel would also stop
-		 * passing frames.
+		 * This path is PWM-only, so disabling BLS_EN only disables the
+		 * backlight PWM; it does not remove a required display processing
+		 * stage. This matches disp_bls_config() in the Lenovo BSP.
 		 */
 		writel(0x0, bls->base + BLS_PWM_DUTY);
+		writel(0x0, bls->base + BLS_EN);
 
-		if (bls->bls_enabled) {
-			writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
-		} else if (bls->clk_enabled) {
-			writel(0x0, bls->base + BLS_EN);
+		if (bls->clk_enabled) {
 			clk_disable_unprepare(bls->clk_main);
 			bls->clk_enabled = false;
 		}
@@ -333,21 +313,16 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	writel(0x0, bls->base + BLS_INTEN);
 
 	/*
-	 * BLS_HIS_SETTING at +0x0c is deliberately left alone.  It exists and
-	 * is documented (datasheet ch. 45.3, p. 1653) but only holds
-	 * Histogram_Mode and Histogram_Auto_Clear, and the histogram engine
-	 * itself is off because BLS_EN.HIS_En is not part of
-	 * BLS_EN_DISPLAY's data path use here.  The stock driver does write
-	 * +0x0c, but with the value 0x3 (ddp_bls.c:366) whose \"w/o inverse
-	 * gamma\" comment does not match this register's fields.
+	 * Match the Lenovo BSP's histogram register initialization even though
+	 * the histogram engine remains disabled by PWM-only BLS_EN.
 	 */
+	writel(0x00000003, bls->base + BLS_HIS_SETTING);
 
 	/*
-	 * Start the block as part of the display pipeline rather than leaving
-	 * it off, or setting only the PWM-only value.
+	 * BLS is used only as a PWM generator on this board.  The downstream
+	 * driver leaves the display-processing bit disabled.
 	 */
-	writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
-	bls->bls_enabled = true;
+	writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
 
 	clk_disable_unprepare(bls->clk_main);
 
@@ -437,8 +412,7 @@ void mt6589_bls_ddp_start(struct device *dev)
 	if (!bls)
 		return;
 
-	writel(BLS_EN_DISPLAY, bls->base + BLS_EN);
-	bls->bls_enabled = true;
+	writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
@@ -450,7 +424,6 @@ void mt6589_bls_ddp_stop(struct device *dev)
 		return;
 
 	writel(0x0, bls->base + BLS_EN);
-	bls->bls_enabled = false;
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_stop);
 
