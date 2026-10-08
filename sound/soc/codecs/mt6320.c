@@ -415,6 +415,11 @@ static int mt6320_analog_idle(struct mt6320_codec_priv *priv)
 	unsigned int cid;
 	int ret;
 
+	/* AUDCLKGEN_CFG0 bit 0 is the downlink SRC clock; no stream owns it now. */
+	ret = regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0, BIT(0));
+	if (ret)
+		return ret;
+
 	ret = regmap_read(priv->regmap, MT6320_CID, &cid);
 	if (ret)
 		return ret;
