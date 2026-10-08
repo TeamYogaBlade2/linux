@@ -693,7 +693,7 @@ static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
 	return 0;
 }
 
-static void mt6628_roc_work(struct work_struct *work)
+void mt6628_roc_work(struct work_struct *work)
 {
 	struct mt6628_wlan *wl = container_of(to_delayed_work(work),
 					     struct mt6628_wlan, roc_work);
