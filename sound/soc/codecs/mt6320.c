@@ -149,6 +149,13 @@
  */
 #define MT6320_ADCCLK_ENABLE		BIT(1)
 
+/* B8000 vendor AnalogSetMux() encodings for the internal dual microphones. */
+#define MT6320_AUDPREAMP_L_INPUT_SEL	GENMASK(4, 2)
+#define MT6320_AUDPREAMP_R_INPUT_SEL	GENMASK(7, 5)
+#define MT6320_AUDPREAMP_L_MIC1		(1U << 2)
+#define MT6320_AUDPREAMP_R_MIC3		(3U << 5)
+#define MT6320_AUDPREAMP_POWER		GENMASK(1, 0)
+
 /*
  * AUD_NCP0 (0x071A) carries the audio LDO enables in bits [14:13]:
  * DA_HCLDO_EN_VA33 and DA_LCLDO_EN_VA33 (upmu_hw.h:4328-4331).  These are
@@ -167,40 +174,7 @@
  */
 #define MT6320_AFUNC_AUD_CON2		MT6320_AFE_AFUNC_AUD_CON2
 
-/*
- * AUXADC channel select is CHSEL[10:7], and it lives in AUXADC_CON1 (0x0542),
- * not in CON0: the vendor setter upmu_set_rg_auxadc_chsel() wraps the
- * RG_AUXADC_CHSEL mask 0xF / shift 7 pair around a write to AUXADC_CON1
- * (mediatek/platform/mt6589/lk/mt_pmic.c:26752-26766, and the same in
- * kernel/drivers/power/upmu_common.c:20642), and the IIO AUXADC driver here
- * programs the same field in the same register.
- *
- * CON0 (0x0540) is a different register entirely - it holds SPL_NUM[11:7] and
- * AVG_NUM[6:4] plus the BUF_PWD_ON/B bits that the IIO driver sets per read,
- * so it must not be used for the channel select, and must not be zeroed
- * wholesale either.
- *
- * Channel 5 is the accessory-detect key voltage, the same one the IIO AUXADC
- * driver uses; select it here so the audio mic path does not depend on that
- * driver having run first.
- */
-#define MT6320_AUXADC_CON1_CHSEL	GENMASK(10, 7)
-#define MT6320_AUXADC_CON1_CHSEL_ACCDET	0x5
-/*
- * Mic bias / AUXADC switch.
- *
- * This board is built with ACCDET_28V_MODE (see the vendor
- * accdet_custom_def.h), where the downstream driver does not use the
- * ACCDET_RSV encoding at all: it drives AUDENCSPARE_CON0 to 0x01 to enable
- * the switch and 0x00 to disable it.  The 0x1090 value is the 1.9 V path
- * and selects RG_AUDACCDETVIN1PULLLOW, which is not what this hardware
- * wants.
- *
- * MT6320_AUDENCSPARE_CON0 itself comes from <linux/mfd/mt6320/registers.h>;
- * only the two values are local.
- */
-#define MT6320_ACCDET_MICBIAS_ENABLE	0x01
-#define MT6320_ACCDET_MICBIAS_DISABLE	0x00
+/* AUXADC and AUDENCSPARE_CON0 are owned by the ACCDET/AUXADC drivers. */
 
 /*
  * Headphone amplifier trim lives in the efuse data-out words.  The
@@ -1126,64 +1100,64 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		/*
-		 * The analog input multiplexer is NOT programmed here.
-		 *
-		 * AUXADC_CON1.CHSEL below does not select the capture input.
-		 * It picks which auxiliary ADC (ACC_DET, TP, etc.) the
-		 * accessory-detection logic reads; this codec has no separate
-		 * ACCDET cell, so it is parked on the ACCDET channel and
-		 * plays no part in capture.  The register that does select the
-		 * analog mic input is AUDPREAMP_CON0 (0x071c), in the two
-		 * 3-bit fields RG_AUDPREAMPLINPUTSEL (mask 0x7, shift 2) for
-		 * the left channel and RG_AUDPREAMPRINPUTSEL (mask 0x7, shift
-		 * 5) for the right - positions confirmed from the vendor
-		 * setters upmu_set_rg_audpreamplinputsel() /
-		 * upmu_set_rg_audpreamprinputsel(), which wrap those exact
-		 * mask/shift pairs around a write to AUDPREAMP_CON0.
-		 *
-		 * The *encoding* of those three bits - which value selects the
-		 * headset mic, which the wired mic, and so on - is not
-		 * establishable from anything available here, so no value is
-		 * written.  The MT6589 data sheet states of the MT6320 analog
-		 * blocks that "these parts are not included in the scope of
-		 * this document and will be covered in MT6320 spec" (p.791,
-		 * Chapter 16); that MT6320 spec is not in this tree, and the
-		 * vendor setters have no callers anywhere in it, not even from
-		 * the vendor audio driver, so no in-tree code exercises them
-		 * and none of them reveals the encoding.  The register's reset
-		 * value is likewise unpublished.
-		 *
-		 * So capture is left running whatever the reset default of
-		 * AUDPREAMP_CON0 selects.  This is a real limitation, not a
-		 * verified-working input path: if the board's mic is not the
-		 * reset-selected one, capture records the wrong analog source
-		 * (or a floating one) while still looking healthy to ALSA.
-		 * Adding a selector needs the MT6320 spec, not a guess - an
-		 * invented bit value here would silently mux to the wrong pin.
-		 *
-		 * Mic bias / accessory-detect switch first, then the vendor's
-		 * capture power-up sequence, following
-		 * AudioPlatformDevice::AnalogOpen() for
-		 * DEVICE_IN_ADC1/DEVICE_IN_ADC2.
-		 *
-		 * The order and the usleep(600) gaps are load-bearing, not
-		 * cosmetic: after enabling the UL FIFO the vendor writes the
-		 * uplink SRC rate, clears it, waits, writes the rate back,
-		 * clears the SRC, and re-enables it.  That clear/reload cycle
-		 * is what latches the sample rate into the SRC after its clock
-		 * domain has just been started; collapsing the sequence into a
-		 * single write leaves the uplink SRC running on whatever rate
-		 * was previously latched, i.e. on the wrong rate or not at all.
+		 * Configure the B8000 internal dual-mic analog front-end using the
+		 * vendor AnalogOpen(DEVICE_IN_ADC1/ADC2) sequence. The active Linux
+		 * capture DAI is mono, so MIC1 is the left source; MIC3 is also
+		 * selected on the right to preserve the vendor dual-mic setup.
 		 */
-		ret = regmap_update_bits(priv->regmap, MT6320_AUXADC_CON1,
-					 MT6320_AUXADC_CON1_CHSEL,
-					 FIELD_PREP(MT6320_AUXADC_CON1_CHSEL,
-						    MT6320_AUXADC_CON1_CHSEL_ACCDET));
+		ret = regmap_write(priv->regmap, MT6320_AUDNVREGGLB_CFG0, 0x000c);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
-				   MT6320_ACCDET_MICBIAS_ENABLE);
+		ret = regmap_write(priv->regmap, MT6320_AUDLDO_CFG0, 0x0d92);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUD_NCP0,
+					 0x9000, 0x9000);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
+					 MT6320_AUDPREAMP_L_INPUT_SEL,
+					 MT6320_AUDPREAMP_L_MIC1);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
+					 MT6320_AUDPREAMP_R_INPUT_SEL,
+					 MT6320_AUDPREAMP_R_MIC3);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMP_CON0,
+					 MT6320_AUDPREAMP_POWER,
+					 MT6320_AUDPREAMP_POWER);
+		if (ret)
+			return ret;
+
+		usleep_range(900, 1100);
+
+		ret = regmap_write(priv->regmap, MT6320_AUDADC_CON0, 0x0093);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_NCP_CLKDIV_CON0,
+					 0x102b, 0x102b);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(priv->regmap, MT6320_NCP_CLKDIV_CON1, 0x0000);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDDIGMI_CON0,
+					 0x0180, 0x0180);
+		if (ret)
+			return ret;
+
+		ret = regmap_update_bits(priv->regmap, MT6320_AUDPREAMPGAIN_CON0,
+					 0x0033, 0x0033);
 		if (ret)
 			return ret;
 
@@ -1279,32 +1253,7 @@ static int mt6320_mic_event(struct snd_soc_dapm_widget *w,
 		return regmap_write(priv->regmap, MT6320_AFE_UL_SRC_CON0_L,
 				    0x0201);
 	case SND_SOC_DAPM_POST_PMD:
-		/*
-		 * The vendor has no explicit capture power-down in this file,
-		 * so this only undoes what the pre-PMU path asserted: the mic
-		 * bias switch and the ADC clock that the pre-PMU sequence
-		 * enabled via AUDCLKGEN_CFG0 bit 1.  Leaving that clock on
-		 * would hold the ADC domain powered between streams.
-		 *
-		 * The AUXADC channel select is deliberately left as the
-		 * pre-PMU path set it.  CHSEL is a mux that costs no power
-		 * and no current, CON1 is shared state that the IIO AUXADC
-		 * driver reprograms on every read, and the register's reset
-		 * value is not published - so "restoring" it would mean
-		 * inventing a value, and the previous code's regmap_write()
-		 * of the whole of AUXADC_CON0 was worse than useless: that
-		 * is the register holding SPL_NUM[11:7], AVG_NUM[6:4] and
-		 * the BUF_PWD_ON/B bits the IIO driver sets up per read
-		 * (vendor setters upmu_set_rg_spl_num(), upmu_set_rg_avg_num(),
-		 * upmu_set_rg_buf_pwd_on(), upmu_set_rg_buf_pwd_b() all write
-		 * AUXADC_CON0), so every capture stop wiped the state the
-		 * IIO driver had just put there.
-		 */
-		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
-				   MT6320_ACCDET_MICBIAS_DISABLE);
-		if (ret)
-			return ret;
-
+		/* ACCDET/AUXADC shared state is owned by the ACCDET driver. */
 		return regmap_clear_bits(priv->regmap, MT6320_AUDCLKGEN_CFG0,
 					 MT6320_ADCCLK_ENABLE);
 	}
