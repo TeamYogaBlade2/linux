@@ -36,7 +36,7 @@ jobs:
 
       - name: Build
         run: |
-          make -j"$(nproc)"
+          make -j"$(nproc)" CC="ccache clang"
 
   dtbs_check:
     name: dtbs_check
