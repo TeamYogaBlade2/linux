@@ -49,6 +49,7 @@
 #define AFE_DAC_CON0_VUL_ON	BIT(3)
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
+#define AFE_DAC_CON1_DL1_DATA	BIT(21)
 #define AFE_DAC_CON1_VUL_RATE	GENMASK(19, 16)
 /*
  * AFE_DAC_CON1 is a bank of mode fields, one 4-bit slice per memory
@@ -431,38 +432,20 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
  * as DAPM walks the graph, matching what the stock driver does between
  * SetMEMIFEnable() and the stream teardown.
  *
- * AFE_ON (AFE_DAC_CON0 bit 0) is written from two places - here and from
- * mt6589_afe_pcm_trigger() / mt6589_afe_stop() - so it is worth saying why
- * that does not need a reference count, because the two links share one AFE
- * component and playback can indeed be streaming while capture starts.
- *
- * What decides it is the order ASoC runs the two in.  soc_pcm_trigger()
- * walks the hops of snd_soc_trigger_order SND_SOC_TRIGGER_ORDER_DEFAULT
- * forwards on START and backwards on STOP - the table is at
- * sound/soc/soc-pcm.c:1185-1195, the forward walk at 1231-1238 and the
- * backward walk at 1262-1269 - and that order is link -> component -> DAI.
- * So:
- *
- *	START: the DAPM power-up (this handler, PRE_PMU) runs *before* the
- *	       component's trigger(), which then sets AFE_ON again.  The
- *	       second write is redundant, not harmful.
- *	STOP:  mt6589_afe_stop() clears AFE_ON from the DAI trigger, which
- *	       runs *before* this handler's POST_PMD, which clears it again.
- *
- * Both directions therefore drop the AFE out in a defined order with no
- * window in which a still-running memory interface has the AFE gated off
- * underneath it.  The one case that could look dangerous - the VUL widget
- * powering down while DL1 is streaming - needs the VUL POST_PMD to run
- * without the DL1 stream also stopping, and it cannot: POST_PMD only runs
- * when DAPM decides the VUL widget has no active source, which happens as
- * part of tearing down the capture stream, and that teardown does not touch
- * the DL1 widget or the DL1 trigger.
- *
- * A reference count here would guard a state the ordering above already
- * prevents, and could not be exercised without hardware.  If a future
- * change adds a playback path that is *not* ordered behind the same DAPM
- * walk, revisit this.
+ * AFE_ON (AFE_DAC_CON0 bit 0) is global to the AFE.  Playback and capture
+ * use independent memory interfaces, so either one may remain active while
+ * the other stops.  Derive the shared enable from the two stream pointers
+ * rather than clearing it unconditionally from either stop path.
  */
+static int mt6589_afe_update_afe_on(struct mt6589_afe *afe)
+{
+	bool active = afe->dl1_substream || afe->vul_substream;
+
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+				 AFE_DAC_CON0_AFE_ON,
+				 active ? AFE_DAC_CON0_AFE_ON : 0);
+}
+
 static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 				  struct snd_kcontrol *kcontrol, int event)
 {
@@ -512,8 +495,7 @@ static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
 				return ret;
 		}
 
-		return regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-					 AFE_DAC_CON0_AFE_ON);
+		return mt6589_afe_update_afe_on(afe);
 	}
 
 	return 0;
@@ -673,7 +655,10 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (ret)
 		return ret;
 
-	return 0;
+	/* AFE_DAC_CON1 bit 21 selects mono (1) versus stereo (0) DL1 data. */
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_DL1_DATA,
+				 runtime->channels == 1 ? AFE_DAC_CON1_DL1_DATA : 0);
 }
 
 static int mt6589_afe_stop(struct mt6589_afe *afe)
@@ -705,11 +690,6 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-				AFE_DAC_CON0_AFE_ON);
-	if (ret && !first_err)
-		first_err = ret;
-
 	/*
 	 * Ack a period interrupt that arrived after IRQ1 was disabled above.
 	 * Leaving it latched makes it fire again as soon as the next stream
@@ -723,6 +703,9 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 		first_err = ret;
 
 	afe->dl1_substream = NULL;
+	ret = mt6589_afe_update_afe_on(afe);
+	if (ret && !first_err)
+		first_err = ret;
 	return first_err;
 }
 
@@ -953,9 +936,10 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	if (ret)
 		return ret;
 
-	/* One VUL buffer holds a single interleaved stream. */
-	return regmap_set_bits(afe->regmap, AFE_DAC_CON1,
-			       AFE_DAC_CON1_VUL_R_MONO);
+	/* Match VUL_DATA/VUL_R_MONO to the ALSA channel count; mono uses L. */
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_VUL_DATA | AFE_DAC_CON1_VUL_R_MONO,
+				 runtime->channels == 1 ? AFE_DAC_CON1_VUL_DATA : 0);
 }
 
 static int mt6589_afe_vul_start(struct snd_soc_component *comp,
@@ -1061,6 +1045,9 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 		first_err = ret;
 
 	afe->vul_substream = NULL;
+	ret = mt6589_afe_update_afe_on(afe);
+	if (ret && !first_err)
+		first_err = ret;
 	return first_err;
 }
 

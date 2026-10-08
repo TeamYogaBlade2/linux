@@ -1390,7 +1390,7 @@ static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
 	{ "Speaker Driver", NULL, "DAC" },
 	{ "Speaker Driver", NULL, "Analog" },
 	{ "Speaker", NULL, "Speaker Driver" },
-	{ "Mic Bias", NULL, "ADC" },
+	{ "ADC", NULL, "Mic Bias" },
 	{ "VUL Capture", NULL, "ADC" },
 };
 
