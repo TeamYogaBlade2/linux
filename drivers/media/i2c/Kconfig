@@ -1791,4 +1791,3 @@ config VIDEO_MAX96717
 endmenu
 
 endif # VIDEO_DEV
-
