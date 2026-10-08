@@ -670,9 +670,6 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	if (MTK_SCPD_CAPS(pd, MTK_SCPD_MODEM_PWRSEQ))
 		ret = scpsys_modem_pwrseq_on(pd);
 	else
-		if (MTK_SCPD_CAPS(pd, MTK_SCPD_MODEM_PWRSEQ))
-		ret = scpsys_modem_pwrseq_on(pd);
-	else
 		ret = scpsys_ctl_pwrseq_on(pd);
 
 	/*
@@ -1319,6 +1316,21 @@ static int scpsys_probe(struct platform_device *pdev)
 	if (IS_ERR(scpsys->base)) {
 		dev_err(dev, "no regmap available\n");
 		return PTR_ERR(scpsys->base);
+	}
+
+	/*
+	 * MT6589 protects SPM power-control registers behind a project-code
+	 * write-enable key.  The vendor spm_module_init() performs this once
+	 * before the non-CPU MTCMOS helpers are used.  There is no separate SPM
+	 * driver in this tree, so do the equivalent setup here before any power
+	 * domain state is touched.
+	 */
+	if (soc == &mt6589_scpsys_data) {
+		ret = regmap_write(scpsys->base, 0x0000,
+				   (0x0b16 << 16) | BIT(0));
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to enable MT6589 SPM register control\n");
 	}
 
 	if (of_find_property(np, "access-controllers", NULL))
