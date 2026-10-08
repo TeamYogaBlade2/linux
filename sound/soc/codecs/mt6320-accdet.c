@@ -757,6 +757,7 @@ static void mt6320_accdet_remove(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv = platform_get_drvdata(pdev);
 	int ret = 0;
+	int bias_ret;
 
 	cancel_delayed_work_sync(&priv->key_work);
 	cancel_delayed_work_sync(&priv->eint_work);
@@ -767,11 +768,17 @@ static void mt6320_accdet_remove(struct platform_device *pdev)
 	priv->plugged = false;
 	priv->last_state = 3;
 	mt6320_accdet_report(priv, 0);
+
+	/* The switch is ACCDET-owned and must be off even on driver removal. */
+	bias_ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				MT6320_ACCDET_MICBIAS_DISABLE);
+	if (!ret)
+		ret = bias_ret;
 	mutex_unlock(&priv->lock);
 
 	if (ret)
 		dev_err(&pdev->dev,
-			"failed to disable ACCDET during remove: %d\n", ret);
+			"failed to clean up ACCDET during remove: %d\n", ret);
 }
 
 static const struct of_device_id mt6320_accdet_of_match[] = {
