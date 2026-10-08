@@ -140,7 +140,8 @@
 #define AFE_IRQ_MCU_STATUS	0x03a4
 #define AFE_IRQ_MCU_STATUS_IRQ1	BIT(0)
 #define AFE_IRQ_MCU_STATUS_IRQ2	BIT(1)
-#define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
+#define AFE_IRQ_MCU_STATUS_MASK	(AFE_IRQ_MCU_STATUS_IRQ1 |\
+					 AFE_IRQ_MCU_STATUS_IRQ2)
 #define AFE_IRQ_MCU_CLR		0x03a8
 /*
  * The only two bits of AFE_IRQ_CLR this driver may touch: bit 0
