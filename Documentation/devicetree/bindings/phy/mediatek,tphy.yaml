@@ -361,7 +361,7 @@ examples:
         #size-cells = <1>;
         ranges;
 
-        u2port0: usb-phy@11220800 {
+        usb-phy@11220800 {
             reg = <0x11220800 0x0100>;
             clocks = <&topckgen CLK_TOP_UNIVPLL_D26>;
             clock-names = "ref";
