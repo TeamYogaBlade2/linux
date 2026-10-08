@@ -823,20 +823,31 @@ static s32 mtk_dsi_wait_for_irq_done(struct mtk_dsi *dsi, u32 irq_flag,
 static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
 {
 	struct mtk_dsi *dsi = dev_id;
-	u32 status, tmp;
+	u32 status, tmp = 0;
+	int ret;
 	u32 flag = LPRX_RD_RDY_INT_FLAG | CMD_DONE_INT_FLAG | VM_DONE_INT_FLAG;
 
 	status = readl(dsi->regs + DSI_INTSTA) & flag;
 
 	if (status) {
-		do {
-			mtk_dsi_mask(dsi, DSI_RACK, RACK, RACK);
-			tmp = readl(dsi->regs + DSI_INTSTA);
-		} while (tmp & DSI_BUSY);
+		/*
+		 * DSI_BUSY is a status bit.  Never spin on it indefinitely from
+		 * hard-IRQ context: a wedged engine would otherwise keep a CPU in
+		 * this handler forever and take the system down with it.
+		 */
+		mtk_dsi_mask(dsi, DSI_RACK, RACK, RACK);
+		ret = readl_poll_timeout_atomic(dsi->regs + DSI_INTSTA, tmp,
+						!(tmp & DSI_BUSY), 1, 1000);
+		if (ret)
+			dev_warn_ratelimited(dsi->host.dev,
+					     "DSI IRQ: engine stayed busy for 1 ms (INTSTA=0x%08x)\n",
+					     tmp);
 
 		mtk_dsi_mask(dsi, DSI_INTSTA, status, 0);
-		mtk_dsi_irq_data_set(dsi, status);
-		wake_up_interruptible(&dsi->irq_wait_queue);
+		if (!ret) {
+			mtk_dsi_irq_data_set(dsi, status);
+			wake_up_interruptible(&dsi->irq_wait_queue);
+		}
 	}
 
 	return IRQ_HANDLED;
