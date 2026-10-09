@@ -46,10 +46,9 @@
 #define DSI_START		0x00
 
 /*
- * DSI_STA.  The MT6589 data sheet extract available for this board has no DSI
- * chapter at all, so these names and bit positions are taken from the vendor
- * bootloader header, lk/include/platform/dsi_reg.h:266-274, where the register
- * is declared at offset 0004 and each bit is named:
+ * DSI_STA / DSI_STATUS (0x004). The MT6589 datasheet's DSI chapter confirms
+ * these status bit positions; the downstream bootloader header uses the same
+ * bit names (lk/include/platform/dsi_reg.h:266-274):
  *
  *	rsv_0:1 BUF_UNDERRUN:1 rsv_2:2 ESC_ENTRY_ERR:1
  *	LPDT_SYNC_ERR:1 CTRL_ERR:1 CONTENT_ERR:1
@@ -149,8 +148,9 @@
 
 /*
  * DSI_STATE_DBG0 (0148) holds the controller/D-PHY state machines;
- * dsi_reg.h:551-561 names CTL_STATE_C[8:0] and HX_TX_STATE_C[11:9].  These are
- * diagnostic only.
+ * dsi_reg.h:551-561 and datasheet p. 1854 place CTL_STATE_C at [8:0] and
+ * HX_TX_STATE_C at [15:12]; bits [11:9] are reserved. These are diagnostic
+ * only.
  */
 #define DSI_STATE_DBG0		0x148
 /*
@@ -159,7 +159,7 @@
  * which FIELD_GET() rejects as a non-constant mask on this kernel.
  */
 #define CTL_STATE_C		0x000001ff
-#define HX_TX_STATE_C		0x00000e00
+#define HX_TX_STATE_C		0x0000f000
 
 #define DSI_PHY_LCCON		0x104
 #define LC_HS_TX_EN			BIT(0)

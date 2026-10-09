@@ -275,6 +275,8 @@ static const u32 mt8195_formats[] = {
 struct mtk_disp_ovl_data {
 	unsigned int addr;
 	unsigned int gmc_bits;
+	/* OVL RDMA FIFO capacity, in 16-byte units; zero if unspecified. */
+	unsigned int gmc_fifo_size;
 	unsigned int layer_nr;
 	bool fmt_rgb565_is_0;
 	bool smi_id_en;
@@ -865,17 +867,16 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 	gmc_thrshd_h = GMC_THRESHOLD_HIGH >>
 		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
 	/*
- * OVL_RDMA0_MEM_GMC_SETTING holds RDMA0_EN_THRD in bits [9:0] and
- * RDMA0_DISEN_THRD in bits [25:16] - two 10-bit fields in units of
- * 16 bytes, and the data sheet requires EN_THRD to be *smaller*
- * than DISEN_THRD.
- *
- * Both branches above put the high threshold in both fields, so the
- * two were equal and the requirement was violated; and the 8-bit
- * branch packed four 8-bit values into 32 bits, which is a different
- * layout from this one. Set the two fields from the two thresholds,
- * masked to the field width.
+	 * The GMC thresholds are 10-bit fields in units of 16 bytes.
+	 * DISEN_THRD must be greater than EN_THRD but smaller than FIFO_SIZE.
+	 * On MT6589 the default FIFO_SIZE is 256, while the generic high
+	 * threshold calculation also produces 256. Clamp it to 255 to keep
+	 * the programmed threshold within the hardware's documented limits.
 	 */
+	if (ovl->data->gmc_fifo_size &&
+	    gmc_thrshd_h >= ovl->data->gmc_fifo_size)
+		gmc_thrshd_h = ovl->data->gmc_fifo_size - 1;
+
 	gmc_value = (gmc_thrshd_l & GENMASK(9, 0)) |
 		    ((gmc_thrshd_h & GENMASK(9, 0)) << 16);
 	mtk_ddp_write(cmdq_pkt, gmc_value,
@@ -1429,6 +1430,7 @@ static const struct mtk_disp_ovl_data mt8167_ovl_driver_data = {
 static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.addr = DISP_REG_OVL_ADDR_MT2701,
 	.gmc_bits = 10,
+	.gmc_fifo_size = 256,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
