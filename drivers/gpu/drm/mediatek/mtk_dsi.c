@@ -266,6 +266,7 @@ struct mtk_dsi_driver_data {
 	 * SoC, so it must stay off unless a part is known to have it.
 	 */
 	bool has_mem_conti;
+	bool has_lane_clk;
 };
 
 struct mtk_dsi {
@@ -281,6 +282,7 @@ struct mtk_dsi {
 
 	struct clk *engine_clk;
 	struct clk *digital_clk;
+	struct clk *lane_clk;
 	struct clk *hs_clk;
 
 	u32 data_rate;
@@ -926,6 +928,15 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		goto err_disable_engine_clk;
 	}
 
+	/* MT6589 has a separate gate for the digital DSI data-lane logic. */
+	if (dsi->lane_clk) {
+		ret = clk_prepare_enable(dsi->lane_clk);
+		if (ret < 0) {
+			dev_err(dev, "Failed to enable lane clock: %d\n", ret);
+			goto err_disable_digital_clk;
+		}
+	}
+
 	mtk_dsi_enable(dsi);
 
 	/*
@@ -955,6 +966,8 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	mtk_dsi_set_interrupt_enable(dsi);
 
 	return 0;
+err_disable_digital_clk:
+	clk_disable_unprepare(dsi->digital_clk);
 err_disable_engine_clk:
 	clk_disable_unprepare(dsi->engine_clk);
 err_phy_power_off:
@@ -992,6 +1005,8 @@ static void mtk_dsi_poweroff(struct mtk_dsi *dsi)
 
 	clk_disable_unprepare(dsi->engine_clk);
 	clk_disable_unprepare(dsi->digital_clk);
+	if (dsi->lane_clk)
+		clk_disable_unprepare(dsi->lane_clk);
 
 	phy_power_off(dsi->phy);
 
@@ -1475,6 +1490,13 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 	if (IS_ERR(dsi->digital_clk))
 		return dev_err_probe(dev, PTR_ERR(dsi->digital_clk),
 				     "Failed to get digital clock\n");
+
+	if (dsi->driver_data->has_lane_clk) {
+		dsi->lane_clk = devm_clk_get(dev, "lane");
+		if (IS_ERR(dsi->lane_clk))
+			return dev_err_probe(dev, PTR_ERR(dsi->lane_clk),
+					     "Failed to get lane clock\n");
+	}
 
 	dsi->hs_clk = devm_clk_get(dev, "hs");
 	if (IS_ERR(dsi->hs_clk))

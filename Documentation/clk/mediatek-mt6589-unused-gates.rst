@@ -32,7 +32,7 @@ consumers; they are reached through the gates below them.
 Display
 =======
 
-Defined in ``clk-mt6589-disp.c``, unreferenced by any node.
+The following gates are not referenced by any node.
 
 * ``CLK_DISP0_SCL`` (``disp0_scl``) - the display scaler.  MT6589 drives its
   panel through the MIPI DSI path, and nothing in this tree uses a scaler
@@ -43,10 +43,6 @@ Defined in ``clk-mt6589-disp.c``, unreferenced by any node.
   correction block.
 * ``CLK_DISP0_ROT_ENGINE`` / ``CLK_DISP0_ROT_SMI`` - the hardware rotator.
   The MT6589 has no rotator in use here.
-* ``CLK_DISP1_DSI_DIGITAL_LANE`` (``disp1_dsi_digital_lane``) - note this is a
-  *different* ID from ``CLK_DISP1_DSI_DIGITAL``, which the ``mt6589-dsi``
-  node does reference (mt6589.dtsi).  Reconciling those two is display-driver
-  work and out of scope here.
 * ``CLK_DISP1_LCD``, ``CLK_DISP1_SLCD``, ``CLK_DISP1_DPI0``, ``CLK_DISP1_DPI1``,
   ``CLK_DISP1_DBI_ENGINE``, ``CLK_DISP1_DBI_OUTPUT``, ``CLK_DISP1_DBI_SMI`` -
   the parallel LCD output paths (SLCD, DPI, DBI).  The Lenovo Blade drives

@@ -1826,8 +1826,9 @@
 			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&dispsys CLK_DISP1_DSI_ENGINE>,
 				 <&dispsys CLK_DISP1_DSI_DIGITAL>,
-				 <&mipi_tx0>;
-			clock-names = "engine", "digital", "hs";
+				 <&mipi_tx0>,
+				 <&dispsys CLK_DISP1_DSI_DIGITAL_LANE>;
+			clock-names = "engine", "digital", "hs", "lane";
 			phys = <&mipi_tx0>;
 			phy-names = "dphy";
 			resets = <&dispsys MT6589_DISP_DSI_RST>;
