@@ -129,6 +129,8 @@ OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 #define OVL_CONST_BLEND					BIT(28)
 #define DISP_REG_OVL_RDMA_CTRL(n)		(0x00c0 + 0x20 * (n))
 #define DISP_REG_OVL_RDMA_GMC(n)		(0x00c8 + 0x20 * (n))
+#define DISP_REG_OVL_RDMA_FIFO_CTRL(n)		(0x00d0 + 0x20 * (n))
+#define DISP_REG_OVL_RDMA0_DBG			0x024c
 #define DISP_REG_OVL_CLRFMT_EXT			0x02d0
 /*
  * OVL_FLOW_CTRL_DBG, the overlay's flow-control debug port
@@ -382,6 +384,7 @@ struct mtk_disp_ovl {
 	/* Rate limiting for a fault that persists indefinitely. */
 	unsigned int			intsta_reported;
 	bool				layer_dbg_done;
+	bool				rdma_err_dbg_done;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -414,6 +417,32 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	 */
 	if (priv->data->int_all_mask && !(reg & priv->data->int_all_mask))
 		return IRQ_NONE;
+
+	/*
+	 * The generic interrupt line tells us that an OVL layer RDMA ended
+	 * abnormally, but not whether the fetch stopped at the memory port or
+	 * at OVL's output handshake. Capture both sides once, at the first fault,
+	 * before acknowledging the status. Do not dump every frame: this error
+	 * repeats at the display refresh rate and pstore is very small.
+	 */
+	if ((reg & priv->data->rdma0_eof_abn_bit) &&
+	    !priv->rdma_err_dbg_done) {
+		priv->rdma_err_dbg_done = true;
+		pr_err("OVL RDMA0 snapshot: flow=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
+		       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
+		       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+		       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
+		       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
+		       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
+		       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
+		       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
+		       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
+		       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
+		       readl(priv->regs + DISP_REG_OVL_CON(0)),
+		       readl(priv->regs + DISP_REG_OVL_SRC_CON),
+		       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
+		       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
+	}
 
 	/*
  * Report OVL_STA alongside the interrupt status.  Bit 0 is OVL_RUN

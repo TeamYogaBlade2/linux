@@ -54,9 +54,12 @@ static struct regmap *infracfg_regmap;
  * modules do that cannot be established from the datasheet, and getting it
  * wrong shows up as random hangs rather than as a clean failure. So unlike
  * the Cortex-A7 DCM below, this stays a per-idle-entry enable that is undone
- * on the way out, and it is switchable at runtime.
+ * way out, and it is switchable at runtime. Keep it disabled by default until
+ * the AXI clients' idle handshakes have been validated on the target: a hang
+ * here leaves the CPU stalled in cpuidle and makes RCU stall reports obscure
+ * unrelated driver failures. Enable it explicitly for testing once validated.
  */
-static bool bus_dcm_enabled = true;
+static bool bus_dcm_enabled;
 module_param(bus_dcm_enabled, bool, 0644);
 MODULE_PARM_DESC(bus_dcm_enabled,
 		 "Enable top AXI fabric (hf_faxi_ck) DCM around idle entries");

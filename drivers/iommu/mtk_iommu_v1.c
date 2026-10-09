@@ -455,9 +455,19 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 	struct mtk_iommu_v1_domain *dom;
 	u32 int_state, regval, fault_iova, fault_pa;
 	unsigned int fault_larb, fault_port;
+	int report_ret;
 
-	/* The domain may not be ready yet; just clear the interrupt */
+	/* Preserve fault evidence even if the domain is not ready yet. */
 	if (!data->m4u_dom) {
+		int_state = readl_relaxed(core->base + REG_MMU_FAULT_ST);
+		fault_iova = readl_relaxed(core->base + REG_MMU_FAULT_VA) &
+			    F_MMU_FAULT_VA_MSK;
+		fault_pa = readl_relaxed(core->base + REG_MMU_INVLD_PA);
+		data->soc->get_fault_larb_port(regval, &fault_larb, &fault_port);
+		dev_err_ratelimited(data->dev,
+			"fault before domain: type=%#x iova=%#x pa=%#x larb=%u port=%u core=%u\n",
+			int_state, fault_iova, fault_pa, fault_larb, fault_port,
+			core->id);
 		regval = readl_relaxed(core->base + REG_MMU_INT_CONTROL);
 		regval |= F_INT_CLR_BIT;
 		writel_relaxed(regval, core->base + REG_MMU_INT_CONTROL);
@@ -486,12 +496,13 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 	 * say so explicitly in the message below rather than letting the
 	 * tracepoint alone imply that the access was a read.
 	 */
-	if (report_iommu_fault(&dom->domain, data->dev, fault_iova,
-			IOMMU_FAULT_READ))
-		dev_err_ratelimited(data->dev,
-			"fault type=0x%x iova=0x%x pa=0x%x larb=%d port=%d core=%d dir=unknown\n",
-			int_state, fault_iova, fault_pa,
-			fault_larb, fault_port, core->id);
+	/* Log every hardware fault, even if a registered handler consumes it. */
+	report_ret = report_iommu_fault(&dom->domain, data->dev, fault_iova,
+					IOMMU_FAULT_READ);
+	dev_err_ratelimited(data->dev,
+		"fault type=%#x iova=%#x pa=%#x larb=%u port=%u core=%u dir=unknown report_ret=%d\n",
+		int_state, fault_iova, fault_pa, fault_larb, fault_port, core->id,
+		report_ret);
 
 	/* Interrupt clear */
 	regval = readl_relaxed(core->base + REG_MMU_INT_CONTROL);
