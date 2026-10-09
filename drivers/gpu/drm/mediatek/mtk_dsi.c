@@ -1563,6 +1563,7 @@ static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.reg_vm_cmd_off = 0x130,
 	.timcon2_no_da_hs_sync = true,
 	.has_mem_conti = true,
+	.has_lane_clk = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
