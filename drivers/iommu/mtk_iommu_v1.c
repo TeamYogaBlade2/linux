@@ -463,6 +463,7 @@ static irqreturn_t mtk_iommu_v1_isr(int irq, void *dev_id)
 		fault_iova = readl_relaxed(core->base + REG_MMU_FAULT_VA) &
 			    F_MMU_FAULT_VA_MSK;
 		fault_pa = readl_relaxed(core->base + REG_MMU_INVLD_PA);
+		regval = readl_relaxed(core->base + REG_MMU_INT_ID);
 		data->soc->get_fault_larb_port(regval, &fault_larb, &fault_port);
 		dev_err_ratelimited(data->dev,
 			"fault before domain: type=%#x iova=%#x pa=%#x larb=%u port=%u core=%u\n",
