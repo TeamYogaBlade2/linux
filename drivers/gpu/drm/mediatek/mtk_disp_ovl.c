@@ -392,6 +392,7 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
 	u32 handled;
+	u32 src_con, sta;
 
 	/*
 	 * A SoC that owns at least one status bit (int_all_mask non-zero)
@@ -427,21 +428,33 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	 */
 	if ((reg & priv->data->rdma0_eof_abn_bit) &&
 	    !priv->rdma_err_dbg_done) {
-		priv->rdma_err_dbg_done = true;
-		pr_err("OVL RDMA0 snapshot: flow=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
-		       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
-		       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
-		       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
-		       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
-		       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
-		       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
-		       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
-		       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
-		       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
-		       readl(priv->regs + DISP_REG_OVL_CON(0)),
-		       readl(priv->regs + DISP_REG_OVL_SRC_CON),
-		       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
-		       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
+		/*
+		 * OVL is started before the initial plane state is programmed.
+		 * EOF_ABNORMAL during that window sees reset/stale layer registers
+		 * (addr=0, pitch=0, src_con=0) and must not consume the one-shot
+		 * diagnostic. Wait until layer 0 is actually enabled, then capture
+		 * the first abnormal EOF against the real framebuffer.
+		 */
+		src_con = readl(priv->regs + DISP_REG_OVL_SRC_CON);
+		if (src_con & BIT(0)) {
+			priv->rdma_err_dbg_done = true;
+			sta = readl(priv->regs + DISP_REG_OVL_STA);
+			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
+			       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
+			       reg, sta,
+			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+			       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
+			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
+			       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
+			       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
+			       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
+			       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
+			       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
+			       readl(priv->regs + DISP_REG_OVL_CON(0)),
+			       src_con,
+			       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
+			       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
+		}
 	}
 
 	/*
