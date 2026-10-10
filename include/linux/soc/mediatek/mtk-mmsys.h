@@ -90,12 +90,8 @@ enum mtk_ddp_comp_id {
 };
 
 /**
- * mtk_ddp_comp_name - the device tree name of a display component
+ * mtk_ddp_comp_name - return a display component's diagnostic name
  * @comp_id: a DDP_COMPONENT_* id
- *
- * The same strings that "mediatek,display-path" and "mediatek,display-routes"
- * use, so a message about a component reads the way the device tree that
- * configured it does.
  */
 const char *mtk_ddp_comp_name(unsigned int comp_id);
 
@@ -106,53 +102,6 @@ void mtk_mmsys_ddp_connect(struct device *dev,
 void mtk_mmsys_ddp_disconnect(struct device *dev,
 			      enum mtk_ddp_comp_id cur,
 			      enum mtk_ddp_comp_id next);
-
-/**
- * mtk_mmsys_ddp_route_available - is @from -> @to wired up at all?
- * @dev: the mmsys device
- * @from: the output component
- * @to: the input component it should feed
- *
- * mtk_mmsys_ddp_connect() only writes registers for pairs that its routing
- * table lists, and it returns nothing, so a pair it does not know is a silent
- * no-op that leaves the crossbar as the bootloader left it.  That is how a
- * path can be wired up correctly in the device tree, compile, probe, and still
- * display nothing.  Callers that cannot tolerate that ask this first.
- *
- * Return: true when the mmsys has at least one route entry for the pair,
- * counting a fixed link as a route.  False when the mmsys has no routing
- * table at all, which is a false "unavailable" and not an error - only SoCs
- * whose routes come from device tree require every connected pair to match.
- */
-bool mtk_mmsys_ddp_route_available(struct device *dev, enum mtk_ddp_comp_id from,
-				   enum mtk_ddp_comp_id to);
-
-/**
- * mtk_mmsys_ddp_routes_from_dt - are this mmsys's routes read from DT?
- * @dev: the mmsys device
- *
- * True only for a node with a "mediatek,display-routes" property, i.e. one
- * whose routing table this driver parsed at probe and could therefore
- * complain about.  Every other SoC's routes come from a C table that the
- * driver cannot check, so nothing about them is asserted.
- */
-bool mtk_mmsys_ddp_routes_from_dt(struct device *dev);
-
-/**
- * mtk_mmsys_ddp_display_path - read "mediatek,display-path"
- * @dev: the mmsys device
- * @path: output array of component ids
- * @max: size of @path
- * @len: receives the number of components
- *
- * Resolve the component names in "mediatek,display-path" to DDP_COMPONENT_*
- * ids, in the order the pipeline runs.
- *
- * Return: 0 on success, -ENOENT if the node has no such property, -EINVAL if
- * it names something this driver does not know or does not fit in @path.
- */
-int mtk_mmsys_ddp_display_path(struct device *dev, unsigned int *path,
-			       unsigned int max, unsigned int *len);
 
 void mtk_mmsys_ddp_dpi_fmt_config(struct device *dev, u32 val);
 

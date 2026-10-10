@@ -388,40 +388,6 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 		goto err_mutex_unprepare;
 	}
 
-	/*
-	 * Every consecutive pair below gets connected, but
-	 * mtk_mmsys_ddp_connect() only writes registers for the pairs its
-	 * routing table lists and returns nothing, so a pair the table does not
-	 * know is a silent no-op that leaves the crossbar as the bootloader left
-	 * it.  That is how a path can be built correctly and still display
-	 * nothing, and it is not visible afterwards.
-	 *
-	 * So an mmsys whose routes come from the device tree must have an
-	 * entry - a fixed link counts - for every pair the path actually
-	 * builds.  Check them all before connecting anything, so that a failure
-	 * leaves the hardware untouched and mtk_crtc_atomic_enable() reports it
-	 * instead of producing a black screen.
-	 *
-	 * The other SoCs keep their C routing tables and are deliberately not
-	 * checked.  A missing route there is the behaviour they have always
-	 * had, and nothing in this driver can tell whether one is missing -
-	 * which is exactly the reason this check exists.
-	 */
-	if (mtk_mmsys_ddp_routes_from_dt(mtk_crtc->mmsys_dev)) {
-		for (i = 0; i < mtk_crtc->ddp_comp_nr - 1; i++) {
-			if (mtk_mmsys_ddp_route_available(mtk_crtc->mmsys_dev,
-							   mtk_crtc->ddp_comp[i]->id,
-							   mtk_crtc->ddp_comp[i + 1]->id))
-				continue;
-
-			DRM_DEV_ERROR(mtk_crtc->ddp_comp[i]->dev,
-				      "no route from %s to %s, refusing to enable\n",
-				      mtk_ddp_comp_name(mtk_crtc->ddp_comp[i]->id),
-				      mtk_ddp_comp_name(mtk_crtc->ddp_comp[i + 1]->id));
-			ret = -EINVAL;
-			goto err_clk_disable;
-		}
-	}
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr - 1; i++) {
 		if (!mtk_ddp_comp_connect(mtk_crtc->ddp_comp[i], mtk_crtc->mmsys_dev,

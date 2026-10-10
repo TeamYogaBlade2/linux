@@ -16,16 +16,15 @@
  *
  * Registers 0x020..0x05c are the display crossbar controls. MOUT_EN fields
  * enable output ports and *_SEL fields select the input consumed by a block.
- * Fixed datapath links need no register, and are stated in the device tree
- * route table with a zero offset; see the end of this file.
+ * Fixed datapath links need no crossbar register and have no routing-table
+ * entry.
  *
  * Blocks with no driver
  * ---------------------
- * The crossbar below describes more blocks than the KMS driver drives. The
- * main path is OVL0 -> BLS -> RDMA0 -> DSI0 (mtk_drm_drv.c), and these are
- * the DISP0 blocks that have no driver, with the reason for each. A grep for
- * e.g. "mt6589-rotator" returns nothing, so without this note the next person
- * has to re-derive the whole table from the datasheet.
+ * The crossbar below describes more blocks than the KMS driver uses. The
+ * B8000 display path is OVL0 -> BLS -> RDMA0 -> DSI0, discovered through OF
+ * graph. The DISP0 blocks not on that path are listed below with the reasons
+ * each is unused.
  *
  *  block  base      IRQ  clock gates          reset       why there is no driver
  *  ROT    0x14001000 161 ROT_ENGINE/SMI       DISP_ROT_RST no rotated panel mount on this board
@@ -94,23 +93,13 @@
  *    every accessor in mtk_ddp_comp.h guards on !comp->funcs, so a component
  *    that ends up on a path degrades to a no-op rather than faulting.
  *
- *  - COLOR and TDSHP have drivers (mtk_disp_color.c, mtk_disp_tdshp.c) and DT
- *    nodes, but are deliberately not on the MT6589 path; see mtk_drm_drv.c.
- *    The reason is not simply that the vendor omits them. The BSP's own path
- *    setup for DISP_MODULE_DSI, DISP_MODULE_DSI_VDO and DISP_MODULE_DSI_CMD
- *    routes OVL -> COLOR -> BLS with COLOR_SEL=1 and BLS_SEL=1
- *    (aquaris-5 ddp_path.c:850-858), whereas the LK bootloader uses a
- *    different topology with no COLOR at all (OVL_MOUT_EN=0x2 straight to BLS).
- *    The vendor trees disagree, the LK topology is the one this driver follows,
- *    and COLOR has never been exercised on hardware here. Note that putting
- *    COLOR0 into the CRTC component array without also adding a (COLOR0, BLS)
- *    route used to disable the display silently, because
- *    mtk_mmsys_ddp_connect() only wires ADJACENT pairs and returns void.
- *    Both halves now live in the device tree next to each other, and
- *    mtk_crtc_ddp_hw_init() rejects the enable rather than missing it.
+ *  - COLOR and TDSHP are not on the selected B8000 OF-graph path. SCL, WDMA,
+ *    DBI and DPI are likewise not selected for this panel. Their register-field
+ *    definitions remain above, while the C route table lists the supported
+ *    connections and OF graph selects the active component sequence.
  *
- * DISP_MISC (0x060) holds the DPI0/1/2 and DBI C/IO select bits. It is defined
- * here and written by nothing, because only DPI and DBI would use it.
+ * DISP_MISC (0x060) holds DPI/DBI output controls. The routing table uses
+ * DPI0_MODE_EN for the RDMA1 -> DPI0 alternative path.
  */
 
 /* DISPSYS_CONFIG routing registers. */
@@ -252,30 +241,173 @@
 #define MT6589_DISP_MISC_DPI2_IO_EN    BIT(11)
 #define MT6589_DISP_MISC_DBI_C_IO_SEL  BIT(12)
 
-/*
- * The routing table itself now lives in the device tree, as
- * "mediatek,display-routes" on the dispsys node in mt6589.dtsi, next to the
- * "mediatek,display-path" it has to agree with.  The defines above are where
- * the offsets, masks and values in that property come from, and the MT6589
- * datasheet crossbar description at the top of this file is what they were
- * derived from; they are kept because they are the only statement of what
- * each field means.
- *
- * Two things the table cannot express, which the property does:
- *
- *  - The fixed links.  The MT6589 datasheet path-debug registers show
- *    connections that therefore need no route entry at all: DISP_PATH_DEBUG0
- *    p. 1446, bit 00 "rot -> scl" and bit 07 "bls -> rdma0", and
- *    DISP_PATH_DEBUG1 bit 02 "rdma1 -> gamma".  Those three are written in the
- *    device tree as entries with a zero offset, so that a path containing one
- *    is still complete and a fixed link is stated rather than merely absent.
- *
- *  - A missing route.  mtk_mmsys_ddp_connect() only writes registers for the
- *    pairs its table lists and returns void, so a pair it does not know was a
- *    silent no-op: the display came up with the crossbar as the bootloader
- *    left it and nothing in the logs said so.  That is what commit 2d59d9693be8
- *    hit when it had to drop COLOR0 from the path, and what c9e543f22025 hit
- *    with TDSHP.  mtk_crtc_ddp_hw_init() now rejects the enable instead.
- */
+static const struct mtk_mmsys_routes mt6589_dispsys_routing_table[] = {
+	/*
+	 * LIVE - main path step 1: OVL output -> BLS.
+	 *
+	 * The overlay goes straight to BLS, not via COLOR.  The bootloader
+	 * does exactly this (lk/ddp_path.c:229, OVL_MOUT_EN = 0x2 and
+	 * BLS_SEL = 0, commented "ovl_mout output to bls" and "bls_sel
+	 * from overlay"), and that is a path known to drive this panel.
+	 *
+	 * The data sheet agrees on both encodings:
+	 *   DISP_OVL_MOUT_EN bit 1 = "Output to BLS", bit 2 = "Output to
+	 *   COLOR" - so the bootloader value 0x2 is bit 1, BLS.
+	 *   DISP_BLS_SEL 0 = "From overlay", 1 = "From color engine" - so
+	 *   the bootloader value 0 is the overlay.
+	 *
+	 * Routing through COLOR instead left OVL_RUN clear and the OVL
+	 * reporting FME_UND with the RDMA EOF aborts set: the overlay was
+	 * feeding an engine that was not in the path, so it never drained.
+	 */
+	MMSYS_ROUTE(OVL0, BLS,
+		    MT6589_DISP_OVL_MOUT_EN,
+		    MT6589_OVL_MOUT_EN_BLS, MT6589_OVL_MOUT_EN_BLS),
+	MMSYS_ROUTE(OVL0, BLS,
+		    MT6589_DISP_BLS_SEL,
+		    MT6589_BLS_SEL_MASK, MT6589_BLS_SEL_OVL),
+
+	/*
+	 * LIVE but off the signal path: COLOR's input select.
+	 *
+	 * COLOR is not on the B8000 OF-graph path. This selector entry is kept
+	 * for reference; it does not make COLOR part of the active route.
+	 * A COLOR path needs its own output mux and an adjacent graph edge.
+	 * COLOR_SEL = 1 is the vendor BSP's topology-2 value ("from overlay
+	 * after alpha blending", kernel ddp_path.c:857); it is written here
+	 * only so the register does not keep a stale bootloader value.  It
+	 * has no effect while OVL_MOUT_EN[2] is 0, because that bit - not
+	 * this register - is what gives COLOR an input.
+	 */
+	MMSYS_ROUTE(OVL0, COLOR0,
+		    MT6589_DISP_COLOR_SEL,
+		    MT6589_COLOR_SEL_MASK, MT6589_COLOR_SEL_OVL_POST),
+
+	/*
+	 * LIVE - main path step 3: RDMA0 output -> DSI0 / DBI / DPI0.
+	 *   BLS feeds RDMA0 via direct link (no SEL register needed).
+	 *   RDMA0_OUT_SEL steers RDMA0's output to the target interface.
+	 *
+	 * DSI0 is the reset default (val=0x0), but write it explicitly
+	 * anyway.  The bootloader hands the panel a live DSI link, so the
+	 * register arrives holding whatever the previous kernel left in it,
+	 * and mtk_mmsys_ddp_disconnect() can clear it on the way down.
+	 * Assuming a reset value is what left this path unprogrammed.
+	 *
+	 * The register is shared, so exactly one of these three survives a
+	 * given connect: writing the DBI or DPI0 encoding necessarily
+	 * deselects DSI0.  They are listed so the encodings exist and are
+	 * checked by the MMSYS_ROUTE build-time assertions; only the DSI0
+	 * one is reached on this board, because DBI and DPI0 are not clocked
+	 * here.
+	 */
+
+	/* RDMA0 -> DSI0 (main LCD path) */
+	MMSYS_ROUTE(RDMA0, DSI0,
+		    MT6589_DISP_RDMA0_OUT_SEL,
+		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DSI),
+
+	/* RDMA0 -> DBI */
+	MMSYS_ROUTE(RDMA0, DBI0,
+		    MT6589_DISP_RDMA0_OUT_SEL,
+		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DBI),
+
+	/* RDMA0 -> DPI0 (OVL-sourced) */
+	MMSYS_ROUTE(RDMA0, DPI0,
+		    MT6589_DISP_RDMA0_OUT_SEL,
+		    MT6589_RDMA0_OUT_SEL_MASK, MT6589_RDMA0_OUT_SEL_DPI0),
+
+	/*
+	 * LIVE - memory-out path: OVL -> WDMA1.
+	 *   Allows screen-capture concurrently with the main LCD path.
+	 *   Shares OVL_MOUT_EN with the BLS route above; the two bits are
+	 *   independent, so both can be set and this is a real fan-out, not
+	 *   an either/or.  Vendor lk/ddp_path.c:250 writes 0x1 for the
+	 *   WDMA1 destination.
+	 */
+	MMSYS_ROUTE(OVL0, WDMA1,
+		    MT6589_DISP_OVL_MOUT_EN,
+		    MT6589_OVL_MOUT_EN_WDMA1, MT6589_OVL_MOUT_EN_WDMA1),
+
+	/*
+	 * LIVE - direct RDMA1 paths: bypass OVL/COLOR/BLS entirely.
+	 *   Used for external display (e.g. HDMI via a bridge chip).
+	 *
+	 * RDMA1 -> DPI0 needs both halves of the switch: RDMA1_OUT_SEL = 1
+	 * picks DPI0 as the target, and DPI0_SEL = 1 makes RDMA1 - not RDMA0 -
+	 * the engine actually driving it.  Both match the vendor BSP
+	 * (kernel ddp_path.c:875-876).
+	 */
+
+	/* RDMA1 -> DPI0 */
+	MMSYS_ROUTE(RDMA1, DPI0,
+		    MT6589_DISP_RDMA1_OUT_SEL,
+		    MT6589_RDMA1_OUT_SEL_MASK, MT6589_RDMA1_OUT_SEL_DPI0),
+	MMSYS_ROUTE(RDMA1, DPI0,
+		    MT6589_DISP_DPI0_SEL,
+		    MT6589_DPI0_SEL_MASK, MT6589_DPI0_SEL_RDMA1),
+
+	/* RDMA1 -> DPI1 */
+	MMSYS_ROUTE(RDMA1,  DPI1,
+		    MT6589_DISP_RDMA1_OUT_SEL,
+		    MT6589_RDMA1_OUT_SEL_MASK, MT6589_RDMA1_OUT_SEL_DPI1),
+
+	/*
+	 * LIVE - MDP path: SCL -> WDMA0.
+	 *   Used for MDP (Media Data Path) scaling + write-back.
+	 *   ROT feeds SCL; SCL_MOUT_EN routes the output to WDMA0.
+	 *   WDMA0_SEL = 0 (from scaler) is the reset value and is not
+	 *   written; see the WDMA0_SEL comment above.  The vendor BSP does
+	 *   write it explicitly (kernel ddp_path.c:930).
+	 */
+	MMSYS_ROUTE(SCL, WDMA0,
+		    MT6589_DISP_SCL_MOUT_EN,
+		    MT6589_SCL_MOUT_EN_WDMA0, MT6589_SCL_MOUT_EN_WDMA0),
+
+	/*
+	 * DOCUMENTATION ONLY - the vendor kernel BSP's topology 2, spelled
+	 * out as the two extra MMSYS_ROUTE entries it would need:
+	 *
+	 *   OVL0 -> COLOR0, MT6589_DISP_OVL_MOUT_EN,
+	 *           MT6589_OVL_MOUT_EN_COLOR_MASK, MT6589_OVL_MOUT_EN_COLOR,
+	 *   COLOR0 -> BLS, MT6589_DISP_COLOR_MOUT_EN,
+	 *             MT6589_COLOR_MOUT_EN_BLS_MASK, MT6589_COLOR_MOUT_EN_BLS,
+	 *
+	 * together with BLS_SEL = MT6589_BLS_SEL_COLOR instead of the
+	 * MT6589_BLS_SEL_OVL the table uses above.  All three values are
+	 * defined above and all three are what kernel ddp_path.c:854-858
+	 * writes.
+	 *
+	 * These are NOT enabled, deliberately:
+	 *  - OVL_MOUT_EN[2] into an engine that is not on the path is the
+	 *    configuration that stalled the overlay (OVL_RUN clear, FME_UND,
+	 *    RDMA EOF aborts).
+	 *  - mtk_mmsys_ddp_connect() has no notion of which engines are
+	 *    clocked, so the route would fire regardless.
+	 *  - the vendor BSP pairs these writes with a path component list
+	 *    that includes COLOR ahead of BLS; enabling the registers without
+	 *    that is a half-applied topology.
+	 *
+	 * DOCUMENTATION ONLY - the BSP's commented-out longer chain with 2D
+	 * sharpness, which needs three more entries:
+	 *
+	 *   TDSHP_MOUT_EN = MT6589_TDSHP_MOUT_EN_OVL_DIRECT (bit 4) to feed
+	 *     the overlay's direct-link input,
+	 *   OVL_SEL = MT6589_OVL_SEL_TDSHP to pick 2D sharpness as the
+	 *     overlay's input,
+	 *   TDSHP_SEL = MT6589_TDSHP_SEL_OVL_PRE_BLEND to take the pre-blend
+	 *     overlay tap,
+	 *
+	 * after which the COLOR entries above complete it.  Vendor source
+	 * ddp_path.c:860-867, commented out there as well.
+	 *
+	 * DOCUMENTATION ONLY - RDMA1 -> DBI, the one encoding of RDMA1_OUT_SEL
+	 * no vendor path builds.  It would need RDMA1_OUT_SEL =
+	 * MT6589_RDMA1_SOUT_DBI and, because DISP_DBI_SEL switches DBI
+	 * between the two RDMAs, DBI_SEL = MT6589_DBI_SEL_RDMA1.  See the
+	 * RDMA1_OUT_SEL comment for why 0 = DBI is the data sheet reading
+	 * that was adopted.
+	 */
+};
 
 #endif /* __SOC_MEDIATEK_MT6589_DISPSYS_H */

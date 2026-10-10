@@ -13,13 +13,6 @@ description:
   The MediaTek mmsys system controller provides clock control, routing control,
   and miscellaneous control in mmsys partition.
 
-  The display hardware is a crossbar: components such as OVL, BLS, RDMA and
-  DSI each have several possible inputs and outputs, and a set of registers
-  selects which of them are connected.  mediatek,display-path names the
-  components of one display pipeline in order, and mediatek,display-routes
-  gives the register settings that wire its consecutive pairs together.  The
-  two are read by one driver because they are one decision.
-
 properties:
   $nodename:
     pattern: "^syscon@[0-9a-f]+$"
@@ -100,39 +93,6 @@ properties:
 
   '#reset-cells':
     const: 1
-
-  mediatek,display-path:
-    description:
-      A display pipeline, as a list of component names in the order the
-      pipeline runs.  Every component named here must exist and be enabled,
-      or no CRTC is created for the pipeline.
-
-      This property programs no register by itself; it describes the pipeline
-      that mediatek,display-routes then wires up.
-
-    $ref: /schemas/types.yaml#/definitions/string-list
-
-  mediatek,display-routes:
-    description:
-      The crossbar settings for the display pipeline, as a list of
-      "<from> <to> <offset> <mask> <value>" strings, where from and to are
-      component names as used in mediatek,display-path and offset is a byte
-      offset into the mmsys register block.
-
-      A connection may need more than one entry, for example when it needs both
-      an output-port enable and an input selector.  All entries matching a pair
-      are applied.
-
-      An offset of 0 means the pair is a fixed link, wired together in hardware
-      with no register to program.  It is written this way rather than left out
-      so that fixed links are stated instead of merely absent.
-
-      A pair that mediatek,display-path connects but that is missing here
-      fails: the CRTC is not enabled and the missing pair is reported, rather
-      than the display silently showing nothing.  Entries naming blocks with no
-      driver are allowed and simply unused.
-
-    $ref: /schemas/types.yaml#/definitions/string-list
 
   port:
     $ref: /schemas/graph.yaml#/properties/port

@@ -243,12 +243,9 @@ static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {
 };
 
 /*
- * No main_path: MT6589's pipeline is "mediatek,display-path" in the device
- * tree, read by mtk_drm_probe() through mtk_mmsys_ddp_display_path().  Keeping
- * it in C meant two independent lists - this and the crossbar routing table -
- * that had to describe the same pipeline and that nothing checked, so a
- * component added to one and not the other compiled, probed, and displayed
- * nothing.
+ * MT6589 discovers its selected display pipeline by walking the OF graph
+ * starting at the MMSYS output port. Crossbar register selection remains in
+ * the SoC-specific mt6589_dispsys_routing_table.
  */
 static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
 	.shadow_register = true,
@@ -1126,48 +1123,9 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		/* No devicetree graphs support: paths come from C or from DT */
-		dev_dbg(dev, "Building display pipeline without graphs for MMSYS %u\n",
-			mtk_drm_data->mmsys_id);
+		dev_dbg(dev, "Using SoC-specific static display path
+");
 		private->data = mtk_drm_data;
-
-		/*
-		 * An SoC can name its pipeline in the device tree instead of C,
-		 * as MT6589 does.  The result has to be stored per device, so
-		 * take the copy before filling it in; mtk_drm_data itself is
-		 * shared by every mmsys using this driver.
-		 */
-		{
-			unsigned int path[DDP_COMPONENT_DRM_ID_MAX], len;
-
-			ret = mtk_mmsys_ddp_display_path(private->mmsys_dev, path,
-							 ARRAY_SIZE(path), &len);
-			if (ret && ret != -ENOENT) {
-				dev_err(dev, "Failed to read mediatek,display-path: %d\n",
-					ret);
-				return ret;
-			}
-
-			if (!ret) {
-				private->data = devm_kmemdup(dev, mtk_drm_data,
-							     sizeof(*mtk_drm_data),
-							     GFP_KERNEL);
-				if (!private->data)
-					return -ENOMEM;
-
-				dev_dbg(dev, "Display path from DT: ");
-				for (i = 0; i < len; i++)
-					dev_dbg(dev, "%s%s", mtk_ddp_comp_name(path[i]),
-						i + 1 < len ? " -> " : "\n");
-
-				private->data->main_path =
-					devm_kmemdup(dev, path,
-						      len * sizeof(path[0]), GFP_KERNEL);
-				if (!private->data->main_path)
-					return -ENOMEM;
-				private->data->main_len = len;
-			}
-		}
 	}
 
 	private->all_drm_private = devm_kmalloc_array(dev, private->data->mmsys_dev_num,
