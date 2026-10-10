@@ -22,6 +22,7 @@
 #include <linux/pwm.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mt6589-bls-ddp.h"
@@ -89,21 +90,21 @@
 #define BLS_DITHER(n)			(0x0E00 + 4 * (n))	/* n=0..17 */
 
 /* BLS_EN bit definitions */
-#define BLS_EN_PWM_ONLY			BIT(31)			/* Enable PWM, others off */
-
 /*
- * Full enable, matching the stock driver's BLSStart() value when BLS is
- * a stage of the display data path: PWM (bit 31) plus the display
- * processing enable (bits 16 and 0).  Downstream writes 0x80010001
- * exactly when BLS sits in the main path (OVL -> BLS -> RDMA0), and
- * keeps BLS out of the path mutex entirely when BLS only generates PWM
- * - "in the path but PWM-only" is a combination the stock driver never
- * produces.
+ * MT6589 datasheet, BLS_EN:
+ *   bit 31: PWM_En
+ *   bit 16: HIS_En
+ *   bit  0: BLS_En
+ *
+ * The normal Lenovo display path uses 0x80000000.  Enabling the PWM
+ * must not implicitly enable histogram collection or BLS processing.
  */
-#define BLS_EN_FULL			(BLS_EN_PWM_ONLY | BIT(16) | BIT(0))
+#define BLS_EN_PWM			BIT(31)
+#define BLS_EN_HISTOGRAM		BIT(16)
+#define BLS_EN_BLS			BIT(0)
 
 /* BLS_PWM_DUTY format */
-#define PWM_DUTY_MIN_LEVEL		BIT(19)			/* Lower bound = 1 */
+#define PWM_DUTY_MIN_LEVEL		BIT(19)			/* LOW_LIMIT = 1; 8 duty units */
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
 
 /* Default PWM divider value (ddp_bls.c:19, PWM_DEFAULT_DIV_VALUE). */
@@ -114,12 +115,31 @@ struct mt6589_bls_pwm {
 	struct clk *clk_main;
 	unsigned int max_level;
 	struct reset_control *rstc;
+	spinlock_t en_lock;
 	bool clk_enabled;
 };
 
 static inline struct mt6589_bls_pwm *to_mt6589_bls_pwm(struct pwm_chip *chip)
 {
 	return pwmchip_get_drvdata(chip);
+}
+
+/*
+ * BLS_EN is shared by the PWM generator and the BLS/histogram engines.
+ * Serialize read-modify-write operations so that changing the backlight
+ * cannot overwrite bits managed by the display path.
+ */
+static void mt6589_bls_update_en(struct mt6589_bls_pwm *bls,
+				 u32 mask, u32 value)
+{
+	unsigned long flags;
+	u32 en;
+
+	spin_lock_irqsave(&bls->en_lock, flags);
+	en = readl(bls->base + BLS_EN);
+	en = (en & ~mask) | (value & mask);
+	writel(en, bls->base + BLS_EN);
+	spin_unlock_irqrestore(&bls->en_lock, flags);
 }
 
 /* Scale the duty cycle to [0, max_level] against the consumer's period. */
@@ -203,27 +223,26 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 			reg = PWM_DUTY_MIN_LEVEL | (level & 0x3FF);
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
-
-		/*
-		 * Keep the display-processing bits set: the backlight can be
-		 * re-configured at any time, and writing BLS_EN_PWM_ONLY here
-		 * would drop BLS out of the OVL -> BLS -> RDMA0 data path
-		 * again, mid-session.
-		 */
-		writel(BLS_EN_FULL, bls->base + BLS_EN);
+		mt6589_bls_update_en(bls, BLS_EN_PWM, BLS_EN_PWM);
 	} else {
 		/*
-		 * This path is PWM-only, so disabling BLS_EN only disables the
-		 * backlight PWM; it does not remove a required display processing
-		 * stage. This matches disp_bls_config() in the Lenovo BSP.
+		 * Ensure the register is clocked before touching it, even if
+		 * the PWM was already reported disabled.  Only PWM_En belongs
+		 * to this driver; preserve BLS_En and HIS_En.
 		 */
-		writel(0x0, bls->base + BLS_PWM_DUTY);
-		writel(0x0, bls->base + BLS_EN);
+		if (!bls->clk_enabled) {
+			ret = clk_prepare_enable(bls->clk_main);
+			if (ret)
+				return ret;
 
-		if (bls->clk_enabled) {
-			clk_disable_unprepare(bls->clk_main);
-			bls->clk_enabled = false;
+			bls->clk_enabled = true;
 		}
+
+		writel(0x0, bls->base + BLS_PWM_DUTY);
+		mt6589_bls_update_en(bls, BLS_EN_PWM, 0);
+
+		clk_disable_unprepare(bls->clk_main);
+		bls->clk_enabled = false;
 	}
 
 	return 0;
@@ -259,6 +278,7 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	if (IS_ERR(chip))
 		return PTR_ERR(chip);
 	bls = to_mt6589_bls_pwm(chip);
+	spin_lock_init(&bls->en_lock);
 
 	bls->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(bls->base))
@@ -334,13 +354,8 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	 */
 	writel(0x00000003, bls->base + BLS_HIS_SETTING);
 
-	/*
-	 * BLS is a stage of the display data path - mediatek,display-path
-	 * lists "bls" between ovl0 and rdma0 - so enable the display
-	 * processing together with the PWM, as the stock driver does when
-	 * BLS is in the path.
-	 */
-	writel(BLS_EN_FULL, bls->base + BLS_EN);
+	/* Match disp_bls_init(): enable PWM without BLS/HIS processing. */
+	writel(BLS_EN_PWM, bls->base + BLS_EN);
 
 	clk_disable_unprepare(bls->clk_main);
 
@@ -433,7 +448,13 @@ void mt6589_bls_ddp_start(struct device *dev)
 	if (!bls)
 		return;
 
-	writel(BLS_EN_FULL, bls->base + BLS_EN);
+	/*
+	 * Match the downstream main-path configuration (0x80000000).
+	 * Do not enable the optional BLS scaling or histogram engines.
+	 */
+	mt6589_bls_update_en(bls,
+			     BLS_EN_PWM | BLS_EN_BLS | BLS_EN_HISTOGRAM,
+			     BLS_EN_PWM);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
@@ -444,7 +465,8 @@ void mt6589_bls_ddp_stop(struct device *dev)
 	if (!bls)
 		return;
 
-	writel(0x0, bls->base + BLS_EN);
+	/* The DDP path does not own the backlight PWM enable bit. */
+	mt6589_bls_update_en(bls, BLS_EN_BLS | BLS_EN_HISTOGRAM, 0);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_stop);
 
