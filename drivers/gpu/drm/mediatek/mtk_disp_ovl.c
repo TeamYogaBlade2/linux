@@ -279,6 +279,16 @@ struct mtk_disp_ovl_data {
 	unsigned int gmc_bits;
 	/* OVL RDMA FIFO capacity, in 16-byte units; zero if unspecified. */
 	unsigned int gmc_fifo_size;
+	/*
+	 * The MT6589 stock driver never writes OVL_RDMAx_GMC:
+	 * OVLLayerConfig() sets only RDMAx_CTRL and the block runs on its
+	 * reset thresholds.  The generic values computed in
+	 * mtk_ovl_layer_on() (0x00ff0080 on this SoC after the FIFO-size
+	 * clamp) are a mock-verified register diff against that working
+	 * sequence - EN_THRD/DISEN_THRD programmed where downstream leaves
+	 * them at reset - so the write is skipped.
+	 */
+	bool skip_rdma_gmc;
 	unsigned int layer_nr;
 	bool fmt_rgb565_is_0;
 	bool smi_id_en;
@@ -897,32 +907,37 @@ int mtk_ovl_layer_check(struct device *dev, unsigned int idx,
 void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 		      struct cmdq_pkt *cmdq_pkt)
 {
-	unsigned int gmc_thrshd_l;
-	unsigned int gmc_thrshd_h;
-	unsigned int gmc_value;
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
 	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs,
 		      DISP_REG_OVL_RDMA_CTRL(idx));
-	gmc_thrshd_l = GMC_THRESHOLD_LOW >>
-		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
-	gmc_thrshd_h = GMC_THRESHOLD_HIGH >>
-		      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
-	/*
-	 * The GMC thresholds are 10-bit fields in units of 16 bytes.
-	 * DISEN_THRD must be greater than EN_THRD but smaller than FIFO_SIZE.
-	 * On MT6589 the default FIFO_SIZE is 256, while the generic high
-	 * threshold calculation also produces 256. Clamp it to 255 to keep
-	 * the programmed threshold within the hardware's documented limits.
-	 */
-	if (ovl->data->gmc_fifo_size &&
-	    gmc_thrshd_h >= ovl->data->gmc_fifo_size)
-		gmc_thrshd_h = ovl->data->gmc_fifo_size - 1;
+	if (!ovl->data->skip_rdma_gmc) {
+		unsigned int gmc_thrshd_l;
+		unsigned int gmc_thrshd_h;
+		unsigned int gmc_value;
 
-	gmc_value = (gmc_thrshd_l & GENMASK(9, 0)) |
-		    ((gmc_thrshd_h & GENMASK(9, 0)) << 16);
-	mtk_ddp_write(cmdq_pkt, gmc_value,
-		      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RDMA_GMC(idx));
+		gmc_thrshd_l = GMC_THRESHOLD_LOW >>
+			      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
+		gmc_thrshd_h = GMC_THRESHOLD_HIGH >>
+			      (GMC_THRESHOLD_BITS - ovl->data->gmc_bits);
+		/*
+		 * The GMC thresholds are 10-bit fields in units of 16 bytes.
+		 * DISEN_THRD must be greater than EN_THRD but smaller than
+		 * FIFO_SIZE.  On MT6589 the default FIFO_SIZE is 256, while
+		 * the generic high threshold calculation also produces 256.
+		 * Clamp it to 255 to keep the programmed threshold within
+		 * the hardware's documented limits.
+		 */
+		if (ovl->data->gmc_fifo_size &&
+		    gmc_thrshd_h >= ovl->data->gmc_fifo_size)
+			gmc_thrshd_h = ovl->data->gmc_fifo_size - 1;
+
+		gmc_value = (gmc_thrshd_l & GENMASK(9, 0)) |
+			    ((gmc_thrshd_h & GENMASK(9, 0)) << 16);
+		mtk_ddp_write(cmdq_pkt, gmc_value,
+			      &ovl->cmdq_reg, ovl->regs,
+			      DISP_REG_OVL_RDMA_GMC(idx));
+	}
 
 	/* For MT6589, explicitly set layer source to memory (0) */
 	if (ovl->data->set_layer_src)
@@ -1473,6 +1488,7 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.addr = DISP_REG_OVL_ADDR_MT2701,
 	.gmc_bits = 10,
 	.gmc_fifo_size = 256,
+	.skip_rdma_gmc = true,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
