@@ -402,6 +402,7 @@ struct mtk_mutex_data {
 	const u16 mutex_sof_reg;
 	const bool no_clk;
 	const bool needs_mutex_inten;
+	const bool bls_not_in_mutex;
 };
 
 struct mtk_mutex_ctx {
@@ -814,13 +815,7 @@ static const struct mtk_mutex_data mt6589_mutex_driver_data = {
 	.mutex_mod1_reg = MT2701_MUTEX0_MOD1,
 	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
 	.needs_mutex_inten = true,
-	/*
-	 * The DISP0 gate register on MT6589 (CG_CON0, data sheet p. 1450-1451)
-	 * has no mutex gate - bits 3 through 24 are SCL, OVL, color, 2DSHP,
-	 * BLS, WDMA, RDMA, gamma, command queue and G2D, and the rest are
-	 * reserved - so the node declares no clocks and none may be requested
-	 * here.  This matches the other SoCs whose data sheet shows no gate.
-	 */
+	.bls_not_in_mutex = true,
 	.no_clk = true,
 };
 
@@ -975,6 +970,22 @@ void mtk_mutex_add_comp(struct mtk_mutex *mutex,
 	unsigned int offset;
 
 	WARN_ON(&mtx->mutex[mutex->id] != mutex);
+
+	/*
+	 * MT6589's display stream passes through BLS, but the downstream
+	 * display path deliberately excludes BLS from MUTEX_MOD.
+	 * Clear the bit as well as skipping the addition, so a stale
+	 * value left by an earlier path cannot survive this setup.
+	 */
+	if (mtx->data->bls_not_in_mutex && id == DDP_COMPONENT_BLS) {
+		offset = DISP_REG_MUTEX_MOD(mtx, mtx->data->mutex_mod[id],
+					    mutex->id);
+		mod_id = mtx->data->mutex_mod[id] % 32;
+		reg = readl_relaxed(mtx->regs + offset);
+		reg &= ~BIT(mod_id);
+		writel_relaxed(reg, mtx->regs + offset);
+		return;
+	}
 
 	switch (id) {
 	case DDP_COMPONENT_DSI0:

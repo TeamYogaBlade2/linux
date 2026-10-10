@@ -1022,7 +1022,8 @@
 			 * TDSHP in drivers/soc/mediatek/mt6589-dispsys.h,
 			 * which also derives each offset, mask and value here.
 			 */
-			mediatek,display-path = "ovl0", "bls", "rdma0", "dsi0";
+			mediatek,display-path = "ovl0", "color0", "bls",
+						"rdma0", "dsi0";
 			mediatek,display-routes =
 			/*
 			 * Fixed links: wired together in hardware, with no
