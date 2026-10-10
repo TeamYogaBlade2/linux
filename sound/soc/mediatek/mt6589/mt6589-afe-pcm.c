@@ -13,6 +13,7 @@
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
+#include <linux/genalloc.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -25,11 +26,20 @@
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/soc-dapm.h>
 #include <sound/tlv.h>
 
 /* AFE registers (classic mt65xx layout); stock magic values noted inline. */
 #define AUDIO_TOP_CON0		0x0000
-#define AUDIO_TOP_CON0_AFE_ON	0x00004000
+/*
+ * AUDIO_TOP_CON0 power bits: PDN_AFE at bit 2 and PDN_I2S at bit 6, both
+ * active-low ("0: Power on").  Bit 14 is APB3_SEL, the APB protocol select,
+ * and is left alone.  These are the same bits the clock driver gates
+ * CLK_AUDIO_AFE and CLK_AUDIO_I2S on, so the AFE must not touch them
+ * directly - see mt6589_afe_pcm_dev_probe().
+ */
+#define AUDIO_TOP_CON0_PDN_AFE		BIT(2)
+#define AUDIO_TOP_CON0_PDN_I2S		BIT(6)
 #define AFE_DAC_CON0		0x0010
 #define AFE_DAC_CON0_AFE_ON	BIT(0)
 #define AFE_DAC_CON0_DL1_ON	BIT(1)
@@ -39,24 +49,89 @@
 #define AFE_DAC_CON0_VUL_ON	BIT(3)
 #define AFE_DAC_CON1		0x0014
 #define AFE_DAC_CON1_DL1_RATE	GENMASK(3, 0)
+#define AFE_DAC_CON1_DL1_DATA	BIT(21)
 #define AFE_DAC_CON1_VUL_RATE	GENMASK(19, 16)
-#define AFE_DAC_CON1_VUL_MONO	BIT(27)
+/*
+ * AFE_DAC_CON1 is a bank of mode fields, one 4-bit slice per memory
+ * interface, followed by the per-interface data/mono bits:
+ *
+ *	[3:0]   DL1_MODE	[7:4]   DL2_MODE	[11:8]  I2S_MODE
+ *	[15:12] AWB_MODE	[19:16] VUL_MODE	[20]    DAI_MODE
+ *	[21]    DL1_DATA	[22]    DL2_DATA	[23]    I2S_DATA
+ *	[24]    AWB_DATA	[25]    AWB_R_MONO	[27]    VUL_DATA
+ *	[28]    VUL_R_MONO
+ *
+ * VUL_R_MONO is bit 28 - bit 27 is VUL_DATA, the VUL data width.  Writing
+ * bit 27 here set the data width instead of the right-justification flag,
+ * which the stock driver never does for a 16-bit stream.
+ */
+#define AFE_DAC_CON1_VUL_DATA	BIT(27)
+#define AFE_DAC_CON1_VUL_R_MONO	BIT(28)
 #define AFE_VUL_BASE		0x0080
 #define AFE_VUL_CUR		0x008c
 #define AFE_VUL_END		0x0088		/* ring end, inclusive */
 
-/* Internal ADC select in ADDA_TOP_CON0. */
-#define AFE_ADDA_TOP_CON0	0x0120
-#define AFE_ADDA_TOP_CON0_INTERNAL_ADC	BIT(0)
-
-/* Uplink SRC: voice mode select [25:23], I2S input control. */
-#define AFE_ADDA_UL_SRC_CON0	0x0114
+/*
+ * There is no ADDA block on MT6589.  AFE_ADDA_TOP_CON0 (+0x120) and
+ * AFE_ADDA_UL_SRC_CON0 (+0x114) are MT6797 registers: this part's AFE map
+ * has nothing between +0x00e0 (AFE_MEMIF_MON4) and +0x0170 (AFE_FOC_CON),
+ * in both the data sheet and the vendor header.  Source selection is done
+ * with the interconnect CONN registers below.
+ */
 
 #define AFE_DL1_BASE		0x0040
 #define AFE_DL1_CUR		0x0044
 #define AFE_DL1_END		0x0048		/* ring end, inclusive */
-#define AFE_MEMIF_PBUF_SIZE	0x03d8
-#define AFE_MEMIF_PBUF_SIZE_DL1	GENMASK(17, 16)
+
+/*
+ * DL2, AWB, DAI, VUL - present in the hardware, deliberately not driven.
+ *
+ * Register map (AudDrv_Afe.h:449-463, the AFE's own map, not the codec's):
+ *
+ *	DL1  BASE/CUR/END  +0x40 / +0x44 / +0x48	driven by this driver
+ *	DL2  BASE/CUR/END  +0x50 / +0x54 / +0x58	not driven
+ *	AWB  BASE/END/CUR  +0x70 / +0x78 / +0x7c	not driven
+ *	VUL  BASE/END/CUR  +0x80 / +0x88 / +0x8c	driven by this driver
+ *	DAI  BASE/END/CUR  +0x90 / +0x98 / +0x9c	not driven
+ *
+ * Note DL2 is at +0x50..+0x58, NOT +0x80..; +0x80/+0x8c is VUL, which this
+ * driver already uses for capture.  Anyone adding DL2 by copying the VUL
+ * offsets would silently overwrite the capture ring registers.
+ *
+ * DL2 is deliberately left unimplemented rather than wired up, because nothing
+ * in the vendor tree ever drives it as a stream:
+ *
+ *	- it has no dai_link at all (no reference in mt_soc_dai_routing.c or
+ *	  mt_soc_pcm_routing.c), so there is no PCM to attach to it;
+ *	- the only mention in the playback driver is
+ *	  mt_soc_pcm_afe.c:573, which sets DL2's *fetch format* while starting
+ *	  DL1 - it never enables DL2;
+ *	- DL2 has no channel/mono configuration: SetChannels()
+ *	  (mt_soc_afe_control.c:468-487) handles AWB and VUL only and returns
+ *	  false from its default branch for MEM_DL1 and MEM_DL2 alike.
+ *
+ * Its enable bit does exist (AFE_DAC_CON0, DL2_ON = bit 2,
+ * mediatek/platform/mt6589/kernel/drivers/sound/AudDrv_Afe.h:574 - the same
+ * 1 << (block + 1) encoding SetMemoryPathEnable() shifts into place at
+ * mt_soc_afe_control.c:1104) and its rate lives in AFE_DAC_CON1[7:4], so a
+ * future second-output path is possible, but it would be untestable dead code
+ * today.
+ *
+ * AWB (asynchronous write buffer) and DAI are likewise not driven.
+ *
+ * AWB is not unused in the vendor tree: mt_soc_pcm_awb.c does enable and
+ * disable it (SetMemoryPathEnable(MEM_AWB) at lines 219 and 195).  But that
+ * file registers its own snd_soc_platform rather than a dai_link, and no
+ * dai_link in mt_soc_machine.c names an AWB stream, so there is no PCM here
+ * to attach it to.  The path it serves is the FM/modem interface
+ * (mt_soc_fm_i2s2.c), which has no mainline equivalent, and wiring it up
+ * would need a second AFE output, the 2nd I2S input and an MT6320 input,
+ * none of which this card's DT or DAI links describe.  Left out on purpose.
+ *
+ * DAI has no driver-side use at all: nothing in the vendor _mediatek tree
+ * enables MEM_DAI, and it is only reachable over the DAI/BT pins
+ * (AFE_DAIBT_CON0, 0x001c) which this board does not wire up.
+ */
 #define AFE_IRQ_MCU_CON		0x03a0
 #define AFE_IRQ_MCU_CON_IRQ1_ON		BIT(0)
 #define AFE_IRQ_MCU_CON_IRQ2_ON		BIT(1)
@@ -65,17 +140,55 @@
 #define AFE_IRQ_MCU_STATUS	0x03a4
 #define AFE_IRQ_MCU_STATUS_IRQ1	BIT(0)
 #define AFE_IRQ_MCU_STATUS_IRQ2	BIT(1)
-#define AFE_IRQ_MCU_STATUS_MASK	GENMASK(3, 0)
 #define AFE_IRQ_MCU_CLR		0x03a8
-#define AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6) | GENMASK(4, 0))
+/*
+ * AFE_IRQ_MCU_STATUS / CLR layout (data sheet p.2498-2501):
+ *
+ *	bit 0  IRQ1_MCU            DL1 / memif period (this driver)
+ *	bit 1  IRQ2_MCU            VUL period (this driver)
+ *	bit 2  IRQ_MCU_DAI_SET     DAI reset 1 -> 0
+ *	bit 3  IRQ_MCU_DAI_RST     DAI reset 0 -> 1
+ *	bit 4  IRQ5_MCU            HDMI 8ch I2S
+ *	bit 5  IRQ6_MCU            SPDIF
+ *	bits 8-13 *_MCU_MISS       per-IRQ missed-interrupt flags
+ *
+ * The GIC line (Afe_irq_mcu_b, SPI 104) is level-triggered.  Any of the
+ * status bits above can hold it asserted until the matching CLR bit is
+ * written.  OWNED is what this driver turns into snd_pcm_period_elapsed();
+ * LINE is every bit that must be cleared to drop the wire.  Treating the
+ * two as the same set (clear only IRQ1|IRQ2) leaves DAI/miss status latched
+ * and the hardirq handler re-enters forever - which is what froze boot
+ * once the AFE node was enabled.
+ *
+ * Bit 6 of CLR ("IRQ_MCU_CLR") is a handshake that only runs once every
+ * status is already zero; it cannot replace clearing bits 0-5 / 8-13.
+ */
+#define AFE_IRQ_MCU_STATUS_OWNED	(AFE_IRQ_MCU_STATUS_IRQ1 |	\
+					 AFE_IRQ_MCU_STATUS_IRQ2)
+#define AFE_IRQ_MCU_STATUS_LINE	(GENMASK(5, 0) | GENMASK(13, 8))
+#define AFE_IRQ_MCU_CLR_OWNED	AFE_IRQ_MCU_STATUS_OWNED
+#define AFE_IRQ_MCU_CLR_LINE	AFE_IRQ_MCU_STATUS_LINE
 #define AFE_IRQ_MCU_CNT1	0x03ac	/* IRQ1 MCU counter */
 #define AFE_IRQ_MCU_CNT2	0x03b0	/* IRQ2 MCU counter */
 
-/* DL1 -> interconnect -> ADDA downlink SRC -> AFE<->PMIC link. */
+/*
+ * DL1 -> interconnect -> I2S2 DAC path.
+ *
+ * AFE_I2S_CON1 (0x0034) is the playback I2S block. The ADC input uses the
+ * third, input-only I2S block at AFE_I2S_CON2 (0x0038), matching the Lenovo
+ * BSP's SetI2SAdcIn()/SetI2SAdcEnable() implementation.
+ */
 #define AFE_I2S_CON1		0x0034
-#define AFE_I2S_CON1_BASE	0x00000008	/* I2S DAC format */
+#define AFE_I2S_CON1_BASE	0x00000008	/* I2S2_FMT: 0=EIAJ, 1=I2S; select I2S */
 #define AFE_I2S_CON1_RATE	GENMASK(11, 8)
 #define AFE_I2S_CON1_ON		BIT(0)
+#define AFE_I2S_CON2		0x0038
+#define AFE_I2S_CON2_BUFFER_UPDATE_WORD GENMASK(27, 24)
+#define AFE_I2S_CON2_RATE	GENMASK(11, 8)
+#define AFE_I2S_CON2_INV_LRCK	BIT(23)
+#define AFE_I2S_CON2_FMT	BIT(3)
+#define AFE_I2S_CON2_WLEN	BIT(1)
+#define AFE_I2S_CON2_EN		BIT(0)
 #define AFE_CONN1		0x0024
 #define AFE_CONN1_DL1_O3	BIT(21)		/* DL1 ch1 -> O3 */
 #define AFE_CONN2		0x0028
@@ -90,21 +203,59 @@
 #define AFE_CONN3		0x002c
 #define AFE_CONN3_VUL_O9	BIT(0)		/* I03 -> O09 */
 #define AFE_CONN3_VUL_O10	BIT(3)		/* I04 -> O10 */
-#define AFE_ADDA_DL_SRC2_CON0	0x0108
-#define AFE_ADDA_DL_SRC2_CON0_BASE 0x03001802	/* SRC-disabled base */
-#define AFE_ADDA_DL_SRC2_CON0_RATE GENMASK(31, 28)
-#define AFE_ADDA_DL_SRC2_CON0_ON   BIT(0)
-#define AFE_ADDA_DL_SRC2_CON0_VOICE_MODE BIT(5)
-#define AFE_ADDA_DL_SRC2_CON1	0x010c
-#define AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE 0xf74f0000
-#define AFE_ADDA_UL_DL_CON0	0x0124
-#define AFE_ADDA_UL_DL_CON0_ON	BIT(0)
-#define AFE_ADDA_PREDIS_CON0	0x0260		/* ADDA downlink pre-distortion */
+
+/*
+ * The downlink pre-distortion block is real on this part and lives at
+ * +0x260, so keep it - only the ADDA registers above it were wrong.
+ */
+#define AFE_ADDA_PREDIS_CON0	0x0260
 #define AFE_ADDA_PREDIS_CON1	0x0264
-#define AFE_ADDA_NEWIF_CFG0	0x0138		/* AFE<->PMIC serial link (NEWIF) */
-#define AFE_ADDA_NEWIF_CFG0_VAL	0x03f87201	/* up8x TXIF saturation on */
-#define AFE_ADDA_NEWIF_CFG1	0x013c
-#define AFE_ADDA_NEWIF_CFG1_VOICE	GENMASK(11, 10)
+/*
+ * The AFE's own 16 KiB SRAM.  The DL1 and VUL memory interfaces fetch
+ * directly out of it with no DMA engine behind them: DL1_BASE/DL1_END are
+ * plain physical addresses the AFE dereferences itself.  A buffer anywhere
+ * else is never fetched, and the failure is silent - the memif runs, but
+ * DL1_CUR never advances past the base while the period interrupt still
+ * fires off the counter, so ALSA sees a healthy stream carrying no audio.
+ *
+ * The base is 0x12008000.  The data sheet, Table 3-9 "Multimedia system
+ * memory map" (p.48), splits 0x12000000..0x1200cfff into three banks whose
+ * sizes sum exactly to the 52 KiB span the table's thirteen 4 KiB rows
+ * cover: DISP SRAM (32 KiB) = 0x12000000..0x12007fff, AUDIO SRAM (16 KiB) =
+ * 0x12008000..0x1200bfff, ISP SRAM (4 KiB) = 0x1200c000..0x1200cfff.  The
+ * bank names are set as two-line labels vertically centred over the group
+ * of rows each covers, so the boundary is the halfway point of the table,
+ * not the row a given label happens to sit beside.
+ *
+ * Two vendor headers agree on 0x12008000 and are what the shipping code
+ * runs.  AudDrv_Afe.h:410,419 derives AFE_INTERNAL_SRAM_PHY_BASE as
+ * (AUDIO_HW_PHYSICAL_BASE - 0x70000 + 0x8000) with AUDIO_HW_PHYSICAL_BASE
+ * 0x12070000, i.e. 0x12008000, and AudDrv_Kernel.c:926,1457 ioremap()s
+ * that macro and hands it straight to the DL1 buffer allocation.  The LDVT
+ * header AudioAfe.h:415,426 reaches the same address the other way round,
+ * AUDIO_HW_PHYSICAL_BASE + 0x4000 off a 0x12000000 base - an offset of
+ * exactly one 32 KiB DISP bank, which only makes sense if the audio bank
+ * starts where the DISP bank ends.
+ *
+ * The one dissenting source is the comment on AudDrv_Afe.h:418 itself
+ * ("0x12004000~0x12007FFF (16K)"), which contradicts the macro sitting
+ * directly beneath it - and 0x12004000 is a quarter-way address inside the
+ * DISP bank, not a bank start, which is what gives the comment away.
+ */
+#define AFE_SRAM_PHYS_BASE	0x12008000
+#define AFE_SRAM_PHYS_END	0x1200bfff	/* inclusive */
+/*
+ * There is no NEWIF (AFE<->PMIC serial link) register on MT6589.  The
+ * offsets this driver used to program - 0x0138 and 0x013c - are MT6797
+ * ADDA registers: MT6589's AFE map goes from AFE_MEMIF_MON4 at +0x00e0
+ * straight to AFE_FOC_CON at +0x0170 with nothing in between, in both the
+ * data sheet and the vendor header.  The values written (0x03f87201 and a
+ * GENMASK(11,10) update) come from the same MT6797 code, so both were
+ * landing on unbacked addresses.
+ *
+ * The AFE<->PMIC link on this part is brought up by the MT6320 codec side
+ * plus the AFE clocks taken above; nothing needs programming here.
+ */
 
 static const struct regmap_config mt6589_afe_regmap_config = {
 	.reg_bits = 32,
@@ -120,21 +271,64 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 				struct snd_pcm_substream *substream);
 static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
 					 struct snd_pcm_substream *substream);
+static int mt6589_afe_sync_stop(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream);
 
 struct mt6589_afe {
 	struct device *dev;
 	struct regmap *regmap;
 	struct clk *clk;
 	struct clk *clk_i2s;
+	int irq;
 	struct snd_pcm_substream *dl1_substream;	/* active DL1 stream */
 	struct snd_pcm_substream *vul_substream;	/* active VUL stream */
 };
 
 /*
- * Hz -> the sparse AFE sample-rate code used by SampleRateTransform()
- * downstream (Soc_Aud_I2S_SAMPLERATE_*).  This is NOT the dense 0..8 table
- * below: 16k is 4, not 3, and 44.1k is 9, not 7.  It applies to the rate
- * fields in DAC_CON1, I2S_CON1 and IRQ_MCU_CON.
+ * Hz -> the AFE sample-rate code, as SampleRateTransform() produces it
+ * downstream (Soc_Aud_I2S_SAMPLERATE_*): 8k=0, 11.025k=1, 12k=2, 16k=3,
+ * 22.05k=4, 24k=5, 32k=6, 44.1k=7, 48k=8.
+ *
+ * Every rate field the driver programs - IRQ_MCU_CON[7:4] and [11:8],
+ * DAC_CON1[3:0] for DL1 and [19:16] for VUL, and I2S_CON1[11:8] - takes
+ * this same code, because SetMemIfSampleRate() and SetIRQMCUAttribute()
+ * both pass their argument through SampleRateTransform() before
+ * shifting it into place.  There is no second, sparse table in that path.
+ *
+ * The data sheet's "6 kHz to 96 kHz" audio figure is not achievable on this
+ * part.  SampleRateTransform() - the single function every AFE rate field goes
+ * through - has cases for exactly the nine rates below and falls through to
+ * `return Soc_Aud_I2S_SAMPLERATE_I2S_44K` for anything else
+ * (mt_soc_afe_control.c:374-400).  The shared audio V2 header does define
+ * AFE_88K/96K/174K/192K and the AFE kernel driver's own enum repeats them
+ * (mediatek/platform/common/hardware/audio/V2/include/AudioStreamAttribute.h:50-61,
+ * mt_soc_digital_type.h:256-259), but nothing ever emits those values, so
+ * asking for 88.2 or 96 kHz would reach the hardware as 44.1 kHz.
+ * The 4-bit rate fields are likewise full at the highest documented code (10),
+ * leaving no spare code to extend into.  Those rates are therefore rejected
+ * below with -EINVAL, and mt6589_afe_rate_code_sparse() returning an error is
+ * what keeps them out of the advertised mask.  There is also no 6 kHz code
+ * anywhere in the ladder.
+ *
+ * 12000 and 24000 *are* encodable (codes 2 and 6) and are offered; see the
+ * rate masks below, which have to add them by hand because ALSA gives those
+ * two their own bits.
+ */
+
+/*
+ * Hz -> the AFE's own rate code.
+ *
+ * This is a *sparse* table, distinct from the dense 0..8 one the PMIC
+ * codec uses for its DL SRC2 register (mt6320.c).  The stock driver
+ * writes u4SamplingRateConvert[] = {0, 1, 2, 4, 5, 6, 8, 9, 10}
+ * (AudioAfe.c) into AFE_DAC_CON1's DL1 mode, AFE_I2S_CON1 and the IRQ
+ * counter select.  The two agree only up to 12 kHz, so using the dense
+ * code here programs the wrong divider for nearly every rate.
+ *
+ * The table is verbatim u4SamplingRateConvert[] (AudioAfe.c:66) indexed by the
+ * dense rate enum, so the {0,1,2,4,5,6,8,9,10} code sequence must not be
+ * "tidied" into 0..8.  Values below 8000 and above 48000 return -EINVAL on
+ * purpose - see the rate-transform note above this function.
  */
 static int mt6589_afe_rate_code_sparse(unsigned int rate)
 {
@@ -153,41 +347,18 @@ static int mt6589_afe_rate_code_sparse(unsigned int rate)
 }
 
 /*
- * Hz -> dense DL_SRC2 rate code.  SetDLSrc2() uses its own 0..8 table,
- * distinct from SampleRateTransform() above.
+ * Rates the AFE hardware can encode, as an ALSA rate mask.
+ *
+ * SNDRV_PCM_RATE_8000_48000 looks like it should cover everything the table
+ * above encodes, but it does not contain 12000 or 24000: ALSA assigns those two
+ * bits of their own, added long after the range macro was defined
+ * (SNDRV_PCM_RATE_12000 = 1U<<17, SNDRV_PCM_RATE_24000 = 1U<<18,
+ * include/sound/pcm.h:127-128).  Without the explicit OR they are supported by
+ * the hardware and by the ladder above yet unavailable to userspace.
  */
-static int mt6589_afe_rate_code(unsigned int rate)
-{
-	switch (rate) {
-	case 8000:	return 0;
-	case 11025:	return 1;
-	case 12000:	return 2;
-	case 16000:	return 3;
-	case 22050:	return 4;
-	case 24000:	return 5;
-	case 32000:	return 6;
-	case 44100:	return 7;
-	case 48000:	return 8;
-	default:	return -EINVAL;
-	}
-}
-
-/* Hz -> ADDA downlink SRC input-mode code. */
-static int mt6589_afe_adda_rate_code(unsigned int rate)
-{
-	switch (rate) {
-	case 8000:	return 0;
-	case 11025:	return 1;
-	case 12000:	return 2;
-	case 16000:	return 3;
-	case 22050:	return 4;
-	case 24000:	return 5;
-	case 32000:	return 6;
-	case 44100:	return 7;
-	case 48000:	return 8;
-	default:	return -EINVAL;
-	}
-}
+#define MT6589_AFE_RATES	(SNDRV_PCM_RATE_8000_48000 |	\
+				 SNDRV_PCM_RATE_12000 |		\
+				 SNDRV_PCM_RATE_24000)
 
 static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 	{
@@ -196,7 +367,7 @@ static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 			.stream_name = "DL1 Playback",
 			.channels_min = 1,
 			.channels_max = 2,
-			.rates = SNDRV_PCM_RATE_8000_48000,
+			.rates = MT6589_AFE_RATES,
 			.formats = SNDRV_PCM_FMTBIT_S16_LE,
 		},
 	},
@@ -206,7 +377,22 @@ static struct snd_soc_dai_driver mt6589_afe_dais[] = {
 			.stream_name = "VUL Capture",
 			.channels_min = 1,
 			.channels_max = 2,
-			.rates = SNDRV_PCM_RATE_8000_48000,
+			/*
+			 * The AFE's own VUL ladder does encode 12 kHz and
+			 * 24 kHz, so this side advertises the full AFE set.
+			 *
+			 * A capture stream is nevertheless limited to
+			 * 8/16/32/48 kHz end to end, because the codec's
+			 * uplink SRC encodes only those four rates
+			 * (MT6320_CODEC_UL_RATES, mt6320_ul_src_rate_code()).
+			 * ALSA intersects the per-DAI rate masks of a link, so
+			 * that narrower codec mask is what userspace
+			 * negotiates against and the two extra rates never
+			 * reach hw_params.  They are deliberately not repeated
+			 * here as a restriction: the AFE really can encode
+			 * them, and it is the codec that cannot.
+			 */
+			.rates = MT6589_AFE_RATES,
 			.formats = SNDRV_PCM_FMTBIT_S16_LE,
 		},
 	},
@@ -216,7 +402,7 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	/* on-chip SRAM buffer, no mmap */
 	.info = SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S16_LE,
-	.rates = SNDRV_PCM_RATE_8000_48000,
+	.rates = MT6589_AFE_RATES,
 	.rate_min = 8000,
 	.rate_max = 48000,
 	.channels_min = 1,
@@ -225,8 +411,43 @@ static const struct snd_pcm_hardware mt6589_afe_hardware = {
 	.period_bytes_max = 8192,
 	.periods_min = 2,
 	.periods_max = 16,
-	.buffer_bytes_max = 16 * 1024,		/* AFE on-chip SRAM */
+	/*
+	 * The AFE SRAM is 16 KB and is shared by both directions. Handing
+	 * the whole window to one stream leaves nothing for the other, so
+	 * cap it at half. speaker-test asks for 8192 with a 4096 period,
+	 * which still fits.
+	 */
+	.buffer_bytes_max = 8 * 1024,
 };
+
+/*
+ * DAPM graph helper for the DL1 and VUL memory-interface widgets.
+ *
+ * The memory-interface enable bits are owned by the PCM trigger path.  That
+ * gives each stream one clear hardware owner and keeps the start sequence in
+ * the same place as CUR/CONN/I2S programming.  AFE_ON remains derived from
+ * the active stream pointers by mt6589_afe_update_afe_on().
+ */
+static int mt6589_afe_update_afe_on(struct mt6589_afe *afe)
+{
+	bool active = READ_ONCE(afe->dl1_substream) ||
+			      READ_ONCE(afe->vul_substream);
+
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON0,
+				 AFE_DAC_CON0_AFE_ON,
+				 active ? AFE_DAC_CON0_AFE_ON : 0);
+}
+
+static int mt6589_afe_memif_event(struct snd_soc_dapm_widget *w,
+				  struct snd_kcontrol *kcontrol, int event)
+{
+	/*
+	 * The DAPM widgets only model the memory-interface graph.  The actual
+	 * AFE_DAC_CON0 enable sequence belongs to the PCM trigger callbacks,
+	 * where CUR/CONN/I2S configuration has already been completed.
+	 */
+	return 0;
+}
 
 static int mt6589_afe_pcm_open(struct snd_soc_component *comp,
 			       struct snd_pcm_substream *substream)
@@ -248,8 +469,38 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned int bytes = params_buffer_bytes(params);
-	u32 base = lower_32_bits(runtime->dma_addr);
+	dma_addr_t dma = runtime->dma_addr;
+	u64 base = lower_32_bits(dma);
 	int ret;
+
+	/*
+	 * The AFE has no DMA engine for these ring buffers - it dereferences
+	 * DL1_BASE/DL1_END itself - so the buffer has to sit in the AFE SRAM.
+	 *
+	 * SNDRV_DMA_TYPE_DEV_IRAM cannot be trusted to have put it there:
+	 * snd_dma_iram_alloc() falls back to plain dma_alloc_coherent() the
+	 * moment the gen_pool lookup or the allocation fails (it does so
+	 * silently, only retyping dmab->dev.type to SNDRV_DMA_TYPE_DEV), and
+	 * it falls back whenever of_gen_pool_get() cannot resolve the "iram"
+	 * phandle to a live pool - including when the sram@ node probed late
+	 * or was never instantiated at all, since the phandle then has no
+	 * platform_device and gen_pool_get() returns NULL.
+	 *
+	 * That fallback yields a perfectly ordinary SDRAM buffer that the AFE
+	 * can never fetch, and the resulting failure is silent: the stream
+	 * opens, periods elapse on schedule off the MCU counter, and the
+	 * DAC is fed nothing.  So refuse it loudly instead.
+	 */
+	if (dma < AFE_SRAM_PHYS_BASE ||
+	    dma > AFE_SRAM_PHYS_END ||
+	    dma + bytes - 1 > AFE_SRAM_PHYS_END) {
+		phys_addr_t sram_base = AFE_SRAM_PHYS_BASE;
+		phys_addr_t sram_end = AFE_SRAM_PHYS_END;
+
+		return dev_err_probe(comp->dev, -EINVAL,
+				     "PCM buffer at %pa (%u bytes) is outside the AFE SRAM window %pa..%pa; the AFE cannot fetch it\n",
+				     &dma, bytes, &sram_base, &sram_end);
+	}
 
 	/* Program this direction's memif DMA ring, in the AFE on-chip SRAM. */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -261,8 +512,16 @@ static int mt6589_afe_pcm_hw_params(struct snd_soc_component *comp,
 		if (ret)
 			return ret;
 
-		return regmap_clear_bits(afe->regmap, AFE_MEMIF_PBUF_SIZE,
-					 AFE_MEMIF_PBUF_SIZE_DL1);
+		/*
+		 * DL1_CUR is the memif's read pointer.  The stock driver does
+		 * not program it either, but it works around the consequence
+		 * twice - in both its ISR and its pointer callback it reads
+		 * DL1_CUR and, when it comes back 0, substitutes the buffer
+		 * address.  It really can read 0, so do the substitution here
+		 * rather than in the callback: seed the register explicitly so
+		 * the very first pointer read after start is already sane.
+		 */
+		return regmap_write(afe->regmap, AFE_DL1_CUR, base);
 	}
 
 	ret = regmap_write(afe->regmap, AFE_VUL_BASE, base);
@@ -281,23 +540,20 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	int adda_code = mt6589_afe_adda_rate_code(runtime->rate);
-	int rate_code = mt6589_afe_rate_code(runtime->rate);
-	int mcu_rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
-	u32 adda_con0;
+	int sparse_code = mt6589_afe_rate_code_sparse(runtime->rate);
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 		return mt6589_afe_vul_prepare(comp, substream);
 	int ret;
 
-	if (adda_code < 0 || rate_code < 0 || mcu_rate_code < 0)
+	if (sparse_code < 0)
 		return -EINVAL;
 
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
 	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
 				 AFE_IRQ_MCU_CON_IRQ1_RATE,
 				 FIELD_PREP(AFE_IRQ_MCU_CON_IRQ1_RATE,
-					    mcu_rate_code));
+					    sparse_code));
 	if (ret)
 		return ret;
 
@@ -323,40 +579,36 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (ret)
 		return ret;
 
-	/* Match the stock SetDLSrc2() sequence. */
-	adda_con0 = AFE_ADDA_DL_SRC2_CON0_BASE |
-		    FIELD_PREP(AFE_ADDA_DL_SRC2_CON0_RATE, adda_code);
-	if (adda_code == 0 || adda_code == 3)
-		adda_con0 |= AFE_ADDA_DL_SRC2_CON0_VOICE_MODE;
-
-	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON0, adda_con0);
-	if (ret)
-		return ret;
-
-	ret = regmap_write(afe->regmap, AFE_ADDA_DL_SRC2_CON1,
-			   AFE_ADDA_DL_SRC2_CON1_STOCK_VALUE);
-	if (ret)
-		return ret;
-
+	/*
+	 * No sample-rate conversion block is programmed here.  Normal DL1
+	 * playback does not go through the ASRC: the stock driver starts
+	 * I2S_OUT_DAC by connecting I05 -> O03 and I06 -> O04 (the
+	 * connections set above), enabling the memory interface, and turning
+	 * on the I2S DAC.  The rate itself goes to the DAC through
+	 * DAC_CON1, which is programmed further down.
+	 */
 	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
 			   AFE_I2S_CON1_BASE |
-			   FIELD_PREP(AFE_I2S_CON1_RATE, mcu_rate_code));
+			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code));
 	if (ret)
 		return ret;
 
 	/*
-	 * DAC_CON1 carries the memif rate fields and SetSampleRate()
-	 * transforms its input through SampleRateTransform() first, so this
-	 * is the sparse code, not the dense DL_SRC2 one.
+	 * DAC_CON1 carries the DL1 memory-interface rate in bits [3:0].
+	 * SetMemIfSampleRate() writes it there for MEM_DL1, and passes it
+	 * u4SamplingRateConvert[] - the same sparse table used above.
 	 */
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_DL1_RATE,
 				 FIELD_PREP(AFE_DAC_CON1_DL1_RATE,
-					    mcu_rate_code));
+					    sparse_code));
 	if (ret)
 		return ret;
 
-	return 0;
+	/* AFE_DAC_CON1 bit 21 selects mono (1) versus stereo (0) DL1 data. */
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_DL1_DATA,
+				 runtime->channels == 1 ? AFE_DAC_CON1_DL1_DATA : 0);
 }
 
 static int mt6589_afe_stop(struct mt6589_afe *afe)
@@ -383,23 +635,8 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				AFE_ADDA_DL_SRC2_CON0_ON);
-	if (ret && !first_err)
-		first_err = ret;
-
 	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON1,
 				AFE_I2S_CON1_ON);
-	if (ret && !first_err)
-		first_err = ret;
-
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				AFE_ADDA_UL_DL_CON0_ON);
-	if (ret && !first_err)
-		first_err = ret;
-
-	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-				AFE_DAC_CON0_AFE_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -411,11 +648,14 @@ static int mt6589_afe_stop(struct mt6589_afe *afe)
 	 * can see an xrun on the first buffer after a stop/start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_STATUS_IRQ1);
 	if (ret && !first_err)
 		first_err = ret;
 
-	afe->dl1_substream = NULL;
+	WRITE_ONCE(afe->dl1_substream, NULL);
+	ret = mt6589_afe_update_afe_on(afe);
+	if (ret && !first_err)
+		first_err = ret;
 	return first_err;
 }
 
@@ -445,21 +685,11 @@ static int mt6589_afe_pcm_trigger(struct snd_soc_component *comp,
 		 * Publish the substream before enabling IRQ1 so the first
 		 * period interrupt cannot race with this assignment.
 		 */
-		afe->dl1_substream = substream;
+		WRITE_ONCE(afe->dl1_substream, substream);
 
 		/* Match the stock SetI2SDacEnable()/EnableAfe() ordering. */
-		ret = regmap_set_bits(afe->regmap, AFE_ADDA_DL_SRC2_CON0,
-				      AFE_ADDA_DL_SRC2_CON0_ON);
-		if (ret)
-			return ret;
-
 		ret = regmap_set_bits(afe->regmap, AFE_I2S_CON1,
 				      AFE_I2S_CON1_ON);
-		if (ret)
-			goto err_stop;
-
-		ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_DL_CON0,
-				      AFE_ADDA_UL_DL_CON0_ON);
 		if (ret)
 			goto err_stop;
 
@@ -503,12 +733,24 @@ static snd_pcm_uframes_t mt6589_afe_pcm_pointer(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	u32 base = lower_32_bits(runtime->dma_addr);
+	u64 base = lower_32_bits(runtime->dma_addr);
 	unsigned int cur = 0;
 
 	regmap_read(afe->regmap,
 		    substream->stream == SNDRV_PCM_STREAM_CAPTURE ?
 		    AFE_VUL_CUR : AFE_DL1_CUR, &cur);
+
+	/*
+	 * DL1_CUR legitimately reads back 0 until the memif has started
+	 * fetching; the stock driver treats that one value specially and
+	 * substitutes the buffer address rather than reporting a wrapped
+	 * pointer.  hw_params now seeds the register, but keep the same
+	 * substitution here so a hardware reset under a running stream
+	 * cannot turn into a wild pointer.
+	 */
+	if (!cur)
+		cur = base;
+
 	if (cur < base || cur >= base + runtime->dma_bytes)
 		return 0;
 	return bytes_to_frames(runtime, cur - base);
@@ -518,6 +760,25 @@ static int mt6589_afe_pcm_new(struct snd_soc_component *comp,
 				    struct snd_soc_pcm_runtime *rtd)
 {
 	size_t size = mt6589_afe_hardware.buffer_bytes_max;
+	struct gen_pool *pool;
+
+	/*
+	 * The ring is not allocated yet - snd_pcm_lib_malloc_pages() runs
+	 * from snd_pcm_hw_params(), not from here - but the AFE SRAM pool it
+	 * will come from has to exist.  snd_dma_iram_alloc() silently degrades
+	 * to ordinary SDRAM when it does not, and the AFE cannot fetch SDRAM,
+	 * so refuse to create the PCM at all rather than hand the user a
+	 * stream that opens and then produces nothing.
+	 */
+	pool = of_gen_pool_get(comp->dev->of_node, "iram", 0);
+	if (!pool)
+		return dev_err_probe(comp->dev, -ENODEV,
+				     "no gen_pool for the AFE SRAM (iram phandle)\n");
+
+	if (gen_pool_avail(pool) < size)
+		return dev_err_probe(comp->dev, -ENOMEM,
+				     "AFE SRAM has %zu bytes free, need %zu\n",
+				     gen_pool_avail(pool), size);
 
 	return snd_pcm_set_managed_buffer_all(rtd->pcm,
 					      SNDRV_DMA_TYPE_DEV_IRAM,
@@ -534,14 +795,20 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 {
 	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
 	struct snd_pcm_runtime *runtime = substream->runtime;
+	/* AFE rate fields use the sparse table, as SetMemIfSampleRate() does. */
 	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
-	/* Select the internal ADC, matching SetI2SAdcIn(). */
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_TOP_CON0,
-				AFE_ADDA_TOP_CON0_INTERNAL_ADC);
-	if (ret)
-		return ret;
+	/*
+	 * Mirror the playback-side check in mt6589_afe_pcm_prepare(): that
+	 * function returns to vul_prepare() before its own check, so without
+	 * this a negative code reaches FIELD_PREP().  FIELD_PREP only masks
+	 * the field, it does not reject the value, so -EINVAL would be
+	 * truncated into the 4-bit VUL rate field and program a plausible
+	 * looking but wrong divider.
+	 */
+	if (rate_code < 0)
+		return -EINVAL;
 
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_VUL_RATE,
@@ -549,9 +816,22 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	if (ret)
 		return ret;
 
-	/* One VUL buffer holds a single interleaved stream. */
-	return regmap_set_bits(afe->regmap, AFE_DAC_CON1,
-			       AFE_DAC_CON1_VUL_MONO);
+	/*
+	 * Configure the dedicated ADC I2S input block like the Lenovo BSP:
+	 * buffer-update word 8, I2S framing, 16-bit samples, no LR swap/invert
+	 * or loopback. Enable is asserted by the VUL trigger path.
+	 */
+	ret = regmap_write(afe->regmap, AFE_I2S_CON2,
+			   FIELD_PREP(AFE_I2S_CON2_BUFFER_UPDATE_WORD, 8) |
+			   FIELD_PREP(AFE_I2S_CON2_RATE, rate_code) |
+			   AFE_I2S_CON2_FMT);
+	if (ret)
+		return ret;
+
+	/* Match VUL_DATA/VUL_R_MONO to the ALSA channel count; mono uses L. */
+	return regmap_update_bits(afe->regmap, AFE_DAC_CON1,
+				 AFE_DAC_CON1_VUL_DATA | AFE_DAC_CON1_VUL_R_MONO,
+				 runtime->channels == 1 ? AFE_DAC_CON1_VUL_DATA : 0);
 }
 
 static int mt6589_afe_vul_start(struct snd_soc_component *comp,
@@ -563,14 +843,13 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 	int rate_code = mt6589_afe_rate_code_sparse(runtime->rate);
 	int ret;
 
-	afe->vul_substream = substream;
+	/* Same guard as in vul_prepare(): this recomputes the code itself. */
+	if (rate_code < 0)
+		return -EINVAL;
+
+	WRITE_ONCE(afe->vul_substream, substream);
 
 	ret = regmap_write(afe->regmap, AFE_VUL_CUR, base);
-	if (ret)
-		goto err;
-
-	/* I2S ADC input, then the uplink SRC that feeds the VUL memif. */
-	ret = regmap_set_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
 	if (ret)
 		goto err;
 
@@ -592,6 +871,10 @@ static int mt6589_afe_vul_start(struct snd_soc_component *comp,
 		goto err;
 
 	ret = regmap_set_bits(afe->regmap, AFE_CONN3, AFE_CONN3_VUL_O10);
+	if (ret)
+		goto err;
+
+	ret = regmap_set_bits(afe->regmap, AFE_I2S_CON2, AFE_I2S_CON2_EN);
 	if (ret)
 		goto err;
 
@@ -631,12 +914,20 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_ADDA_UL_SRC_CON0, BIT(0));
+	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
+				AFE_DAC_CON0_VUL_ON);
 	if (ret && !first_err)
 		first_err = ret;
 
-	ret = regmap_clear_bits(afe->regmap, AFE_DAC_CON0,
-				AFE_DAC_CON0_VUL_ON);
+	/*
+	 * Disable the I2S input path again.  AFE_I2S_CON is bidirectional, so
+	 * leaving it enabled keeps the AFE's first I2S block driving pins it
+	 * does not own after arecord exits, and the codec's AIF1 is the other
+	 * end of that link.  Clear I2S_EN explicitly rather than writing 0, so
+	 * the rate and format fields keep whatever they held and the next
+	 * open reprograms them (vul_prepare() does).
+	 */
+	ret = regmap_clear_bits(afe->regmap, AFE_I2S_CON2, AFE_I2S_CON2_EN);
 	if (ret && !first_err)
 		first_err = ret;
 
@@ -645,11 +936,14 @@ static int mt6589_afe_vul_stop(struct mt6589_afe *afe)
 	 * fire again on the next start.
 	 */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_STATUS_IRQ2);
 	if (ret && !first_err)
 		first_err = ret;
 
-	afe->vul_substream = NULL;
+	WRITE_ONCE(afe->vul_substream, NULL);
+	ret = mt6589_afe_update_afe_on(afe);
+	if (ret && !first_err)
+		first_err = ret;
 	return first_err;
 }
 
@@ -661,23 +955,92 @@ static int mt6589_afe_vul_stop_substream(struct snd_soc_component *comp,
 	return mt6589_afe_vul_stop(afe);
 }
 
+/*
+ * DAPM graph.
+ *
+ * Without these the codec's routes have nothing to attach to: a route
+ * naming a widget that does not exist can never be walked, so the DAC is
+ * never powered up and mt6320_dac_event() never runs.  That is what kept
+ * the whole analog side dead.
+ *
+ * The memory interfaces feeding the interconnect are "DL1" and "VUL", and
+ * the interconnect itself runs DL1 left/right into I05/I06 and out to
+ * O03/O04 - the path the stock driver builds with SetinputConnection(I05,
+ * O03) and SetinputConnection(I06, O04).
+ */
+static const struct snd_soc_dapm_widget mt6589_afe_widgets[] = {
+	/*
+	 * DL1 and VUL are the memory interfaces.  They carry an event
+	 * handler that powers DAC_CON0 as DAPM walks the graph, mirroring
+	 * what the stock driver does around SetMEMIFEnable().
+	 *
+	 * The stream endpoints themselves ("DL1 Playback", "VUL Capture")
+	 * need no widget of their own: a DAI gets an auto-created one named
+	 * after its stream_name, and dapm_connect_dai_pair() joins the codec
+	 * to the AFE through exactly those.
+	 */
+	SND_SOC_DAPM_OUT_DRV_E("DL1", SND_SOC_NOPM, 0, 0, NULL, 0,
+		      mt6589_afe_memif_event,
+		      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	SND_SOC_DAPM_OUT_DRV_E("VUL", SND_SOC_NOPM, 0, 0, NULL, 0,
+			      mt6589_afe_memif_event,
+			      SND_SOC_DAPM_POST_PMD | SND_SOC_DAPM_PRE_PMU),
+	/*
+	 * The Ixx/Oxx interconnect widgets the stock driver names in
+	 * SetinputConnection() are deliberately absent here.  They are not
+	 * endpoints, and nothing on the codec side routes to them, so
+	 * dapm_generic_check_power() would see no sink and they would never
+	 * power - dead weight that misleads a reader into thinking the
+	 * interconnect is modelled.  The interconnect itself is hardware:
+	 * AFE_CONN1 bit 21 (I05_O03_S) and AFE_CONN2 bit 6 (I06_O04_S) are
+	 * programmed in prepare().
+	 *
+	 * The graph therefore has just the two memory interfaces, with the
+	 * codec's DAC hanging off the DAI widget DAPM creates for us:
+	 *
+	 *	DL1 Playback -> DL1 -> (AFE_CONN1/CON2) -> I2S2 -> MT6320 DAC
+	 */
+};
+
+static const struct snd_soc_dapm_route mt6589_afe_routes[] = {
+	/* Playback: the DAI's own widget feeds the DL1 memory interface. */
+	{ "DL1", NULL, "DL1 Playback" },
+	/* Capture: the I2S ADC feeds the VUL memory interface. */
+	{ "VUL", NULL, "VUL Capture" },
+};
+
 static const struct snd_soc_component_driver mt6589_afe_component = {
 	.name = "mt6589-afe-pcm",
+	.dapm_widgets = mt6589_afe_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(mt6589_afe_widgets),
+	.dapm_routes = mt6589_afe_routes,
+	.num_dapm_routes = ARRAY_SIZE(mt6589_afe_routes),
 	.open = mt6589_afe_pcm_open,
 	.hw_params = mt6589_afe_pcm_hw_params,
 	.prepare = mt6589_afe_pcm_prepare,
 	.trigger = mt6589_afe_pcm_trigger,
+	.sync_stop = mt6589_afe_sync_stop,
 	.pointer = mt6589_afe_pcm_pointer,
 	.pcm_new = mt6589_afe_pcm_new,
 };
 
-/* IRQ1 marks a DL1 period, IRQ2 a VUL one; hardirq, fast_io regmap,
+/*
+ * IRQ1 marks a DL1 period, IRQ2 a VUL one; hardirq, fast_io regmap,
  * atomic PCM.  Active-low.
+ *
+ * The line is level triggered and the status bits are cleared nowhere else,
+ * so the handler has to ack before doing anything that can sleep: it writes
+ * the status it captured to AFE_IRQ_CLR first, and only then calls
+ * snd_pcm_period_elapsed().  Returning with the line still asserted would
+ * simply re-enter this handler forever.
+ *
+ * Not a shared handler - see the devm_request_irq() call in the probe.
  */
 static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 {
 	struct mt6589_afe *afe = dev_id;
-	unsigned int status;
+	struct snd_pcm_substream *dl1, *vul;
+	unsigned int status, to_clear, owned;
 	int ret;
 
 	ret = regmap_read(afe->regmap, AFE_IRQ_MCU_STATUS, &status);
@@ -685,33 +1048,50 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 		dev_err_ratelimited(afe->dev,
 				    "failed to read AFE IRQ status: %d\n",
 				    ret);
+		/* Best-effort drop of the level line so we do not spin. */
+		regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+			     AFE_IRQ_MCU_CLR_LINE);
 		return IRQ_HANDLED;
 	}
 
-	status &= AFE_IRQ_MCU_STATUS_MASK;
-	if (!status) {
-		ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-				   AFE_IRQ_MCU_CLR_NOSTATUS);
-		if (ret)
-			dev_err_ratelimited(afe->dev,
-					    "failed to clear AFE IRQ: %d\n",
-					    ret);
-		return IRQ_HANDLED;
-	}
+	/*
+	 * Ack every bit that can hold the level line, then report periods
+	 * only for the IRQs this driver enables.  Capture the raw status
+	 * first so period_elapsed still sees the edge we are clearing.
+	 */
+	to_clear = status & AFE_IRQ_MCU_STATUS_LINE;
+	if (!to_clear)
+		to_clear = AFE_IRQ_MCU_CLR_LINE;
 
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ1) && afe->dl1_substream)
-		snd_pcm_period_elapsed(afe->dl1_substream);
-
-	if ((status & AFE_IRQ_MCU_STATUS_IRQ2) && afe->vul_substream)
-		snd_pcm_period_elapsed(afe->vul_substream);
-
-	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, status);
+	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR, to_clear);
 	if (ret)
 		dev_err_ratelimited(afe->dev,
 				    "failed to clear AFE IRQ status: %d\n",
 				    ret);
 
+	owned = status & AFE_IRQ_MCU_STATUS_OWNED;
+	if (!owned)
+		return IRQ_HANDLED;
+
+	dl1 = READ_ONCE(afe->dl1_substream);
+	vul = READ_ONCE(afe->vul_substream);
+
+	if ((owned & AFE_IRQ_MCU_STATUS_IRQ1) && dl1)
+		snd_pcm_period_elapsed(dl1);
+
+	if ((owned & AFE_IRQ_MCU_STATUS_IRQ2) && vul)
+		snd_pcm_period_elapsed(vul);
+
 	return IRQ_HANDLED;
+}
+
+static int mt6589_afe_sync_stop(struct snd_soc_component *comp,
+				struct snd_pcm_substream *substream)
+{
+	struct mt6589_afe *afe = snd_soc_component_get_drvdata(comp);
+
+	synchronize_irq(afe->irq);
+	return 0;
 }
 
 static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
@@ -732,16 +1112,6 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to set DMA mask\n");
 
-	afe->clk = devm_clk_get_enabled(dev, "afe");
-	if (IS_ERR(afe->clk))
-		return dev_err_probe(dev, PTR_ERR(afe->clk),
-				     "failed to get/enable the audio clock\n");
-
-	afe->clk_i2s = devm_clk_get_enabled(dev, "i2s");
-	if (IS_ERR(afe->clk_i2s))
-		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
-				     "failed to get/enable the I2S clock\n");
-
 	/* The AFE registers are in the parent audsys syscon window. */
 	ret = of_address_to_resource(dev->parent->of_node, 0, &res);
 	if (ret)
@@ -755,37 +1125,29 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 				     "failed to init AFE regmap\n");
 
 	/*
-	 * Power on the AFE top.  AUDIO_TOP_CON0 also carries the CCF clock
-	 * gate bits for the AFE (bit 2) and I2S (bit 6) blocks, which were
-	 * just enabled above through the clk provider, so touch only the
-	 * AFE power bit.
+	 * Release the AFE and I2S power-down bits before anything enables
+	 * the clocks that live behind them, otherwise the register writes
+	 * that follow land on a block that is still powered down.
+	 *
+	 * PDN_AFE resets to 0 (powered on) but PDN_I2S resets to 1 (powered
+	 * down), so both are cleared explicitly.
 	 */
 	ret = regmap_update_bits(afe->regmap, AUDIO_TOP_CON0,
-				 AUDIO_TOP_CON0_AFE_ON,
-				 AUDIO_TOP_CON0_AFE_ON);
+				 AUDIO_TOP_CON0_PDN_AFE |
+				 AUDIO_TOP_CON0_PDN_I2S, 0);
 	if (ret)
 		return dev_err_probe(dev, ret,
-				     "failed to enable AFE\n");
+				     "failed to power on AFE\n");
 
-	ret = regmap_write(afe->regmap, AFE_ADDA_NEWIF_CFG0,
-			   AFE_ADDA_NEWIF_CFG0_VAL);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "failed to configure AFE NEWIF\n");
+	afe->clk = devm_clk_get_enabled(dev, "afe");
+	if (IS_ERR(afe->clk))
+		return dev_err_probe(dev, PTR_ERR(afe->clk),
+				     "failed to get/enable the audio clock\n");
 
-	/*
-	 * AFE_ADDA_NEWIF_CFG1 carries the voice-mode delay selection in
-	 * bits [11:10], which downstream programs per stream from the
-	 * uplink (ADC) sample rate.  There is no capture path here, so
-	 * apply the non-zero delay the stock driver uses for its default
-	 * case rather than writing a whole-register value.
-	 */
-	ret = regmap_update_bits(afe->regmap, AFE_ADDA_NEWIF_CFG1,
-				 AFE_ADDA_NEWIF_CFG1_VOICE,
-				 AFE_ADDA_NEWIF_CFG1_VOICE);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "failed to configure AFE NEWIF delay\n");
+	afe->clk_i2s = devm_clk_get_enabled(dev, "i2s");
+	if (IS_ERR(afe->clk_i2s))
+		return dev_err_probe(dev, PTR_ERR(afe->clk_i2s),
+				     "failed to get/enable the I2S clock\n");
 
 	/* mask all AFE IRQs + clear stale status before hooking the GIC */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CON, 0);
@@ -793,8 +1155,9 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to mask AFE IRQs\n");
 
+	/* Drop any sticky STATUS left by the bootloader before request_irq. */
 	ret = regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
-			   AFE_IRQ_MCU_CLR_NOSTATUS);
+			   AFE_IRQ_MCU_CLR_LINE);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "failed to clear AFE IRQ status\n");
@@ -802,6 +1165,25 @@ static int mt6589_afe_pcm_dev_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
+	afe->irq = irq;
+	/*
+	 * Flags 0 is deliberate: it leaves the trigger type exactly as the
+	 * device tree declared it (IRQ_TYPE_LEVEL_LOW for this node), and the
+	 * level behaviour is required here - the AFE status bits stay set
+	 * until mt6589_afe_irq() clears them, so an edge-triggered line would
+	 * drop a period whose status it could not ack in time.
+	 *
+	 * Passing 0 does not silently downgrade the interrupt to an edge one:
+	 * request_irq() only calls __irq_set_trigger() when IRQF_TRIGGER_MASK
+	 * is actually set in the flags (kernel/irq/manage.c:1715-1721), so
+	 * with 0 the trigger configured earlier from the DT by the GIC driver
+	 * stands.
+	 *
+	 * No IRQF_SHARED: SPI 104 is the AFE's own interrupt line - the data
+	 * sheet's interrupt table names it "Afe_irq_mcu_b" and gives no other
+	 * source - so it is never requested twice and the handler does not
+	 * need to be chained.
+	 */
 	ret = devm_request_irq(dev, irq, mt6589_afe_irq, 0, "mt6589-afe", afe);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to request AFE irq %d\n", irq);
