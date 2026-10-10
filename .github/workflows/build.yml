@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+name: build
+
+on:
+  push:
+
+env:
+  DEFCONFIG: lenovo-blade_defconfig
+  ARCH: arm
+  LLVM: 1
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential \
+            dwarves libelf-dev libssl-dev python3 \
+            llvm-dev clang lld git rsync cpio kmod pahole zstd
+
+      - name: Cache ccache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: ${{ env.DEFCONFIG }}-linux
+
+      - name: Configure
+        run: |
+          make ${{ env.DEFCONFIG }}
+
+      - name: Build
+        run: |
+          make -j"$(nproc)" CC="ccache clang"
+
+  dtbs_check:
+    name: dtbs_check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dtc and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential libelf-dev \
+            python3 python3-pip python3-setuptools llvm-dev clang lld
+
+      - name: Install dtschema
+        run: |
+         python3 -m pip install dtschema
+
+      - name: Configure
+        run: make ${{ env.DEFCONFIG }}
+
+      - name: Run dtbs_check
+        run: make dtbs_check
+
+  dt_binding_check:
+    name: dt_binding_check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc binutils bison flex build-essential libelf-dev \
+            python3 python3-pip python3-setuptools llvm-dev clang lld
+
+      - name: Install dtschema
+        run: |
+          python3 -m pip install dtschema
+
+      - name: Run dt_binding_check
+        run: |
+          make dt_binding_check
