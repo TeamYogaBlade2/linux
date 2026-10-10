@@ -839,15 +839,13 @@ static const struct mtk_disp_rdma_data mt6589_rdma_driver_data = {
 	/* ddp_rdma.c:95 / RDMAReset(). */
 	.fifo_con = 0x80f00008,
 	/*
-	 * Unsourced: the data sheet gives MEM_GMC_SETTING_0 a reset value of
-	 * 0x0a0a0a0a, the shared upstream default RDMA_MEM_GMC is 0x40402020,
-	 * and the stock driver never writes this register at all - it relies
-	 * on the reset value.  This 0x20402040 came with the port and matches
-	 * neither.  Left as it is rather than changed to a value with no
-	 * better evidence; flagging it so it is a known-unknown rather than
-	 * an oversight.
+	 * Zero: MEM_GMC_SETTING_0 stays at its reset value.  The stock
+	 * driver never writes this register (data sheet reset 0x0a0a0a0a,
+	 * upstream generic 0x40402020; 0x20402040 matched neither).  On
+	 * this SoC layer_config never runs anyway (direct_link_no_plane) -
+	 * this only makes the intent explicit.
 	 */
-	.mem_gmc_val = 0x20402040,
+	.mem_gmc_val = 0,
 	.reset = mtk_rdma_reset_mt6589,
 	/*
 	 * This block's INT_STATUS has exactly the six bits named above, and
