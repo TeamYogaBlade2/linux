@@ -56,8 +56,14 @@
  * call, then restores it once the hook switch settles.
  */
 #define MT6320_ACCDET_DEBOUNCE0_BTN	0x0400
-/* ACCDET_CON0 (ACCDET_RSV): micbias/AUXADC switch, 1.9 V mode. */
-#define MT6320_ACCDET_CON0_MICBIAS_1V9	0x1090
+/*
+ * Mic bias / AUXADC switch.  This board uses ACCDET_28V_MODE, where the
+ * downstream driver drives AUDENCSPARE_CON0 rather than the ACCDET_RSV
+ * (ACCDET_CON0) 1.9 V encoding.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_MICBIAS_ENABLE	0x01
+#define MT6320_ACCDET_MICBIAS_DISABLE	0x00
 
 struct mt6320_accdet {
 	struct device *dev;
@@ -68,6 +74,7 @@ struct mt6320_accdet {
 	struct snd_soc_jack *jack;
 	struct mutex lock;
 	struct delayed_work key_work;
+	struct delayed_work eint_work;
 	int accdet_irq;
 	int eint_irq;
 	int last_state;
@@ -239,9 +246,15 @@ static void mt6320_accdet_handle_state(struct mt6320_accdet *priv)
 					   MT6320_ACCDET_PWM_WIDTH_VALUE);
 			if (ret)
 				return;
+			/*
+			 * The threshold keeps its own value.  Downstream
+			 * writes the width into this register too, but only
+			 * under ACCDET_PIN_RECOGNIZATION, which this board
+			 * does not enable.
+			 */
 			ret = regmap_write(priv->regmap,
 					   MT6320_ACCDET_PWM_THRESH,
-					   MT6320_ACCDET_PWM_WIDTH_VALUE);
+					   MT6320_ACCDET_PWM_THRESH_VALUE);
 			if (ret)
 				return;
 		}
@@ -434,6 +447,39 @@ static irqreturn_t mt6320_accdet_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t mt6320_accdet_eint(int irq, void *data);
+
+static void mt6320_accdet_eint_work(struct work_struct *work)
+{
+	struct mt6320_accdet *priv =
+		container_of(to_delayed_work(work), struct mt6320_accdet,
+				     eint_work);
+	int inserted;
+	int ret;
+
+	inserted = gpiod_get_value_cansleep(priv->detect);
+	if (inserted < 0)
+		goto retry;
+
+	mutex_lock(&priv->lock);
+	if (!!inserted != priv->plugged) {
+		/* Recover a transition missed while switching the IRQ edge. */
+		mutex_unlock(&priv->lock);
+		mt6320_accdet_eint(priv->eint_irq, priv);
+		return;
+	}
+
+	ret = irq_set_irq_type(priv->eint_irq,
+				       priv->plugged ? IRQ_TYPE_EDGE_RISING :
+				       IRQ_TYPE_EDGE_FALLING);
+	mutex_unlock(&priv->lock);
+	if (!ret)
+		return;
+
+retry:
+	schedule_delayed_work(&priv->eint_work, msecs_to_jiffies(100));
+}
+
 static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 {
 	struct mt6320_accdet *priv = data;
@@ -464,32 +510,71 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		goto out;
 
 	if (!!inserted) {
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_ENABLE);
+		if (ret) {
+			dev_err_ratelimited(priv->dev,
+					    "failed to enable mic bias switch: %d\n",
+					    ret);
+			goto out;
+		}
+
 		ret = mt6320_accdet_enable(priv);
 		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to enable ACCDET: %d\n",
 					    ret);
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back mic bias switch\n");
+			goto out;
+		}
+
+		/* Active-low detect: insertion was falling, so removal is rising. */
+		ret = irq_set_irq_type(priv->eint_irq,
+				       IRQ_TYPE_EDGE_RISING);
+		if (ret) {
+			dev_err_ratelimited(priv->dev,
+					    "failed to configure plug-in IRQ: %d\n",
+					    ret);
+			priv->plugged = false;
+			if (mt6320_accdet_disable(priv))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back ACCDET after IRQ setup failure\n");
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err_ratelimited(priv->dev,
+						    "failed to roll back mic bias switch\n");
+			schedule_delayed_work(&priv->eint_work,
+					      msecs_to_jiffies(100));
 			goto out;
 		}
 
 		priv->plugged = true;
-
-		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_HIGH);
-		if (ret)
-			dev_err_ratelimited(priv->dev,
-					    "failed to configure plug-in IRQ: %d\n",
-					    ret);
 	} else {
 		/*
-		 * Drop the micbias/AUXADC switch back to 1.9 V mode before
-		 * declaring the jack empty, otherwise the PMIC keeps
-		 * driving mic bias into an unpopulated connector.  The
-		 * AUXADC driver asserts the same switch for each voltage
-		 * read, so restore it here on the way out too.
+		 * Turn the micbias/AUXADC switch off before declaring the
+		 * jack empty, otherwise the PMIC keeps driving mic bias
+		 * into an unpopulated connector.  The AUXADC driver asserts
+		 * the same switch for each voltage read, so it has to be
+		 * dropped on the way out too.
+		 *
+		 * In ACCDET_28V_MODE, which is what this board is built with,
+		 * the vendor switch is a plain on/off write to
+		 * AUDENCSPARE_CON0: accdet_auxadc_switch() writes 0x01 to
+		 * enable and 0x00 to disable
+		 * (mediatek/platform/mt6589/kernel/drivers/accdet/accdet.c:159-176).
+		 * The 0x1090 word there belongs to the 1.9 V ACCDET_RSV
+		 * encoding, which that build does not use.  Writing the
+		 * ENABLE value here was therefore leaving the bias powered.
 		 */
-		regmap_write(priv->regmap, MT6320_ACCDET_CON0,
-			     MT6320_ACCDET_CON0_MICBIAS_1V9);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_DISABLE);
+		if (ret)
+			dev_err_ratelimited(priv->dev,
+					    "failed to disable mic bias: %d\n",
+					    ret);
 
 		ret = mt6320_accdet_disable(priv);
 		if (ret)
@@ -501,12 +586,16 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		priv->last_state = 3;
 		mt6320_accdet_report(priv, 0);
 
+		/* Active-low detect: removal was rising, so insertion is falling. */
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_LEVEL_LOW);
-		if (ret)
+				       IRQ_TYPE_EDGE_FALLING);
+		if (ret) {
 			dev_err_ratelimited(priv->dev,
-					    "failed to configure plug-out IRQ: %d\n",
+					    "failed to configure next plug-in IRQ: %d\n",
 					    ret);
+			schedule_delayed_work(&priv->eint_work,
+					      msecs_to_jiffies(100));
+		}
 	}
 
 out:
@@ -559,6 +648,7 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 
 	mutex_init(&priv->lock);
 	INIT_DELAYED_WORK(&priv->key_work, mt6320_accdet_key_work);
+	INIT_DELAYED_WORK(&priv->eint_work, mt6320_accdet_eint_work);
 	platform_set_drvdata(pdev, priv);
 
 	priv->detect = devm_gpiod_get(&pdev->dev, "detect", GPIOD_IN);
@@ -606,9 +696,20 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	priv->plugged = !!ret;
 	priv->last_state = 3;
 
+	/*
+	 * Arm for the edge that reports the *next* transition, not for the
+	 * level the line is already sitting at.  detect-gpios is
+	 * GPIO_ACTIVE_LOW, so the pin idles high with nothing plugged and is
+	 * pulled low on insertion: an unplugged jack needs EDGE_FALLING and a
+	 * plugged one needs EDGE_RISING.  Level-triggering on the current
+	 * level instead leaves the line asserted in the stable state, and the
+	 * handler is IRQF_ONESHOT, so it re-arms and immediately re-fires -
+	 * an interrupt storm that also drives the jack report and therefore
+	 * DAPM.
+	 */
 	ret = irq_set_irq_type(priv->eint_irq,
 			       priv->plugged ?
-			       IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_LEVEL_LOW);
+			       IRQ_TYPE_EDGE_RISING : IRQ_TYPE_EDGE_FALLING);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to configure detect IRQ\n");
@@ -622,10 +723,20 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 				     "failed to request detect IRQ\n");
 
 	if (priv->plugged) {
-		ret = mt6320_accdet_enable(priv);
+		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_MICBIAS_ENABLE);
 		if (ret)
 			return dev_err_probe(&pdev->dev, ret,
+					     "failed to enable mic bias switch\n");
+
+		ret = mt6320_accdet_enable(priv);
+		if (ret) {
+			if (regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+					 MT6320_ACCDET_MICBIAS_DISABLE))
+				dev_err(&pdev->dev, "failed to roll back mic bias switch\n");
+			return dev_err_probe(&pdev->dev, ret,
 					     "failed to enable ACCDET\n");
+		}
 	} else {
 		ret = clk_prepare_enable(priv->clk_accdet);
 		if (!ret) {
@@ -646,8 +757,10 @@ static void mt6320_accdet_remove(struct platform_device *pdev)
 {
 	struct mt6320_accdet *priv = platform_get_drvdata(pdev);
 	int ret = 0;
+	int bias_ret;
 
 	cancel_delayed_work_sync(&priv->key_work);
+	cancel_delayed_work_sync(&priv->eint_work);
 
 	mutex_lock(&priv->lock);
 	if (priv->plugged)
@@ -655,11 +768,17 @@ static void mt6320_accdet_remove(struct platform_device *pdev)
 	priv->plugged = false;
 	priv->last_state = 3;
 	mt6320_accdet_report(priv, 0);
+
+	/* The switch is ACCDET-owned and must be off even on driver removal. */
+	bias_ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
+				MT6320_ACCDET_MICBIAS_DISABLE);
+	if (!ret)
+		ret = bias_ret;
 	mutex_unlock(&priv->lock);
 
 	if (ret)
 		dev_err(&pdev->dev,
-			"failed to disable ACCDET during remove: %d\n", ret);
+			"failed to clean up ACCDET during remove: %d\n", ret);
 }
 
 static const struct of_device_id mt6320_accdet_of_match[] = {
