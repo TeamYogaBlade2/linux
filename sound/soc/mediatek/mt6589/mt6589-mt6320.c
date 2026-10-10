@@ -120,6 +120,12 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 		dev_info(card->dev,
 			 "headset detection unavailable: %d\n", ret);
 
+	/*
+	 * ACCDET's set_jack reports the plug state; make sure the inverted
+	 * Speaker pin is applied before userspace opens the PCM.
+	 */
+	snd_soc_dapm_sync(card->dapm);
+
 	return 0;
 }
 
