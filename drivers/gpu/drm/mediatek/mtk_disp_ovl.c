@@ -1444,8 +1444,28 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
+	/*
+	 * Not for power management - the clocks are already held above - but
+	 * for the device link the IOMMU driver created from this device to
+	 * its SMI LARB.  The LARB programs SMI_SECUR_CON (the per-port
+	 * physical/virtual select) only on a runtime resume that happens
+	 * *after* the IOMMU has attached this device to its domain, and that
+	 * attach already ran before this probe function.  Without the get,
+	 * the port-mode update relies on another LARB2 client (RDMA0)
+	 * probing later and runtime-resuming the LARB in between - i.e. on
+	 * probe ordering - and if that never happens the overlay keeps
+	 * reading its IOVA framebuffers through ports still in physical
+	 * mode.
+	 */
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0) {
+		pm_runtime_disable(dev);
+		return dev_err_probe(dev, ret, "Failed to enable power\n");
+	}
+
 	ret = component_add(dev, &mtk_disp_ovl_component_ops);
 	if (ret) {
+		pm_runtime_put_sync(dev);
 		pm_runtime_disable(dev);
 		return dev_err_probe(dev, ret, "Failed to add component\n");
 	}
@@ -1456,6 +1476,7 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 static void mtk_disp_ovl_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &mtk_disp_ovl_component_ops);
+	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 }
 
