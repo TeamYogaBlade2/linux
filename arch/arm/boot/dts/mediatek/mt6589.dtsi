@@ -170,7 +170,7 @@
 			compatible = "arm,cortex-a7";
 			reg = <0x0>;
 			enable-method = "mediatek,mt6589-smp";
-			cpu-idle-states = <&cpu_idle_dcm>;
+			//cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -192,7 +192,7 @@
 			compatible = "arm,cortex-a7";
 			reg = <0x1>;
 			enable-method = "mediatek,mt6589-smp";
-			cpu-idle-states = <&cpu_idle_dcm>;
+			//cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -214,7 +214,7 @@
 			compatible = "arm,cortex-a7";
 			reg = <0x2>;
 			enable-method = "mediatek,mt6589-smp";
-			cpu-idle-states = <&cpu_idle_dcm>;
+			//cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -236,7 +236,7 @@
 			compatible = "arm,cortex-a7";
 			reg = <0x3>;
 			enable-method = "mediatek,mt6589-smp";
-			cpu-idle-states = <&cpu_idle_dcm>;
+			//cpu-idle-states = <&cpu_idle_dcm>;
 
 			i-cache-size = <32768>;
 			i-cache-line-size = <32>;
@@ -301,6 +301,7 @@
 		 * They are deliberately conservative, so a wrong estimate costs
 		 * power rather than correctness.
 		 */
+/*
 		idle-states {
 			cpu_idle_dcm: cpu-idle-dcm {
 				compatible = "arm,idle-state";
@@ -310,6 +311,7 @@
 				min-residency-us = <2000>;
 			};
 		};
+*/
 	};
 
 	timer {
