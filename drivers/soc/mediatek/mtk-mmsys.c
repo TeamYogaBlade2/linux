@@ -169,93 +169,6 @@ struct mtk_mmsys {
 	struct cmdq_client_reg cmdq_base;
 };
 
-
-/*
- * Human-readable component names, indexed by enum mtk_ddp_comp_id, used by
- * display-path diagnostics after OF graph traversal. The order is positional
- * and the size assertion below keeps the table aligned with the enum.
- */
-static const char * const mtk_ddp_comp_names[] = {
-	"2DSHARP",
-	"AAL0",
-	"AAL1",
-	"BLS",
-	"CCORR",
-	"COLOR0",
-	"COLOR1",
-	"DITHER0",
-	"DITHER1",
-	"DP_INTF0",
-	"DP_INTF1",
-	"DPI0",
-	"DPI1",
-	"DSC0",
-	"DSC1",
-	"DSI0",
-	"DSI1",
-	"DSI2",
-	"DSI3",
-	"ETHDR_MIXER",
-	"GAMMA",
-	"MDP_RDMA0",
-	"MDP_RDMA1",
-	"MDP_RDMA2",
-	"MDP_RDMA3",
-	"MDP_RDMA4",
-	"MDP_RDMA5",
-	"MDP_RDMA6",
-	"MDP_RDMA7",
-	"MERGE0",
-	"MERGE1",
-	"MERGE2",
-	"MERGE3",
-	"MERGE4",
-	"MERGE5",
-	"OD0",
-	"OD1",
-	"OVL0",
-	"OVL_2L0",
-	"OVL_2L1",
-	"OVL_2L2",
-	"OVL1",
-	"PADDING0",
-	"PADDING1",
-	"PADDING2",
-	"PADDING3",
-	"PADDING4",
-	"PADDING5",
-	"PADDING6",
-	"PADDING7",
-	"POSTMASK0",
-	"PWM0",
-	"PWM1",
-	"PWM2",
-	"RDMA0",
-	"RDMA1",
-	"RDMA2",
-	"RDMA4",
-	"ROT",
-	"SCL",
-	"TDSHP",
-	"UFOE",
-	"WDMA0",
-	"WDMA1",
-	"DBI0",
-};
-
-
-static_assert(ARRAY_SIZE(mtk_ddp_comp_names) == DDP_COMPONENT_ID_MAX);
-
-const char *mtk_ddp_comp_name(unsigned int comp_id)
-{
-	if (comp_id >= ARRAY_SIZE(mtk_ddp_comp_names))
-		return "<unknown>";
-
-	return mtk_ddp_comp_names[comp_id];
-}
-EXPORT_SYMBOL_GPL(mtk_ddp_comp_name);
-
-
 static void mtk_mmsys_update_bits(struct mtk_mmsys *mmsys, u32 offset, u32 mask, u32 val,
 				  struct cmdq_pkt *cmdq_pkt)
 {
@@ -508,7 +421,6 @@ static int mtk_mmsys_probe(struct platform_device *pdev)
 	}
 
 	mmsys->data = of_device_get_match_data(&pdev->dev);
-
 
 	if (mmsys->data->num_resets > 0) {
 		spin_lock_init(&mmsys->lock);

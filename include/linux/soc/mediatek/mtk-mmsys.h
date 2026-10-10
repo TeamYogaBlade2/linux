@@ -89,12 +89,6 @@ enum mtk_ddp_comp_id {
 	DDP_COMPONENT_ID_MAX,
 };
 
-/**
- * mtk_ddp_comp_name - return a display component's diagnostic name
- * @comp_id: a DDP_COMPONENT_* id
- */
-const char *mtk_ddp_comp_name(unsigned int comp_id);
-
 void mtk_mmsys_ddp_connect(struct device *dev,
 			   enum mtk_ddp_comp_id cur,
 			   enum mtk_ddp_comp_id next);
