@@ -307,7 +307,6 @@ struct mtk_disp_ovl_data {
 	 */
 	bool has_const_blend;
 	bool set_layer_src;
-	bool defer_start_until_layer_config;
 	unsigned int vblank_en_mask;
 	/*
 	 * Whether this SoC's OVL node declares a "resets" phandle for this
@@ -648,23 +647,6 @@ void mtk_ovl_start(struct device *dev)
 {
 	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
 
-	/*
-	 * MT6589's downstream path programs the OVL layers before OVLStart().
-	 * The generic CRTC currently calls start() while SRC_CON is still zero;
-	 * letting the empty engine run produces RDMA0 abnormal EOF and can park
-	 * the flow-control FSM outside its IDLE/WAIT states. Defer the engine
-	 * enable until mtk_ovl_layer_config() has installed the first layer.
-	 */
-	if (ovl->data->defer_start_until_layer_config &&
-	    !readl_relaxed(ovl->regs + DISP_REG_OVL_SRC_CON)) {
-		dev_dbg(dev, "ovl: deferring start until a source layer is configured\n");
-		return;
-	}
-
-	/* Status is write-zero-to-clear on MT6589; discard stale status before restart. */
-	if (ovl->data->defer_start_until_layer_config)
-		writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_INTSTA);
-
 	if (ovl->data->smi_id_en) {
 		unsigned int reg;
 
@@ -985,11 +967,6 @@ void mtk_ovl_layer_off(struct device *dev, unsigned int idx,
 			   DISP_REG_OVL_SRC_CON, BIT(idx));
 	mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, ovl->regs,
 		      DISP_REG_OVL_RDMA_CTRL(idx));
-
-	/* Keep the empty MT6589 overlay stopped so the next start is clean. */
-	if (ovl->data->defer_start_until_layer_config && !cmdq_pkt &&
-	    !readl_relaxed(ovl->regs + DISP_REG_OVL_SRC_CON))
-		mtk_ovl_stop(dev);
 }
 
 static unsigned int mtk_ovl_fmt_convert(struct mtk_disp_ovl *ovl, struct mtk_plane_state *state)
@@ -1226,15 +1203,6 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	if (ovl->data->fmt_convert == mt6589_fmt_convert &&
 	    (fmt == DRM_FORMAT_UYVY || fmt == DRM_FORMAT_YUYV))
 		mt6589_ovl_write_yuv_matrix(ovl, idx, cmdq_pkt);
-
-	/*
-	 * SRC_CON and the layer registers are now programmed. On MT6589 this
-	 * is the first safe point to enable OVL; do it only on the direct-MMIO
-	 * path, because a queued command packet has not reached hardware yet.
-	 */
-	if (ovl->data->defer_start_until_layer_config && !cmdq_pkt &&
-	    !(readl_relaxed(ovl->regs + DISP_REG_OVL_EN) & BIT(0)))
-		mtk_ovl_start(dev);
 
 	/*
 	 * Read the layer back once it has actually been programmed.  The
@@ -1585,7 +1553,6 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 		       BIT(DRM_MODE_BLEND_PIXEL_NONE),
 	.has_const_blend = false,
 	.set_layer_src = true,
-	.defer_start_until_layer_config = true,
 	/*
 	 * The only OVL node in the tree that declares
 	 * "resets = <&dispsys MT6589_DISP_OVL_RST>" (mt6589.dtsi), and so
