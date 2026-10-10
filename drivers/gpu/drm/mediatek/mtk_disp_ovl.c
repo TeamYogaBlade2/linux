@@ -1429,6 +1429,32 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	writel(0x0, priv->regs + DISP_REG_OVL_INTEN);
 	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
 
+	/*
+	 * Downstream OVLReset() also zeros SRC_CON and every layer's
+	 * address/pitch path. The warm reset line alone does not clear
+	 * those registers on MT6589, so a bootloader that left L0 live
+	 * would keep the internal RDMA fetching until the first DRM
+	 * plane config. Only SoCs that take the reset (has_reset) need
+	 * this; the others never asserted the line in the first place.
+	 */
+	if (priv->data->has_reset) {
+		unsigned int i, layers = priv->data->layer_nr;
+
+		writel(0x0, priv->regs + DISP_REG_OVL_SRC_CON);
+		writel(0x0, priv->regs + DISP_REG_OVL_ROI_SIZE);
+		writel(0xffffffff, priv->regs + DISP_REG_OVL_ROI_BGCLR);
+
+		for (i = 0; i < layers; i++) {
+			writel(0x0, priv->regs + DISP_REG_OVL_CON(i));
+			writel(0x0, priv->regs + DISP_REG_OVL_SRC_SIZE(i));
+			writel(0x0, priv->regs + DISP_REG_OVL_OFFSET(i));
+			writel(0x0, priv->regs + DISP_REG_OVL_ADDR(priv, i));
+			writel(0x0, priv->regs + DISP_REG_OVL_PITCH(i));
+			writel(0x0, priv->regs + DISP_REG_OVL_RDMA_CTRL(i));
+			writel(0x0, priv->regs + DISP_REG_OVL_RDMA_GMC(i));
+		}
+	}
+
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	ret = cmdq_dev_get_client_reg(dev, &priv->cmdq_reg, 0);
 	if (ret)
