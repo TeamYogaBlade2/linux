@@ -91,6 +91,17 @@
 /* BLS_EN bit definitions */
 #define BLS_EN_PWM_ONLY			BIT(31)			/* Enable PWM, others off */
 
+/*
+ * Full enable, matching the stock driver's BLSStart() value when BLS is
+ * a stage of the display data path: PWM (bit 31) plus the display
+ * processing enable (bits 16 and 0).  Downstream writes 0x80010001
+ * exactly when BLS sits in the main path (OVL -> BLS -> RDMA0), and
+ * keeps BLS out of the path mutex entirely when BLS only generates PWM
+ * - "in the path but PWM-only" is a combination the stock driver never
+ * produces.
+ */
+#define BLS_EN_FULL			(BLS_EN_PWM_ONLY | BIT(16) | BIT(0))
+
 /* BLS_PWM_DUTY format */
 #define PWM_DUTY_MIN_LEVEL		BIT(19)			/* Lower bound = 1 */
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
@@ -193,8 +204,13 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
 
-		/* Lenovo's MT6589 BSP uses BLS as PWM-only on this display path. */
-		writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
+		/*
+		 * Keep the display-processing bits set: the backlight can be
+		 * re-configured at any time, and writing BLS_EN_PWM_ONLY here
+		 * would drop BLS out of the OVL -> BLS -> RDMA0 data path
+		 * again, mid-session.
+		 */
+		writel(BLS_EN_FULL, bls->base + BLS_EN);
 	} else {
 		/*
 		 * This path is PWM-only, so disabling BLS_EN only disables the
@@ -319,10 +335,12 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	writel(0x00000003, bls->base + BLS_HIS_SETTING);
 
 	/*
-	 * BLS is used only as a PWM generator on this board.  The downstream
-	 * driver leaves the display-processing bit disabled.
+	 * BLS is a stage of the display data path - mediatek,display-path
+	 * lists "bls" between ovl0 and rdma0 - so enable the display
+	 * processing together with the PWM, as the stock driver does when
+	 * BLS is in the path.
 	 */
-	writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
+	writel(BLS_EN_FULL, bls->base + BLS_EN);
 
 	clk_disable_unprepare(bls->clk_main);
 
@@ -404,7 +422,10 @@ void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
 
-/* See BLS_EN_DISPLAY for why the full enable value is used here. */
+/*
+ * BLS_EN_FULL is the "BLS_EN_DISPLAY" this comment always referred to:
+ * with BLS in the display path, PWM-only leaves the data path disabled.
+ */
 void mt6589_bls_ddp_start(struct device *dev)
 {
 	struct mt6589_bls_pwm *bls = bls_ddp;
@@ -412,7 +433,7 @@ void mt6589_bls_ddp_start(struct device *dev)
 	if (!bls)
 		return;
 
-	writel(BLS_EN_PWM_ONLY, bls->base + BLS_EN);
+	writel(BLS_EN_FULL, bls->base + BLS_EN);
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
