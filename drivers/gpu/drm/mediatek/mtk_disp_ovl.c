@@ -911,7 +911,17 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 
 	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs,
 		      DISP_REG_OVL_RDMA_CTRL(idx));
-	if (!ovl->data->skip_rdma_gmc) {
+	if (ovl->data->skip_rdma_gmc) {
+		/*
+		 * MT6589: the stock driver leaves GMC alone (the write is
+		 * compiled out). OVL_RST does not zero the register, so a
+		 * residual bootloader value such as 0x10101010 would
+		 * otherwise survive. Force 0 to match a clean post-reset
+		 * state.
+		 */
+		mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, ovl->regs,
+			      DISP_REG_OVL_RDMA_GMC(idx));
+	} else {
 		unsigned int gmc_thrshd_l;
 		unsigned int gmc_thrshd_h;
 		unsigned int gmc_value;
