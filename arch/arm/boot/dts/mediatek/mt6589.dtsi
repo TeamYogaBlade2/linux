@@ -750,14 +750,6 @@
 			reg = <0x10200000 0x1000>;
 		};
 
-		/*
-		 * #reset-cells advertises the reset controller that
-		 * drivers/clk/mediatek/clk-mt6589-mfg.c registers on this node
-		 * against MFG_RESET (0x1020600c, data sheet p. 2433).  The node
-		 * was missing it, which left a registered controller with no
-		 * #reset-cells and so unnameable from DT.  One bank means 32
-		 * resets: MFG_G3D_RESET at bit 0 and MFG_AXI_RESET at bit 1.
-		 */
 		mfgsys: syscon@10206000 {
 			compatible = "mediatek,mt6589-mfgsys", "syscon";
 			reg = <0x10206000 0x1000>;
@@ -876,15 +868,6 @@
 				 <&iommu MT6589_M4U_PORT_JPGENC_BSDMA>;
 		};
 
-		/*
-		 * AUDIO SRAM, 16 KiB: data sheet Table 3-9 (p.48) splits
-		 * 0x12000000..0x1200cfff into DISP SRAM (32 KiB,
-		 * 0x12000000..0x12007fff), AUDIO SRAM (16 KiB, this one) and
-		 * ISP SRAM (4 KiB, 0x1200c000..0x1200cfff).  It must not be
-		 * moved down into the DISP bank to keep the AFE's buffers near
-		 * the bank base - the AFE dereferences DL1_BASE/DL1_END
-		 * itself and only the AUDIO bank is wired to it.
-		 */
 		afe_sram: sram@12008000 {
 			compatible = "mmio-sram";
 			reg = <0x12008000 0x4000>;
