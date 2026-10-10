@@ -172,6 +172,14 @@
 			output-high;
 		};
 	};
+
+	accdet_pins: accdet-pins {
+		pin-accdet {
+			pinmux = <MT6589_GPIO115__FUNC_EINT10>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
 };
 
 &pmic {
@@ -235,15 +243,6 @@
 	detect-gpios = <&pio 115 GPIO_ACTIVE_LOW>;
 	io-channels = <&mt6320_adc 5>;
 	io-channel-names = "key";
-};
-
-&pio {
-	accdet_pins: accdet-pins {
-		pin-accdet {
-			pinmux = <MT6589_GPIO115__FUNC_EINT10>;
-			input-enable;
-		};
-	};
 };
 
 &mt6320_ldo_vgp4 {
