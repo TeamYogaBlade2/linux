@@ -611,8 +611,21 @@ static int mt6320_accdet_set_jack(struct snd_soc_component *component,
 
 	mutex_lock(&priv->lock);
 	priv->jack = jack;
-	if (priv->plugged)
+	if (!jack) {
+		mutex_unlock(&priv->lock);
+		return 0;
+	}
+	/*
+	 * Always publish a full-mask report.  The Speaker jack pin is
+	 * inverted on SND_JACK_HEADPHONE; without an initial report DAPM
+	 * never enables it and the built-in speaker stays silent even
+	 * though the AFE period IRQ is running.
+	 */
+	if (priv->plugged) {
 		mt6320_accdet_handle_state(priv);
+	} else {
+		mt6320_accdet_report(priv, 0);
+	}
 	mutex_unlock(&priv->lock);
 
 	return 0;
