@@ -1123,8 +1123,7 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		dev_dbg(dev, "Using SoC-specific static display path
-");
+		dev_dbg(dev, "Using SoC-specific static display path");
 		private->data = mtk_drm_data;
 	}
 
