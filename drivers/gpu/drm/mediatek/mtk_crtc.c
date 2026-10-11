@@ -419,6 +419,13 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	}
 
 	/*
+	 * The initial mode was programmed synchronously above.
+	 * Consume the pending mode flag so the first atomic_flush
+	 * does not reset OVL again after the pipeline has started.
+	 */
+	to_mtk_crtc_state(crtc->state)->pending_config = false;
+
+	/*
 	 * Program the initial plane state synchronously, before starting OVL.
 	 * The DRM atomic state has already been swapped by the time the
 	 * modeset enable callback runs.  Preparing it here avoids relying on
