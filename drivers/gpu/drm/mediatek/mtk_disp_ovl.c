@@ -9,11 +9,13 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
+#include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
@@ -52,7 +54,7 @@
  * DISP_CG_SET0/CLR0 at that very 0x100/0x104/0x108, so this readback looks
  * at exactly the bits clk_bulk_prepare_enable() manipulates.
  */
-#define MT6589_DISPSYS_CONFIG_CG_CON0		0x14000100
+#define MT6589_DISPSYS_CONFIG_CG_CON0		0x0100
 #define DISP_CG_CON0_OVL_ENGINE			BIT(4)
 #define DISP_CG_CON0_OVL_SMI			BIT(5)
 #define DISP_REG_OVL_INTEN					0x0004
@@ -109,6 +111,7 @@ OVL_RDMA0_FIFO_UND_INT | OVL_RDMA1_FIFO_UND_INT | \
 OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 
 #define DISP_REG_OVL_INTSTA			0x0008
+#define DISP_REG_OVL_OUTMUX_DBG			0x0248
 
 #define DISP_REG_OVL_EN				0x000c
 #define DISP_REG_OVL_TRIG			0x0010
@@ -384,7 +387,7 @@ struct mtk_disp_ovl {
 	 * be read back.  NULL on every SoC except MT6589, the only one whose
 	 * node names a dispsys syscon parent to borrow the mapping from.
 	 */
-	void __iomem			*cfg_regs;
+	struct regmap			*cfg_regmap;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
@@ -441,10 +444,11 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		    (sta & BIT(0)) &&
 		    !(sta & BIT(1))) {
 			priv->rdma_err_dbg_done = true;
-			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x addcon=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
+			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x outmux=%#x addcon=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
 			       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
 			       reg, sta,
 			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+			       readl(priv->regs + DISP_REG_OVL_OUTMUX_DBG),
 			       readl(priv->regs + DISP_REG_OVL_ADDCON_DBG),
 			       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
 			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
@@ -701,8 +705,10 @@ void mtk_ovl_start(struct device *dev)
 	 * ~0 rather than 0 when there is no mapping, so a missing mapping is
 	 * visible in the line instead of silently reading as "no gate set".
 	 */
-	cg = ovl->cfg_regs ?
-		     readl(ovl->cfg_regs + MT6589_DISPSYS_CONFIG_CG_CON0) : ~0U;
+	if (!ovl->cfg_regmap ||
+	    regmap_read(ovl->cfg_regmap,
+			MT6589_DISPSYS_CONFIG_CG_CON0, &cg))
+		cg = ~0U;
 
 	dev_info(dev,
 		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x fsm=%#x fsm_state=%#x\n",
@@ -724,7 +730,7 @@ void mtk_ovl_start(struct device *dev)
 	 * resource is simply not judged on it.
 	 */
 	if (!(en & 0x1) ||
-	    (ovl->cfg_regs &&
+	    (ovl->cfg_regmap &&
 	     (cg & (DISP_CG_CON0_OVL_ENGINE | DISP_CG_CON0_OVL_SMI))) ||
 	    (fsm_state != 0x1 && fsm_state != 0x2))
 		dev_err(dev,
@@ -1366,33 +1372,23 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 		return ret;
 
 	/*
-	 * Borrow the DISPSYS_CONFIG mapping so the clock-gate state can be
-	 * read back in mtk_ovl_start().  The OVL clock gates are bits 4 and
-	 * 5 of DISP_CG_CON0, which lives in that block at 0x14000000 and
-	 * not in this driver's own reg window - so it cannot be reached
-	 * through priv->regs at all.
+	 * OVL and DISPSYS_CONFIG are sibling nodes in the device tree.
+	 * Obtain the syscon through the clock-provider phandle rather than
+	 * assuming the OVL node's parent is DISPSYS_CONFIG.
 	 *
-	 * The mapping comes from the clock/reset provider this node already
-	 * depends on, via devm_ioremap_resource() on the parent id.  That
-	 * parent is the dispsys syscon named by "clocks" and "resets"
-	 * (mt6589.dtsi:960, dispsys: syscon@14000000), so no new DT is
-	 * needed and no property is invented.  A missing provider is not an
-	 * error: the readback is a diagnostic, so on a SoC whose node has no
-	 * such parent cfg_regs simply stays NULL and the check is skipped.
+	 * The register is at offset 0x100 within the syscon. This is
+	 * diagnostic-only, so failure to obtain the regmap is non-fatal.
 	 */
 	if (priv->data->has_dispsys_cfg) {
 		struct device_node *np;
-		struct platform_device *parent;
-		struct resource *res = NULL;
 
-		np = of_get_parent(dev->of_node);
-		parent = of_find_device_by_node(np);
-		if (parent)
-			res = platform_get_resource(parent, IORESOURCE_MEM, 0);
-		if (res)
-			priv->cfg_regs = devm_ioremap_resource(&parent->dev, res);
-		if (IS_ERR(priv->cfg_regs))
-			priv->cfg_regs = NULL;
+		np = of_parse_phandle(dev->of_node, "clocks", 0);
+		if (np) {
+			priv->cfg_regmap = syscon_node_to_regmap(np);
+			of_node_put(np);
+			if (IS_ERR(priv->cfg_regmap))
+				priv->cfg_regmap = NULL;
+		}
 	}
 
 	/*
