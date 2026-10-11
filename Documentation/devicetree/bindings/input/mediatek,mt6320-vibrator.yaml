@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/input/mediatek,mt6320-vibrator.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6320 PMIC Vibrator
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+allOf:
+  - $ref: leds.yaml#
+
+description: |
+  The MT6320 PMIC, used by MediaTek MT6589 SoCs, drives a linear resonant
+  actuator through an integrated LDO called VIBR. The part has no separate
+  amplifier enable pin and no PWM duty input: the rail is gated by RG_VIBR_EN
+  in DIGLDO_CON39, and the vibration amplitude is the LDO output voltage
+  selected by RG_VIBR_VOSEL in DIGLDO_CON40.
+
+  The eight selectable output voltages are 1200, 1300, 1500, 1800, 2500,
+  2800, 3000 and 3300 mV. Any request is rounded down to the nearest of
+  these, and the vendor default of 2800 mV is used when no amplitude is
+  given.
+
+  The vibrator is exposed as an LED classdev so that userspace can set a
+  brightness (which plays a single pulse) or a one-interval LED pattern.
+  Because the rail is gated by the VIBR regulator, the regulator node
+  supplying this device must be the PMIC's own "vibr" LDO.
+
+properties:
+  compatible:
+    const: mediatek,mt6320-vibrator
+
+  vibr-supply:
+    description: |
+      Regulator providing the vibrator LDO. On the MT6320 this must be the
+      PMIC's own VIBR LDO, since the driver relies on the regulator owning
+      the RG_VIBR_EN gate.
+    $ref: /schemas/types.yaml#/definitions/phandle
+
+  mediatek,vibr-amplitude-uv:
+    description: |
+      Vibrator output voltage in microvolts. This is the vibration
+      amplitude: on a linear resonant actuator a higher LDO voltage yields a
+      stronger drive. The value is clamped to the nearest hardware setting
+      of 1200000, 1300000, 1500000, 1800000, 2500000, 2800000, 3000000 or
+      3300000 microvolts.
+    $ref: /schemas/types.yaml#/definitions/int
+    default: 2800000
+    minimum: 1200000
+    maximum: 3300000
+
+required:
+  - compatible
+
+additionalProperties: false
+
+...

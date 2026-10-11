@@ -64,7 +64,7 @@ void fhctl_parse_dt(const u8 *compatible_node, struct mtk_pllfh_data *pllfhs,
 {
 	void __iomem *base;
 	struct device_node *node;
-	u32 num_clocks, pll_id, ssc_rate;
+	u32 num_clocks, pll_id, ssc_rate, fh_capable;
 	int offset, i;
 
 	node = of_find_compatible_node(NULL, NULL, compatible_node);
@@ -90,16 +90,46 @@ void fhctl_parse_dt(const u8 *compatible_node, struct mtk_pllfh_data *pllfhs,
 
 		offset = i * 2;
 
-		of_property_read_u32_index(node, "clocks", offset + 1, &pll_id);
+		if (of_property_read_u32_index(node, "clocks",
+					       offset + 1, &pll_id)) {
+			pr_err("%s(): invalid clocks entry %d\n",
+			       __func__, i);
+			goto err;
+		}
+
+		/*
+		 * The SSC property is optional; omitted entries mean 0%.
+		 * SSC only modulates the clock around the nominal frequency,
+		 * it says nothing about whether the FHCTL hop works here, so
+		 * it must not be used to gate the hardware path.
+		 */
+		ssc_rate = 0;
 		of_property_read_u32_index(node,
 					   "mediatek,hopping-ssc-percent",
 					   i, &ssc_rate);
+
+		/*
+		 * Being listed in "clocks" only means the channel is wired to
+		 * an FHCTL channel.  Whether the hop sequence actually
+		 * completes on it is a separate, per-board question, so boards
+		 * can opt in per channel.
+		 *
+		 * When the property is absent entirely - every SoC but MT6589
+		 * today - fall back to the historical behaviour of taking the
+		 * hop whenever SSC is configured, so no existing board changes
+		 * under us.
+		 */
+		if (of_property_read_u32_index(node,
+						"mediatek,fhctl-hopping-enabled",
+						i, &fh_capable))
+			fh_capable = ssc_rate ? 1 : 0;
 
 		pllfh = get_pllfh_by_id(pllfhs, num_fhs, pll_id);
 		if (!pllfh)
 			continue;
 
 		pllfh->state.fh_enable = 1;
+		pllfh->state.fh_capable = fh_capable ? 1 : 0;
 		pllfh->state.ssc_rate = ssc_rate;
 		pllfh->state.base = base;
 	}
@@ -113,7 +143,9 @@ err:
 }
 EXPORT_SYMBOL_GPL(fhctl_parse_dt);
 
-static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
+static int pllfh_init(struct mtk_fh *fh,
+		      struct mtk_pllfh_data *pllfh_data,
+		      void __iomem *pll_base)
 {
 	struct fh_pll_regs *regs = &fh->regs;
 	const struct fhctl_offset *offset;
@@ -124,11 +156,21 @@ static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
 	if (IS_ERR(offset))
 		return PTR_ERR(offset);
 
-	regs->reg_hp_en = base + offset->offset_hp_en;
-	regs->reg_clk_con = base + offset->offset_clk_con;
-	regs->reg_rst_con = base + offset->offset_rst_con;
-	regs->reg_slope0 = base + offset->offset_slope0;
-	regs->reg_slope1 = base + offset->offset_slope1;
+	if (pllfh_data->data.fh_ver == FHCTL_PLLFH_V3)
+	{
+		regs->reg_hp_en = pll_base + offset->offset_hp_en;
+		regs->reg_clk_con = NULL;
+		regs->reg_rst_con = NULL;
+		regs->reg_slope0 = NULL;
+		regs->reg_slope1 = NULL;
+	}
+	else {
+		regs->reg_hp_en = base + offset->offset_hp_en;
+		regs->reg_clk_con = base + offset->offset_clk_con;
+		regs->reg_rst_con = base + offset->offset_rst_con;
+		regs->reg_slope0 = base + offset->offset_slope0;
+		regs->reg_slope1 = base + offset->offset_slope1;
+	}
 
 	regs->reg_cfg = fhx_base + offset->offset_cfg;
 	regs->reg_updnlmt = fhx_base + offset->offset_updnlmt;
@@ -161,7 +203,7 @@ mtk_clk_register_pllfh(struct device *dev, const struct mtk_pll_data *pll_data,
 	if (!fh)
 		return ERR_PTR(-ENOMEM);
 
-	ret = pllfh_init(fh, pllfh_data);
+	ret = pllfh_init(fh, pllfh_data, base);
 	if (ret) {
 		hw = ERR_PTR(ret);
 		goto out;

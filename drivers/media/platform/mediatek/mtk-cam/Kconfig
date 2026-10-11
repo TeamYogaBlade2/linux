@@ -1,0 +1,41 @@
+config VIDEO_MTK_CAM
+	tristate "MediaTek MT6589 CAM/ISP control plane and IMGO DMA"
+	depends on HAS_IOMEM && OF
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_ASYNC
+	# No camera subdev can join a media graph without it: it owns the
+	# media_device, the v4l2_device, the async notifier and the link
+	# creation for the whole camera path.
+	select VIDEO_MTK_CAM_GRAPH
+	select MEDIA_CONTROLLER
+	help
+	  Say Y here if you want to use the MediaTek MT6589 CAM/ISP
+	  control plane and IMGO output DMA.
+
+	  This driver maps the CAM control registers at 0x15004000,
+	  implements the documented software-reset handshake, block enable
+	  and start/stop strobes, and programs the IMGO output DMA engine
+	  from a videobuf2 capture queue.  It registers the CAM/ISP as a
+	  subdev with both a sink and a source pad, and exposes the IMGO
+	  output as a V4L2 capture video node with one format
+	  (V4L2_PIX_FMT_UYVY, the YUV422 1-plane layout the CAM output
+	  format field selects).
+
+	  The image pipeline itself - the CPIPE stages, the memory sequencer
+	  and the interrupt controllers - is NOT written, and no CPIPE stage
+	  enable is programmed, because turning a stage on without writing
+	  the pipeline would run it against unconfigured registers.  So the
+	  video node registers cleanly, negotiates, allocates buffers and
+	  starts, but the DMA engine is programmed rather than fed: there is
+	  no CPIPE output for it to transfer.
+
+	  On a board with no camera sensor - which is the case for the
+	  Lenovo YOGA Tablet 8/10 this was written for, which has no sensor
+	  node and no MIPI CSI-2 D-PHY in the device tree - STREAMON
+	  succeeds and no frame ever completes, so DQBUF blocks until the
+	  file is closed.  That is the intended inert behaviour, not a
+	  defect.  See the file header.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called mtk-cam.

@@ -31,6 +31,7 @@ struct mtk_pll_data {
 	u32 fenc_sta_ofs;
 	u32 pd_reg;
 	u32 pd_mask; /* default POSTDIV_MASK if 0 */
+	u8 pd_valid_mask; /* valid encoded postdiv values, 0 means all */
 	u32 tuner_reg;
 	u32 tuner_en_reg;
 	u8 tuner_en_bit;
@@ -59,7 +60,9 @@ struct mtk_pll_data {
  * MediaTek PLLs are configured through their pcw value. The pcw value describes
  * a divider in the PLL feedback loop which consists of 7 bits for the integer
  * part and the remaining bits (if present) for the fractional part. Also they
- * have a 3 bit power-of-two post divider.
+ * have a power-of-two post divider. Some SoCs reserve post-divider encodings
+ * for other functions, so mtk_pll_data::pd_valid_mask describes which
+ * encodings are actually valid.
  */
 
 struct mtk_clk_pll {

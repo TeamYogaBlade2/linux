@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config VIDEO_MTK_CAM_GRAPH
+	bool
+	select MEDIA_CONTROLLER
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_ASYNC
+	help
+	  The media graph that ties the MediaTek MT6589 camera blocks together.
+
+	  This driver owns no hardware.  It registers the struct media_device
+	  and struct v4l2_device for the camera path, runs the
+	  v4l2_async_notifier that pulls mtk-csi2-rx, mtk-scam and mtk-cam into
+	  that v4l2_device, and creates the media links between them from the
+	  "remote-endpoint" properties in the device tree.
+
+	  Without it the three subdevs register as async subdevs that nothing is
+	  waiting for, so no entity joins a media_device and no media_link is
+	  ever created: the pads exist and the dtsi points them at each other,
+	  but that is not a graph.
+
+	  It is deliberately a silent bool selected by the three camera drivers
+	  rather than a user-visible option: none of them can produce a graph
+	  without it, so there is no configuration in which turning it off is
+	  useful.  It also carries no depends of its own, because its three
+	  selectors already depend on the SoC and adding a second, narrower
+	  condition here would make Kconfig warn about selecting it with
+	  unmet dependencies.

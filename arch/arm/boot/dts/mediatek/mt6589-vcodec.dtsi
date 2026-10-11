@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2026 Akari Tsuyukusa
+ */
+
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/mediatek,mt6589-clk.h>
+#include <dt-bindings/memory/mt6589-larb-port.h>
+#include <dt-bindings/power/mt6589-power.h>
+
+/*
+ * MediaTek MT6589 video codec: VENC and VDEC as two separate nodes.
+ *
+ * These are separate hardware blocks and are declared as two nodes because they
+ * really are two devices.  The data sheet gives them separate chapters with
+ * separate register definitions (ch.60 "H.264/VP8 Video Encoder" plus ch.61
+ * "MPEG-4 Video Encoder" against ch.59 "Video Decoder"), they sit at separate
+ * register bases, they have separate GIC lines (MT_VENC_IRQ_ID = SPI 136 against
+ * MT_VDEC_IRQ_ID = SPI 140), separate clock controllers (vencsys against
+ * vdecsys) and separate power domains (VEN against VDE).
+ *
+ * The reason this tree moved off one merged node is not tidiness.  A device with
+ * more than one "power-domains" phandle gets no domain at all:
+ * genpd_dev_pm_attach() counts the phandles and returns without attaching
+ * anything unless there is exactly one (the count != 1 test in
+ * drivers/pmdomain/core.c).  The merged node therefore probed successfully with no
+ * power domain, no clock isolation and no deferral - and the encoder's power-on
+ * path only takes a clock, it cannot raise MTCMOS, so 0x17002000 was an
+ * unisolated access to a dark domain.  That node was disabled in commit
+ * f1b204d85ff6 ("disable a node that never gets its domains"), which turned off
+ * the H.264 encoder outright.  One domain per node is what lets each half attach
+ * for real, and a domain that fails to come up then becomes a visible
+ * -EPROBE_DEFER rather than a silent success against unpowered hardware.
+ *
+ * Note the register bases differ from the clock nodes: vencsys is at 0x17000000
+ * and vdecsys at 0x16000000, while the engines themselves are at 0x17002000 and
+ * 0x16020000 respectively.
+ *
+ * The vendor driver treats the decoder as two clocks from vdecsys (MT_CG_VDEC0_VDE
+ * and MT_CG_VDEC1_SMI) plus one from vencsys (MT_CG_VENC_VEN).
+ */
+
+&soc {
+	venc: venc@17002000 {
+		compatible = "mediatek,mt6589-venc";
+		/*
+		 * VENC is 4 KiB at 0x17002000 (data sheet ch.60 and ch.61, both the
+		 * H.264/VP8 and the MPEG-4 encoder, the latter starting at offset
+		 * 0x600 inside the same window).
+		 */
+		reg = <0x17002000 0x1000>;
+
+		/*
+		 * VENC IRQ is MT_VENC_IRQ_ID = GIC_PRIVATE_SIGNALS(32) + 136 = SPI 136
+		 * (kernel/core/include/mach/mt_irq.h:101).
+		 *
+		 * The vendor driver registers it with IRQF_TRIGGER_LOW
+		 * (videocodec_kernel_driver.c:2104), so the line is wired active low.
+		 * Note this is the OPPOSITE polarity to the decoder's, which is
+		 * IRQF_TRIGGER_HIGH (:2113); using one polarity for both would
+		 * silently never fire on one of them.
+		 */
+		interrupts = <GIC_SPI 136 IRQ_TYPE_LEVEL_LOW>;
+
+		/*
+		 * clock-names is required rather than implied: vencsys and vdecsys
+		 * each number their gates from zero, so the provider-local clock ids
+		 * are not a unique key and index-based lookup cannot tell them apart.
+		 */
+		clocks = <&vencsys CLK_VENC_VEN>;
+		clock-names = "venc";
+
+		/*
+		 * VENC lives in the VEN domain, which arrives powered off at reset and
+		 * must be brought up by the SCM power sequence.  One phandle, so
+		 * genpd_dev_pm_attach() attaches it properly - see the note above.
+		 *
+		 * STATUS: this node is DISABLED, and the reasoning is the whole
+		 * point of splitting the node, so it is worth stating exactly.
+		 *
+		 * Enabled is now genuinely an option that can be reasoned about
+		 * rather than a shrug, because this node attaches its domain for
+		 * real: a failed power-on becomes a visible -EPROBE_DEFER naming
+		 * this device, instead of the silent probe-success-against-a-dark-
+		 * domain the merged node had.  So the choice is between a deferred
+		 * probe that names the culprit, and no node at all.
+		 *
+		 * It is left off, and the evidence is the asymmetry between the two
+		 * domains in drivers/pmdomain/mediatek/mt6589-pm-domains.h:
+		 *
+		 *   VDE  .sram_pdn_ack_bits = BIT(12)          <- diagnosed, fixed
+		 *   VEN  .sram_pdn_ack_bits = GENMASK(15, 12)  <- undiagnosed
+		 *
+		 * VDE's power-on WAS understood and repaired: the stock driver waits
+		 * on VDE_SRAM_ACK = (0x1 << 12) while waiting on VEN_SRAM_ACK =
+		 * (0xf << 12), so polling all four VDE acknowledge bits spun until
+		 * MTK_POLL_TIMEOUT on three bits the hardware never asserts, and
+		 * genpd_power_on() then failed.  Since scpsys_sram_enable() polls
+		 * (ctl & sram_pdn_ack_bits) == 0, a narrower mask can only make the
+		 * wait easier to satisfy, never harder - so that fix is safe in the
+		 * direction that matters.
+		 *
+		 * VEN needed no width change - its four-bit poll is correct, and
+		 * the vendor's own VEN_SRAM_ACK is (0xf << 12) too.  What was wrong
+		 * was the position: our power-on stopped at PWR_RST_B and deferred
+		 * the SRAM release to scpsys_sram_enable(), which runs later and
+		 * after bus protection is touched.  The stock driver releases SRAM
+		 * inline, right after PWR_RST_B (mt_spm_mtcmos.c:443-462), and
+		 * scpsys_ctl_pwrseq_on() now does that for the domains marked
+		 * MTK_SCPD_SRAM_PDN_INLINE, which is this one and VDE.
+		 *
+		 * That is unverified on hardware - it is a change to a power
+		 * sequence, and there is no board here to characterise it - but it
+		 * is the vendor's own ordering rather than an invention, and with
+		 * no spare hardware a deferred probe is at least a visible failure
+		 * rather than a silent one.
+		 */
+		power-domains = <&spm MT6589_POWER_DOMAIN_VEN>;
+
+		/*
+		 * The three larb0 ports the H.264 datapath DMAs through: source luma,
+		 * source chroma and bitstream out.  One larb only, which is required -
+		 * mtk_iommu_v1_probe_device() rejects a device whose master ids span
+		 * two larbs ("Can only use one larb"), which the merged node's five
+		 * iommus did.
+		 */
+		iommus = <&iommu MT6589_M4U_PORT_VENC_CUR_LUMA>,
+			 <&iommu MT6589_M4U_PORT_VENC_CUR_CHROMA>,
+			 <&iommu MT6589_M4U_PORT_VENC_BSDMA>;
+
+	};
+
+	vdec: vdec@16020000 {
+		compatible = "mediatek,mt6589-vdec";
+		/*
+		 * VDEC is 0x29000 at 0x16020000 - NOT 0x16000000, which is the vdecsys
+		 * clock controller.  0x16020000 is mt_reg_base.h VDEC_BASE 0xF6020000
+		 * after the +0xE0000000 remap.  The data sheet has no register-definition
+		 * section for the decoder at all (ch.59 stops at the block diagram and
+		 * the string "16000000" does not appear anywhere in it), so the offsets
+		 * come from the vendor LDVT register-level test harness.
+		 */
+		reg = <0x16020000 0x29000>;
+
+		/*
+		 * VDEC IRQ is MT_VDEC_IRQ_ID = GIC_PRIVATE_SIGNALS(32) + 140 = SPI 140
+		 * (kernel/core/include/mach/mt_irq.h:103), and unlike VENC's it is
+		 * asserted HIGH (videocodec_kernel_driver.c:2113).
+		 */
+		interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
+
+		clocks = <&vdecsys CLK_VDEC0_VDE>,
+			 <&vdecsys CLK_VDEC1_SMI>;
+		clock-names = "vdec-vde",
+			      "vdec-smi";
+
+		/*
+		 * VDEC lives in the VDE domain.  One phandle, so this one attaches for
+		 * real too.
+		 *
+		 * STATUS: enabled, unlike its encoder sibling, and the asymmetry is
+		 * evidence-based rather than optimistic.  See the VEN comment above for
+		 * the full comparison; the short version is in
+		 * drivers/pmdomain/mediatek/mt6589-pm-domains.h:
+		 *
+		 *   VDE  .sram_pdn_ack_bits = BIT(12)          <- diagnosed, fixed
+		 *   VEN  .sram_pdn_ack_bits = GENMASK(15, 12)  <- undiagnosed
+		 *
+		 * VDE's power-on failure was understood (polling three acknowledge
+		 * bits the hardware never asserts, until timeout) and fixed, and the
+		 * fix is safe in the only direction that matters because
+		 * scpsys_sram_enable() polls for the bits to CLEAR.  VEN has no
+		 * equivalent fix.  So this is the half whose domain can be expected to
+		 * come up, and this is the half that is enabled.
+		 *
+		 * Note what enabling it does and does not buy.  The node now probes,
+		 * attaches its domain, registers and opens - and then refuses every
+		 * buffer with -ENODEV, because the MT6589 decode sequence lives in
+		 * closed userspace that programs the block over MFV_SET_CMD_CMD (see
+		 * the Kconfig text and mtk-vdec-mt6589.c).  A correctly attached
+		 * resource layer is not a datapath, and this node does not pretend to
+		 * be one.
+		 */
+		power-domains = <&spm MT6589_POWER_DOMAIN_VDE>;
+
+		/* The two larb1 ports the decoder's output paths DMA through. */
+		iommus = <&iommu MT6589_M4U_PORT_HW_VDEC_PP_EXT>,
+			 <&iommu MT6589_M4U_PORT_HW_VDEC_VLD_EXT>;
+
+		status = "okay";
+	};
+};

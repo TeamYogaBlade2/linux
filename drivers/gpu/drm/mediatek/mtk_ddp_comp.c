@@ -12,8 +12,12 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 
+#include "../../../pwm/mt6589-bls-ddp.h"
 #include "mtk_crtc.h"
 #include "mtk_ddp_comp.h"
 #include "mtk_disp_drv.h"
@@ -340,6 +344,19 @@ static const struct mtk_ddp_comp_funcs ddp_merge = {
 	.config = mtk_merge_config,
 };
 
+/*
+ * MT6589 BLS.  The merge funcs above drive the MT8195 merge unit, a
+ * different register block, so BLS needs its own.  The block is shared
+ * with the backlight PWM driver, which owns the mapping and the clock.
+ */
+static const struct mtk_ddp_comp_funcs ddp_bls = {
+	.clk_enable = mt6589_bls_ddp_clk_enable,
+	.clk_disable = mt6589_bls_ddp_clk_disable,
+	.config = mt6589_bls_ddp_config,
+	.start = mt6589_bls_ddp_start,
+	.stop = mt6589_bls_ddp_stop,
+};
+
 static const struct mtk_ddp_comp_funcs ddp_od = {
 	.clk_enable = mtk_ddp_clk_enable,
 	.clk_disable = mtk_ddp_clk_disable,
@@ -377,6 +394,25 @@ static const struct mtk_ddp_comp_funcs ddp_postmask = {
 	.stop = mtk_postmask_stop,
 };
 
+/*
+ * The RDMA funcs are shared by every SoC in this driver, so they carry
+ * .layer_config (and .layer_nr) for RDMA0/1/2/4 alike.  A plane is only
+ * ever attached to path index 0 or 1 (see mtk_crtc_num_comp_planes() and
+ * mtk_ddp_comp_for_plane() in mtk_crtc.c), and index 1 only gets planes if
+ * the component supplies .bgclr_in_on, which only ddp_ovl does.  So an RDMA
+ * receives a plane only when it is the FIRST element of a path array.  On
+ * MT6589 the main path is OVL0, BLS, RDMA0, DSI0 (mtk_drm_drv.c:
+ * mt6589_mtk_ddp_main), so RDMA0 sits at index 2 and mtk_rdma_layer_config()
+ * is dead code there.
+ *
+ * It is not dead everywhere, though: mt2701_mtk_ddp_ext is RDMA1, DPI0 and
+ * mt7623_mtk_ddp_ext is RDMA1, DSI0, so on those SoCs RDMA1 is index 0 and
+ * does get a plane.  The hook is kept because an RDMA-first display path is
+ * plausible future hardware.  Note that mtk_ddp_comp_supports_plane()
+ * reports true for RDMA, since it only asks whether the layer hooks exist -
+ * the path array, not the funcs table, is what decides whether RDMA
+ * receives a plane.
+ */
 static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.clk_enable = mtk_rdma_clk_enable,
 	.clk_disable = mtk_rdma_clk_disable,
@@ -393,10 +429,57 @@ static const struct mtk_ddp_comp_funcs ddp_rdma = {
 	.get_num_formats = mtk_rdma_get_num_formats,
 };
 
+static const struct mtk_ddp_comp_funcs ddp_tdshp = {
+	.clk_enable = mtk_tdshp_clk_enable,
+	.clk_disable = mtk_tdshp_clk_disable,
+	.config = mtk_tdshp_config,
+	.start = mtk_tdshp_start,
+	.stop = mtk_tdshp_stop,
+};
+
 static const struct mtk_ddp_comp_funcs ddp_ufoe = {
 	.clk_enable = mtk_ddp_clk_enable,
 	.clk_disable = mtk_ddp_clk_disable,
 	.start = mtk_ufoe_start,
+};
+
+/*
+ * DISP_WDMA.  Wired to WDMA0 and WDMA1 below, which previously carried a
+ * NULL funcs pointer - so every mtk_ddp_comp_* accessor on those two
+ * components fell through to its default.  The defaults were safe (all of
+ * them guard on !comp->funcs) but not free: mtk_ddp_comp_power_on() and
+ * _power_off() fall back to pm_runtime_resume_and_get()/pm_runtime_put()
+ * rather than returning 0, and mtk_ddp_comp_supported_rotations() falls back
+ * to DRM_MODE_ROTATE_0.  Those defaults were the right behaviour for a block
+ * with no driver attached, and they are now the driver's own behaviour.
+ *
+ * Note what is absent: power_on/power_off, because WDMA needs no power
+ * sequence beyond pm_runtime, which mtk_ddp_comp_power_on() already does when
+ * funcs->power_on is NULL - and adding an empty wrapper would only remove
+ * that fallback.  Also absent: layer_nr and layer_config, and that is the
+ * point rather than an omission.  WDMA is the write-only output leg of the
+ * pipeline; the pixel source is upstream of it, so WDMA never owns a plane.
+ * mtk_ddp_comp_supports_plane() requires BOTH hooks to report true, so with
+ * these two absent WDMA reports false and mtk_crtc_num_comp_planes() will
+ * never allocate a plane for it.  That is what keeps it out of any path
+ * array by construction, and it is why adding a funcs pointer here is not
+ * the same risk as adding a component to mt6589_mtk_ddp_main[] - see
+ * commits c9e543f22025 and 2d59d9693be8.
+ *
+ * supported_rotations is DRM_MODE_ROTATE_0, the same value the NULL-funcs
+ * fallback returned, so nothing observable changes there either.
+ */
+static const struct mtk_ddp_comp_funcs ddp_wdma = {
+	.clk_enable = mtk_wdma_clk_enable,
+	.clk_disable = mtk_wdma_clk_disable,
+	.config = mtk_wdma_config,
+	.start = mtk_wdma_start,
+	.stop = mtk_wdma_stop,
+	.register_vblank_cb = mtk_wdma_register_vblank_cb,
+	.unregister_vblank_cb = mtk_wdma_unregister_vblank_cb,
+	.enable_vblank = mtk_wdma_enable_vblank,
+	.disable_vblank = mtk_wdma_disable_vblank,
+	.supported_rotations = mtk_wdma_supported_rotations,
 };
 
 static const struct mtk_ddp_comp_funcs ddp_ovl_adaptor = {
@@ -441,6 +524,7 @@ static const char * const mtk_ddp_comp_stem[MTK_DDP_COMP_TYPE_MAX] = {
 	[MTK_DISP_POSTMASK] = "postmask",
 	[MTK_DISP_PWM] = "pwm",
 	[MTK_DISP_RDMA] = "rdma",
+	[MTK_DISP_TDSHP] = "tdshp",
 	[MTK_DISP_UFOE] = "ufoe",
 	[MTK_DISP_WDMA] = "wdma",
 	[MTK_DP_INTF] = "dp-intf",
@@ -457,7 +541,7 @@ struct mtk_ddp_comp_match {
 static const struct mtk_ddp_comp_match mtk_ddp_matches[DDP_COMPONENT_DRM_ID_MAX] = {
 	[DDP_COMPONENT_AAL0]		= { MTK_DISP_AAL,		0, &ddp_aal },
 	[DDP_COMPONENT_AAL1]		= { MTK_DISP_AAL,		1, &ddp_aal },
-	[DDP_COMPONENT_BLS]		= { MTK_DISP_BLS,		0, NULL },
+	[DDP_COMPONENT_BLS]		= { MTK_DISP_BLS,		0, &ddp_bls },
 	[DDP_COMPONENT_CCORR]		= { MTK_DISP_CCORR,		0, &ddp_ccorr },
 	[DDP_COMPONENT_COLOR0]		= { MTK_DISP_COLOR,		0, &ddp_color },
 	[DDP_COMPONENT_COLOR1]		= { MTK_DISP_COLOR,		1, &ddp_color },
@@ -495,9 +579,10 @@ static const struct mtk_ddp_comp_match mtk_ddp_matches[DDP_COMPONENT_DRM_ID_MAX]
 	[DDP_COMPONENT_RDMA1]		= { MTK_DISP_RDMA,		1, &ddp_rdma },
 	[DDP_COMPONENT_RDMA2]		= { MTK_DISP_RDMA,		2, &ddp_rdma },
 	[DDP_COMPONENT_RDMA4]		= { MTK_DISP_RDMA,		4, &ddp_rdma },
+	[DDP_COMPONENT_TDSHP]		= { MTK_DISP_TDSHP,		0, &ddp_tdshp },
 	[DDP_COMPONENT_UFOE]		= { MTK_DISP_UFOE,		0, &ddp_ufoe },
-	[DDP_COMPONENT_WDMA0]		= { MTK_DISP_WDMA,		0, NULL },
-	[DDP_COMPONENT_WDMA1]		= { MTK_DISP_WDMA,		1, NULL },
+	[DDP_COMPONENT_WDMA0]		= { MTK_DISP_WDMA,		0, &ddp_wdma },
+	[DDP_COMPONENT_WDMA1]		= { MTK_DISP_WDMA,		1, &ddp_wdma },
 };
 
 static bool mtk_ddp_comp_find(struct device *dev,
@@ -705,6 +790,59 @@ int mtk_ddp_comp_init(struct device *dev, struct device_node *node, struct mtk_d
 #endif
 
 	platform_set_drvdata(comp_pdev, priv);
+
+	return 0;
+}
+
+/**
+ * mtk_ddp_comp_fb_dma_addr - fetch the DMA address of a single-plane framebuffer
+ * @fb: the framebuffer to inspect
+ * @addr: output, the DMA address of the backing buffer on success
+ *
+ * Every DDP block programs a single starting address per layer, and this
+ * driver only ever creates single-plane framebuffers (mtk_drm_mode_fb_create()
+ * rejects anything else).  Callers - the plane code that fills
+ * &mtk_plane_pending_state, and any offload component that copies from or to a
+ * plane - should use this instead of indexing @fb->obj[] and calling
+ * to_drm_gem_dma_obj() directly, which turns a bad framebuffer into a NULL
+ * dereference inside container_of().
+ *
+ * The GEM object must be a DMA-helper object, because that is the only layout
+ * this driver allocates and imports (the driver sets DRM_GEM_DMA_DRIVER_OPS).
+ * Reading dma_addr out of any other object layout would be garbage.
+ *
+ * Return: 0 and the address in @addr on success, or a negative errno if @fb is
+ * NULL, is not a single-plane framebuffer, has no GEM object, or is not backed
+ * by a DMA-helper GEM object.
+ */
+int mtk_ddp_comp_fb_dma_addr(struct drm_framebuffer *fb, dma_addr_t *addr)
+{
+	struct drm_gem_object *gem;
+
+	if (!fb || !addr)
+		return -EINVAL;
+
+	if (fb->format->num_planes != 1)
+		return -EINVAL;
+
+	/*
+	 * drm_gem_fb_get_obj() is the accessor that validates the plane index
+	 * and warns on a missing obj[]; using it keeps a bad framebuffer from
+	 * turning into a NULL dereference inside container_of() below.
+	 */
+	gem = drm_gem_fb_get_obj(fb, 0);
+	if (!gem)
+		return -EINVAL;
+
+	/*
+	 * This driver only ever creates GEM objects through the DMA helper, so
+	 * every object it can hand us must be a struct drm_gem_dma_object.  The
+	 * core has no generic "is this a DMA object" predicate, so that contract
+	 * is what makes the container_of() below safe: DRM_GEM_DMA_DRIVER_OPS in
+	 * mtk_drm_drv.c allocates and imports only DMA-helper objects, and
+	 * mtk_drm_mode_fb_create() only accepts single-plane formats.
+	 */
+	*addr = to_drm_gem_dma_obj(gem)->dma_addr;
 
 	return 0;
 }

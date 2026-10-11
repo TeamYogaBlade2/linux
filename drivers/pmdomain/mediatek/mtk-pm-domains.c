@@ -493,6 +493,40 @@ static int scpsys_ctl_pwrseq_on(struct scpsys_domain *pd)
 	regmap_set_bits(scpsys->base, pd->data->ctl_offs, PWR_RST_B_BIT);
 
 	/*
+	 * Release SRAM here rather than leaving it to the caller's later
+	 * scpsys_sram_enable(), for the domains whose vendor power-on sequence
+	 * puts it in this exact spot.
+	 *
+	 * The stock MT6589 driver does it inline: spm_mtcmos_ctrl_venc() sets
+	 * PWR_ON, PWR_ON_S, waits on PWR_STATUS, clears PWR_CLK_DIS and PWR_ISO,
+	 * sets PWR_RST_B, and only then clears SRAM_PDN and waits for the
+	 * acknowledge bits to fall to zero (mt_spm_mtcmos.c:443-462).  Our
+	 * sequence matched that exactly right up to PWR_RST_B and then stopped,
+	 * deferring the SRAM release to scpsys_sram_enable() - which runs later,
+	 * after bus protection has already been touched.
+	 *
+	 * Doing it here is not cosmetic.  For VEN the deferred wait never
+	 * completed, which is the undiagnosed power-on failure recorded in
+	 * drivers/pmdomain/mediatek/mt6589-power-domains.md and the reason
+	 * larb0/larb1 and the venc node are disabled.
+	 */
+	if (pd->data->sram_pdn_bits &&
+	    MTK_SCPD_CAPS(pd, MTK_SCPD_SRAM_PDN_INLINE)) {
+		ret = scpsys_sram_enable(pd);
+		if (ret < 0) {
+			u32 ctl = 0;
+
+			regmap_read(scpsys->base, pd->data->ctl_offs, &ctl);
+			dev_err(scpsys->dev,
+				"%s: SRAM release failed (%d): ctl=0x%08x still acknowledging 0x%08x of mask 0x%08x\n",
+				pd->genpd.name, ret, ctl,
+				ctl & pd->data->sram_pdn_ack_bits,
+				pd->data->sram_pdn_ack_bits);
+			return ret;
+		}
+	}
+
+	/*
 	 * RTFF HW state may be modified by secure world or remote processors.
 	 *
 	 * With the only exception of STOR_UFS, which always needs save/restore,
@@ -638,8 +672,35 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 	else
 		ret = scpsys_ctl_pwrseq_on(pd);
 
-	if (ret)
+	/*
+	 * Say which domain is being powered on, and which step failed.
+	 *
+	 * Nothing on the failure path logs: genpd_power_on()'s error is
+	 * discarded by __genpd_dev_pm_attach(), which returns a bare
+	 * -EPROBE_DEFER (drivers/pmdomain/core.c), and that happens inside
+	 * dev_pm_domain_attach() before the consumer's own ->probe() runs.
+	 * A device stuck behind a domain that will not switch on is therefore
+	 * indistinguishable in the log from a device whose driver has not
+	 * been called yet - which is the trap this driver fell into on
+	 * MT6589, where larb0 and larb1 deferred silently with no output
+	 * from mtk-smi.c at all.
+	 *
+	 * The PWR_ACK step reports ctl and both status registers against the
+	 * mask the domain's table entry declares, because a domain stuck in
+	 * that poll is a hardware or clocking problem and the register state
+	 * is what tells them apart.
+	 */
+	if (ret) {
+		u32 ctl = 0, sta = 0, sta2 = 0;
+
+		regmap_read(scpsys->base, pd->data->ctl_offs, &ctl);
+		regmap_read(scpsys->base, pd->data->pwr_sta_offs, &sta);
+		regmap_read(scpsys->base, pd->data->pwr_sta2nd_offs, &sta2);
+		dev_err(scpsys->dev,
+			"%s: power-on failed in pwrseq (%d): ctl=0x%08x sta=0x%08x sta_s=0x%08x want=0x%08x\n",
+			pd->genpd.name, ret, ctl, sta, sta2, pd->data->sta_mask);
 		goto err_pwr_ack;
+	}
 
 	/*
 	 * In MT8189 mminfra power domain, the bus protect policy separates
@@ -662,9 +723,16 @@ static int scpsys_power_on(struct generic_pm_domain *genpd)
 			goto err_pwr_ack;
 	}
 
-	ret = scpsys_sram_enable(pd);
-	if (ret < 0)
-		goto err_disable_subsys_clks;
+	/* Already done inline in scpsys_ctl_pwrseq_on() for the domains whose
+	 * vendor sequence releases SRAM there; repeating it would only wait on
+	 * bits that are already clear.
+	 */
+	if (!(pd->data->sram_pdn_bits &&
+	      MTK_SCPD_CAPS(pd, MTK_SCPD_SRAM_PDN_INLINE))) {
+		ret = scpsys_sram_enable(pd);
+		if (ret < 0)
+			goto err_disable_subsys_clks;
+	}
 
 	ret = scpsys_bus_protect_disable(pd, 0);
 	if (ret < 0)
@@ -1248,6 +1316,21 @@ static int scpsys_probe(struct platform_device *pdev)
 	if (IS_ERR(scpsys->base)) {
 		dev_err(dev, "no regmap available\n");
 		return PTR_ERR(scpsys->base);
+	}
+
+	/*
+	 * MT6589 protects SPM power-control registers behind a project-code
+	 * write-enable key.  The vendor spm_module_init() performs this once
+	 * before the non-CPU MTCMOS helpers are used.  There is no separate SPM
+	 * driver in this tree, so do the equivalent setup here before any power
+	 * domain state is touched.
+	 */
+	if (soc == &mt6589_scpsys_data) {
+		ret = regmap_write(scpsys->base, 0x0000,
+				   (0x0b16 << 16) | BIT(0));
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to enable MT6589 SPM register control\n");
 	}
 
 	if (of_find_property(np, "access-controllers", NULL))

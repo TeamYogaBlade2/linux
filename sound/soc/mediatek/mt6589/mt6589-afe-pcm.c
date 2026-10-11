@@ -181,7 +181,10 @@
 #define AFE_I2S_CON1		0x0034
 #define AFE_I2S_CON1_BASE	0x00000008	/* I2S2_FMT: 0=EIAJ, 1=I2S; select I2S */
 #define AFE_I2S_CON1_RATE	GENMASK(11, 8)
+#define AFE_I2S_CON1_UPDATE_WORD GENMASK(28, 24)
 #define AFE_I2S_CON1_ON		BIT(0)
+/* Same value the capture path forces on AFE_I2S_CON2 (LDVT / vendor). */
+#define AFE_I2S_CON1_UPDATE_WORD_8	(8)
 #define AFE_I2S_CON2		0x0038
 #define AFE_I2S_CON2_BUFFER_UPDATE_WORD GENMASK(27, 24)
 #define AFE_I2S_CON2_RATE	GENMASK(11, 8)
@@ -587,9 +590,17 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	 * on the I2S DAC.  The rate itself goes to the DAC through
 	 * DAC_CON1, which is programmed further down.
 	 */
+	/*
+	 * AI2S_UPDATE_WORD lives in bits [28:24].  Leaving it at 0 is enough
+	 * for the period IRQ counter to run, but the DAC then hands the
+	 * PMIC an empty digital stream.  The vendor LDVT helper and the
+	 * capture-side CON2 path both use 8.
+	 */
 	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
 			   AFE_I2S_CON1_BASE |
-			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code));
+			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code) |
+			   FIELD_PREP(AFE_I2S_CON1_UPDATE_WORD,
+				      AFE_I2S_CON1_UPDATE_WORD_8));
 	if (ret)
 		return ret;
 

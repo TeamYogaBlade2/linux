@@ -58,6 +58,21 @@ properties:
   power-domains:
     maxItems: 1
 
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+    description:
+      BLS input and output ports in the display pipeline.
+    properties:
+      port@0:
+        $ref: /schemas/graph.yaml#/properties/port
+        description: BLS input from OVL or COLOR
+      port@1:
+        $ref: /schemas/graph.yaml#/properties/port
+        description: BLS output to RDMA
+    required:
+      - port@0
+      - port@1
+
 required:
   - compatible
   - reg

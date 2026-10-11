@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/dma/mediatek,mt6589-gdma.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6589 AP DMA General DMA Controller
+
+maintainers:
+  - MediaTek, Inc. <linux-mediatek@lists.linux.dev>
+
+description: >
+  The AP DMA block of the MT6589 contains eighteen DMA engines, but only two of
+  them are generic: G_DMA0 and G_DMA1. The remaining sixteen are wired to
+  internal peripherals (HIF, IrDA, I2C and UART) and are described by a
+  separate binding.
+
+  The two general DMA engines have no descriptor ring and no scatter-gather
+  support. A transfer is programmed directly into the SRC, DST, LEN1 and LEN2
+  registers and completion is signalled through a single interrupt flag.
+
+allOf:
+  - $ref: dma-controller.yaml#
+
+properties:
+  compatible:
+    enum:
+      - mediatek,mt6589-gdma
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    description:
+      One interrupt per general DMA engine, G_DMA0 first and G_DMA1 second.
+    minItems: 2
+    maxItems: 2
+
+  interrupt-names:
+    items:
+      - const: gdma0
+      - const: gdma1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: main
+
+  resets:
+    maxItems: 1
+
+  reset-names:
+    const: main
+
+  "#dma-cells":
+    description: Channel number, 0 for G_DMA0 and 1 for G_DMA1
+    const: 1
+
+required:
+  - reg
+  - interrupts
+  - interrupt-names
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+
+# This controller is deliberately described without an "iommus" or a
+# "power-domains" property. AP DMA is attached straight to the peripheral AXI
+# fabric, so there is no M4U or LARB in front of it and it has no power domain
+# of its own; the datasheet's AP_DMA_PD is the same PERICFG PDN0 bit that gates
+# CLK_PERI0_APDMA, so the clock above already covers it. Adding either property
+# here would describe a path that does not exist.
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/mediatek,mt6589-clk.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/reset/mt6589-resets.h>
+
+    dma-controller@11000000 {
+        compatible = "mediatek,mt6589-gdma";
+        reg = <0x11000000 0x180>;
+        interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
+        interrupt-names = "gdma0", "gdma1";
+        clocks = <&pericfg CLK_PERI0_APDMA>;
+        clock-names = "main";
+        resets = <&pericfg MT6589_PERI_DMA_SW_RS_RST>;
+        reset-names = "main";
+        #dma-cells = <1>;
+        status = "disabled";
+    };

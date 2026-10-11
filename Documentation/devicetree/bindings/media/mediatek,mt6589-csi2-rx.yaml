@@ -1,0 +1,222 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-csi2-rx.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 MIPI CSI-2 Receiver
+
+maintainers:
+  - Lenovo Linux Team
+
+description: |
+  The MT6589 image subsystem contains two independent MIPI CSI-2 receivers
+  (called seninf/csi2 in the vendor sources) in a single register window at
+  0x15008000, one per camera port.  Each receiver unpacks the MIPI packets,
+  checks their ECC/CRC, and forwards the raw byte stream together with
+  frame and line synchronisation to the sensor-CAM (SCAM) block that feeds
+  the ISP.
+
+  One DT node describes the window; mediatek,seninf-port selects which of
+  the two receivers the node programs.
+
+  DRAFT DRIVER - NO MIPI CSI-2 D-PHY EXISTS FOR THIS SOC
+  ------------------------------------------------------
+  This receiver driver programs the seninf/csi2 registers.  It does not
+  program any MIPI PHY, because on the MT6589 there is no such PHY to
+  program:
+
+  - The MT6589 data sheet maps the imgsys aperture in full and documents no
+    MIPI RX PHY registers at all.  The PHY appears only as the word
+    "mipi_rx" in the img_rst description of WDT_SWSYSRST.
+  - There is no vendor PHY driver for this SoC to derive a register map from.
+
+  An earlier revision of this tree carried a D-PHY binding and a stub
+  driver whose power_on() returned success without touching the hardware.  Both
+  were removed rather than kept as a placeholder.  A "phys" reference here
+  therefore names a PHY that this tree provides no driver for: the receiver
+  does the full phy_init()/phy_power_on()/phy_power_off()/phy_exit() lifecycle
+  on it and a missing reference is non-fatal, but no lanes will be driven.
+  Expect no frames from this receiver until a real D-PHY driver exists.
+
+  In the same spirit, the three clocks below are optional and the reset is
+  optional, for reasons documented on each property.  A node with neither
+  clocks nor resets probes and its registers are programmed; that is all that
+  is being claimed.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-csi2-rx
+
+  reg:
+    description: |
+      Register window covering what this driver programs: seninf_top at
+      0x15008000 and the two csi2 receivers at 0x15008100 and 0x15008180,
+      0x200 bytes in total.
+
+      The window must NOT be widened to cover the SCAM blocks at
+      0x15008200: those have their own node and their own driver, and two
+      platform devices reserving one aperture is a real bug - one of them
+      ends up driving the other's registers.  Claim 0x200 and no more.
+    maxItems: 1
+
+  mediatek,seninf-port:
+    description: |
+      Which receiver in the window this node programs.  Port 0 is the
+      seninf1/csi2 receiver pair at 0x15008100, port 1 is seninf2/csi2 at
+      0x15008180.  On the Lenovo YOGA Tablet 8/10 port 0 is the main (rear)
+      camera and port 1 is the front camera.
+    enum: [0, 1]
+
+  clocks:
+    description: |
+      Up to three clocks, in this order:
+        seninf - the sensor front end block itself
+        csi2   - the CSI-2 receiver sampling logic
+        tg_grp - the timing generator feeding the parallel sensor clock
+
+      These are OPTIONAL and the driver treats each one as optional: it takes
+      them with devm_clk_get_optional() and, for each gate that is present,
+      enables it with clk_prepare_enable() on resume and drops it on suspend.
+
+      They are optional because the gate bits behind these names cannot be
+      derived on this SoC.  The MT6589 clock bindings stop at CLK_IMAGE_FPC and
+      the data sheet documents SENINF at 0x15008000 but never describes the
+      CAM_TG_CG register that the gate bits would live in, so the bit positions
+      are unknown.  Rather than guess - a wrong bit could gate off a block
+      some other driver is using - the in-tree board leaves the property off
+      entirely.
+
+      When a gate is absent the driver simply programs the receiver off
+      whatever clock state it finds: it skips the clk_prepare_enable() for
+      that gate, still deasserts the reset, still powers the D-PHY up if one
+      is wired, and still writes the receiver's registers.  So a node with no
+      "clocks" probes and its ports program correctly; add the property once
+      the real gate positions have been read from hardware.
+    minItems: 3
+    maxItems: 3
+
+  clock-names:
+    description: |
+      Names of the gates in "clocks", in the order listed there.  Both
+      properties are optional and must either both be present or both be
+      absent.
+    items:
+      - seninf
+      - csi2
+      - tg_grp
+
+  phys:
+    description: |
+      The MIPI CSI-2 D-PHY this receiver sits on top of.  The driver holds
+      the PHY's whole lifetime: phy_init() once in the probe function and
+      phy_exit() once in remove, with phy_power_on()/phy_power_off() per
+      runtime-PM resume and suspend.  On remove the block is taken down
+      explicitly before phy_exit() runs, so the PHY is never left powered.
+
+      There is no in-tree D-PHY driver for the MT6589 - see the description at
+      the top of this file - so this property cannot currently name anything
+      that drives lanes.  It is not required: a node without it still probes
+      and still programs the receiver's registers.
+    maxItems: 1
+
+  phy-names:
+    description: Name of the D-PHY reference in "phys".
+    const: dphy
+
+  resets:
+    description: |
+      Reset for the sensor front end.  OPTIONAL, and deliberately not
+      required: the driver takes it with devm_reset_control_get_optional() and
+      guards its reset_control_assert()/reset_control_deassert() calls on the
+      control being present, so a node without this property probes and its
+      ports program correctly.
+
+      The property is optional because the provider for this reset does not
+      exist yet.  The data sheet puts img_rst at bit 5 of WDT_SWSYSRST
+      ("writes 1 to reset imgsys and its related pad macro (cam, mipi_rx)"),
+      and that register is at 0x10000000 + 0x18 in the WDT block - not in
+      topckgen, which is syscon@10000100 and which declares no #reset-cells at
+      all.  The in-tree board therefore omits the property rather than
+      reference a node and index that cannot resolve.
+
+      The honest cost of omitting it: without a reset, whatever state the
+      imgsys/mipi_rx registers were left in is not cleared before this driver
+      programs them.  On a cold boot the block is already at its documented
+      reset values and this is harmless; after a warm reboot, stale state can
+      survive.  The driver restores the registers it cares about (CSI2_CTRL,
+      CSI2_INTSTA) but cannot claim the rest are clean.
+
+      Add this property once a reset provider for WDT_SWSYSRST bit 5 exists;
+      the driver needs no change to pick it up.
+    maxItems: 1
+
+  reset-names:
+    const: seninf
+
+  power-domains:
+    maxItems: 1
+
+  # The receiver presents a sink pad facing the sensor (or the MIPI D-PHY
+  # that stands in for it) and a source pad facing the SCAM adaptor.
+  ports:
+    $ref: /schemas/graph/ports.yaml#
+
+    properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
+required:
+  - compatible
+  - reg
+  - mediatek,seninf-port
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    seninf: csi2-rx@15008000 {
+        compatible = "mediatek,mt6589-csi2-rx";
+        reg = <0x0 0x15008000 0x0 0x200>;
+
+        mediatek,seninf-port = <0>;
+
+        /*
+         * No "clocks" / "clock-names" here, and that is deliberate - see the
+         * description on "clocks".  The driver takes all three gates as
+         * optional and programs the receiver without them.
+         */
+
+        /*
+         * No "resets" here either, for the same reason as the clocks: the
+         * provider does not exist yet.  The driver takes the reset as
+         * optional, so this node probes without it.  See the description on
+         * "resets".
+         */
+
+        /*
+         * Only the source pad is shown, pointing at the SCAM adaptor that
+         * follows the receiver; scam_in_ep is defined in the
+         * mediatek,mt6589-scam binding.
+         *
+         * The sink pad is absent because there is nothing in this tree to
+         * point it at: the A5142 sensor driver was deleted (it never
+         * answered on I2C on this board) and the MIPI CSI-2 D-PHY node went
+         * with it, the MT6589 data sheet not describing the PHY registers
+         * at all.  The receiver still creates both media pads and it takes
+         * a missing "phys" as non-fatal; the link is simply not made.
+         */
+        ports {
+            seninf_out: port@1 {
+                seninf_out_ep: endpoint {
+                    remote-endpoint = <&scam_in_ep>;
+                };
+            };
+        };
+    };
+
+...

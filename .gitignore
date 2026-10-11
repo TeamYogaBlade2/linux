@@ -11,6 +11,10 @@
 # Normal rules (sorted alphabetically)
 #
 .*
+# The leading-dot rule above would otherwise hide the CI configuration,
+# which needs to be tracked for the workflow to run.
+!.github/
+!.github/workflows/
 *.a
 *.asn1.[ch]
 *.bc

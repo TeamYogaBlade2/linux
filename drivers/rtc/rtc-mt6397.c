@@ -37,6 +37,57 @@ static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
 	return ret;
 }
 
+/*
+ * The MT6589 vendor kernel enables RTC_GPIO 32 kHz for
+ * RTC_GPIO_USER_GPS before powering up the combo chip. On this RTC,
+ * RTC_CON.F32KOB = 0 enables the output, while RTC_PDN1 bit 9 records
+ * the GPS user's request so the output remains enabled.
+ */
+int mt6397_rtc_enable_32k_gpio(struct device *dev)
+{
+	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+	u32 con, pdn1;
+	int ret;
+
+	if (!rtc || !rtc->rtc_dev)
+		return -EPROBE_DEFER;
+
+	mutex_lock(&rtc->lock);
+
+	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_PDN1, &pdn1);
+	if (ret < 0)
+		goto out;
+
+	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_CON, &con);
+	if (ret < 0)
+		goto out;
+
+	if (con & RTC_CON_F32KOB) {
+		ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_CON,
+				   con & ~RTC_CON_F32KOB);
+		if (ret < 0)
+			goto out;
+
+		ret = mtk_rtc_write_trigger(rtc);
+		if (ret < 0)
+			goto out;
+	}
+
+	if (!(pdn1 & RTC_PDN1_GPIO_GPS)) {
+		ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_PDN1,
+				   pdn1 | RTC_PDN1_GPIO_GPS);
+		if (ret < 0)
+			goto out;
+
+		ret = mtk_rtc_write_trigger(rtc);
+	}
+
+out:
+	mutex_unlock(&rtc->lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mt6397_rtc_enable_32k_gpio);
+
 static irqreturn_t mtk_rtc_irq_handler_thread(int irq, void *data)
 {
 	struct mt6397_rtc *rtc = data;

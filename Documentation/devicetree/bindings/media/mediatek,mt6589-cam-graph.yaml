@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/mediatek,mt6589-cam-graph.yaml#
+$schema: http://devicetree.org/schemas/base.yaml#
+
+title: MediaTek MT6589 Camera Media Graph
+
+maintainers:
+  - Lenovo Linux Team
+
+description: |
+  The MT6589 camera path is a chain of three blocks, each of which is its own
+  platform device and its own subdev:
+
+    csi2-rx (MIPI CSI-2 receiver) -> scam (sensor-CAM adaptor) -> cam (ISP)
+
+  The blocks declare "remote-endpoint" properties pointing at each other, but
+  that is not enough to build a media graph.  A media graph is a runtime object:
+  something has to register the media_device and the v4l2_device, run the
+  v4l2_async_notifier that pulls the subdevs into that v4l2_device, and create
+  the media_links.
+
+  This binding describes the node that owns all of that.  The driver bound to
+  it maps no registers and programs no hardware; it is pure plumbing, and it
+  exists because none of the three hardware blocks can own the graph without
+  making its own probe order and unbind order decide the whole pipeline.
+
+  One node is expected per camera path.  It waits on one endpoint per block it
+  should wait for, and the links between the blocks are derived from the DT
+  endpoints by the driver, not listed here.
+
+  "One endpoint per block" is load-bearing, not a convention.  The only thing
+  that ever puts a v4l2_async_connection on notifier->waiting_list is an
+  endpoint on THIS node, and the only thing that registers a subdev into this
+  node's v4l2_device is such a connection matching that subdev.  A block that
+  declares no endpoint here never joins v4l2_device->subdevs, and the driver's
+  link creation walks only that list -- so the links that touch it are silently
+  never created, even when its pads and its "remote-endpoint" properties all
+  exist and point at the right peers.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-cam-graph
+
+  ports:
+    description: |
+      The blocks this driver should wait for.  Each endpoint names a remote
+      endpoint belonging to one of the camera subdevs.
+
+      One endpoint per block in the chain, INCLUDING the last one.  For the
+      chain above that is three: seninf_out (the receiver's output), scam_out
+      (SCAM's output) and cam_in (CAM's input).
+
+      A remote may sit on either a source or a sink endpoint of its block; the
+      match is by fwnode, so both resolve.  Source endpoints read more
+      naturally, but the important thing is that a remote is named at all.
+
+      Naming cam_in as scam_out's remote does NOT substitute for an endpoint
+      here.  It describes the SCAM -> CAM wiring for link creation, but it
+      binds nothing: v4l2_async_find_match() only inspects descriptors taken
+      from this node's own endpoints, so cam would stay out of
+      v4l2_device->subdevs and the SCAM -> CAM link would never be created.
+
+      An endpoint whose remote does not resolve is not an error.  The driver
+      counts what resolved, reports how many at probe, and carries on, so a
+      graph_to_sensor endpoint can be declared ahead of the sensor node.
+
+      Note that adding a sensor is not a DT-only change on the sensor side: the
+      receiver has no sink endpoint for a sensor to point at (its ports carry
+      only seninf_out, port@1) and the MIPI CSI-2 D-PHY between the two is not
+      modelled.  Restoring the receiver's seninf_in endpoint and adding a
+      graph_to_sensor endpoint here are both required before the sensor ->
+      receiver link can exist.
+    $ref: /schemas/graph/ports.yaml#
+
+    properties:
+      "#address-cells":
+        const: 1
+
+      "#size-cells":
+        const: 0
+
+required:
+  - compatible
+  - ports
+
+additionalProperties: false
+
+examples:
+  - |
+    mtk-cam-graph {
+        compatible = "mediatek,mt6589-cam-graph";
+
+        /*
+         * Wait for the receiver's output, for SCAM's output and for CAM's
+         * input.  None of these endpoints has a peer back on this node, so
+         * dtc reports each of them as not bidirectional; that is expected for
+         * a graph owner, which owns a media_device and a notifier rather than
+         * pads.
+         */
+        ports {
+            graph_to_rx: port@0 {
+                graph_to_rx_ep: endpoint {
+                    remote-endpoint = <&seninf_out_ep>;
+                };
+            };
+
+            graph_to_scam: port@1 {
+                graph_to_scam_ep: endpoint {
+                    remote-endpoint = <&scam_out_ep>;
+                };
+            };
+
+            graph_to_cam: port@2 {
+                graph_to_cam_ep: endpoint {
+                    remote-endpoint = <&cam_in_ep>;
+                };
+            };
+        };
+    };
+
+...

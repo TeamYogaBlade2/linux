@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR MIT)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mediatek,mt6589-vdec.yaml#
+$schema: http://devicetree.org/schemas/bindings.yaml#
+
+title: MediaTek MT6589 Video Decoder (VDEC)
+
+description: |
+  The MT6589 video decoder is a hardwired RTL accelerator at 0x16020000 with no
+  coprocessor and no firmware, described in data sheet chapter 59 as a
+  multi-standard block: MPEG-1/2, MPEG-4, DivX, Xvid, H.263, VC-1, WMV9, H.264 up
+  to level 4.2 and VP8.  It is programmed entirely through MMIO and power is a
+  plain clock gate in the VDE power domain.
+
+  This node is the decoder half of what was previously one combined
+  "mediatek,mt6589-vcodec" node also covering the encoder.  VENC and VDEC are
+  separate hardware blocks - separate register window, separate interrupt
+  (MT_VDEC_IRQ_ID = GIC SPI 140 against MT_VENC_IRQ_ID = SPI 136), separate clock
+  controller and separate power domain - and separating them is what allows each to
+  attach its single power domain: genpd_dev_pm_attach() attaches nothing at all
+  unless the "power-domains" property has exactly one phandle.
+
+  WHAT THIS NODE DELIVERS, PRECISELY
+  -----------------------------------
+  A resource layer and an honest V4L2 node.  The node registers, opens, answers
+  VIDIOC_QUERYCAP and negotiates formats.  Its device_run() reports -ENODEV for
+  every buffer, and that is the correct answer rather than a stub:
+
+  - The vendor stack does not program the VDEC datapath from the kernel.  Its
+    kernel driver (videocodec_kernel_driver.c, 2391 lines) touches the decoder only
+    to power it up and to acknowledge the frame-end interrupt (:300-301); it never
+    writes a datapath register.  The sequence is shipped from CLOSED USERSPACE as a
+    queue of WRITE_REG_CMD records (hal_api.h:33-41, :107-124) that the driver
+    merely walks over the MFV_SET_CMD_CMD ioctl:
+
+        case WRITE_REG_CMD:
+            VDO_HW_WRITE(cmd_queue->address + cmd_queue->offset,
+                         cmd_queue->value);   (videocodec_kernel_driver.c:1758)
+
+    The decode sequence therefore lives in stripped, partly encrypted ARM blobs
+    (libvp8dec_sa.ca7.so and siblings).  Porting it is a userspace
+    reverse-engineering project, not a kernel one.
+  - The data sheet has no register-definition section for this block at all:
+    chapter 59 stops at the block diagram, and "16000000" does not appear anywhere
+    in it.  The only readable register map is the vendor LDVT register-test
+    harness, which sets CONFIG_CHIP_VER_CURR 80 (include/vdec_info_common.h:125) -
+    that same header defines 80 as MT8580 (:130), a different SoC.
+  - VP8 additionally requires its probability tables pushed bit-by-bit into parser
+    SRAM before any frame can decode.
+
+  Having its own driver, its own power domain and its own node does not change any
+  of that.  Userspace of this driver must not expect a decoded picture.
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+properties:
+  compatible:
+    oneOf:
+      - items:
+          - const: mediatek,mt6589-vdec
+
+  reg:
+    maxItems: 1
+    description: |
+      The decoder register window: 0x29000 bytes at 0x16020000, itself split into
+      a MISC block at offset 0 and a VLD (bitstream parser) block at offset 0x1000.
+
+      Note this is 0x16020000 and NOT 0x16000000, which is the vdecsys clock
+      controller.  It comes from the stock mt_reg_base.h VDEC_BASE 0xF6020000
+      after the +0xE0000000 remap.  A binding cannot describe the register layout,
+      because no register definition for this block exists in the data sheet.
+
+  interrupts:
+    maxItems: 1
+    description: |
+      One interrupt line: MT_VDEC_IRQ_ID = GIC_PRIVATE_SIGNALS(32) + 140 = SPI 140
+      (kernel/core/include/mach/mt_irq.h:103).
+
+      It is asserted HIGH.  The vendor driver registers it with
+      IRQF_TRIGGER_HIGH (videocodec_kernel_driver.c:2113), the opposite polarity to
+      the encoder's, so IRQ_TYPE_LEVEL_LOW here would silently never fire.
+
+  clocks:
+    minItems: 2
+    maxItems: 2
+    description: |
+      Two clock gates from the vdecsys provider: the decoder engine (MT_CG_VDEC0_VDE
+      / CLK_VDEC0_VDE) and its SMI/LARB clock (MT_CG_VDEC1_SMI / CLK_VDEC1_SMI).
+
+  clock-names:
+    items:
+      - const: vdec-vde
+      - const: vdec-smi
+    description: |
+      Required rather than implied: vencsys and vdecsys each number their gates
+      from zero, so provider-local clock ids are not a unique key and index-based
+      lookup cannot tell the providers apart.
+
+  power-domains:
+    maxItems: 1
+    description: |
+      The decoder power domain, VDE.  It arrives powered off at reset (PWR_STATUS
+      bit 8 is 0) and has to be raised by the SCM power sequence.
+
+      This property must name exactly ONE domain.  genpd_dev_pm_attach() attaches
+      a domain only when the phandle count is exactly 1 (drivers/pmdomain/core.c),
+      so a node naming two domains gets no domain at all and no deferred probe -
+      which is why this block is a node of its own rather than a second window in
+      a combined node.
+
+  iommus:
+    minItems: 1
+    items:
+      description: |
+        M4U port for a decoder DMA engine.  All of the decoder's ports are on
+        larb1, and they must be: mtk_iommu_v1_probe_device() rejects a device
+        whose master ids span two larbs.
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+
+additionalProperties: false
