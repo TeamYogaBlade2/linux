@@ -588,7 +588,8 @@
 	vmmc-supply = <&mt6320_ldo_vmch1>;
 	vqmmc-supply = <&mt6320_ldo_vmc1>;
 
-	bus-width = <4>;
+	/* Temporary MT6628 bring-up diagnostic: avoid the 4-bit switch. */
+	bus-width = <1>;
 	no-mmc;
 	no-sdio;
 	/* TODO: recheck */

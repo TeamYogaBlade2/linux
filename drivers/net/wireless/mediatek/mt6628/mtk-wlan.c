@@ -119,8 +119,17 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 {
 	unsigned int tries = 0;
 	unsigned long timeout = jiffies + msecs_to_jiffies(8192);
-	u32 val;
+	u32 val = 0, wcir;
 	int ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
+	if (ret)
+		return ret;
+
+	dev_info(&wl->func->dev,
+		 "driver-own start: WCIR=%#010x, chip_id=%#lx, WLAN_READY=%u\n",
+		 wcir, wcir & MT6628_WCIR_CHIP_ID,
+		 !!(wcir & MT6628_WCIR_WLAN_READY));
 
 	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
 			     MT6628_FW_OWN_REQ_CLR);
@@ -132,13 +141,23 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		if (ret)
 			return ret;
 
-		if (val & MT6628_IS_DRIVER_OWN)
+		if (val & MT6628_IS_DRIVER_OWN) {
+			dev_info(&wl->func->dev,
+				 "driver ownership acquired: WHLPCR=%#010x\n",
+				 val);
 			return 0;
+		}
 
 		/*
 		 * Match nicpmSetDriverOwn(): refresh the ownership request
 		 * periodically while the LP engine is completing its transition.
 		 */
+		if (!(tries & 0x3ff))
+			dev_info(&wl->func->dev,
+				 "waiting for driver ownership: "
+				 "WCIR=%#010x WHLPCR=%#010x iteration=%u\n",
+				 wcir, val, tries);
+
 		if (!(tries++ & 0xff)) {
 			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
 					     MT6628_FW_OWN_REQ_CLR);
@@ -149,7 +168,9 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		usleep_range(900, 1100);
 	}
 
-	dev_err(&wl->func->dev, "timed out waiting for driver ownership\n");
+	dev_err(&wl->func->dev,
+		"timed out waiting for driver ownership: "
+		"WCIR=%#010x WHLPCR=%#010x\n", wcir, val);
 	return -ETIMEDOUT;
 }
 
