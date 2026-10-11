@@ -1971,12 +1971,14 @@
 				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
+			input-schmitt-enable;
 			drive-strength = <4>;
 			mediatek,pull-up-adv = <2>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			input-schmitt-enable;
 			mediatek,pull-up-adv = <2>;
 			drive-strength = <4>;
 		};
@@ -1990,11 +1992,13 @@
 				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
 				 <MT6589_GPIO228__FUNC_MSDC3_CMD>;
 			input-enable;
+			input-schmitt-enable;
 			drive-strength = <4>;
 		};
 
 		pins-clk {
 			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			input-schmitt-enable;
 			drive-strength = <4>;
 		};
 	};
