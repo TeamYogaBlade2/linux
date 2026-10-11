@@ -67,25 +67,6 @@ static unsigned int mt6320_vibr_round_voltage(unsigned int uv)
 	return mt6320_vibr_voltages_uv[0];
 }
 
-static unsigned int mt6320_vibr_voltage_for_level(struct mt6320_vibrator *vib,
-						  u16 level)
-{
-	unsigned int max_index = 0;
-	unsigned int index;
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(mt6320_vibr_voltages_uv); i++) {
-		if (mt6320_vibr_voltages_uv[i] > vib->amplitude_uv)
-			break;
-		max_index = i;
-	}
-
-	/* Map the 16-bit FF magnitude to the available LDO voltage steps. */
-	index = DIV_ROUND_CLOSEST((unsigned int)level * max_index, 0xffffU);
-
-	return mt6320_vibr_voltages_uv[index];
-}
-
 static int mt6320_vibr_hw_init(struct mt6320_vibrator *vib)
 {
 	int ret;
@@ -121,7 +102,13 @@ static int mt6320_vibr_apply_level(struct mt6320_vibrator *vib, u16 level)
 		return ret;
 	}
 
-	voltage_uv = mt6320_vibr_voltage_for_level(vib, level);
+	/*
+	 * Bring-up mode: the VIBR LDO has no waveform/PWM engine, and the
+	 * voltage-to-vibration response of this board has not been calibrated.
+	 * Drive at the DT-configured safe maximum for any nonzero rumble rather
+	 * than mapping common 50-75% FF levels to only 1.5-1.8 V.
+	 */
+	voltage_uv = vib->amplitude_uv;
 	ret = regulator_set_voltage(vib->vibr_reg, voltage_uv, voltage_uv);
 	if (ret) {
 		/* Do not leave an actuator running at a stale strength on error. */
@@ -309,6 +296,21 @@ static int mt6320_vibr_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to initialize force feedback\n");
+
+	/*
+	 * input_ff_create_memless() emulates FF_PERIODIC as FF_RUMBLE and
+	 * advertises SINE/TRIANGLE/SQUARE. This device has only a voltage-
+	 * selectable LDO, not a waveform generator. Keep memless effect timing
+	 * for Rumble but do not advertise waveforms we cannot physically render.
+	 */
+	clear_bit(FF_PERIODIC, vib->input->ffbit);
+	clear_bit(FF_SINE, vib->input->ffbit);
+	clear_bit(FF_TRIANGLE, vib->input->ffbit);
+	clear_bit(FF_SQUARE, vib->input->ffbit);
+	clear_bit(FF_PERIODIC, vib->input->ff->ffbit);
+	clear_bit(FF_SINE, vib->input->ff->ffbit);
+	clear_bit(FF_TRIANGLE, vib->input->ff->ffbit);
+	clear_bit(FF_SQUARE, vib->input->ff->ffbit);
 
 	ret = input_register_device(vib->input);
 	if (ret)
