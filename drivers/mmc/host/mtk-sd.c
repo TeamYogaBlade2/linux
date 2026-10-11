@@ -1412,6 +1412,25 @@ static bool msdc_cmd_done(struct msdc_host *host, int events,
 			cmd->error = -ETIMEDOUT;
 			host->error |= REQ_CMD_TMO;
 		}
+
+		if (cmd->opcode == SD_IO_RW_DIRECT &&
+		    (events & (MSDC_INT_RSPCRCERR | MSDC_INT_CMDTMO))) {
+			struct mmc_host *mmc = mmc_from_priv(host);
+
+			dev_err(host->dev,
+				"CMD52 error: arg=%08x events=%08x "
+				"rsp=%08x CFG=%08x IOCON=%08x PS=%08x "
+				"clock=%u width=%d signal=%d power=%d\n",
+				cmd->arg, events,
+				readl(host->base + SDC_RESP0),
+				readl(host->base + MSDC_CFG),
+				readl(host->base + MSDC_IOCON),
+				readl(host->base + MSDC_PS),
+				mmc->actual_clock,
+				mmc->ios.bus_width,
+				mmc->ios.signal_voltage,
+				mmc->ios.power_mode);
+		}
 	}
 	if (cmd->error)
 		dev_dbg(host->dev,
