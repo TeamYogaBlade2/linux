@@ -1047,16 +1047,6 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_start(dsi);
 
-	/*
-	 * Dump after the start, not just before it.  A snapshot taken in
-	 * atomic_pre_enable() predates this write and so cannot show whether
-	 * the engine ever ran; DSI_STA reads 0x00 with no error bits both
-	 * before and after a failed link, which is what made the earlier dump
-	 * read like a healthy link.  This one is post-start and shares the
-	 * same rate limit as the pre-start one.
-	 */
-	mtk_dsi_dump_status(dsi, "post-start");
-
 	dsi->enabled = true;
 }
 
@@ -1105,6 +1095,13 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 		return;
 
 	mtk_output_dsi_enable(dsi);
+	/*
+	 * On MT6589, the CRTC's DDP start hook now starts DSI before OVL.
+	 * Keep this snapshot in the bridge callback, which runs after the
+	 * CRTC component start sequence, to observe whether the sink and
+	 * source have actually begun streaming together.
+	 */
+	mtk_dsi_dump_status(dsi, "post-start");
 }
 
 static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
@@ -1195,8 +1192,28 @@ static const struct drm_bridge_funcs mtk_dsi_bridge_funcs = {
 void mtk_dsi_ddp_start(struct device *dev)
 {
 	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	int ret;
 
-	mtk_dsi_poweron(dsi);
+	ret = mtk_dsi_poweron(dsi);
+	if (ret < 0) {
+		DRM_ERROR("failed to power on DSI display path: %d\n", ret);
+		return;
+	}
+
+	/*
+	 * The CRTC starts MT6589 DDP components in reverse order, so this is
+	 * the sink-side start hook and runs before RDMA0 and OVL are enabled.
+	 * Powering DSI on alone is not enough: the actual DSI_START write used
+	 * to wait for the bridge atomic_enable callback, which runs only after
+	 * CRTC atomic_enable has already started OVL.  Start the video engine
+	 * here so the downstream path is ready before OVL begins fetching.
+	 *
+	 * atomic_pre_enable normally did this lane setup already.  Keep it
+	 * idempotent here because the DDP hook can also handle a retried power-on.
+	 */
+	mtk_dsi_lane_ready(dsi);
+	mtk_dsi_clk_hs_mode(dsi, true);
+	mtk_output_dsi_enable(dsi);
 }
 
 void mtk_dsi_ddp_stop(struct device *dev)
