@@ -9,6 +9,7 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/iommu.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -1310,7 +1311,15 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	 * hardware fault in the log and is not one.
 	 */
 	if (!cmdq_pkt && !ovl->layer_dbg_done) {
+		struct iommu_domain *domain;
+		phys_addr_t phys = 0;
+		u32 hw_addr;
+
 		ovl->layer_dbg_done = true;
+		hw_addr = readl(ovl->regs + DISP_REG_OVL_ADDR(ovl, idx));
+		domain = iommu_get_domain_for_dev(dev);
+		if (domain)
+			phys = iommu_iova_to_phys(domain, hw_addr);
 		dev_info(dev,
 			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n"
 			 "ovl layer%d: rdma_ctrl=%#x rdma_gmc=%#x sta=%#x\n",
@@ -1324,6 +1333,12 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 			 readl(ovl->regs + DISP_REG_OVL_RDMA_CTRL(idx)),
 			 readl(ovl->regs + DISP_REG_OVL_RDMA_GMC(idx)),
 			 readl(ovl->regs + DISP_REG_OVL_STA));
+		dev_info(dev,
+			 "OVL layer%d fetch: iova=%#x translated_pa=%pa domain=%u offset=%#x pitch_msb=%#x fifo_ctrl=%#x\n",
+			 idx, hw_addr, &phys, !!domain,
+			 readl(ovl->regs + DISP_REG_OVL_OFFSET(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_PITCH_MSB(idx)),
+			 readl(ovl->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(idx)));
 	}
 }
 

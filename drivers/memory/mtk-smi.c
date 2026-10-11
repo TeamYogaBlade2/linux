@@ -220,6 +220,14 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 
 	/* gen 1 part */
 	for (i = 0; i < larb_port_num; i++, m4u_port_id++) {
+		if (larb->larbid == 2 &&
+		    ((i >= 1 && i <= 4) || i == 7))
+			dev_info(dev,
+				 "MT6589 LARB2 port local=%d m4u=%d mmu_req=%u secur_con_before=%#x\n",
+				 i, m4u_port_id, !!(*larb->mmu & BIT(i)),
+				 readl(common->smi_ao_base +
+				       REG_SMI_SECUR_CON_ADDR(m4u_port_id)));
+
 		if (*larb->mmu & BIT(i)) {
 			sec_con_val = SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
 		} else {
@@ -233,6 +241,13 @@ static int mtk_smi_larb_config_port_gen0(struct device *dev)
 		reg_val |= SMI_SECUR_CON_VAL_DOMAIN(m4u_port_id);
 		writel(reg_val, common->smi_ao_base +
 					REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+		if (larb->larbid == 2 &&
+		    ((i >= 1 && i <= 4) || i == 7))
+			dev_info(dev,
+				 "MT6589 LARB2 port local=%d m4u=%d secur_con_after=%#x\n",
+				 i, m4u_port_id,
+				 readl(common->smi_ao_base +
+				       REG_SMI_SECUR_CON_ADDR(m4u_port_id)));
 	}
 
 	/* gen 2 part */
