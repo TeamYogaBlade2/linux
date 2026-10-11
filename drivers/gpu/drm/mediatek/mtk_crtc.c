@@ -459,8 +459,6 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 
 	return 0;
 
-err_clk_disable:
-	mtk_crtc_ddp_clk_disable(mtk_crtc);
 err_mutex_unprepare:
 	mtk_mutex_unprepare(mtk_crtc->mutex);
 err_pm_runtime_put:
