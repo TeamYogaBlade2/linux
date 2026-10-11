@@ -881,7 +881,8 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 {
 	struct iommu_fwspec *fwspec;
 	struct mtk_iommu_v1_data *data;
-	int idx, larbid, larbidx;
+	int idx, larbid, larbidx, rpm_active;
+	u32 link_flags;
 	struct device_link *link;
 	struct device *larbdev;
 
@@ -924,8 +925,26 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 		return ERR_PTR(-EINVAL);
 	}
 
-	link = device_link_add(dev, larbdev,
-			       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
+	/*
+	 * The IOMMU may be registered after a consumer has already become
+	 * runtime-active. A plain PM-runtime link does not activate the
+	 * supplier retroactively in that case.
+	 *
+	 * Pin the consumer while checking its state and creating the link.
+	 * If it is already active, DL_FLAG_RPM_ACTIVE acquires a matching
+	 * supplier reference, preventing the LARB from remaining suspended
+	 * until a later consumer runtime-resume.
+	 */
+	link_flags = DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS;
+	rpm_active = pm_runtime_get_if_active(dev);
+	if (rpm_active > 0)
+		link_flags |= DL_FLAG_RPM_ACTIVE;
+
+	link = device_link_add(dev, larbdev, link_flags);
+
+	if (rpm_active > 0)
+		pm_runtime_put(dev);
+
 	if (!link)
 		dev_err(dev, "Unable to link %s\n", dev_name(larbdev));
 
