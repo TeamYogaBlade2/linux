@@ -307,6 +307,7 @@ config INPUT_MAX8997_HAPTIC
 config INPUT_MT6320_VIBRATOR
 	tristate "MediaTek MT6320 PMIC vibrator support"
 	depends on LEDS_CLASS && REGULATOR
+	select INPUT_FF_MEMLESS
 	help
 	  This option enables the vibrator (haptics) driver for the
 	  MediaTek MT6320 PMIC, used by MediaTek MT6589 SoCs. The driver

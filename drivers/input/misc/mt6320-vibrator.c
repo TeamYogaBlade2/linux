@@ -1,110 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * MediaTek MT6320 PMIC vibrator (haptics) driver
+ * MediaTek MT6320 PMIC vibrator driver
  *
- * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
- *
- * The MT6320 drives a linear resonant actuator through an integrated LDO
- * ("VIBR"). This part has no separate amplifier enable pin and no PWM duty
- * input: the hardware only accepts
- *
- *   - an on/off control (RG_VIBR_EN), which gates the LDO, and
- *   - an output voltage (RG_VIBR_VOSEL), which on an LRA is what userspace
- *     perceives as strength / amplitude.
- *
- * Both fields live in the DIGLDO (top configuration) block:
- *
- *   DIGLDO_CON39 (0x0466)  RG_VIBR_EN         [15]
- *                          RG_VIBR_STBTD      [13:12]
- *                          QI_VIBR_MODE       [7]      (read-only)
- *                          VIBR_SRCLK_MODE_SEL[6:4]
- *                          VIBR_THER_SHEN_EN  [2]
- *                          VIBR_LP_MODE_SET   [1]
- *                          VIBR_LP_SEL        [0]
- *
- *   DIGLDO_CON40 (0x0468)  RG_VIBR_CAL        [11:8]
- *                          RG_VIBR_VOSEL      [7:5]
- *                          RG_VIBR_STB_SEL    [4]
- *                          RG_VIBR_OCFB       [2]
- *                          RG_VIBR_NDIS_EN    [0]
- *
- * There is therefore no separate "mute" path: muting is exactly what dropping
- * RG_VIBR_EN does, so the LED classdev's brightness 0 doubles as the mute.
- *
- * Interface surface: an LED class device only.  This driver deliberately
- * registers no input device and no FF_RUMBLE / EV_FF node, so there is no
- * "haptic" event device and the usual on/off + "strong/medium/weak" ff effect
- * set does not exist here.  Effects instead go through the classdev's pattern
- * API (brightness plus delay-on/delay-off), and the driver drives the actuator
- * itself from its hrtimer, which is also how the bounded one-shot pulse the
- * BSP clamp implements is produced.
- *
- * That is a deliberate omission rather than a gap in the plumbing: FF_RUMBLE
- * would mean inventing a strength scale and an effect vocabulary on top of the
- * 8-step VOSEL table, and no board in this tree has an haptics consumer
- * expecting one.  Adding an evdev node later is a self-contained change.
- *
- * Register / bit provenance, all from the vendor tree for this SoC.
- *
- * Addresses:
- *   aquaris-5/mediatek/platform/mt6589/kernel/core/include/mach/upmu_hw.h:339
- *       #define DIGLDO_CON39 0x0466
- *   aquaris-5/.../mach/upmu_hw.h:340
- *       #define DIGLDO_CON40 0x0468
- *
- * Bit positions (upmu_hw.h defines only masks, never the owning register):
- *   upmu_hw.h:3274-3275  PMIC_RG_VIBR_EN_MASK 0x1 / _SHIFT 15
- *   upmu_hw.h:3276-3277  PMIC_RG_VIBR_STBTD_MASK 0x3 / _SHIFT 12
- *   upmu_hw.h:3278-3279  PMIC_QI_VIBR_MODE_MASK 0x1 / _SHIFT 7
- *   upmu_hw.h:3280-3281  PMIC_VIBR_SRCLK_MODE_SEL_MASK 0x7 / _SHIFT 4
- *   upmu_hw.h:3282-3283  PMIC_VIBR_THER_SHEN_EN_MASK 0x1 / _SHIFT 2
- *   upmu_hw.h:3284-3285  PMIC_VIBR_LP_MODE_SET_MASK 0x1 / _SHIFT 1
- *   upmu_hw.h:3286-3287  PMIC_VIBR_LP_SEL_MASK 0x1 / _SHIFT 0
- *   upmu_hw.h:3288-3289  PMIC_RG_VIBR_CAL_MASK 0xF / _SHIFT 8
- *   upmu_hw.h:3290-3291  PMIC_RG_VIBR_VOSEL_MASK 0x7 / _SHIFT 5
- *   upmu_hw.h:3292-3293  PMIC_RG_VIBR_STB_SEL_MASK 0x1 / _SHIFT 4
- *   upmu_hw.h:3294-3295  PMIC_RG_VIBR_OCFB_MASK 0x1 / _SHIFT 2
- *   upmu_hw.h:3296-3297  PMIC_RG_VIBR_NDIS_EN_MASK 0x1 / _SHIFT 0
- *
- * Which register each field belongs to:
- *   aquaris-5/.../kernel/drivers/power/upmu_common.c:18991-19150 pairs every
- *   upmu_set_rg_vibr_* accessor with its register, e.g.
- *       upmu_set_rg_vibr_en()    -> DIGLDO_CON39 (upmu_common.c:18991-19002)
- *       upmu_set_rg_vibr_vosel() -> DIGLDO_CON40 (upmu_common.c:19098-19109)
- *   The LK carries the identical table at lk/mt_pmic.c:24629-25190.
- *
- * The authoritative power-on init, which hardcodes the same two offsets:
- *   aquaris-5/.../kernel/drivers/power/pmic_mt6320.c:3879-3880
- *       ret = pmic_config_interface(0x466,0x1,0x1,2); // [2:2]: VIBR_THER_SHEN_EN;
- *       ret = pmic_config_interface(0x468,0x1,0x1,4); // [4:4]: RG_VIBR_STB_SEL;
- *
- * VOSEL -> millivolts, from aquaris-5/.../power/pmic_mt6320.c:2030-2077
- * (dct_pmic_VIBR_sel) cross-checked against the readback path at
- * pmic_mt6320.c:3491-3518 (show_LDO_VIBR_VOLTAGE):
- *       0=1200 1=1300 2=1500 3=1800 4=2500 5=2800 6=3000 7=3300
- *
- * Board defaults, from
- * aquaris-5/mediatek/custom/eastaeon89_wet_td/kernel/vibrator/cust_vibrator.c:4-9
- *       .vib_timer = 25, .vib_limit = 9
- * and the clamp they drive in
- * aquaris-5/mediatek/kernel/drivers/vibrator/vibrator_drv.c:149-157.
- *
- * The VIBR LDO has no dedicated clock gate, and the vendor driver touches it
- * with no clock or runtime-PM handshake at all (vibrator.c:44-48,
- * vibr_Enable_HW() is a bare dct_pmic_VIBR_enable()).  There is accordingly no
- * clock or runtime-PM prepare/unprepare around the register access here.
- *
- * Note on RG_VIBR_EN: the MT6320 regulator driver already owns that bit as the
- * enable_reg of its "vibr" LDO (mt6320-regulator.c:648-650, whose
- * regulator_enable_regmap writes DIGLDO_CON39 BIT(15) - the very bit
- * dct_pmic_VIBR_enable() pokes).  Driving it from both places would make the
- * regulator's refcount lie, so this driver takes the regulator for all on/off
- * transitions and writes only VOSEL itself.
+ * The MT6320 drives the vibrator from its integrated VIBR LDO.  The
+ * regulator framework owns the LDO enable bit and voltage selector; this
+ * driver sets the vibrator-specific safety bits and exposes force feedback
+ * through the input subsystem.
  */
 
-#include <linux/hrtimer.h>
-#include <linux/leds.h>
-#include <linux/math64.h>
+#include <linux/bitops.h>
+#include <linux/err.h>
+#include <linux/input.h>
+#include <linux/kernel.h>
+#include <linux/mfd/mt6397/core.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -112,313 +20,242 @@
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/spinlock.h>
 #include <linux/workqueue.h>
 
-#include <linux/mfd/mt6397/core.h>
+#define MT6320_VIBR_REG_CTRL		0x0466 /* DIGLDO_CON39 */
+#define MT6320_VIBR_REG_VSEL		0x0468 /* DIGLDO_CON40 */
+#define MT6320_VIBR_THER_SHEN_EN	BIT(2)
+#define MT6320_VIBR_STB_SEL		BIT(4)
 
-#define MT6320_VIBR_REG_CTRL		0x0466	/* DIGLDO_CON39 */
-#define MT6320_VIBR_REG_VSEL		0x0468	/* DIGLDO_CON40 */
+#define MT6320_VIBR_DEFAULT_UV		2800000
 
-/* DIGLDO_CON39 */
-#define MT6320_VIBR_STBTD_MASK		GENMASK(13, 12)
-#define MT6320_VIBR_SRCLK_MODE_SEL_MASK	GENMASK(6, 4)
-#define MT6320_VIBR_THER_SHEN_EN_BIT	2
-#define MT6320_VIBR_LP_MODE_SET_BIT	1
-#define MT6320_VIBR_LP_SEL_BIT		0
-
-/* DIGLDO_CON40 */
-#define MT6320_VIBR_VOSEL_MASK		GENMASK(7, 5)
-#define MT6320_VIBR_VOSEL_SHIFT		5
-#define MT6320_VIBR_STB_SEL_BIT		4
-#define MT6320_VIBR_NDIS_EN_BIT		0
-
-/* Ascending VOSEL settings; the index into this table *is* the VOSEL field
- * value.  Mirrors dct_pmic_VIBR_sel() and ldo_volt_table3 in mt6320-regulator.c.
- */
-static const unsigned int mt6320_vibr_vsel_mv[] = {
-	1200000, 1300000, 1500000, 1800000, 2500000, 2800000, 3000000, 3300000,
+static const unsigned int mt6320_vibr_voltages_uv[] = {
+	1200000, 1300000, 1500000, 1800000,
+	2500000, 2800000, 3000000, 3300000,
 };
-
-/* dct_pmic_VIBR_sel(VOL_DEFAULT) -> VOSEL 5 -> 2800 mV. */
-#define MT6320_VIBR_VSEL_DEFAULT_MV	2800000
-
-/* cust_vibrator.c: .vib_timer = 25 ms, .vib_limit = 9. */
-#define MT6320_VIBR_DEFAULT_DURATION_MS	25
-#define MT6320_VIBR_LIMIT_MS		9
-#define MT6320_VIBR_MAX_DURATION_MS	15000
 
 struct mt6320_vibrator {
 	struct device *dev;
+	struct input_dev *input;
 	struct regulator *vibr_reg;
 	struct regmap *regmap;
-	struct led_classdev cdev;
+	struct work_struct play_work;
+	spinlock_t request_lock;
+	struct mutex hw_lock;
 
-	struct mutex lock;
-	struct hrtimer timer;
-	struct work_struct poweroff_work;
+	/* Protected by request_lock. */
+	u16 requested_level;
+	bool shutting_down;
 
-	/*
-	 * @running is also the regulator reference count, bounded at one: this
-	 * driver only ever calls regulator_enable() when it is clear and
-	 * regulator_disable() when it is set.  Two concurrent pulse requests
-	 * cannot take two references.
-	 */
-	bool running;
-	bool shutdown;
-	u32 amplitude;		/* microvolts */
-	u32 duration_ms;
+	/* Protected by hw_lock. */
+	bool enabled;
+
+	/* Highest output voltage allowed for FF_RUMBLE strength mapping. */
+	unsigned int amplitude_uv;
 };
 
-/* Map a requested voltage onto the nearest VOSEL that is at or below it. */
-static unsigned int mt6320_vibr_map_vosel(u32 mv)
+/* Round down to a voltage supported by the MT6320 VIBR LDO. */
+static unsigned int mt6320_vibr_round_voltage(unsigned int uv)
 {
+	int i;
+
+	for (i = ARRAY_SIZE(mt6320_vibr_voltages_uv) - 1; i >= 0; i--)
+		if (uv >= mt6320_vibr_voltages_uv[i])
+			return mt6320_vibr_voltages_uv[i];
+
+	return mt6320_vibr_voltages_uv[0];
+}
+
+static unsigned int mt6320_vibr_voltage_for_level(struct mt6320_vibrator *vib,
+						  u16 level)
+{
+	unsigned int max_index = 0;
+	unsigned int index;
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(mt6320_vibr_vsel_mv); i++)
-		if (mv <= mt6320_vibr_vsel_mv[i])
-			return i;
+	for (i = 0; i < ARRAY_SIZE(mt6320_vibr_voltages_uv); i++) {
+		if (mt6320_vibr_voltages_uv[i] > vib->amplitude_uv)
+			break;
+		max_index = i;
+	}
 
-	return ARRAY_SIZE(mt6320_vibr_vsel_mv) - 1;
+	/* Map the 16-bit FF magnitude to the available LDO voltage steps. */
+	index = DIV_ROUND_CLOSEST((unsigned int)level * max_index, 0xffffU);
+
+	return mt6320_vibr_voltages_uv[index];
 }
 
-static int mt6320_vibr_set_amplitude(struct mt6320_vibrator *vib)
-{
-	unsigned int vosel = mt6320_vibr_map_vosel(vib->amplitude);
-
-	return regmap_update_bits(vib->regmap, MT6320_VIBR_REG_VSEL,
-				  MT6320_VIBR_VOSEL_MASK,
-				  vosel << MT6320_VIBR_VOSEL_SHIFT);
-}
-
-/* Program the LDO the way the vendor power-on init does. */
 static int mt6320_vibr_hw_init(struct mt6320_vibrator *vib)
 {
 	int ret;
 
-	/* pmic_mt6320.c:3879 - thermal shutdown enable, which the vendor sets
-	 * unconditionally at power-on; it protects the actuator against a
-	 * stalled LRA.
-	 */
+	/* Match the vendor PMIC initialization: enable thermal shutdown. */
 	ret = regmap_update_bits(vib->regmap, MT6320_VIBR_REG_CTRL,
-				 BIT(MT6320_VIBR_THER_SHEN_EN_BIT),
-				 BIT(MT6320_VIBR_THER_SHEN_EN_BIT));
+				 MT6320_VIBR_THER_SHEN_EN,
+				 MT6320_VIBR_THER_SHEN_EN);
 	if (ret)
 		return ret;
 
-	/* pmic_mt6320.c:3880 - standby source select. */
+	/* Select the standby source used by the vendor driver. */
 	return regmap_update_bits(vib->regmap, MT6320_VIBR_REG_VSEL,
-				  BIT(MT6320_VIBR_STB_SEL_BIT),
-				  BIT(MT6320_VIBR_STB_SEL_BIT));
+				  MT6320_VIBR_STB_SEL,
+				  MT6320_VIBR_STB_SEL);
 }
 
-/* Pull the rail up or down. Sleeps; call from process context only. */
-static int mt6320_vibr_hw_set_power(struct mt6320_vibrator *vib, bool on)
+/* Called with hw_lock held; regulator operations are allowed to sleep. */
+static int mt6320_vibr_apply_level(struct mt6320_vibrator *vib, u16 level)
 {
-	if (!vib->vibr_reg)
+	unsigned int voltage_uv;
+	int ret;
+	int off_ret;
+
+	if (!level) {
+		if (!vib->enabled)
+			return 0;
+
+		ret = regulator_disable(vib->vibr_reg);
+		if (!ret)
+			vib->enabled = false;
+
+		return ret;
+	}
+
+	voltage_uv = mt6320_vibr_voltage_for_level(vib, level);
+	ret = regulator_set_voltage(vib->vibr_reg, voltage_uv, voltage_uv);
+	if (ret) {
+		/* Do not leave an actuator running at a stale strength on error. */
+		if (vib->enabled) {
+			off_ret = regulator_disable(vib->vibr_reg);
+			if (!off_ret)
+				vib->enabled = false;
+			else
+				dev_err(vib->dev,
+					"failed to disable vibrator after voltage error: %d\n",
+					off_ret);
+		}
+
+		return ret;
+	}
+
+	if (vib->enabled)
 		return 0;
 
-	return on ? regulator_enable(vib->vibr_reg) :
-		    regulator_disable(vib->vibr_reg);
-}
-
-static enum hrtimer_restart mt6320_vibr_timer_func(struct hrtimer *timer)
-{
-	struct mt6320_vibrator *vib =
-		container_of(timer, struct mt6320_vibrator, timer);
-
-	/* Softirq context, so this must not sleep: drop the rail from a worker
-	 * instead.  The generation is guarded by "running", which
-	 * mt6320_vibr_start() sets again for a new pulse, so a stale poweroff
-	 * is a no-op.
-	 */
-	queue_work(system_wq, &vib->poweroff_work);
-
-	return HRTIMER_NORESTART;
-}
-
-/* Power the LRA down once the pulse has elapsed. Process context. */
-static void mt6320_vibr_poweroff_work(struct work_struct *work)
-{
-	struct mt6320_vibrator *vib =
-		container_of(work, struct mt6320_vibrator, poweroff_work);
-	bool poweroff;
-
-	mutex_lock(&vib->lock);
-	/* A newer pulse has started: leave its rail alone. */
-	poweroff = !vib->shutdown && vib->running;
-	vib->running = false;
-	mutex_unlock(&vib->lock);
-
-	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
-		dev_err(vib->dev, "failed to disable vibrator\n");
-}
-
-/* Replay the board's own clamp on an arbitrary userspace duration: over
- * MT6320_VIBR_LIMIT_MS but under the board's 25 ms vib_timer, round up to
- * 25 ms; anything past 15 s is capped (vibrator_drv.c:149-157).
- */
-static u32 mt6320_vibr_clamp_duration(u32 ms)
-{
-	if (ms > MT6320_VIBR_LIMIT_MS && ms < MT6320_VIBR_DEFAULT_DURATION_MS)
-		ms = MT6320_VIBR_DEFAULT_DURATION_MS;
-
-	return min_t(u32, ms, MT6320_VIBR_MAX_DURATION_MS);
-}
-
-/* Stop the LRA and drop the rail.  Process context (LED sysfs write, LED
- * pattern engine), so sleeping is fine.
- */
-static int mt6320_vibr_stop(struct mt6320_vibrator *vib)
-{
-	bool poweroff;
-	int ret = 0;
-
-	/*
-	 * hrtimer_cancel() waits for a running callback, and that callback
-	 * queues poweroff_work which takes the lock - so cancel with the lock
-	 * dropped, or the two can deadlock.
-	 */
-	hrtimer_cancel(&vib->timer);
-
-	mutex_lock(&vib->lock);
-	poweroff = !vib->shutdown && vib->running;
-	vib->running = false;
-	mutex_unlock(&vib->lock);
-
-	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
-		ret = -EIO;
+	ret = regulator_enable(vib->vibr_reg);
+	if (!ret)
+		vib->enabled = true;
 
 	return ret;
 }
 
-static int mt6320_vibr_start(struct mt6320_vibrator *vib, u32 duration_ms)
+/* Force-feedback callbacks can run under input_dev->event_lock; do not sleep. */
+static int mt6320_vibr_play_effect(struct input_dev *input, void *data,
+				   struct ff_effect *effect)
 {
-	u32 ms;
+	struct mt6320_vibrator *vib = data;
+	unsigned long flags;
+	u16 level;
+
+	level = effect->u.rumble.strong_magnitude;
+	if (!level)
+		level = effect->u.rumble.weak_magnitude;
+
+	spin_lock_irqsave(&vib->request_lock, flags);
+	if (vib->shutting_down) {
+		spin_unlock_irqrestore(&vib->request_lock, flags);
+		return -ESHUTDOWN;
+	}
+	vib->requested_level = level;
+	spin_unlock_irqrestore(&vib->request_lock, flags);
+
+	/* All PMIC/regulator access is deferred to process context. */
+	schedule_work(&vib->play_work);
+
+	return 0;
+}
+
+static void mt6320_vibr_play_work(struct work_struct *work)
+{
+	struct mt6320_vibrator *vib =
+		container_of(work, struct mt6320_vibrator, play_work);
+	unsigned long flags;
+	bool shutting_down;
+	u16 level;
 	int ret;
 
-	ms = mt6320_vibr_clamp_duration(duration_ms);
+	/* Consume the newest requested state; coalesce rapid FF updates. */
+	for (;;) {
+		spin_lock_irqsave(&vib->request_lock, flags);
+		level = vib->requested_level;
+		shutting_down = vib->shutting_down;
+		spin_unlock_irqrestore(&vib->request_lock, flags);
 
-	/* Cancel outside the lock; the timer callback queues work. */
-	hrtimer_cancel(&vib->timer);
-	/* Retire any poweroff already queued by the previous pulse. */
-	cancel_work_sync(&vib->poweroff_work);
+		mutex_lock(&vib->hw_lock);
+		ret = mt6320_vibr_apply_level(vib,
+					      shutting_down ? 0 : level);
+		mutex_unlock(&vib->hw_lock);
 
-	mutex_lock(&vib->lock);
-	if (vib->shutdown) {
-		mutex_unlock(&vib->lock);
-		return 0;
-	}
-
-	/* Voltage must be settled before the rail is enabled. */
-	ret = mt6320_vibr_set_amplitude(vib);
-	if (ret)
-		goto out_unlock;
-
-	/*
-	 * Only enable a rail this driver does not already hold.  @running is
-	 * exactly the "this call owns one regulator_enable()" flag: it is set
-	 * here and cleared by whichever path disables the rail again.  Calling
-	 * regulator_enable() on a pulse that is already in flight would take a
-	 * second reference that nothing ever puts, because the matching stop
-	 * only ever disables once - two "1" writes to
-	 * /sys/class/leds/.../brightness followed by one "0" leave the LDO
-	 * energised with @running already false, so no later stop can drain it.
-	 */
-	if (!vib->running) {
-		ret = mt6320_vibr_hw_set_power(vib, true);
 		if (ret)
-			goto out_unlock;
+			dev_err(vib->dev, "failed to %s vibrator (level %u): %d\n",
+				(level && !shutting_down) ? "apply effect to" : "stop",
+				level, ret);
 
-		vib->running = true;
+		spin_lock_irqsave(&vib->request_lock, flags);
+		if (level == vib->requested_level &&
+		    shutting_down == vib->shutting_down) {
+			spin_unlock_irqrestore(&vib->request_lock, flags);
+			break;
+		}
+		spin_unlock_irqrestore(&vib->request_lock, flags);
 	}
-
-	vib->duration_ms = ms;
-	hrtimer_start(&vib->timer,
-		      ktime_set(ms / 1000, (ms % 1000) * 1000000LL),
-		      HRTIMER_MODE_REL);
-out_unlock:
-	mutex_unlock(&vib->lock);
-
-	return ret;
 }
 
-/* LED classdev: 0 is off, >0 plays the latched pattern. */
-static void mt6320_vibr_led_brightness_set(struct led_classdev *cdev,
-					   enum led_brightness brightness)
+static void mt6320_vibr_close(struct input_dev *input)
 {
-	struct mt6320_vibrator *vib =
-		container_of(cdev, struct mt6320_vibrator, cdev);
-	u32 duration;
+	struct mt6320_vibrator *vib = input_get_drvdata(input);
+	unsigned long flags;
+	bool shutting_down;
 
-	if (!brightness) {
-		mt6320_vibr_stop(vib);
-		return;
+	spin_lock_irqsave(&vib->request_lock, flags);
+	shutting_down = vib->shutting_down;
+	if (!shutting_down)
+		vib->requested_level = 0;
+	spin_unlock_irqrestore(&vib->request_lock, flags);
+
+	if (!shutting_down)
+		schedule_work(&vib->play_work);
+	flush_work(&vib->play_work);
+}
+
+static void mt6320_vibr_quiesce(struct mt6320_vibrator *vib)
+{
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&vib->request_lock, flags);
+	vib->shutting_down = true;
+	vib->requested_level = 0;
+	spin_unlock_irqrestore(&vib->request_lock, flags);
+
+	cancel_work_sync(&vib->play_work);
+
+	mutex_lock(&vib->hw_lock);
+	if (vib->enabled) {
+		ret = regulator_disable(vib->vibr_reg);
+		if (!ret)
+			vib->enabled = false;
 	}
+	mutex_unlock(&vib->hw_lock);
 
-	mutex_lock(&vib->lock);
-	duration = vib->duration_ms;
-	mutex_unlock(&vib->lock);
-
-	mt6320_vibr_start(vib, duration);
-}
-
-static enum led_brightness
-mt6320_vibr_led_brightness_get(struct led_classdev *cdev)
-{
-	struct mt6320_vibrator *vib =
-		container_of(cdev, struct mt6320_vibrator, cdev);
-	bool running;
-
-	mutex_lock(&vib->lock);
-	running = vib->running;
-	mutex_unlock(&vib->lock);
-
-	return running ? cdev->max_brightness : 0;
-}
-
-/*
- * LED pattern support.
- *
- * The generic haptics engine describes a pattern as a list of intervals whose
- * delta_t is a duration in milliseconds and whose brightness is a percentage.
- * This LDO can only be driven fully on or fully off for a single interval,
- * and the driver has no sequencer to alternate gaps and pulses. Rather than
- * silently play only the final interval, accept exactly the shape the
- * hardware can express - one interval at full amplitude - and reject
- * anything else so callers learn the pattern was not honoured.
- */
-static int mt6320_vibr_led_pattern_set(struct led_classdev *cdev,
-				       struct led_pattern *pattern, u32 len,
-				       int repeat)
-{
-	struct mt6320_vibrator *vib =
-		container_of(cdev, struct mt6320_vibrator, cdev);
-
-	/* A repeating pattern cannot be expressed by a one-shot pulse. */
-	if (repeat)
-		return -EOPNOTSUPP;
-
-	if (len != 1 || pattern[0].brightness != 100)
-		return -EINVAL;
-
-	if (!pattern[0].delta_t)
-		return mt6320_vibr_stop(vib);
-
-	return mt6320_vibr_start(vib, pattern[0].delta_t);
-}
-
-static int mt6320_vibr_led_pattern_clear(struct led_classdev *cdev)
-{
-	return mt6320_vibr_stop(container_of(cdev, struct mt6320_vibrator, cdev));
+	if (ret)
+		dev_err(vib->dev, "failed to power off vibrator: %d\n", ret);
 }
 
 static int mt6320_vibr_probe(struct platform_device *pdev)
 {
 	struct mt6397_chip *pmic;
 	struct mt6320_vibrator *vib;
-	struct led_classdev *cdev;
-	struct regulator *rdev;
-	u32 amplitude;
+	u32 amplitude_uv = MT6320_VIBR_DEFAULT_UV;
 	int ret;
 
 	vib = devm_kzalloc(&pdev->dev, sizeof(*vib), GFP_KERNEL);
@@ -426,122 +263,74 @@ static int mt6320_vibr_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	vib->dev = &pdev->dev;
-	/*
-	 * Take the regmap from the MFD parent's private data, which is how
-	 * every other MT6320 cell gets it: mt6397_probe() reads the regmap
-	 * from pwrap and keeps it in its mt6397_chip, and each child reaches
-	 * it with dev_get_drvdata(pdev->dev.parent).
-	 *
-	 * dev_get_regmap() only searches devres, and the MT6320 parent never
-	 * calls dev_set_regmap() - it only reads a regmap that pwrap created.
-	 * So asking for it here always returned NULL and probe failed
-	 * -ENODEV, and none of the rest of this driver ever ran.
-	 */
+
+	/* The MT6320 MFD parent owns the regmap shared by its child devices. */
 	pmic = dev_get_drvdata(pdev->dev.parent);
-	if (!pmic)
+	if (!pmic || !pmic->regmap)
 		return dev_err_probe(&pdev->dev, -ENODEV,
-				     "no MT6320 parent\n");
-
+				     "no regmap available from MT6320 parent\n");
 	vib->regmap = pmic->regmap;
-	if (!vib->regmap)
-		return dev_err_probe(&pdev->dev, -ENODEV,
-				     "no regmap available from parent\n");
 
-	mutex_init(&vib->lock);
-	hrtimer_setup(&vib->timer, mt6320_vibr_timer_func, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
-	INIT_WORK(&vib->poweroff_work, mt6320_vibr_poweroff_work);
-	vib->duration_ms = MT6320_VIBR_DEFAULT_DURATION_MS;
+	/* Regulator IDs omit -supply; the core resolves the DT's vibr-supply. */
+	vib->vibr_reg = devm_regulator_get(&pdev->dev, "vibr");
+	if (IS_ERR(vib->vibr_reg))
+		return dev_err_probe(&pdev->dev, PTR_ERR(vib->vibr_reg),
+				     "failed to get VIBR regulator\n");
 
-	amplitude = MT6320_VIBR_VSEL_DEFAULT_MV;
-	if (of_property_read_u32(pdev->dev.of_node, "mediatek,vibr-amplitude-uv",
-				 &amplitude))
-		amplitude = MT6320_VIBR_VSEL_DEFAULT_MV;
-
-	/* Clamp into the VOSEL range rather than overflowing the field. */
-	if (amplitude < mt6320_vibr_vsel_mv[0])
-		amplitude = mt6320_vibr_vsel_mv[0];
-	if (amplitude > mt6320_vibr_vsel_mv[ARRAY_SIZE(mt6320_vibr_vsel_mv) - 1])
-		amplitude =
-			mt6320_vibr_vsel_mv[ARRAY_SIZE(mt6320_vibr_vsel_mv) - 1];
-	vib->amplitude = amplitude;
-
-	rdev = devm_regulator_get_optional(&pdev->dev, "vibr-supply");
-	if (IS_ERR(rdev))
-		return dev_err_probe(&pdev->dev, PTR_ERR(rdev),
-				     "failed to get vibr regulator\n");
-	vib->vibr_reg = rdev;
+	device_property_read_u32(&pdev->dev, "mediatek,vibr-amplitude-uv",
+				 &amplitude_uv);
+	vib->amplitude_uv = clamp_val(amplitude_uv,
+				      mt6320_vibr_voltages_uv[0],
+				      mt6320_vibr_voltages_uv[ARRAY_SIZE(mt6320_vibr_voltages_uv) - 1]);
+	vib->amplitude_uv = mt6320_vibr_round_voltage(vib->amplitude_uv);
 
 	ret = mt6320_vibr_hw_init(vib);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
-				     "failed to program vibrator defaults\n");
+				     "failed to initialize vibrator registers\n");
 
-	cdev = &vib->cdev;
-	cdev->max_brightness = 1;
-	cdev->brightness_set = mt6320_vibr_led_brightness_set;
-	cdev->brightness_get = mt6320_vibr_led_brightness_get;
-	cdev->pattern_set = mt6320_vibr_led_pattern_set;
-	cdev->pattern_clear = mt6320_vibr_led_pattern_clear;
+	spin_lock_init(&vib->request_lock);
+	mutex_init(&vib->hw_lock);
+	INIT_WORK(&vib->play_work, mt6320_vibr_play_work);
 
-	ret = devm_led_classdev_register(&pdev->dev, cdev);
+	vib->input = devm_input_allocate_device(&pdev->dev);
+	if (!vib->input)
+		return -ENOMEM;
+
+	vib->input->name = "MT6320 Vibrator";
+	vib->input->id.bustype = BUS_HOST;
+	vib->input->dev.parent = &pdev->dev;
+	vib->input->close = mt6320_vibr_close;
+	input_set_drvdata(vib->input, vib);
+	input_set_capability(vib->input, EV_FF, FF_RUMBLE);
+
+	ret = input_ff_create_memless(vib->input, vib,
+				      mt6320_vibr_play_effect);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
-				     "failed to register LED classdev\n");
+				     "failed to initialize force feedback\n");
+
+	ret = input_register_device(vib->input);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to register input device\n");
+
 	platform_set_drvdata(pdev, vib);
-	dev_info(&pdev->dev, "registered, amplitude %u uV (VOSEL %u)\n",
-		 vib->amplitude, mt6320_vibr_map_vosel(vib->amplitude));
+	dev_info(&pdev->dev,
+		 "registered as FF_RUMBLE, maximum drive voltage %u uV\n",
+		 vib->amplitude_uv);
 
 	return 0;
 }
 
 static void mt6320_vibr_remove(struct platform_device *pdev)
 {
-	struct mt6320_vibrator *vib = platform_get_drvdata(pdev);
-	bool poweroff;
-
-	/* Latch shutdown first so no new pulse can start. */
-	mutex_lock(&vib->lock);
-	vib->shutdown = true;
-	poweroff = vib->running;
-	vib->running = false;
-	mutex_unlock(&vib->lock);
-
-	hrtimer_cancel(&vib->timer);
-	cancel_work_sync(&vib->poweroff_work);
-
-	/*
-	 * Only give back a reference this driver actually took.  The LED core
-	 * already runs brightness_set(LED_OFF) from led_classdev_unregister(),
-	 * which is what stops a live pulse and clears @running; an unconditional
-	 * regulator_disable() here would then be one more disable than enables,
-	 * tripping WARN_ON(enable_count == 0) in the regulator core and
-	 * returning -EIO.
-	 */
-	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
-		dev_err(&pdev->dev, "failed to disable vibrator\n");
+	mt6320_vibr_quiesce(platform_get_drvdata(pdev));
 }
 
 static void mt6320_vibr_shutdown(struct platform_device *pdev)
 {
-	struct mt6320_vibrator *vib = platform_get_drvdata(pdev);
-	bool poweroff;
-
-	mutex_lock(&vib->lock);
-	vib->shutdown = true;
-	poweroff = vib->running;
-	vib->running = false;
-	mutex_unlock(&vib->lock);
-
-	hrtimer_cancel(&vib->timer);
-	cancel_work_sync(&vib->poweroff_work);
-
-	/* Leave the rail down for good: mt6320_vibr_stop() would refuse once
-	 * shutdown is latched, so cut it directly.  As in remove(), only a
-	 * reference that is still held is given back.
-	 */
-	if (poweroff && mt6320_vibr_hw_set_power(vib, false))
-		dev_err(&pdev->dev, "failed to disable vibrator\n");
+	mt6320_vibr_quiesce(platform_get_drvdata(pdev));
 }
 
 static const struct of_device_id mt6320_vibr_of_match[] = {
@@ -556,11 +345,11 @@ static struct platform_driver mt6320_vibr_driver = {
 	.shutdown = mt6320_vibr_shutdown,
 	.driver = {
 		.name = "mt6320-vibrator",
+		.of_match_table = mt6320_vibr_of_match,
 	},
 };
-
 module_platform_driver(mt6320_vibr_driver);
 
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
-MODULE_DESCRIPTION("Vibrator driver for MediaTek MT6320 PMIC");
-MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("MediaTek MT6320 PMIC vibrator with force feedback");
+MODULE_LICENSE("GPL");
