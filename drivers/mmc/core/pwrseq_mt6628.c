@@ -36,9 +36,10 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
+#include <linux/mfd/mt6397/rtc.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/pinctrl/consumer.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -53,12 +54,10 @@
 #define MT6628_DFT_OFF_STABLE_TIME	10	/* pmu/rst asserted low */
 #define MT6628_DFT_ON_STABLE_TIME	30	/* supply enabled */
 #define MT6628_DFT_RST_STABLE_TIME	30	/* released out of reset */
+#define MT6628_DFT_RTC_STABLE_TIME	100	/* RTC 32 kHz output */
 
 struct mmc_pwrseq_mt6628 {
 	struct mmc_pwrseq pwrseq;
-	struct pinctrl *pinctrl;
-	struct pinctrl_state *pins_default;
-	struct pinctrl_state *pins_strap;
 	struct gpio_desc *pmu_gpio;
 	struct gpio_desc *reset_gpio;
 };
@@ -69,27 +68,19 @@ static void mmc_pwrseq_mt6628_pre_power_on(struct mmc_host *host)
 		container_of(host->pwrseq, struct mmc_pwrseq_mt6628, pwrseq);
 
 	/*
-	 * Put the strap pins in their DFT pinmux before releasing reset, so
-	 * the chip latches its boot mode while it is still held there.
+	 * PMU_EN is active-high, while RESET is active-low. Use logical
+	 * values here: 0 turns PMU_EN off, and 1 asserts RESET.
 	 */
-	if (pwrseq->pins_strap)
-		pinctrl_select_state(pwrseq->pinctrl, pwrseq->pins_strap);
-
-	/* Hold the chip unpowered and in reset long enough to settle. */
 	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
-	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
 	msleep(MT6628_DFT_OFF_STABLE_TIME);
 
 	/* Bring the supply up, then release reset. */
 	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 1);
 	msleep(MT6628_DFT_ON_STABLE_TIME);
 
-	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
 	msleep(MT6628_DFT_RST_STABLE_TIME);
-
-	/* Hand the pins back to the board's own pinmux. */
-	if (pwrseq->pins_default)
-		pinctrl_select_state(pwrseq->pinctrl, pwrseq->pins_default);
 }
 
 static void mmc_pwrseq_mt6628_power_off(struct mmc_host *host)
@@ -97,8 +88,8 @@ static void mmc_pwrseq_mt6628_power_off(struct mmc_host *host)
 	struct mmc_pwrseq_mt6628 *pwrseq =
 		container_of(host->pwrseq, struct mmc_pwrseq_mt6628, pwrseq);
 
-	/* Reset first, then drop the supply, so the chip never runs unreset. */
-	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
+	/* Assert active-low RESET before removing power. */
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
 	msleep(MT6628_DFT_OFF_STABLE_TIME);
 	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
 }
@@ -112,47 +103,52 @@ static int mmc_pwrseq_mt6628_probe(struct platform_device *pdev)
 {
 	struct mmc_pwrseq_mt6628 *pwrseq;
 	struct device *dev = &pdev->dev;
+	struct device_node *rtc_np;
+	struct platform_device *rtc_pdev;
+	int ret;
 
 	pwrseq = devm_kzalloc(dev, sizeof(*pwrseq), GFP_KERNEL);
 	if (!pwrseq)
 		return -ENOMEM;
 
-	pwrseq->pinctrl = devm_pinctrl_get(dev);
-	if (IS_ERR(pwrseq->pinctrl))
-		return dev_err_probe(dev, PTR_ERR(pwrseq->pinctrl),
-				     "cannot get pinctrl\n");
-
 	/*
-	 * "default" restores the pins to whatever the board uses once the
-	 * chip is running.  "strap" is the pinmux that makes the boot-mode
-	 * strap pins readable while the chip is held in reset.  A board that
-	 * hardwires the straps needs neither state, so a missing lookup is
-	 * not fatal; we simply skip the select/restore around the sequence.
-	 */
-	pwrseq->pins_default = pinctrl_lookup_state(pwrseq->pinctrl,
-						    "default");
-	if (IS_ERR(pwrseq->pins_default))
-		pwrseq->pins_default = NULL;
-
-	pwrseq->pins_strap = pinctrl_lookup_state(pwrseq->pinctrl, "strap");
-	if (IS_ERR(pwrseq->pins_strap))
-		pwrseq->pins_strap = NULL;
-
-	/*
-	 * Both lines are fetched asserted-low, so the chip starts held in
-	 * reset and unpowered.  devm_gpiod_get() applies that initial value
-	 * as a side effect, which is what we want even before pre_power_on()
-	 * runs.
+	 * The GPIO descriptors use logical values. PMU_EN is active-high
+	 * and starts low; RESET is active-low and must start asserted,
+	 * which requires logical 1 (physical low).
 	 */
 	pwrseq->pmu_gpio = devm_gpiod_get(dev, "pmu", GPIOD_OUT_LOW);
 	if (IS_ERR(pwrseq->pmu_gpio))
 		return dev_err_probe(dev, PTR_ERR(pwrseq->pmu_gpio),
 				     "can't get pmu gpio\n");
 
-	pwrseq->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
+	pwrseq->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(pwrseq->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(pwrseq->reset_gpio),
 				     "can't get reset gpio\n");
+
+	/*
+	 * The vendor MT6589 sequence explicitly enables RTC_GPIO 32 kHz
+	 * for RTC_GPIO_USER_GPS and waits for it to stabilize before
+	 * powering up the combo chip. Defer until the RTC provider is
+	 * usable so the first SDIO enumeration cannot race RTC setup.
+	 */
+	rtc_np = of_parse_phandle(dev->of_node, "mediatek,rtc", 0);
+	if (!rtc_np)
+		return dev_err_probe(dev, -EINVAL,
+				     "missing mediatek,rtc phandle\n");
+
+	rtc_pdev = of_find_device_by_node(rtc_np);
+	of_node_put(rtc_np);
+	if (!rtc_pdev)
+		return -EPROBE_DEFER;
+
+	ret = mt6397_rtc_enable_32k_gpio(&rtc_pdev->dev);
+	put_device(&rtc_pdev->dev);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to enable RTC 32 kHz output\n");
+
+	msleep(MT6628_DFT_RTC_STABLE_TIME);
 
 	pwrseq->pwrseq.dev = dev;
 	pwrseq->pwrseq.ops = &mmc_pwrseq_mt6628_ops;

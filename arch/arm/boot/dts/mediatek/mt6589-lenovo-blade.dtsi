@@ -71,6 +71,26 @@
 		>;
 		default-brightness-level = <13>;
 	};
+
+	/*
+	 * Keep this provider at the root level. The MSDC host is not an
+	 * OF bus, so a power-sequence device nested under &mmc3 is not
+	 * instantiated as an independent platform device.
+	 *
+	 * The RTC reference also ensures that the PMIC's 32 kHz output is
+	 * enabled before the MMC host starts enumerating the combo chip.
+	 */
+	mt6628_pwrseq: mt6628-pwrseq {
+		compatible = "mediatek,mt6628-pwrseq";
+		status = "okay";
+		mediatek,rtc = <&mt6320_rtc>;
+
+		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&mt6628_pins_default>;
+	};
 };
 
 &cpu0 {
@@ -111,13 +131,10 @@
 	};
 
 	/*
-	 * MT6628 combo chip supply enable (PMU_EN), on GPIO14.
-	 *
-	 * "strap" is what pwrseq_mt6628.c selects while it runs the power
-	 * sequence.  The MT6630 driver this was modelled on also muxes a second
-	 * pin to read the chip's boot-mode straps; there is no MT6628 strap
-	 * pin documented, so this group only carries PMU_EN and the strap step
-	 * is effectively a no-op rather than a guess at an unknown mux.
+	 * The board uses GPIO14 for MT6628 PMU_EN and GPIO225 for its
+	 * active-low reset input. Do not apply an unverified strap phase:
+	 * the vendor MT6628 power-up sequence does not document one on
+	 * these pins.
 	 */
 	mt6628_pins_default: mt6628-pins-default {
 		pmu_en {
@@ -130,14 +147,16 @@
 		};
 	};
 
-	mt6628_pins_strap: mt6628-pins-strap {
-		pmu_en {
-			pinmux = <MT6589_GPIO14__FUNC_GPIO14>;
-			bias-pull-down;
-		};
-		reset {
-			pinmux = <MT6589_GPIO225__FUNC_GPIO225>;
-			bias-pull-down;
+	/*
+	 * GPIO128 is the board's active-low, level-triggered Wi-Fi wake
+	 * interrupt (EINT9 in the vendor board configuration). It is used
+	 * for out-of-band wakeup; normal SDIO interrupts remain in-band.
+	 */
+	mt6628_wifi_eint_pins: mt6628-wifi-eint-pins {
+		pin-wifi-eint {
+			pinmux = <MT6589_GPIO128__FUNC_EINT9>;
+			input-enable;
+			bias-pull-up;
 		};
 	};
 
@@ -585,9 +604,13 @@
 /* SDIO */
 &mmc3 {
 	status = "okay";
-	pinctrl-names = "default", "state_uhs";
+	pinctrl-names = "default", "state_uhs", "state_eint";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
+	pinctrl-2 = <&mt6628_wifi_eint_pins>;
+	interrupts-extended = <&sysirq GIC_SPI 42 IRQ_TYPE_LEVEL_LOW>,
+			      <&pio 9 IRQ_TYPE_LEVEL_LOW>;
+	interrupt-names = "msdc", "sdio_wakeup";
 	/* FIXME: always 1.8V? */
 	//vmmc-supply = <&mt6320_ldo_vemc_3v3>;
 	vmmc-supply = <&mt6320_ldo_vemc_1v8>;
@@ -598,6 +621,8 @@
 	non-removable;
 	no-mmc;
 	no-sd;
+	keep-power-in-suspend;
+	wakeup-source;
 
 	max-frequency = <50000000>;
 
@@ -620,59 +645,6 @@
 	sd-uhs-sdr50;
 	sd-uhs-ddr50;
 */
-
-	/*
-	 * MT6628 combo chip power sequence.
-	 *
-	 * The chip is released out of reset the way the vendor DFT flow does
-	 * it: supply enable and reset lines are asserted low while the
-	 * boot-mode strap pins are moved to their strap pinmux, then reset is
-	 * released once the supply has settled.  See pwrseq_mt6628.c for the
-	 * sequence and where the delays come from.
-	 *
-	 * The pins below are enabled.  The two constraints that made this
-	 * unusable before are both satisfied:
-	 *
-	 *  - The mmc core resolves "mmc-pwrseq" with of_parse_phandle(), which
-	 *    ignores node status.  Pointing &mmc3 at a disabled pwrseq node
-	 *    makes mmc_pwrseq_alloc() return -EPROBE_DEFER forever and
-	 *    permanently breaks the whole SDIO bus, so the node being enabled
-	 *    and the reference existing are one change, not two.
-	 *
-	 *  - The pin numbers are the Blade's own.  They are not in any in-tree
-	 *    or aquaris-5 source: the vendor's wmt_plat_alps.c takes them from
-	 *    per-project cust_gpio_usage.h macros, and that generated header is
-	 *    absent from the Aquaris reference, which is a different handset
-	 *    with a different combo chip.  The GPIO101/GPIO38 pair that appears
-	 *    in an MT6630 driver's error strings is likewise not a source.
-	 */
-	mt6628_pwrseq: mt6628-pwrseq {
-		compatible = "mediatek,mt6628-pwrseq";
-		status = "okay";
-
-		/*
-		 * PMU_EN is GPIO14 and the chip's reset line is GPIO225 on this
-		 * board.
-		 *
-		 * The vendor's equivalent sequence lives in
-		 * mediatek/kernel/drivers/combo/common/platform/alps/wmt_plat_alps.c
-		 * (PIN_PMU / PIN_RST), where the pins come from per-project
-		 * cust_gpio_usage.h macros - GPIO_COMBO_PMU_EN_PIN and
-		 * GPIO_COMBO_RST_PIN.  That header is generated per project and is
-		 * not in the aquaris-5 reference, which is an Aquaris handset with
-		 * its own combo chip, so its values do not apply here.  These two are
-		 * the Lenovo Blade's.
-		 *
-		 * The order and the delays are the vendor's: drive PMU low, drive
-		 * reset low, 10 ms, PMU high, 30 ms, reset high, 30 ms, then put
-		 * the pins back to GPIO.
-		 */
-		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
-		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
-		pinctrl-names = "default", "strap";
-		pinctrl-0 = <&mt6628_pins_default>;
-		pinctrl-1 = <&mt6628_pins_strap>;
-	};
 
 	/*
 	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the

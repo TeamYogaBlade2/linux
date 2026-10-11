@@ -28,7 +28,7 @@
 			#power-domain-cells = <0>;
 		};
 
-		rtc {
+		mt6320_rtc: rtc {
 			compatible = "mediatek,mt6320-rtc",
 				     "mediatek,mt6397-rtc";
 		};

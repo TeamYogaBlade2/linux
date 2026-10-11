@@ -36,7 +36,7 @@ config PWRSEQ_SIMPLE
 
 config PWRSEQ_MT6628
 	tristate "HW reset support for MT6628 combo chip"
-	depends on OF && GPIOLIB
+	depends on OF && GPIOLIB && RTC_DRV_MT6397
 	help
 	  This selects hardware reset support aka pwrseq-mt6628 for the
 	  MT6628 WLAN/BT/FM/GNSS combo chip, which is attached over SDIO.
