@@ -625,7 +625,8 @@
 	keep-power-in-suspend;
 	wakeup-source;
 
-	max-frequency = <50000000>;
+	max-frequency = <25000000>;
+//	max-frequency = <50000000>;
 
 	/*
 	 * The MT6628 combo chip needs its supply enabled before the host
