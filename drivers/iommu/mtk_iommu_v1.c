@@ -236,7 +236,6 @@ struct mtk_iommu_v1_data {
 	struct mtk_smi_larb_iommu larb_imu[MTK_LARB_NR_MAX];
 
 	struct mtk_iommu_v1_suspend_reg reg;
-	bool larb2_pm_ref;
 
 	/*
 	 * Guards @mapping, which is shared by *every* client of this M4U: the
@@ -290,28 +289,13 @@ static int mtk_iommu_v1_bind(struct device *dev)
 		return ret;
 
 	/*
-	 * MT6589 programs LARB2's SHARE_EN and ROUTE_SEL from the
-	 * LARB runtime-resume callback. Do this only after the LARB
-	 * component has been bound, since that callback uses the
-	 * larbid and MMU-port bitmap installed by mtk_smi_larb_bind().
-	 *
-	 * Keep LARB2 active during display bring-up: the OVL -> BLS ->
-	 * RDMA0 path reads its framebuffer through LARB2 ports.
+	 * Do not force-resume LARB2 here. The display clients have not
+	 * necessarily attached to the IOMMU yet, so the LARB's MMU-port
+	 * bitmap can still be empty. Pinning it active at this point prevents
+	 * its runtime-resume callback from applying the bitmap populated by
+	 * the later OVL/RDMA attachments. The runtime-PM device links created
+	 * by probe_device() keep LARB2 active when those clients need it.
 	 */
-	if (data->soc->has_global_base && data->larb_imu[2].dev) {
-		dev_info(dev, "resuming display LARB2 before DRM startup\n");
-
-		ret = pm_runtime_resume_and_get(data->larb_imu[2].dev);
-		if (ret < 0) {
-			component_unbind_all(dev, &data->larb_imu);
-			return dev_err_probe(dev, ret,
-					     "failed to resume display LARB2\n");
-		}
-
-		data->larb2_pm_ref = true;
-		dev_info(dev, "display LARB2 held active for bring-up\n");
-	}
-
 	return 0;
 }
 
@@ -320,11 +304,6 @@ static void mtk_iommu_v1_unbind(struct device *dev)
 	struct mtk_iommu_v1_data *data = dev_get_drvdata(dev);
 
 	component_unbind_all(dev, &data->larb_imu);
-
-	if (data->larb2_pm_ref) {
-		pm_runtime_put_sync(data->larb_imu[2].dev);
-		data->larb2_pm_ref = false;
-	}
 }
 
 static struct mtk_iommu_v1_domain *to_mtk_domain(struct iommu_domain *dom)
