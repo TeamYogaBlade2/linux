@@ -280,15 +280,12 @@ struct mtk_disp_ovl_data {
 	/* OVL RDMA FIFO capacity, in 16-byte units; zero if unspecified. */
 	unsigned int gmc_fifo_size;
 	/*
-	 * The MT6589 stock driver never writes OVL_RDMAx_GMC:
-	 * OVLLayerConfig() sets only RDMAx_CTRL and the block runs on its
-	 * reset thresholds.  The generic values computed in
-	 * mtk_ovl_layer_on() (0x00ff0080 on this SoC after the FIFO-size
-	 * clamp) are a mock-verified register diff against that working
-	 * sequence - EN_THRD/DISEN_THRD programmed where downstream leaves
-	 * them at reset - so the write is skipped.
+	 * Fixed OVL RDMA GMC_SETTING value for SoCs whose normal vendor
+	 * path programs one explicitly. Zero uses the generic threshold
+	 * calculation below. MT6589's downstream display path writes
+	 * 0x0101a06b to each OVL RDMA GMC_SETTING register.
 	 */
-	bool skip_rdma_gmc;
+	unsigned int rdma_gmc_setting;
 	unsigned int layer_nr;
 	bool fmt_rgb565_is_0;
 	bool smi_id_en;
@@ -921,15 +918,14 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 
 	mtk_ddp_write(cmdq_pkt, 0x1, &ovl->cmdq_reg, ovl->regs,
 		      DISP_REG_OVL_RDMA_CTRL(idx));
-	if (ovl->data->skip_rdma_gmc) {
+	if (ovl->data->rdma_gmc_setting) {
 		/*
-		 * MT6589: the stock driver leaves GMC alone (the write is
-		 * compiled out). OVL_RST does not zero the register, so a
-		 * residual bootloader value such as 0x10101010 would
-		 * otherwise survive. Force 0 to match a clean post-reset
-		 * state.
+		 * Program the SoC-specific value during layer setup,
+		 * before OVL_EN is asserted. MT6589's downstream path
+		 * writes this setting for every OVL internal RDMA.
 		 */
-		mtk_ddp_write(cmdq_pkt, 0, &ovl->cmdq_reg, ovl->regs,
+		mtk_ddp_write(cmdq_pkt, ovl->data->rdma_gmc_setting,
+			      &ovl->cmdq_reg, ovl->regs,
 			      DISP_REG_OVL_RDMA_GMC(idx));
 	} else {
 		unsigned int gmc_thrshd_l;
@@ -1555,7 +1551,7 @@ static const struct mtk_disp_ovl_data mt6589_ovl_driver_data = {
 	.addr = DISP_REG_OVL_ADDR_MT2701,
 	.gmc_bits = 10,
 	.gmc_fifo_size = 256,
-	.skip_rdma_gmc = true,
+	.rdma_gmc_setting = 0x0101a06b,
 	.layer_nr = 4,
 	.fmt_rgb565_is_0 = false,
 	.blend_modes = BIT(DRM_MODE_BLEND_PREMULTI) |
