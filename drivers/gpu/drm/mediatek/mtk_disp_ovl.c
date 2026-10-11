@@ -1273,6 +1273,37 @@ void mtk_ovl_bgclr_in_off(struct device *dev)
 static int mtk_disp_ovl_bind(struct device *dev, struct device *master,
 			     void *data)
 {
+	struct mtk_disp_ovl *ovl = dev_get_drvdata(dev);
+	int ret;
+
+	/*
+	 * On MT6589, OVL's initial runtime-PM reference is taken in probe,
+	 * before the M4U driver necessarily registers the IOMMU and adds
+	 * the device link to LARB2. Resuming OVL at that point cannot
+	 * activate the supplier through the link.
+	 *
+	 * This component bind runs after the M4U component master has bound
+	 * the LARBs. Cycle the existing reference now, so runtime resume
+	 * sees the IOMMU link and LARB2's larb->mmu mapping is ready.
+	 * Do this before the CRTC starts the display pipeline.
+	 */
+	if (!ovl->data->has_dispsys_cfg)
+		return 0;
+
+	ret = pm_runtime_put_sync(dev);
+	if (ret < 0) {
+		pm_runtime_get_noresume(dev);
+		return dev_err_probe(dev, ret,
+				     "Failed to suspend OVL before LARB setup\n");
+	}
+
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0) {
+		pm_runtime_get_noresume(dev);
+		return dev_err_probe(dev, ret,
+				     "Failed to resume OVL after LARB setup\n");
+	}
+
 	return 0;
 }
 
