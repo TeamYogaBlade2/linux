@@ -181,12 +181,13 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		u8 reserved;
 		__le16 rx_checksum;
 		__le16 tx_checksum;
-	} __packed response;
+	} __packed request = {}, response;
 	size_t response_len;
 	int ret;
 
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_BASIC_CONFIG, 0,
-				   NULL, 0, &response, sizeof(response),
+				   &request, sizeof(request),
+				   &response, sizeof(response),
 				   &response_len, MT6628_EVENT_ID_BASIC_CONFIG,
 				   MT6628_CMD_TIMEOUT_MS);
 	if (ret)
