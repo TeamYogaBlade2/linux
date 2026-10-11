@@ -56,6 +56,7 @@
 #define DISP_CG_CON0_OVL_ENGINE			BIT(4)
 #define DISP_CG_CON0_OVL_SMI			BIT(5)
 #define DISP_REG_OVL_INTEN					0x0004
+#define DISP_REG_OVL_ADDCON_DBG				0x0244
 /*
  * OVL_INTEN (0x14003004) and OVL_INTSTA (0x14003008) share one bit map.
  * The data sheet's "Bit 15..0" row for both registers names exactly
@@ -427,29 +428,24 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		return IRQ_NONE;
 
 	/*
-	 * The generic interrupt line tells us that an OVL layer RDMA ended
-	 * abnormally, but not whether the fetch stopped at the memory port or
-	 * at OVL's output handshake. Capture both sides once, at the first fault,
-	 * before acknowledging the status. Do not dump every frame: this error
-	 * repeats at the display refresh rate and pstore is very small.
+	 * Capture the first EOF-abnormal while OVL and RDMA0 are active.
+	 * The interrupt may be serviced after the failed transaction has
+	 * already returned the engine to its idle state. Do not consume the
+	 * one-shot diagnostic on that idle snapshot.
 	 */
 	if ((reg & priv->data->rdma0_eof_abn_bit) &&
 	    !priv->rdma_err_dbg_done) {
-		/*
-		 * OVL is started before the initial plane state is programmed.
-		 * EOF_ABNORMAL during that window sees reset/stale layer registers
-		 * (addr=0, pitch=0, src_con=0) and must not consume the one-shot
-		 * diagnostic. Wait until layer 0 is actually enabled, then capture
-		 * the first abnormal EOF against the real framebuffer.
-		 */
 		src_con = readl(priv->regs + DISP_REG_OVL_SRC_CON);
-		if (src_con & BIT(0)) {
+		sta = readl(priv->regs + DISP_REG_OVL_STA);
+		if ((src_con & BIT(0)) &&
+		    (sta & BIT(0)) &&
+		    !(sta & BIT(1))) {
 			priv->rdma_err_dbg_done = true;
-			sta = readl(priv->regs + DISP_REG_OVL_STA);
-			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
+			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x addcon=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
 			       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
 			       reg, sta,
 			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+			       readl(priv->regs + DISP_REG_OVL_ADDCON_DBG),
 			       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
 			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
 			       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
