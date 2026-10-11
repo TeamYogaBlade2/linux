@@ -4,102 +4,48 @@
  *
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
- * The MT6320 has a 192-bit (12 words of 16 bits) one-time-programmable
- * array behind the pwrap bus.  Reading a word requires setting the row
- * address in EFUSE_CON1, pulsing EFUSE_RD_TRIG in EFUSE_CON4 and
- * waiting for the BUSY flag in EFUSE_CON6 to clear; the data then reads
- * back from EFUSE_DOUT_<n> registers.  Programming is not supported by
- * this driver.
+ * The MT6320 exposes 192 bits of eFuse data through the EFUSE_DOUT registers.
+ * The downstream preloader reads this latched DOUT window directly when
+ * applying PMIC trimming, so Linux must not start another software read
+ * transaction through EFUSE_CONx.
  */
 
-#include <linux/bitfield.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/nvmem-provider.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/types.h>
 
 #include <linux/mfd/mt6397/core.h>
 #include <linux/mfd/mt6320/registers.h>
 
 #define MT6320_EFUSE_NUM_WORDS		12
-
-/* EFUSE_CON0 */
-#define MT6320_EFUSE_ROW_ADDR		GENMASK(5, 0)
-/* EFUSE_CON2 */
-#define MT6320_EFUSE_EN			BIT(0)
-/* EFUSE_CON4 */
-#define MT6320_EFUSE_RD_TRIG		BIT(0)
-/* EFUSE_CON6 */
-#define MT6320_EFUSE_BUSY		BIT(2)
-
-struct mt6320_efuse {
-	struct regmap *regmap;
-	struct nvmem_config config;
-	struct mutex lock;
-};
-
-static int mt6320_efuse_read_word(struct mt6320_efuse *efuse,
-				  unsigned int row, u16 *out)
-{
-	unsigned int val;
-	int ret;
-
-	/* select the row */
-	ret = regmap_update_bits(efuse->regmap, MT6320_EFUSE_CON0,
-				 MT6320_EFUSE_ROW_ADDR,
-				 FIELD_PREP(MT6320_EFUSE_ROW_ADDR, row));
-	if (ret)
-		return ret;
-
-	/* enable efuse read path and pulse the read trigger */
-	ret = regmap_write(efuse->regmap, MT6320_EFUSE_CON2,
-			   MT6320_EFUSE_EN);
-	if (ret)
-		return ret;
-
-	ret = regmap_write(efuse->regmap, MT6320_EFUSE_CON4,
-			   MT6320_EFUSE_RD_TRIG);
-	if (ret)
-		return ret;
-	ret = regmap_write(efuse->regmap, MT6320_EFUSE_CON4, 0);
-	if (ret)
-		return ret;
-
-	ret = regmap_read_poll_timeout(efuse->regmap, MT6320_EFUSE_CON6,
-				       val, !(val & MT6320_EFUSE_BUSY),
-				       50, 10000);
-	if (ret)
-		return ret;
-
-	ret = regmap_read(efuse->regmap,
-			  MT6320_EFUSE_DOUT_0_15 + row * 2, &val);
-	if (ret)
-		return ret;
-
-	*out = val & 0xffff;
-
-	return 0;
-}
+#define MT6320_EFUSE_SIZE		(MT6320_EFUSE_NUM_WORDS * sizeof(u16))
+#define MT6320_EFUSE_DOUT_BASE		MT6320_EFUSE_DOUT_0_15
 
 static int mt6320_efuse_read(void *context, unsigned int off,
 			     void *data, size_t len)
 {
-	struct mt6320_efuse *efuse = context;
+	struct regmap *regmap = context;
 	u16 *buf = data;
-	int i, ret;
+	unsigned int val;
+	size_t i;
+	int ret;
 
 	if (!len || (off & 1) || (len & 1) ||
-	    off + len > MT6320_EFUSE_NUM_WORDS * sizeof(*buf))
+	    off > MT6320_EFUSE_SIZE || len > MT6320_EFUSE_SIZE - off)
 		return -EINVAL;
 
-	guard(mutex)(&efuse->lock);
-
+	/* PWRAP is a register bus, not a linear memory window: read each word. */
 	for (i = 0; i < len / sizeof(*buf); i++) {
-		ret = mt6320_efuse_read_word(efuse, off / 2 + i, &buf[i]);
+		ret = regmap_read(regmap,
+				  MT6320_EFUSE_DOUT_BASE + off + i * sizeof(*buf),
+				  &val);
 		if (ret)
 			return ret;
+
+		buf[i] = val;
 	}
 
 	return 0;
@@ -110,24 +56,22 @@ static int mt6320_efuse_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct mt6397_chip *pmic = dev_get_drvdata(dev->parent);
 	struct nvmem_device *nvmem;
-	struct mt6320_efuse *efuse;
+	struct nvmem_config config = {
+		.name = "mt6320-efuse",
+		.owner = THIS_MODULE,
+		.stride = 2,
+		.word_size = 2,
+		.size = MT6320_EFUSE_SIZE,
+		.reg_read = mt6320_efuse_read,
+	};
 
-	efuse = devm_kzalloc(dev, sizeof(*efuse), GFP_KERNEL);
-	if (!efuse)
-		return -ENOMEM;
+	if (!pmic || !pmic->regmap)
+		return dev_err_probe(dev, -ENODEV, "failed to get PMIC regmap\n");
 
-	efuse->regmap = pmic->regmap;
-	efuse->config.dev = dev;
-	efuse->config.name = "mt6320-efuse";
-	efuse->config.owner = THIS_MODULE;
-	efuse->config.stride = 2;
-	efuse->config.word_size = 2;
-	efuse->config.size = MT6320_EFUSE_NUM_WORDS * 2;
-	efuse->config.reg_read = mt6320_efuse_read;
-	efuse->config.priv = efuse;
-	mutex_init(&efuse->lock);
+	config.dev = dev;
+	config.priv = pmic->regmap;
 
-	nvmem = devm_nvmem_register(dev, &efuse->config);
+	nvmem = devm_nvmem_register(dev, &config);
 	if (IS_ERR(nvmem))
 		return dev_err_probe(dev, PTR_ERR(nvmem),
 				     "failed to register nvmem\n");
