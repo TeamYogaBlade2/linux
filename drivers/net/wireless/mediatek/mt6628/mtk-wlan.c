@@ -71,10 +71,13 @@ static u32 mt6628_crc32(const u8 *data, size_t len)
 
 static int mt6628_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 {
+	u32 value;
 	int ret;
 
 	sdio_claim_host(wl->func);
-	ret = sdio_memcpy_fromio(wl->func, val, reg, sizeof(*val));
+	value = sdio_readl(wl->func, reg, &ret);
+	if (!ret)
+		*val = value;
 	sdio_release_host(wl->func);
 
 	return ret;
@@ -554,6 +557,9 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 {
 	struct mt6628_wlan *wl;
 	u32 wcir;
+	u8 raw[4] = {};
+	int raw_ret[4] = {};
+	unsigned int retry, i;
 	int ret;
 
 	if (func->num != 1) {
@@ -577,15 +583,44 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	if (ret)
 		goto err_disable;
 
-	msleep(50);		/* let the ROM come up */
+	/*
+	 * Allow the WLAN block to finish starting.  Also preserve the
+	 * raw WCIR value so a failed identification can be distinguished
+	 * from a failed SDIO transfer.
+	 */
+	for (retry = 0; retry < 10; retry++) {
+		msleep(50);
+		ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
+		if (ret)
+			goto err_disable;
 
-	ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
-	if (ret)
-		goto err_disable;
+		if ((wcir & MT6628_WCIR_CHIP_ID) == 0x6628)
+			break;
+
+		msleep(10);
+	}
 
 	if ((wcir & MT6628_WCIR_CHIP_ID) != 0x6628) {
-		dev_err(&func->dev, "unexpected chip ID %#x\n",
-			(u32)(wcir & MT6628_WCIR_CHIP_ID));
+		/*
+		 * WCIR should contain CHIP_ID=0x6628 in bits 15:0.
+		 * Compare the 32-bit read with byte reads to distinguish
+		 * a register/window issue from a broader startup problem.
+		 */
+		sdio_claim_host(func);
+		for (i = 0; i < ARRAY_SIZE(raw); i++)
+			raw[i] = sdio_readb(func,
+					    MT6628_MCR_WCIR + i,
+					    &raw_ret[i]);
+		sdio_release_host(func);
+
+		dev_err(&func->dev,
+			"unexpected chip ID %#x; WCIR=%#010x, "
+			"func=%u device=%04x:%04x, "
+			"CMD52 bytes=%02x/%d %02x/%d %02x/%d %02x/%d\n",
+			(u32)(wcir & MT6628_WCIR_CHIP_ID), wcir,
+			func->num, func->vendor, func->device,
+			raw[0], raw_ret[0], raw[1], raw_ret[1],
+			raw[2], raw_ret[2], raw[3], raw_ret[3]);
 		ret = -ENODEV;
 		goto err_disable;
 	}
