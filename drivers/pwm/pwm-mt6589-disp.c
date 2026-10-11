@@ -211,6 +211,11 @@ static const struct pwm_ops mt6589_bls_pwm_ops = {
 	.apply = mt6589_bls_pwm_apply,
 };
 
+static void mt6589_bls_clk_disable_action(void *data)
+{
+	clk_disable_unprepare(data);
+}
+
 static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -236,6 +241,18 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	/* Enable clocks for initialization */
 	ret = clk_prepare_enable(bls->clk_main);
+	if (ret)
+		return ret;
+
+	/*
+	 * BLS is part of the live OVL -> BLS -> RDMA0 display path.
+	 * In the non-DRM blade/v7.1 kernel, no DDP component owns
+	 * this clock after probe. Retain this reference for the
+	 * device lifetime; pwm_apply() manages its own additional
+	 * reference through bls->clk_enabled.
+	 */
+	ret = devm_add_action_or_reset(dev, mt6589_bls_clk_disable_action,
+				       bls->clk_main);
 	if (ret)
 		return ret;
 
@@ -277,7 +294,10 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	/* Disable BLS module for now, it will be enabled on first apply */
 	writel(0x0, bls->base + BLS_EN);
 
-	clk_disable_unprepare(bls->clk_main);
+	/*
+	 * Do not release the retained clock reference here. BLS is
+	 * also a stage in the display pixel path, not just a PWM.
+	 */
 
 	chip->ops = &mt6589_bls_pwm_ops;
 
