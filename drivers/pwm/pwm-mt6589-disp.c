@@ -438,8 +438,12 @@ void mt6589_bls_ddp_config(struct device *dev, unsigned int w,
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_config);
 
 /*
- * BLS_EN_FULL is the "BLS_EN_DISPLAY" this comment always referred to:
- * with BLS in the display path, PWM-only leaves the data path disabled.
+ * The downstream MT6589 main display path writes BLS_EN = 0x80000000
+ * in both disp_bls_init() and disp_bls_config(): PWM is enabled while
+ * BLS processing and histogram collection remain disabled.
+ *
+ * BLS is still part of the routed hardware path. Do not infer that the
+ * crossbar connection is disabled merely because BLS_EN_BLS is clear.
  */
 void mt6589_bls_ddp_start(struct device *dev)
 {
