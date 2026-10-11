@@ -774,7 +774,7 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
  */
 static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 {
-	u32 txrx, start, sta, trig, dbg0;
+	u32 con_ctrl, mode_ctrl, txrx, start, sta, intsta, trig, dbg0;
 
 	/*
 	 * Cap the lines for the life of the device, and say so once when the
@@ -794,15 +794,21 @@ static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 	}
 	dsi->status_dumps++;
 
+	con_ctrl = readl(dsi->regs + DSI_CON_CTRL);
+	mode_ctrl = readl(dsi->regs + DSI_MODE_CTRL);
 	txrx = readl(dsi->regs + DSI_TXRX_CTRL);
 	start = readl(dsi->regs + DSI_START);
 	sta = readl(dsi->regs + DSI_STA);
+	intsta = readl(dsi->regs + DSI_INTSTA);
 	trig = readl(dsi->regs + DSI_TRIG_STA);
 	dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
 
 	dev_info(dsi->host.dev,
-		 "DSI %s: txrx=0x%08x start=0x%08x sta=0x%02x trig=0x%02x ack=%u ctl=0x%03x hx=0x%x rx0=0x%02x\n",
-		 when, txrx, start, sta, trig, !!(trig & TRIG_ACK),
+		 "DSI %s: con_ctrl=%#x mode_ctrl=%#x txrx=%#x start=%#x "
+		 "sta=%#x intsta=%#x trig=%#x ack=%u ctl_state=%#x "
+		 "hx_state=%#x rx0=%#x\n",
+		 when, con_ctrl, mode_ctrl, txrx, start, sta, intsta,
+		 trig, !!(trig & TRIG_ACK),
 		 FIELD_GET(CTL_STATE_C, dbg0),
 		 FIELD_GET(HX_TX_STATE_C, dbg0),
 		 readb(dsi->regs + DSI_RX_DATA0));
