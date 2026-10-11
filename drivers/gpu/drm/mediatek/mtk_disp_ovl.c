@@ -394,6 +394,10 @@ struct mtk_disp_ovl {
 	void				*vblank_cb_data;
 	/* Rate limiting for a fault that persists indefinitely. */
 	unsigned int			intsta_reported;
+	/* Persistent-fault counters; sampled at powers of two to preserve pstore. */
+	u32				rdma0_eof_abn_count;
+	u32				frame_done_count;
+	u32				vblank_cb_count;
 	bool				layer_dbg_done;
 	bool				rdma_err_dbg_done;
 };
@@ -429,6 +433,48 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	 */
 	if (priv->data->int_all_mask && !(reg & priv->data->int_all_mask))
 		return IRQ_NONE;
+
+	if (reg & priv->data->fme_cpl_bit)
+		priv->frame_done_count++;
+	if (priv->vblank_cb && (reg & priv->data->fme_cpl_bit))
+		priv->vblank_cb_count++;
+
+	/*
+	 * The normal fault report below is intentionally limited to eight
+	 * messages, and the first full register snapshot is one-shot.  Ramoops
+	 * keeps only the tail of the console, so those early messages can be
+	 * gone by the time DRM's vblank wait times out.  Log a compact snapshot
+	 * at powers of two while OVL's internal RDMA0 EOF fault persists.  This
+	 * stays logarithmic even if the display runs indefinitely, and the
+	 * counters distinguish a missing frame-complete/vblank path from an
+	 * OVL fetch engine that is still faulting.
+	 */
+	if (priv->data->has_dispsys_cfg &&
+	    (reg & priv->data->rdma0_eof_abn_bit)) {
+		priv->rdma0_eof_abn_count++;
+		if (!(priv->rdma0_eof_abn_count &
+		      (priv->rdma0_eof_abn_count - 1))) {
+			src_con = readl(priv->regs + DISP_REG_OVL_SRC_CON);
+			sta = readl(priv->regs + DISP_REG_OVL_STA);
+			pr_err("OVL progress: eof_abn=%u frame_done=%u vblank_cb=%u "
+			       "intsta=%#x sta=%#x flow=%#x addr=%#x pitch=%#x "
+			       "size=%#x con=%#x src_con=%#x rdma_ctrl=%#x "
+			       "gmc=%#x fifo=%#x roi=%#x datapath=%#x\n",
+			       priv->rdma0_eof_abn_count,
+			       priv->frame_done_count, priv->vblank_cb_count,
+			       reg, sta,
+			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+			       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
+			       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
+			       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
+			       readl(priv->regs + DISP_REG_OVL_CON(0)), src_con,
+			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
+			       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
+			       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
+			       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
+			       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
+		}
+	}
 
 	/*
 	 * Capture the first EOF-abnormal while OVL and RDMA0 are active.
