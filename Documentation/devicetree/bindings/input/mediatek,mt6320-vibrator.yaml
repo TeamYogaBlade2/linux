@@ -54,6 +54,7 @@ properties:
 
 required:
   - compatible
+  - vibr-supply
 
 additionalProperties: false
 
