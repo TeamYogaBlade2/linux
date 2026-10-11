@@ -153,6 +153,11 @@
  * only.
  */
 #define DSI_STATE_DBG0		0x148
+#define DSI_STATE_DBG1		0x14c
+#define DSI_STATE_DBG2		0x150
+#define DSI_STATE_DBG3		0x154
+#define DSI_STATE_DBG4		0x158
+#define DSI_STATE_DBG6		0x160
 /*
  * Field masks for DSI_STATE_DBG0.  These are spelled as u32 constants rather
  * than GENMASK() because GENMASK() expands to an unsigned long expression,
@@ -774,7 +779,9 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
  */
 static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 {
-	u32 con_ctrl, mode_ctrl, txrx, start, sta, intsta, trig, dbg0;
+	u32 con_ctrl, mode_ctrl, txrx, start, sta, intsta, inten, trig, dbg0;
+	u32 phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6;
+	u32 psctrl, vact, hsa, hbp, hfp;
 
 	/*
 	 * Cap the lines for the life of the device, and say so once when the
@@ -800,8 +807,24 @@ static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 	start = readl(dsi->regs + DSI_START);
 	sta = readl(dsi->regs + DSI_STA);
 	intsta = readl(dsi->regs + DSI_INTSTA);
+	inten = readl(dsi->regs + DSI_INTEN);
 	trig = readl(dsi->regs + DSI_TRIG_STA);
 	dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
+	phy_lccon = readl(dsi->regs + DSI_PHY_LCCON);
+	phy_ld0con = readl(dsi->regs + DSI_PHY_LD0CON);
+	dbg1 = readl(dsi->regs + DSI_STATE_DBG1);
+	dbg2 = readl(dsi->regs + DSI_STATE_DBG2);
+	dbg3 = readl(dsi->regs + DSI_STATE_DBG3);
+	dbg4 = readl(dsi->regs + DSI_STATE_DBG4);
+	dbg6 = readl(dsi->regs + DSI_STATE_DBG6);
+	psctrl = readl(dsi->regs + DSI_PSCTRL);
+	vact = readl(dsi->regs + DSI_VACT_NL);
+	hsa = readl(dsi->regs + DSI_HSA_WC);
+	hbp = readl(dsi->regs + DSI_HBP_WC);
+	hfp = readl(dsi->regs + DSI_HFP_WC);
+	dev_info(dsi->host.dev, "DSI %s detail: phy_lc=%#x phy_ld0=%#x dbg1=%#x dbg2=%#x dbg3=%#x dbg4=%#x dbg6=%#x ps=%#x vact=%#x hsa=%#x hbp=%#x hfp=%#x\n",
+		 when, phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6,
+		 psctrl, vact, hsa, hbp, hfp);
 
 	dev_info(dsi->host.dev,
 		 "DSI %s: con_ctrl=%#x mode_ctrl=%#x txrx=%#x start=%#x "

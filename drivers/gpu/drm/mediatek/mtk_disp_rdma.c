@@ -162,6 +162,9 @@ struct mtk_disp_rdma {
 	void				*vblank_cb_data;
 	u32				fifo_size;
 	bool				dbg_done;
+	unsigned int			irq_reports;
+	bool				fault_reported;
+	bool				start_dbg_done;
 };
 
 static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
@@ -180,6 +183,25 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 	 * See ddp_drv.c: DISP_REG_RDMA_INT_STATUS, ~reg_val.
 	 */
 	writel(~handled, priv->regs + DISP_REG_RDMA_INT_STATUS);
+
+	if (priv->data->direct_link_no_plane &&
+	    (priv->irq_reports < 4 ||
+	     ((handled & (RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT)) &&
+	      !priv->fault_reported))) {
+		pr_info("MT6589 RDMA0 IRQ: status=%#x global_con=%#x int_enable=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x start=%#x fifo=%#x\n",
+			status,
+			readl(priv->regs + DISP_REG_RDMA_GLOBAL_CON),
+			readl(priv->regs + DISP_REG_RDMA_INT_ENABLE),
+			readl(priv->regs + DISP_REG_RDMA_SIZE_CON_0),
+			readl(priv->regs + DISP_REG_RDMA_SIZE_CON_1),
+			readl(priv->regs + DISP_RDMA_MEM_CON),
+			readl(priv->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
+			readl(priv->regs + priv->data->mem_start_addr_reg),
+			readl(priv->regs + DISP_REG_RDMA_FIFO_CON));
+		priv->irq_reports++;
+		if (handled & (RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT))
+			priv->fault_reported = true;
+	}
 
 	if (priv->vblank_cb && (status & RDMA_FRAME_END_INT))
 		priv->vblank_cb(priv->vblank_cb_data);
@@ -285,6 +307,22 @@ void mtk_rdma_start(struct device *dev)
 
 	rdma_update_bits(dev, DISP_REG_RDMA_GLOBAL_CON, RDMA_ENGINE_EN,
 			 RDMA_ENGINE_EN);
+
+	if (rdma->data->direct_link_no_plane && !rdma->start_dbg_done) {
+		rdma->start_dbg_done = true;
+		dev_info(dev,
+			 "RDMA0 post-start: global_con=%#x int_enable=%#x int_status=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x start=%#x gmc1=%#x fifo=%#x\n",
+			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_INT_ENABLE),
+			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),
+			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_1),
+			 readl(rdma->regs + DISP_RDMA_MEM_CON),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
+			 readl(rdma->regs + rdma->data->mem_start_addr_reg),
+			 readl(rdma->regs + DISP_REG_RDMA_MEM_GMC_SETTING_1),
+			 readl(rdma->regs + DISP_REG_RDMA_FIFO_CON));
+	}
 }
 
 void mtk_rdma_stop(struct device *dev)

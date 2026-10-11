@@ -162,6 +162,12 @@ OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 #define DISP_REG_OVL_HDR_ADDR(ovl, n)		((ovl)->data->addr + 0x20 * (n) + 0x04)
 #define DISP_REG_OVL_HDR_PITCH(ovl, n)		((ovl)->data->addr + 0x20 * (n) + 0x08)
 
+#define MT6589_ROUTE_OVL_MOUT_EN		0x024
+#define MT6589_ROUTE_COLOR_MOUT_EN		0x028
+#define MT6589_ROUTE_RDMA0_OUT_SEL		0x034
+#define MT6589_ROUTE_COLOR_SEL			0x04c
+#define MT6589_ROUTE_BLS_SEL			0x054
+
 #define GMC_THRESHOLD_BITS	16
 #define GMC_THRESHOLD_HIGH	((1 << GMC_THRESHOLD_BITS) / 4)
 #define GMC_THRESHOLD_LOW	((1 << GMC_THRESHOLD_BITS) / 8)
@@ -764,6 +770,31 @@ void mtk_ovl_start(struct device *dev)
 		 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
 		 readl(ovl->regs + DISP_REG_OVL_STA),
 		 cg, flow, fsm_state);
+
+	/*
+	 * Read the MT6589 crossbar configuration in process context. The OVL
+	 * active snapshot showed OUTMUX READY/VALID both clear while the layer
+	 * was active, so record whether the OVL -> COLOR -> BLS -> RDMA0 route
+	 * was actually selected before guessing at another block's state.
+	 */
+	if (ovl->cfg_regmap) {
+		u32 ovl_mout = ~0U, color_mout = ~0U, rdma0_sel = ~0U;
+		u32 color_sel = ~0U, bls_sel = ~0U;
+
+		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_OVL_MOUT_EN,
+			    &ovl_mout);
+		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_COLOR_MOUT_EN,
+			    &color_mout);
+		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_RDMA0_OUT_SEL,
+			    &rdma0_sel);
+		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_COLOR_SEL,
+			    &color_sel);
+		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_BLS_SEL,
+			    &bls_sel);
+		dev_info(dev,
+			 "MT6589 route: ovl_mout=%#x color_mout=%#x color_sel=%#x bls_sel=%#x rdma0_out=%#x\n",
+			 ovl_mout, color_mout, color_sel, bls_sel, rdma0_sel);
+	}
 
 	/*
 	 * The same three conditions the stock driver checks before it

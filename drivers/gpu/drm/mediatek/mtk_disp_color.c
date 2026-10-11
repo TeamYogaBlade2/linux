@@ -146,6 +146,15 @@ void mtk_color_start(struct device *dev)
 		color->data->init(color);
 
 	writel(0x1, color->regs + DISP_COLOR_START(color));
+	if (color->data->enable_main_bit29)
+		dev_info(dev,
+			 "MT6589 COLOR start: cfg_main=%#x start=%#x width=%#x height=%#x win_x=%#x r2y_en=%#x\n",
+			 readl(color->regs + DISP_COLOR_CFG_MAIN),
+			 readl(color->regs + DISP_COLOR_START(color)),
+			 readl(color->regs + DISP_COLOR_WIDTH(color)),
+			 readl(color->regs + DISP_COLOR_HEIGHT(color)),
+			 readl(color->regs + DISP_COLOR_WIN_X_MAIN),
+			 readl(color->regs + DISP_COLOR_R2Y_EN));
 }
 
 static int mtk_disp_color_bind(struct device *dev, struct device *master,

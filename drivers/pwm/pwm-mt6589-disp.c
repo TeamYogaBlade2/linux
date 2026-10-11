@@ -459,6 +459,10 @@ void mt6589_bls_ddp_start(struct device *dev)
 	mt6589_bls_update_en(bls,
 			     BLS_EN_PWM | BLS_EN_BLS | BLS_EN_HISTOGRAM,
 			     BLS_EN_PWM);
+	dev_info(dev,
+		 "MT6589 BLS start: en=%#x src_size=%#x setting=%#x\n",
+		 readl(bls->base + BLS_EN), readl(bls->base + BLS_SRC_SIZE),
+		 readl(bls->base + BLS_BLS_SETTING));
 }
 EXPORT_SYMBOL_GPL(mt6589_bls_ddp_start);
 
