@@ -274,15 +274,6 @@
 	regulator-max-microvolt = <1800000>;
 };
 
-/*
- * The board uses VEMC_1V8 as the 1.8 V signal rail.
- * Do not let MMC consumers change this rail to a card OCR voltage.
- */
-&mt6320_ldo_vemc_1v8 {
-	regulator-min-microvolt = <1800000>;
-	regulator-max-microvolt = <1800000>;
-};
-
 &usb0 {
 	status = "okay";
 	usb-role-switch;
