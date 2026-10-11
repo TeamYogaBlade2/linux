@@ -251,6 +251,15 @@ struct mtk_dsi_driver_data {
 	const u32 reg_cmdq_off;
 	const u32 reg_vm_cmd_off;
 	const u32 reg_shadow_dbg_off;
+	/*
+	 * Optional control bits in DSI_CON_CTRL.
+	 *
+	 * MT6589 calls register 0x10 DSI_COM_CTRL and implements only
+	 * DSI_RESET at bit 0. DSI_EN and DPHY_RESET are not defined
+	 * there, so leave these masks zero on MT6589.
+	 */
+	const u32 dsi_en_mask;
+	const u32 dphy_reset_mask;
 	bool has_shadow_ctl;
 	bool has_size_ctl;
 	bool cmdq_long_packet_ctl;
@@ -372,12 +381,18 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 
 static void mtk_dsi_enable(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_EN, DSI_EN);
+	u32 mask = dsi->driver_data->dsi_en_mask;
+
+	if (mask)
+		mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, mask);
 }
 
 static void mtk_dsi_disable(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_EN, 0);
+	u32 mask = dsi->driver_data->dsi_en_mask;
+
+	if (mask)
+		mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, 0);
 }
 
 static void mtk_dsi_reset_engine(struct mtk_dsi *dsi)
@@ -388,8 +403,13 @@ static void mtk_dsi_reset_engine(struct mtk_dsi *dsi)
 
 static void mtk_dsi_reset_dphy(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DPHY_RESET, DPHY_RESET);
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DPHY_RESET, 0);
+	u32 mask = dsi->driver_data->dphy_reset_mask;
+
+	if (!mask)
+		return;
+
+	mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, mask);
+	mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, 0);
 }
 
 static void mtk_dsi_clk_ulp_mode_enter(struct mtk_dsi *dsi)
@@ -1549,18 +1569,26 @@ static void mtk_dsi_remove(struct platform_device *pdev)
 static const struct mtk_dsi_driver_data mt8173_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
-	.reg_shadow_dbg_off = 0x190
+	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 };
 
 static const struct mtk_dsi_driver_data mt2701_dsi_driver_data = {
 	.reg_cmdq_off = 0x180,
 	.reg_vm_cmd_off = 0x130,
-	.reg_shadow_dbg_off = 0x190
+	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 };
 
 static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.reg_cmdq_off = 0x180,
 	.reg_vm_cmd_off = 0x130,
+	/*
+	 * DSI_COM_CTRL at 0x10 only implements DSI_RESET on MT6589.
+	 * Do not access the generic DSI_EN or DPHY_RESET bits here.
+	 */
 	.timcon2_no_da_hs_sync = true,
 	.has_mem_conti = true,
 	.has_lane_clk = true,
@@ -1570,6 +1598,8 @@ static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
 	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 };
@@ -1578,6 +1608,8 @@ static const struct mtk_dsi_driver_data mt8186_dsi_driver_data = {
 	.reg_cmdq_off = 0xd00,
 	.reg_vm_cmd_off = 0x200,
 	.reg_shadow_dbg_off = 0xc00,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 };
@@ -1586,6 +1618,8 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 	.reg_cmdq_off = 0xd00,
 	.reg_vm_cmd_off = 0x200,
 	.reg_shadow_dbg_off = 0xc00,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 	.cmdq_long_packet_ctl = true,
