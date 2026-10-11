@@ -344,6 +344,7 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	struct drm_encoder *encoder;
 	struct drm_connector_list_iter conn_iter;
 	struct drm_device *dev = mtk_crtc->base.dev;
+	struct mtk_drm_private *priv = dev->dev_private;
 	unsigned int width, height, vrefresh, bpc = MTK_MAX_BPC;
 	int ret;
 	int i;
@@ -462,9 +463,18 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 						  plane_state, NULL);
 	}
 
-	/* Start the engines only after the active source layers are ready. */
-	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
-		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i]);
+	/*
+	 * MT6589's OVL begins fetching as soon as it is enabled. Start the
+	 * sink first so DSI and RDMA0 are ready before OVL starts a frame;
+	 * otherwise OVL can report RDMA0_EOF_ABNORMAL during initial startup.
+	 */
+	if (priv->data->start_reverse) {
+		for (i = mtk_crtc->ddp_comp_nr; i > 0; i--)
+			mtk_ddp_comp_start(mtk_crtc->ddp_comp[i - 1]);
+	} else {
+		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
+			mtk_ddp_comp_start(mtk_crtc->ddp_comp[i]);
+	}
 
 	return 0;
 

@@ -249,6 +249,7 @@ static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {
  */
 static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
 	.shadow_register = true,
+	.start_reverse = true,
 	.mmsys_dev_num = 1,
 };
 

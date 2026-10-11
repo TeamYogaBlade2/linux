@@ -25,6 +25,19 @@
 			pinmux = <MT6589_GPIO137__FUNC_GPIO137>;
 		};
 	};
+
+	/* GPIO129 is the board's DISP_PWM output (function 1). */
+	disp_pwm_pins: disp-pwm-pins {
+		pin-disp-pwm {
+			pinmux = <MT6589_GPIO129__FUNC_DISP_PWM>;
+			bias-disable;
+		};
+	};
+};
+
+&bls {
+	pinctrl-names = "default";
+	pinctrl-0 = <&disp_pwm_pins>;
 };
 
 &dsi_out {

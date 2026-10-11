@@ -46,6 +46,7 @@ struct mtk_mmsys_driver_data {
 	unsigned int num_conn_routes;
 
 	bool shadow_register;
+	bool start_reverse;
 	unsigned int mmsys_id;
 	unsigned int mmsys_dev_num;
 
