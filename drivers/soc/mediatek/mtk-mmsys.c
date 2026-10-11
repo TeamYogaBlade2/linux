@@ -226,7 +226,10 @@ void mtk_mmsys_ddp_disconnect(struct device *dev,
 
 	for (i = 0; i < nroutes; i++)
 		if (cur == routes[i].from_comp && next == routes[i].to_comp)
-			mtk_mmsys_update_bits(mmsys, routes[i].addr, routes[i].mask, 0, NULL);
+			if (!(routes[i].flags &
+			      MTK_MMSYS_ROUTE_F_KEEP_ON_DISCONNECT))
+				mtk_mmsys_update_bits(mmsys, routes[i].addr,
+						      routes[i].mask, 0, NULL);
 }
 EXPORT_SYMBOL_GPL(mtk_mmsys_ddp_disconnect);
 
