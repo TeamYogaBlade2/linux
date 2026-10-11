@@ -1182,9 +1182,9 @@
 			reg = <0x10200100 0x1c>;
 		};
 
-		smi_common: smi@10202000 {
+		smi_common: smi@1000e000 {
 			compatible = "mediatek,mt6589-smi-common";
-			reg = <0x10202000 0x1000>, <0x1000e000 0x1000>;
+			reg = <0x1000e000 0x1000>, <0x10202000 0x1000>;
 			clocks = <&infracfg CLK_INFRA_SMI>,
 				 <&infracfg CLK_INFRA_SMI>;
 			clock-names = "apb", "smi";
