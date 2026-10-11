@@ -158,13 +158,14 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 				 "WCIR=%#010x WHLPCR=%#010x iteration=%u\n",
 				 wcir, val, tries);
 
-		if (!(tries++ & 0xff)) {
+		if (tries && !(tries & 0xff)) {
 			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
 					     MT6628_FW_OWN_REQ_CLR);
 			if (ret)
 				return ret;
 		}
 
+		tries++;
 		usleep_range(900, 1100);
 	}
 
