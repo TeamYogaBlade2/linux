@@ -176,31 +176,128 @@ out_unlock:
 int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 {
 	struct {
+		struct mt6628_wifi_cmd_hdr hdr;
 		u8 mac[ETH_ALEN];
 		u8 native_80211;
 		u8 reserved;
 		__le16 rx_checksum;
 		__le16 tx_checksum;
 	} __packed request = {}, response;
-	size_t response_len;
+	struct mt6628_wifi_event_hdr *event;
+	u8 event_buf[MT6628_WIFI_EVENT_HEADER_LEN + sizeof(response)];
+	unsigned long timeout;
+	u32 rx_len_reg = 0;
+	size_t rx_len = 0;
 	int ret;
 
-	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_BASIC_CONFIG, 0,
-				   &request, sizeof(request),
-				   &response, sizeof(response),
-				   &response_len, MT6628_EVENT_ID_BASIC_CONFIG,
-				   MT6628_CMD_TIMEOUT_MS);
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+
+	mutex_lock(&wl->cmd_mutex);
+
+	ret = mt6628_cmd_acquire_tc(wl);
 	if (ret)
-		return ret;
-	if (response_len != sizeof(response) ||
-	    is_multicast_ether_addr(response.mac) ||
-	    is_zero_ether_addr(response.mac))
-		return -EPROTO;
+		goto out_unlock;
+
+	/*
+	 * Match the downstream BASIC_CONFIG query format and sequence:
+	 * send the complete command, then poll WRPLR and read WRDR1.
+	 */
+	request.hdr.tx_byte_count_user_priority =
+		cpu_to_le16(sizeof(request));
+	request.hdr.resource_pkt_type_csflags =
+		(MT6628_TX_TC_CMD << MT6628_HIF_TX_RESOURCE_OFFSET) |
+		(MT6628_HIF_TX_PKT_TYPE_CMD <<
+		 MT6628_HIF_TX_PACKET_TYPE_OFFSET);
+	request.hdr.cid = MT6628_CMD_ID_BASIC_CONFIG;
+	request.hdr.set_query = 0;
+	request.hdr.seq_num = ++wl->cmd_seq_num;
+
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		goto out_release_tc;
+
+	sdio_claim_host(wl->func);
+	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, &request,
+			   mt6628_sdio_xfer_len(sizeof(request)));
+	if (!ret) {
+		timeout = jiffies + msecs_to_jiffies(MT6628_CMD_TIMEOUT_MS);
+
+		do {
+			rx_len_reg = sdio_readl(wl->func,
+						MT6628_MCR_WRPLR, &ret);
+			if (ret)
+				break;
+
+			rx_len = rx_len_reg >> 16;
+			if (rx_len)
+				break;
+
+			usleep_range(50, 100);
+		} while (time_before(jiffies, timeout));
+
+		if (!ret && !rx_len) {
+			int diag_ret;
+			u32 whisr;
+
+			whisr = sdio_readl(wl->func, MT6628_MCR_WHISR,
+					   &diag_ret);
+			dev_err(&wl->func->dev,
+				"BASIC_CONFIG poll timeout: "
+				"WRPLR=%#010x WHISR=%#010x read_err=%d\n",
+				rx_len_reg, whisr, diag_ret);
+			ret = -ETIMEDOUT;
+		}
+
+		if (!ret && (rx_len < sizeof(*event) ||
+			     rx_len > sizeof(event_buf)))
+			ret = -EMSGSIZE;
+
+		if (!ret)
+			ret = sdio_readsb(wl->func, event_buf,
+					  MT6628_MCR_WRDR1, rx_len);
+	}
+	sdio_release_host(wl->func);
+	if (ret)
+		goto out_release_tc;
+
+	event = (struct mt6628_wifi_event_hdr *)event_buf;
+	if (le16_to_cpu(event->packet_len) != rx_len ||
+	    (le16_to_cpu(event->packet_type) & GENMASK(1, 0)) != 1 ||
+	    event->eid != MT6628_EVENT_ID_BASIC_CONFIG ||
+	    event->seq_num != request.hdr.seq_num) {
+		ret = -EPROTO;
+		goto out_release_tc;
+	}
+
+	if (rx_len - sizeof(*event) != sizeof(response)) {
+		ret = -EMSGSIZE;
+		goto out_release_tc;
+	}
+
+	memcpy(&response, event_buf + sizeof(*event), sizeof(response));
+	if (is_multicast_ether_addr(response.mac) ||
+	    is_zero_ether_addr(response.mac)) {
+		ret = -EPROTO;
+		goto out_release_tc;
+	}
 
 	eth_hw_addr_set(wl->netdev, response.mac);
 	if (wl->wiphy)
 		ether_addr_copy(wl->wiphy->perm_addr, response.mac);
-	return 0;
+	ret = 0;
+
+	/*
+	 * Keep the command TX resource reserved until TX_DONE is processed
+	 * after runtime interrupts are enabled.
+	 */
+	goto out_unlock;
+
+out_release_tc:
+	mt6628_cmd_release_tc(wl);
+out_unlock:
+	mutex_unlock(&wl->cmd_mutex);
+	return ret;
 }
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_send_cmd);

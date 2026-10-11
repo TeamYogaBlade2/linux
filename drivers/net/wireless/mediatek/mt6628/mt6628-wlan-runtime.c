@@ -974,6 +974,22 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		goto err_netdev;
 	wl->netdev = ndev;
 
+	/*
+	 * Query BASIC_CONFIG by polling RX1 first, matching the downstream
+	 * nicRxWaitResponse() path. Enable asynchronous runtime IRQ handling
+	 * only after this initial command has completed.
+	 */
+	wl->runtime_started = true;
+	ret = mt6628_wlan_query_basic_config(wl);
+	if (ret) {
+		dev_err(&wl->func->dev,
+			"failed to read firmware basic configuration: %d\n",
+			ret);
+		wl->runtime_started = false;
+		wl->fw_running = false;
+		goto err_unregister;
+	}
+
 	sdio_claim_host(wl->func);
 	ret = sdio_claim_irq(wl->func, mt6628_runtime_irq);
 	if (!ret)
@@ -986,30 +1002,21 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 			ret = mt6628_runtime_write32(wl, MT6628_MCR_WHCR,
 						     whcr & ~MT6628_WHCR_W_INT_CLR_CTRL);
 	}
-	if (!ret) {
-		wl->runtime_started = true;
+	if (!ret)
 		ret = mt6628_runtime_write32(wl, MT6628_MCR_WHIER,
 					     MT6628_WHIER_RUNTIME);
-	}
 	if (!ret)
 		ret = mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
 					     MT6628_INT_EN_SET);
 	if (ret && wl->irq_claimed) {
-		wl->runtime_started = false;
 		sdio_release_irq(wl->func);
 		wl->irq_claimed = false;
 	}
 	sdio_release_host(wl->func);
-	if (ret)
-		goto err_unregister;
-
-	ret = mt6628_wlan_query_basic_config(wl);
 	if (ret) {
-		dev_err(&wl->func->dev,
-			"failed to read firmware basic configuration: %d\n",
-			ret);
-		mt6628_wlan_runtime_stop(wl);
-		return ret;
+		wl->runtime_started = false;
+		wl->fw_running = false;
+		goto err_unregister;
 	}
 
 	return 0;
