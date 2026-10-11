@@ -12,16 +12,18 @@
  * This driver brackets the card with the sequence the chip's vendor DFT
  * (Design For Test) flow uses, which is where the timing below comes from.
  *
- * The chip is released out of reset by taking its reset line low while the
- * supply enable ("pmu") line is asserted low, then raising reset.  While held
- * in reset the chip samples its boot-mode strap pins, so they are moved to
- * their test/"strap" pinmux for the duration of the sequence and put back to
- * the board default afterwards:
+ * The MMC core invokes pre_power_on() before enabling the host's card
+ * supply and post_power_on() after it has been enabled. Keep MT6628 powered
+ * off and held in reset while the host brings the supply up; enable PMU_EN
+ * and release RESET only afterwards.
  *
- *	strap pinmux	-> pmu low  -> rst low  -> DFT_OFF_STABLE_TIME
- *			-> pmu high -> DFT_ON_STABLE_TIME
- *			-> rst high -> DFT_RST_STABLE_TIME
- *			-> restore default pinmux
+ * This driver controls PMU_EN and RESET only. It does not switch any
+ * additional boot-strap pinmux states.
+ *
+ *      pmu low -> rst low -> DFT_OFF_STABLE_TIME
+ *              -> host enables VMMC
+ *              -> pmu high -> DFT_ON_STABLE_TIME
+ *              -> rst high -> DFT_RST_STABLE_TIME
  *
  * The three delays are named after the downstream DFT_OFF_STABLE_TIME,
  * DFT_ON_STABLE_TIME and DFT_RST_STABLE_TIME constants that specify how long
@@ -75,10 +77,18 @@ static void mmc_pwrseq_mt6628_pre_power_on(struct mmc_host *host)
 	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
 	msleep(MT6628_DFT_OFF_STABLE_TIME);
 
-	/* Bring the supply up, then release reset. */
+}
+
+static void mmc_pwrseq_mt6628_post_power_on(struct mmc_host *host)
+{
+	struct mmc_pwrseq_mt6628 *pwrseq =
+		container_of(host->pwrseq, struct mmc_pwrseq_mt6628, pwrseq);
+
+	/* VMMC is enabled by the host before this callback is invoked. */
 	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 1);
 	msleep(MT6628_DFT_ON_STABLE_TIME);
 
+	/* Release active-low RESET only after PMU_EN has settled. */
 	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
 	msleep(MT6628_DFT_RST_STABLE_TIME);
 }
@@ -96,6 +106,7 @@ static void mmc_pwrseq_mt6628_power_off(struct mmc_host *host)
 
 static const struct mmc_pwrseq_ops mmc_pwrseq_mt6628_ops = {
 	.pre_power_on = mmc_pwrseq_mt6628_pre_power_on,
+	.post_power_on = mmc_pwrseq_mt6628_post_power_on,
 	.power_off = mmc_pwrseq_mt6628_power_off,
 };
 
