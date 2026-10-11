@@ -388,6 +388,15 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 		goto err_mutex_unprepare;
 	}
 
+	/*
+	 * The downstream MT6589 path stops OVL before programming
+	 * its ROI and layers. Linux may be taking over an OVL that
+	 * LK left running, so stop it with its clocks enabled before
+	 * rebuilding the display path.
+	 */
+	if (mtk_crtc->ddp_comp_nr &&
+	    mtk_crtc->ddp_comp[0]->id == DDP_COMPONENT_OVL0)
+		mtk_ddp_comp_stop(mtk_crtc->ddp_comp[0]);
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr - 1; i++) {
 		if (!mtk_ddp_comp_connect(mtk_crtc->ddp_comp[i], mtk_crtc->mmsys_dev,

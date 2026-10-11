@@ -751,6 +751,16 @@ void mtk_ovl_stop(struct device *dev)
 	 */
 	writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_INTEN);
 	writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_EN);
+
+	/*
+	 * MT6589's OVL_INTSTA is write-zero-to-clear. The downstream
+	 * OVLStop() clears it when handing the engine back to setup;
+	 * do the same when this SoC's documented interrupt map is
+	 * available. Keep the generic path untouched on other SoCs.
+	 */
+	if (ovl->data->int_all_mask)
+		writel_relaxed(0x0, ovl->regs + DISP_REG_OVL_INTSTA);
+
 	if (ovl->data->smi_id_en) {
 		unsigned int reg;
 
