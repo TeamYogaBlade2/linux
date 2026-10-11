@@ -1017,6 +1017,20 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 	u32 val;
 	bool timing_changed;
 
+	/*
+	 * Diagnose unexpected clock increases while bringing up an SDIO card.
+	 * The stack trace identifies the caller that requested the transition.
+	 */
+	if (hz > 1000000 && host->mclk <= 400000) {
+		dev_warn(host->dev,
+			 "clock transition: old=%u requested=%u timing=%u "
+			 "ios_clock=%u actual=%u width=%d signal=%d power=%d\n",
+			 host->mclk, hz, timing, mmc->ios.clock,
+			 mmc->actual_clock, mmc->ios.bus_width,
+			 mmc->ios.signal_voltage, mmc->ios.power_mode);
+		dump_stack();
+	}
+
 	if (!hz) {
 		dev_dbg(host->dev, "set mclk to 0\n");
 		host->mclk = 0;
@@ -1396,6 +1410,20 @@ static bool msdc_cmd_done(struct msdc_host *host, int events,
 	}
 
 	if (!sbc_error && !(events & MSDC_INT_CMDRDY)) {
+		u32 err_cfg = 0, err_iocon = 0, err_ps = 0;
+
+		/*
+		 * Preserve the controller state before msdc_reset_hw().
+		 * Reading these registers after the reset only reports the
+		 * reset state, not the state that produced the error.
+		 */
+		if (cmd->opcode == SD_IO_RW_DIRECT &&
+		    (events & (MSDC_INT_RSPCRCERR | MSDC_INT_CMDTMO))) {
+			err_cfg = readl(host->base + MSDC_CFG);
+			err_iocon = readl(host->base + MSDC_IOCON);
+			err_ps = readl(host->base + MSDC_PS);
+		}
+
 		if ((events & MSDC_INT_CMDTMO && !host->hs400_tuning) ||
 		    (!mmc_op_tuning(cmd->opcode) && !host->hs400_tuning))
 			/*
@@ -1422,10 +1450,7 @@ static bool msdc_cmd_done(struct msdc_host *host, int events,
 				"rsp=%08x CFG=%08x IOCON=%08x PS=%08x "
 				"clock=%u width=%d signal=%d power=%d\n",
 				cmd->arg, events,
-				readl(host->base + SDC_RESP0),
-				readl(host->base + MSDC_CFG),
-				readl(host->base + MSDC_IOCON),
-				readl(host->base + MSDC_PS),
+				rsp[0], err_cfg, err_iocon, err_ps,
 				mmc->actual_clock,
 				mmc->ios.bus_width,
 				mmc->ios.signal_voltage,
