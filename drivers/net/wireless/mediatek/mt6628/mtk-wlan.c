@@ -88,7 +88,7 @@ static int mt6628_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 	int ret;
 
 	sdio_claim_host(wl->func);
-	ret = sdio_memcpy_toio(wl->func, reg, &val, sizeof(val));
+	sdio_writel(wl->func, val, reg, &ret);
 	sdio_release_host(wl->func);
 
 	return ret;
@@ -132,6 +132,7 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		 !!(wcir & MT6628_WCIR_WLAN_READY));
 
 	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_INT_EN_CLR |
 			     MT6628_FW_OWN_REQ_CLR);
 	if (ret)
 		return ret;
@@ -599,8 +600,6 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	/* enable the SDIO function; MMC core does not do it for us */
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);
-	if (!ret)
-		ret = sdio_set_block_size(func, 512);
 	sdio_release_host(func);
 	if (ret)
 		goto err_disable;
@@ -651,6 +650,12 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	if (ret)
 		goto err_disable;
 	wl->driver_owned = true;
+
+	sdio_claim_host(func);
+	ret = sdio_set_block_size(func, 512);
+	sdio_release_host(func);
+	if (ret)
+		goto err_disable;
 
 	ret = mt6628_download_firmware(wl);
 	if (ret)
