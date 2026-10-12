@@ -399,6 +399,20 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	    mtk_crtc->ddp_comp[0]->id == DDP_COMPONENT_OVL0)
 		mtk_ddp_comp_stop(mtk_crtc->ddp_comp[0]);
 
+	/*
+	 * LK may leave OVL -> BLS enabled in the crossbar. MOUT_EN bits are
+	 * independent output gates, so selecting the OVL -> COLOR path below
+	 * does not clear this bypass. On the MT6589 main path BLS consumes
+	 * COLOR, and the stale unselected OVL output must be disabled during
+	 * handoff rather than carried over from the bootloader state.
+	 */
+	if (mtk_crtc->ddp_comp_nr > 1 &&
+	    mtk_crtc->ddp_comp[0]->id == DDP_COMPONENT_OVL0 &&
+	    mtk_crtc->ddp_comp[1]->id == DDP_COMPONENT_COLOR0)
+		mtk_mmsys_ddp_disconnect(mtk_crtc->mmsys_dev,
+					DDP_COMPONENT_OVL0,
+					DDP_COMPONENT_BLS);
+
 	for (i = 0; i < mtk_crtc->ddp_comp_nr - 1; i++) {
 		if (!mtk_ddp_comp_connect(mtk_crtc->ddp_comp[i], mtk_crtc->mmsys_dev,
 					  mtk_crtc->ddp_comp[i + 1]->id))

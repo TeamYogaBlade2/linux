@@ -1030,7 +1030,7 @@
 				port@0 {
 					reg = <0>;
 					bls_in: endpoint {
-						remote-endpoint = <&ovl0_out>;
+						remote-endpoint = <&color_out>;
 					};
 				};
 
@@ -1050,6 +1050,24 @@
 			clocks = <&dispsys CLK_DISP0_COLOR>;
 			resets = <&dispsys MT6589_DISP_COLOR_RST>;
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					color_in: endpoint {
+						remote-endpoint = <&ovl0_out>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					color_out: endpoint {
+						remote-endpoint = <&bls_in>;
+					};
+				};
+			};
 		};
 
 		tdshp: tdshp@1400b000 {
@@ -1470,7 +1488,7 @@
 				port@1 {
 					reg = <1>;
 					ovl0_out: endpoint {
-						remote-endpoint = <&bls_in>;
+						remote-endpoint = <&color_in>;
 					};
 				};
 			};
