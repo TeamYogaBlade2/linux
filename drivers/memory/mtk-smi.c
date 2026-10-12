@@ -208,6 +208,7 @@ static const struct component_ops mtk_smi_larb_component_ops = {
 static int mtk_smi_larb_config_mmu_ports_gen0(struct device *dev)
 {
 	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
 	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
 	int i, m4u_port_id, larb_port_num;
 	u32 reg_val;
