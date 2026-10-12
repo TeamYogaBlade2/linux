@@ -936,12 +936,12 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
 		 * This is the one client that cannot work: its port lives in a
 		 * LARB the M4U did not pick up, so there is nothing to link
 		 * against and nothing to program the port through.  Refusing
-		 * here keeps the promise the probe loop now makes by skipping
-		 * absent LARBs - every other client of this M4U still works.
+		 * this client must not prevent the M4U from serving clients
+		 * whose LARBs are available.
 		 */
 		dev_err(dev, "iommu port %d needs larb %d, which is unavailable\n",
 			fwspec->ids[0], larbid);
-		return ERR_PTR(-EINVAL);
+		return ERR_PTR(-ENODEV);
 	}
 
 	/*
@@ -1175,6 +1175,8 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	void				*protect;
 	int				larb_nr, ret, i;
 	bool				larb_defer = false;
+	bool				display_larb_defer = false;
+	bool				display_larb_enabled = false;
 
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
@@ -1270,22 +1272,31 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 			continue;
 		}
 
+		/*
+		 * MT6589's display pipeline uses LARB2. Unlike an unrelated
+		 * unavailable LARB, missing LARB2 means the display IOMMU
+		 * clients cannot work, so do not register a partial M4U yet.
+		 */
+		if (soc->has_global_base && i == 2)
+			display_larb_enabled = true;
+
 		plarbdev = of_find_device_by_node(larbnode);
 		if (!plarbdev) {
 			/*
-			 * A LARB the M4U lists is not a prerequisite of the
-			 * M4U.  Each one arbitrates one bus segment, and the
-			 * M4U only programs the SMI ports of the segments a
-			 * client actually names, so a client whose port lands
-			 * in an absent LARB is the one that cannot work - not
-			 * every other client of the same M4U.  This is the
-			 * same treatment a node marked status = "disabled" gets
-			 * just above, and it is what lets the display path
-			 * (larb2) come up on a board where larb0 sits behind a
-			 * power domain that will not switch on.
+			 * A missing non-display LARB only prevents its own
+			 * clients from working. LARB2 is required by the MT6589
+			 * display path, so wait for its platform device.
 			 */
-			dev_warn(dev, "larb %d has no platform device, skipping\n",
-				 i);
+			if (soc->has_global_base && i == 2) {
+				larb_defer = true;
+				display_larb_defer = true;
+				dev_dbg(dev,
+					"display LARB2 has no platform device yet\n");
+			} else {
+				dev_warn(dev,
+					 "larb %d has no platform device, skipping\n",
+					 i);
+			}
 			of_node_put(larbnode);
 			continue;
 		}
@@ -1313,9 +1324,45 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 		}
 
 		larb_defer = true;
+		if (soc->has_global_base && i == 2)
+			display_larb_defer = true;
 		dev_dbg(dev, "larb %d has no driver, deferring\n", i);
 		put_device(&plarbdev->dev);
 		of_node_put(larbnode);
+	}
+
+	/*
+	 * Check readiness before iommu_device_register(). That function
+	 * probes existing bus devices, and one of them may refer to an
+	 * unavailable LARB before we can reach the no-match check below.
+	 */
+	if (display_larb_enabled && !data->larb_imu[2].dev) {
+		if (display_larb_defer) {
+			dev_dbg(dev,
+				"display LARB2 is not ready yet, deferring M4U probe\n");
+			ret = -EPROBE_DEFER;
+		} else {
+			dev_err(dev,
+				"display LARB2 is required but unavailable\n");
+			ret = -ENODEV;
+		}
+		goto out_put_larbs;
+	}
+
+	/*
+	 * Do not register an M4U with no usable LARB components. In
+	 * particular, defer while the LARB drivers are still probing.
+	 */
+	if (!match) {
+		if (larb_defer) {
+			dev_dbg(dev, "LARBs are not ready yet, deferring IOMMU probe\n");
+			ret = -EPROBE_DEFER;
+		} else {
+			dev_err(dev,
+				"no usable LARB: every listed one is unavailable, nothing to aggregate\n");
+			ret = -ENODEV;
+		}
+		goto out_put_larbs;
 	}
 
 	platform_set_drvdata(pdev, data);
@@ -1328,31 +1375,6 @@ static int mtk_iommu_v1_probe(struct platform_device *pdev)
 	ret = iommu_device_register(&data->iommu, &mtk_iommu_v1_ops, dev);
 	if (ret)
 		goto out_sysfs_remove;
-
-	/*
-	 * An M4U with no usable LARB has nothing to aggregate, and
-	 * component_master_add_with_match() dereferences the match it is
-	 * handed without checking it - component_match_realloc() reads
-	 * match->alloc on entry - so passing the NULL an empty match list
-	 * leaves behind is a NULL dereference, not a tolerated case.
-	 *
-	 * That is reachable: the loop above skips a LARB that has no platform
-	 * device or no driver bound, and on this board every listed LARB sits
-	 * behind a power domain that will not switch on, so all of them can be
-	 * skipped.  Refuse the probe instead, which is also the truth - there is
-	 * nothing here that could translate an address.
-	 */
-	if (!match) {
-		if (larb_defer) {
-			dev_dbg(dev, "LARBs are not ready yet, deferring IOMMU probe\n");
-			ret = -EPROBE_DEFER;
-		} else {
-			dev_err(dev,
-				"no usable LARB: every listed one is unavailable, nothing to aggregate\n");
-			ret = -ENODEV;
-		}
-		goto out_dev_unreg;
-	}
 
 	ret = component_master_add_with_match(dev, &mtk_iommu_v1_com_ops, match);
 	if (ret)
