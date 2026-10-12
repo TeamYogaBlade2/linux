@@ -1275,8 +1275,12 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		return -EINVAL;
 	if (sme->auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM &&
 	    sme->auth_type != NL80211_AUTHTYPE_SHARED_KEY &&
-	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC)
+	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC) {
+		dev_warn(&wl->func->dev,
+			 "connect rejected: unsupported auth_type=%u\n",
+			 sme->auth_type);
 		return -EOPNOTSUPP;
+	}
 
 	secure = sme->privacy || sme->crypto.wpa_versions ||
 		sme->crypto.cipher_group ||
@@ -1291,11 +1295,30 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		if (!conn_key)
 			return -ENOMEM;
 	} else if (secure) {
-		if (!mt6628_connect_is_wpa_psk(sme, &auth_mode, &enc_status))
+		if (!mt6628_connect_is_wpa_psk(sme, &auth_mode, &enc_status)) {
+			dev_warn(&wl->func->dev,
+				 "connect rejected: unsupported WPA params: "
+				 "versions=%#x group=%#x pairwise_count=%u "
+				 "pairwise0=%#x akm_count=%u akm0=%#x mfp=%u\n",
+				 sme->crypto.wpa_versions,
+				 sme->crypto.cipher_group,
+				 sme->crypto.n_ciphers_pairwise,
+				 sme->crypto.n_ciphers_pairwise ?
+				 sme->crypto.ciphers_pairwise[0] : 0,
+				 sme->crypto.n_akm_suites,
+				 sme->crypto.n_akm_suites ?
+				 sme->crypto.akm_suites[0] : 0,
+				 sme->mfp);
 			return -EOPNOTSUPP;
+		}
 	} else if (sme->mfp != NL80211_MFP_NO ||
-		   sme->key_len || sme->key)
+		   sme->key_len || sme->key) {
+		dev_warn(&wl->func->dev,
+			 "connect rejected: unsupported open/WEP params: "
+			 "secure=%u mfp=%u key_len=%u key_present=%u\n",
+			 secure, sme->mfp, sme->key_len, !!sme->key);
 		return -EOPNOTSUPP;
+	}
 
 	privacy = secure ? IEEE80211_PRIVACY_ON : IEEE80211_PRIVACY_OFF;
 
