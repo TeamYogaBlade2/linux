@@ -1179,6 +1179,15 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 		}
 		ret = wl->mgmt_tx_status;
 		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+		if (!timeout && ret == -ETIMEDOUT)
+			dev_warn(&wl->func->dev,
+				 "management TX timed out: packet_seq=%u sta_rec=%u need_ack=%u\n",
+				 (unsigned int)packet_seq, (unsigned int)wl->sta_rec_idx,
+				 (unsigned int)need_ack);
+		else if (ret)
+			dev_warn(&wl->func->dev,
+				 "management TX failed: packet_seq=%u status=%d need_ack=%u\n",
+				 (unsigned int)packet_seq, ret, (unsigned int)need_ack);
 
 		/*
 		 * Do not restore the TC4 resource here.  A timed-out frame

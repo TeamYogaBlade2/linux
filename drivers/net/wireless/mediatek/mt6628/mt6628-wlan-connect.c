@@ -1262,6 +1262,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	enum ieee80211_privacy privacy;
 	bool secure;
 	bool wep;
+	const char *failure_stage = "validate connect request";
 	u8 auth_mode = MT6628_AUTH_MODE_OPEN;
 	u8 enc_status = MT6628_ENCRYPTION_DISABLED;
 	u8 *conn_key = NULL;
@@ -1333,9 +1334,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	wl->conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
 					 sme->ssid, sme->ssid_len,
-					 IEEE80211_BSS_TYPE_ESS,
-					 privacy);
+						 IEEE80211_BSS_TYPE_ESS,
+						 privacy);
 	if (!wl->conn_bss) {
+		dev_warn(&wl->func->dev,
+			 "connect target BSS not in cfg80211 cache: channel=%u privacy=%u\n",
+			 channel ? channel->hw_value : 0,
+			 (unsigned int)privacy);
 		kfree(conn_key);
 		return -ENOENT;
 	}
@@ -1362,18 +1367,21 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	wl->conn_state = MT6628_CONN_AUTH;
 	mutex_unlock(&wl->cfg_mutex);
 
+	failure_stage = "build association IEs";
 	ret = mt6628_build_assoc_ies(wl, sme);
 	if (ret)
 		goto err_reset;
 
 	mt6628_cfg80211_abort_scan(wl);
 
+	failure_stage = "request channel privilege";
 	ret = mt6628_wlan_request_channel(wl, wl->conn_bss->channel,
 					  wl->conn_bssid);
 	if (ret)
 		goto err_reset;
 
 	wl->sta_rec_idx = 0;
+	failure_stage = "update STA-REC state 1";
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_1, 0,
 					    wl->conn_bssid);
 	if (ret) {
@@ -1381,11 +1389,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		goto err_reset;
 	}
 
+	failure_stage = "set BSS info";
 	ret = mt6628_wlan_set_bss_info(wl, wl->conn_channel, wl->conn_ssid,
 					wl->conn_ssid_len, wl->conn_bssid, false);
 	if (ret)
 		goto err_reset;
 
+	failure_stage = "activate BSS";
 	ret = mt6628_wlan_activate_bss(wl, true);
 	if (ret)
 		goto err_reset;
@@ -1399,12 +1409,14 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			.key_len = wl->conn_key_len,
 		};
 
+		failure_stage = "install WEP key";
 		ret = mt6628_wlan_add_key(wl, wl->conn_key_idx, false, true,
 					  NULL, &key);
 		if (ret)
 			goto err_reset;
 	}
 
+	failure_stage = "send authentication frame / wait for TX_DONE";
 	ret = mt6628_send_auth(wl);
 	if (ret)
 		goto err_reset;
@@ -1421,6 +1433,8 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	return 0;
 
 err_reset:
+	dev_err(&wl->func->dev, "connect setup failed at %s: %d\n",
+		failure_stage, ret);
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
 	mt6628_conn_fw_cleanup(wl);
 	mutex_lock(&wl->cfg_mutex);
