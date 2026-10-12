@@ -15,6 +15,7 @@
 #define MTK_MIN_BPC	3
 
 void mtk_crtc_commit(struct drm_crtc *crtc);
+void mtk_crtc_ddp_start_pending(struct drm_crtc *crtc);
 int mtk_crtc_create(struct drm_device *drm_dev, const unsigned int *path,
 		    unsigned int path_len, int priv_data_index,
 		    const struct mtk_drm_route *conn_routes,

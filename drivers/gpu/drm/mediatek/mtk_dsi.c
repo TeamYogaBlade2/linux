@@ -30,6 +30,7 @@
 
 #include "mtk_ddp_comp.h"
 #include "mtk_disp_drv.h"
+#include "mtk_crtc.h"
 #include "mtk_drm_drv.h"
 
 /*
@@ -1164,6 +1165,13 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 	if (dsi->refcount == 0)
 		return;
 
+	/*
+	 * MT6589 defers the complete DDP start until this point: the panel
+	 * bridge has already run atomic_pre_enable, so its supply and enable
+	 * GPIO are ready before DSI starts transmitting and OVL starts fetching.
+	 * This is a no-op on SoCs whose CRTC start sequence was not deferred.
+	 */
+	mtk_crtc_ddp_start_pending(dsi->encoder.crtc);
 	mtk_output_dsi_enable(dsi);
 	/*
 	 * On MT6589, the CRTC's DDP start hook now starts DSI before OVL.

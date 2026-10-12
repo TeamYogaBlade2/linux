@@ -41,6 +41,7 @@
 struct mtk_crtc {
 	struct drm_crtc			base;
 	bool				enabled;
+	bool				ddp_start_pending;
 
 	bool				pending_needs_vblank;
 	struct drm_pending_vblank_event	*event;
@@ -483,8 +484,13 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	 * otherwise OVL can report RDMA0_EOF_ABNORMAL during initial startup.
 	 */
 	if (priv->data->start_reverse) {
-		for (i = mtk_crtc->ddp_comp_nr; i > 0; i--)
-			mtk_ddp_comp_start(mtk_crtc->ddp_comp[i - 1]);
+		/*
+		 * MT6589 starts DSI video before OVL to avoid backpressure, but
+		 * the CRTC enable callback runs before bridge atomic_pre_enable.
+		 * Defer the whole start sequence until the DSI bridge is enabled,
+		 * after the panel bridge has powered and prepared the panel.
+		 */
+		mtk_crtc->ddp_start_pending = true;
 	} else {
 		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
 			mtk_ddp_comp_start(mtk_crtc->ddp_comp[i]);
@@ -499,12 +505,32 @@ err_pm_runtime_put:
 	return ret;
 }
 
+void mtk_crtc_ddp_start_pending(struct drm_crtc *crtc)
+{
+	struct mtk_crtc *mtk_crtc;
+	int i;
+
+	if (!crtc)
+		return;
+
+	mtk_crtc = to_mtk_crtc(crtc);
+	if (!mtk_crtc->ddp_start_pending)
+		return;
+
+	/* Clear first so a re-entrant enable cannot start the path twice. */
+	mtk_crtc->ddp_start_pending = false;
+	for (i = mtk_crtc->ddp_comp_nr; i > 0; i--)
+		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i - 1]);
+}
+
 static void mtk_crtc_ddp_hw_fini(struct mtk_crtc *mtk_crtc)
 {
 	struct drm_device *drm = mtk_crtc->base.dev;
 	struct drm_crtc *crtc = &mtk_crtc->base;
 	unsigned long flags;
 	int i;
+
+	mtk_crtc->ddp_start_pending = false;
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
 		mtk_ddp_comp_stop(mtk_crtc->ddp_comp[i]);
