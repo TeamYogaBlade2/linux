@@ -8,6 +8,7 @@
 #include <linux/etherdevice.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/printk.h>
 #include <linux/slab.h>
 
 #include "mtk-wlan.h"
@@ -185,9 +186,12 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 	} __packed request = {}, response;
 	struct mt6628_wifi_event_hdr *event;
 	u8 event_buf[MT6628_WIFI_EVENT_HEADER_LEN + sizeof(response)];
+	u8 rx0_diag[64] = {};
 	unsigned long timeout;
 	u32 rx_len_reg = 0;
 	size_t rx_len = 0;
+	size_t rx0_diag_len;
+	u16 rx0_len;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -237,15 +241,50 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		} while (time_before(jiffies, timeout));
 
 		if (!ret && !rx_len) {
-			int diag_ret;
 			u32 whisr;
+			int diag_ret;
+			int packet_ret;
 
 			whisr = sdio_readl(wl->func, MT6628_MCR_WHISR,
 					   &diag_ret);
 			dev_err(&wl->func->dev,
 				"BASIC_CONFIG poll timeout: "
-				"WRPLR=%#010x WHISR=%#010x read_err=%d\n",
-				rx_len_reg, whisr, diag_ret);
+				"seq=%u WRPLR=%#010x WHISR=%#010x "
+				"read_err=%d\n",
+				request.hdr.seq_num, rx_len_reg, whisr,
+				diag_ret);
+
+			/*
+			 * A 12-byte packet on RX0 may be a normal runtime
+			 * CMD_RESULT event. Do not assume that from its length
+			 * alone: capture the complete RX packet, including the
+			 * hardware-appended dword, before decoding its header.
+			 * This probe path is already failing, so consuming the
+			 * pending RX0 packet does not discard a usable response.
+			 */
+			rx0_len = rx_len_reg & 0xffff;
+			if (rx0_len >= sizeof(*event) &&
+			    rx0_len <= sizeof(rx0_diag) - 4) {
+				rx0_diag_len = ALIGN((size_t)rx0_len, 4) + 4;
+				packet_ret = sdio_readsb(wl->func, rx0_diag,
+							 MT6628_MCR_WRDR0,
+							 rx0_diag_len);
+				if (packet_ret) {
+					dev_err(&wl->func->dev,
+						"failed to capture RX0 packet: %d\n",
+						packet_ret);
+				} else {
+					dev_err(&wl->func->dev,
+						"BASIC_CONFIG timeout: "
+						"RX0 packet length=%u\n",
+						rx0_len);
+					print_hex_dump(KERN_ERR,
+						       "mtk_wlan RX0: ",
+						       DUMP_PREFIX_OFFSET, 16, 1,
+						       rx0_diag, rx0_len, false);
+				}
+			}
+
 			ret = -ETIMEDOUT;
 		}
 

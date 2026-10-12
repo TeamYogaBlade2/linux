@@ -390,7 +390,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	struct sdio_func *func = wl->func;
 	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
 	size_t pkt_len = ALIGN(hdr_len + extra_len + data_len, 4);
-	size_t tx_len = ALIGN(pkt_len, MT6628_WLAN_SDIO_BLK_SIZE);
+	size_t tx_len = mt6628_sdio_xfer_len(pkt_len);
 	u8 seq_num;
 	u8 *pkt;
 	bool resource_reserved = false;
@@ -401,11 +401,11 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 		return -ENOMEM;
 
 	/*
-	 * u2TxByteCount describes the actual HIF packet and remains
-	 * 4-byte aligned.  The SDIO transfer itself must follow the
-	 * 512-byte block access used by the downstream MT6628 driver.
-	 * The zeroed tail is therefore transport padding, not part of
-	 * the HIF packet.
+	 * Match the downstream kalDevPortWrite() transfer rules:
+	 * packets shorter than one SDIO block use byte mode, while transfers
+	 * of at least one block are rounded up to a whole-block length.
+	 * u2TxByteCount still describes the real 4-byte-aligned HIF packet;
+	 * any zeroed tail is transport padding, not part of that packet.
 	 */
 	put_unaligned_le16(pkt_len, pkt);
 	pkt[2] = 0;			/* ether type offset */

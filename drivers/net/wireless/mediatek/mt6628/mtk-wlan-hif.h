@@ -83,7 +83,6 @@ size_t mt6628_sdio_xfer_len(size_t len);
 					 MT6628_WHIER_RX0_DONE | \
 					 MT6628_WHIER_RX1_DONE | \
 					 MT6628_WHIER_ABNORMAL | \
-					 MT6628_WHIER_FW_OWN_BACK | \
 					 MT6628_WHIER_D2H_SW_ASSERT_INFO)
 
 /* Runtime command/event protocol. */
