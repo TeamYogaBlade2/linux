@@ -335,6 +335,11 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	cmd->seq_num = seq;
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SCAN_REQ_V2, 1,
 					   cmd, cmd_len, NULL, 0, NULL, 0, 0);
+	if (!ret)
+		dev_info(&wl->func->dev,
+			 "scan chunk sent: seq=%u start=%u count=%u passive=%u "
+			 "cursor=%u/%u\n", seq, start, n_channels, passive,
+			 start + n_channels, request->n_channels);
 
 out_free:
 	kfree(cmd);
@@ -406,6 +411,16 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 	wl->scan_req = request;
 	wl->scan_chan_idx = 0;
 	wl->scan_done_pending = false;
+	/*
+	 * SCAN_DONE can already be queued when userspace aborts a scan and
+	 * starts another one. Invalidate the old sequence before BSS activation
+	 * (which may sleep); otherwise that stale event can match the previous
+	 * wl->scan_seq while this request's cursor is still zero, and schedule
+	 * scan_work concurrently with this scan_start() call.
+	 * scan_send_chunk() assigns a separate sequence to the actual command.
+	 */
+	if (!++wl->scan_seq)
+		++wl->scan_seq;
 	mutex_unlock(&wl->cfg_mutex);
 
 	/* Match the vendor AIS FSM: activate the AIS network before scanning. */
@@ -1149,6 +1164,11 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 		 scan_done->seq_num, wl->scan_seq,
 		 request ? "active" : "none", wl->scan_chan_idx,
 		 request ? request->n_channels : 0);
+	if (request && scan_done->seq_num != wl->scan_seq)
+		dev_info(&wl->func->dev,
+			 "ignoring stale SCAN_DONE: seq=%u current=%u cursor=%u/%u\n",
+			 scan_done->seq_num, wl->scan_seq, wl->scan_chan_idx,
+			 request->n_channels);
 	if (request && scan_done->seq_num == wl->scan_seq) {
 		if (wl->scan_chan_idx < request->n_channels) {
 			next_chunk = true;
