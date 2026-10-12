@@ -941,6 +941,12 @@ static int mt6628_ndo_stop(struct net_device *ndev)
 {
 	struct mt6628_wlan *wl = mt6628_wlan_from_ndev(ndev);
 
+	/*
+	 * cfg80211 warns if the interface goes DOWN while its scan request
+	 * has not been reported complete. Retire any scan before NETDEV_DOWN
+	 * is sent by the networking core.
+	 */
+	mt6628_cfg80211_abort_scan(wl);
 	netif_stop_queue(ndev);
 	napi_disable(&wl->napi);
 	cancel_delayed_work_sync(&wl->tx_work);
