@@ -170,13 +170,17 @@ struct mt6628_wmt {
 static int mt6628_uart_write(struct mt6628_wmt *wmt,
 			     const u8 *buf, size_t len)
 {
-	int ret;
+	ssize_t ret;
 
 	if (READ_ONCE(wmt->stopping))
 		return -ESHUTDOWN;
 
 	ret = serdev_device_write(wmt->serdev, buf, len,
 				  msecs_to_jiffies(MT6628_STP_TX_TIMEOUT_MS));
+	if (!READ_ONCE(wmt->full_mode))
+		dev_info(&wmt->serdev->dev,
+			 "UART TX request=%zu accepted=%zd data=%*ph\n",
+			 len, ret, (int)min_t(size_t, len, 32), buf);
 	if (ret < 0)
 		return ret;
 	if (ret != len)
@@ -206,6 +210,9 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 	if (task == MT6628_STP_TASK_WMT) {
 		u16 payload_len;
 
+		dev_info(&wmt->serdev->dev,
+			 "STP WMT packet len=%zu data=%*ph\n",
+			 len, (int)min_t(size_t, len, 32), buf);
 		if (len < 4 || buf[0] != 0x02)
 			return;
 		payload_len = get_unaligned_le16(buf + 2);
@@ -484,8 +491,14 @@ static size_t mt6628_uart_receive_buf(struct serdev_device *serdev,
 		dev_warn_ratelimited(&serdev->dev,
 				     "UART RX FIFO overflow; dropped %zu bytes\n",
 				     count - copied);
-	if (copied)
+	if (copied) {
+		if (!READ_ONCE(wmt->full_mode))
+			dev_info(&serdev->dev,
+				 "UART RX copied=%u input=%zu data=%*ph\n",
+				 copied, count,
+				 (int)min_t(size_t, copied, 32), data);
 		schedule_work(&wmt->rx_work);
+	}
 
 	return copied;
 }
@@ -653,6 +666,8 @@ static int __mt6628_wmt_cmd(struct mt6628_wmt *wmt, const u8 *cmd,
 
 	ret = mt6628_uart_send(wmt, MT6628_STP_TASK_WMT, cmd, len);
 	if (ret < 0) {
+		dev_err(&wmt->serdev->dev,
+			"WMT opcode %#x transmit failed: %d\n", opcode, ret);
 		mutex_lock(&wmt->wmt_lock);
 		wmt->wmt_waiting = false;
 		mutex_unlock(&wmt->wmt_lock);
@@ -665,6 +680,9 @@ static int __mt6628_wmt_cmd(struct mt6628_wmt *wmt, const u8 *cmd,
 	if (!timeout && wmt->wmt_waiting) {
 		wmt->wmt_waiting = false;
 		ret = -ETIMEDOUT;
+		dev_err(&wmt->serdev->dev,
+			"WMT opcode %#x response timeout; request len=%zu\n",
+			opcode, len);
 	} else {
 		ret = wmt->wmt_status;
 	}
