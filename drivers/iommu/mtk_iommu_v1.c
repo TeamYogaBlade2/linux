@@ -282,20 +282,30 @@ static void mt6589_enable_translation(struct mtk_iommu_v1_data *data)
 static int mtk_iommu_v1_bind(struct device *dev)
 {
 	struct mtk_iommu_v1_data *data = dev_get_drvdata(dev);
-	int ret;
+	int ret, i;
 
 	ret = component_bind_all(dev, &data->larb_imu);
 	if (ret)
 		return ret;
 
 	/*
-	 * Do not force-resume LARB2 here. The display clients have not
-	 * necessarily attached to the IOMMU yet, so the LARB's MMU-port
-	 * bitmap can still be empty. Pinning it active at this point prevents
-	 * its runtime-resume callback from applying the bitmap populated by
-	 * the later OVL/RDMA attachments. The runtime-PM device links created
-	 * by probe_device() keep LARB2 active when those clients need it.
+	 * The early IOMMU probe may have populated a LARB's MMU-port bitmap
+	 * before component_bind_all() installed larb->mmu. Re-apply the
+	 * current bitmap now that every matched LARB has been bound.
 	 */
+	for (i = 0; i < data->soc->num_larb; i++) {
+		if (!data->larb_imu[i].dev)
+			continue;
+
+		ret = mtk_smi_larb_config_mmu_ports(data->larb_imu[i].dev);
+		if (ret) {
+			component_unbind_all(dev, &data->larb_imu);
+			return dev_err_probe(dev, ret,
+					     "failed to synchronize LARB%d M4U ports\n",
+					     i);
+		}
+	}
+
 	return 0;
 }
 
@@ -637,6 +647,8 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
 	struct mtk_iommu_v1_domain *dom = to_mtk_domain(domain);
 	struct dma_iommu_mapping *mtk_mapping;
+	struct iommu_fwspec *fwspec;
+	unsigned int larbid;
 	int ret;
 
 	/*
@@ -655,6 +667,10 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 		return 0;
 	}
 
+	fwspec = dev_iommu_fwspec_get(dev);
+	if (!fwspec || !fwspec->num_ids)
+		return -EINVAL;
+
 	if (!data->m4u_dom) {
 		data->m4u_dom = dom;
 		ret = mtk_iommu_v1_domain_finalise(data);
@@ -665,6 +681,20 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 	}
 
 	mtk_iommu_v1_config(data, dev, true);
+
+	larbid = mtk_iommu_v1_to_larb(data, fwspec->ids[0]);
+	ret = mtk_smi_larb_config_mmu_ports(data->larb_imu[larbid].dev);
+	/*
+	 * The LARB's component bind may not have installed larb->mmu yet.
+	 * mtk_iommu_v1_bind() synchronizes the bitmap after that bind.
+	 */
+	if (ret == -EAGAIN)
+		return 0;
+	if (ret) {
+		mtk_iommu_v1_config(data, dev, false);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -673,9 +703,19 @@ static int mtk_iommu_v1_identity_attach(struct iommu_domain *identity_domain,
 					struct iommu_domain *old)
 {
 	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	unsigned int larbid;
+	int ret;
+
+	if (!fwspec || !fwspec->num_ids)
+		return -EINVAL;
 
 	mtk_iommu_v1_config(data, dev, false);
-	return 0;
+
+	larbid = mtk_iommu_v1_to_larb(data, fwspec->ids[0]);
+	ret = mtk_smi_larb_config_mmu_ports(data->larb_imu[larbid].dev);
+
+	return ret == -EAGAIN ? 0 : ret;
 }
 
 static struct iommu_domain_ops mtk_iommu_v1_identity_ops = {

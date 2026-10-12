@@ -149,6 +149,7 @@ struct mtk_smi_common_plat {
 struct mtk_smi_larb_gen {
 	int port_in_larb[MTK_LARB_NR_MAX + 1];
 	int				(*config_port)(struct device *dev);
+	int				(*config_mmu_ports)(struct device *dev);
 	unsigned int			larb_direct_to_common_mask;
 	unsigned int			flags_general;
 	const u8			(*ostd)[SMI_LARB_PORT_NR_MAX];
@@ -204,51 +205,76 @@ static const struct component_ops mtk_smi_larb_component_ops = {
 	.unbind = mtk_smi_larb_unbind,
 };
 
-static int mtk_smi_larb_config_port_gen0(struct device *dev)
+static int mtk_smi_larb_config_mmu_ports_gen0(struct device *dev)
 {
 	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
-	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
 	struct mtk_smi *common = dev_get_drvdata(larb->smi_common_dev);
-	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
-					      NULL;
-	int i, m4u_port_id, larb_port_num, offset;
-	u32 sec_con_val, reg_val, tmp;
-	int ret;
+	int i, m4u_port_id, larb_port_num;
+	u32 reg_val;
+
+	/*
+	 * The LARB-to-IOMMU component bind installs this pointer.
+	 * Do not touch it before that bind has completed.
+	 */
+	if (!larb->mmu)
+		return -EAGAIN;
 
 	m4u_port_id = larb_gen->port_in_larb[larb->larbid];
 	larb_port_num = larb_gen->port_in_larb[larb->larbid + 1] - m4u_port_id;
 
-	/* gen 1 part */
 	for (i = 0; i < larb_port_num; i++, m4u_port_id++) {
-		if (larb->larbid == 2 &&
-		    ((i >= 1 && i <= 4) || i == 7))
+		bool mmu_enabled = !!(*larb->mmu & BIT(i));
+		bool debug = larb->larbid == 2 &&
+			     ((i >= 1 && i <= 4) || i == 7);
+
+		if (debug)
 			dev_info(dev,
 				 "MT6589 LARB2 port local=%d m4u=%d mmu_req=%u secur_con_before=%#x\n",
-				 i, m4u_port_id, !!(*larb->mmu & BIT(i)),
+				 i, m4u_port_id, mmu_enabled,
 				 readl(common->smi_ao_base +
 				       REG_SMI_SECUR_CON_ADDR(m4u_port_id)));
 
-		if (*larb->mmu & BIT(i)) {
-			sec_con_val = SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
-		} else {
-			continue;
-		}
-
 		reg_val = readl(common->smi_ao_base +
 				REG_SMI_SECUR_CON_ADDR(m4u_port_id));
-		reg_val &= SMI_SECUR_CON_VAL_MSK(m4u_port_id);
-		reg_val |= sec_con_val;
-		reg_val |= SMI_SECUR_CON_VAL_DOMAIN(m4u_port_id);
+		if (mmu_enabled) {
+			reg_val &= SMI_SECUR_CON_VAL_MSK(m4u_port_id);
+			reg_val |= SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
+			reg_val |= SMI_SECUR_CON_VAL_DOMAIN(m4u_port_id);
+		} else {
+			/*
+			 * Do not leave a bootloader's virtual-address mode
+			 * enabled on a port that no longer uses the M4U.
+			 * Preserve the remaining security/domain fields.
+			 */
+			reg_val &= ~SMI_SECUR_CON_VAL_VIRT(m4u_port_id);
+		}
+
 		writel(reg_val, common->smi_ao_base +
-					REG_SMI_SECUR_CON_ADDR(m4u_port_id));
-		if (larb->larbid == 2 &&
-		    ((i >= 1 && i <= 4) || i == 7))
+				 REG_SMI_SECUR_CON_ADDR(m4u_port_id));
+		if (debug)
 			dev_info(dev,
 				 "MT6589 LARB2 port local=%d m4u=%d secur_con_after=%#x\n",
 				 i, m4u_port_id,
 				 readl(common->smi_ao_base +
 				       REG_SMI_SECUR_CON_ADDR(m4u_port_id)));
 	}
+
+	return 0;
+}
+
+static int mtk_smi_larb_config_port_gen0(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	const struct mtk_smi_larb_gen *larb_gen = larb->larb_gen;
+	const u8 *larbostd = larb_gen->ostd ? larb_gen->ostd[larb->larbid] :
+					      NULL;
+	int i, offset;
+	u32 reg_val, tmp;
+	int ret;
+
+	ret = mtk_smi_larb_config_mmu_ports_gen0(dev);
+	if (ret)
+		return ret;
 
 	/* gen 2 part */
 	for (i = 0; i < SMI_LARB_PORT_NR_MAX && larbostd && !!larbostd[i]; i++)
@@ -624,6 +650,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt2712 = {
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt6589 = {
 	.port_in_larb =  { 0, 10, 17, 29, 44 ,56 },
 	.config_port = mtk_smi_larb_config_port_mt6589,
+	.config_mmu_ports = mtk_smi_larb_config_mmu_ports_gen0,
 	.flags_general = MTK_SMI_FLAG_BW_CALIBRATE,
 };
 
@@ -917,6 +944,37 @@ static int __maybe_unused mtk_smi_larb_suspend(struct device *dev)
 	clk_bulk_disable_unprepare(larb->smi.clk_num, larb->smi.clks);
 	return 0;
 }
+
+/*
+ * Synchronize the hardware's virtual/physical selection with the M4U's
+ * current port bitmap. If the LARB is suspended, its resume callback runs
+ * the normal configuration path; if it is already active, apply the
+ * bitmap directly rather than relying on a future PM transition.
+ */
+int mtk_smi_larb_config_mmu_ports(struct device *dev)
+{
+	struct mtk_smi_larb *larb = dev_get_drvdata(dev);
+	int ret;
+
+	if (!larb || !larb->larb_gen)
+		return -ENODEV;
+
+	if (!larb->larb_gen->config_mmu_ports)
+		return 0;
+
+	if (!larb->mmu)
+		return -EAGAIN;
+
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0)
+		return ret;
+
+	ret = larb->larb_gen->config_mmu_ports(dev);
+	pm_runtime_put(dev);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mtk_smi_larb_config_mmu_ports);
 
 static const struct dev_pm_ops smi_larb_pm_ops = {
 	SET_RUNTIME_PM_OPS(mtk_smi_larb_suspend, mtk_smi_larb_resume, NULL)
