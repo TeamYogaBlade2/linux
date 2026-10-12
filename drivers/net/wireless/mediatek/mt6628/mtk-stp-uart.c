@@ -1336,9 +1336,10 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	msleep(500);
 	ret = mt6628_wmt_read_versions(wmt);
 	if (ret) {
+		dev_err(&serdev->dev,
+			"MT6628 WMT version query failed at %u baud: %d\n",
+			MT6628_WMT_UART_BOOT_BAUD, ret);
 		/* This read-only probe does not change baud or STP framing. */
-		dev_dbg(&serdev->dev,
-			"MT6628 not ready on UART yet (%d); defer probe\n", ret);
 		ret = -EPROBE_DEFER;
 		goto err_close;
 	}
