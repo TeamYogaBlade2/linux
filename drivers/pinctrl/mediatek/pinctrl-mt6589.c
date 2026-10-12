@@ -570,6 +570,36 @@ static const unsigned int mt6589_pull_type[] = {
 	[226 ... 231] = MTK_PULL_PUPD_R1R0_TYPE,
 };
 
+/*
+ * MT6589 PUPD polarity differs from the generic PUPD/R1/R0 helpers:
+ * 1 selects pull-up and 0 selects pull-down.
+ */
+static int mt6589_pinconf_bias_set_combo(struct mtk_pinctrl *hw,
+					const struct mtk_pin_desc *desc,
+					u32 pullup, u32 arg)
+{
+	if (mt6589_pull_type[desc->number] & MTK_PULL_PUPD_R1R0_TYPE)
+		pullup = !pullup;
+
+	return mtk_pinconf_bias_set_combo(hw, desc, pullup, arg);
+}
+
+static int mt6589_pinconf_bias_get_combo(struct mtk_pinctrl *hw,
+					const struct mtk_pin_desc *desc,
+					u32 *pullup, u32 *arg)
+{
+	int err;
+
+	err = mtk_pinconf_bias_get_combo(hw, desc, pullup, arg);
+	if (err)
+		return err;
+
+	if (mt6589_pull_type[desc->number] & MTK_PULL_PUPD_R1R0_TYPE)
+		*pullup = !*pullup;
+
+	return 0;
+}
+
 static const char * const mt6589_pinctrl_register_base_names[] = {
 	"gpio", "gpio1",
 };
@@ -592,8 +622,8 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.gpio_m = 0,
 	.base_names = mt6589_pinctrl_register_base_names,
 	.nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
-	.bias_set_combo = mtk_pinconf_bias_set_combo,
-	.bias_get_combo = mtk_pinconf_bias_get_combo,
+	.bias_set_combo = mt6589_pinconf_bias_set_combo,
+	.bias_get_combo = mt6589_pinconf_bias_get_combo,
 	.drive_set = mtk_pinconf_drive_set_rev1,
 	.drive_get = mtk_pinconf_drive_get_rev1,
 	.adv_pull_set = mtk_pinconf_adv_pull_set,
