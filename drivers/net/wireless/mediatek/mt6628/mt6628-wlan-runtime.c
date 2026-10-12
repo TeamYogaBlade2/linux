@@ -165,13 +165,17 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 		    packet_len > skb->len)
 			goto drop;
 
-		body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
-		spin_lock_irqsave(&wl->cmd_lock, flags);
-		if (wl->cmd_pending && event->seq_num == wl->cmd_pending_seq &&
-		    event->eid == wl->cmd_pending_eid &&
-		    (event->eid != MT6628_EVENT_ID_CMD_RESULT ||
-		     (body_len == 4 &&
-		      skb->data[MT6628_WIFI_EVENT_HEADER_LEN] ==
+			body_len = packet_len - MT6628_WIFI_EVENT_HEADER_LEN;
+			spin_lock_irqsave(&wl->cmd_lock, flags);
+			if (wl->cmd_pending && event->eid == wl->cmd_pending_eid &&
+			    (event->eid == MT6628_EVENT_ID_CH_PRIVILEGE ?
+			     (body_len >= 2 &&
+			      skb->data[MT6628_WIFI_EVENT_HEADER_LEN + 1] ==
+					wl->cmd_pending_token) :
+			     event->seq_num == wl->cmd_pending_seq) &&
+			    (event->eid != MT6628_EVENT_ID_CMD_RESULT ||
+			     (body_len == 4 &&
+			      skb->data[MT6628_WIFI_EVENT_HEADER_LEN] ==
 				wl->cmd_pending_id))) {
 			if (event->eid == MT6628_EVENT_ID_CMD_RESULT) {
 				wl->cmd_response_len = 0;

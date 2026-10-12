@@ -137,6 +137,15 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 		wl->cmd_pending_seq = cmd->seq_num;
 		wl->cmd_pending_id = cid;
 		wl->cmd_pending_eid = expected_event_id;
+		/*
+		 * CH_PRIVILEGE is an unsolicited firmware event, not a response
+		 * carrying the command sequence number. Match it by its token ID
+		 * instead; the event body starts with net_type_index, token_id.
+		 */
+		wl->cmd_pending_token =
+			cid == MT6628_CMD_ID_CH_PRIVILEGE &&
+			expected_event_id == MT6628_EVENT_ID_CH_PRIVILEGE &&
+			payload_len >= 2 ? ((const u8 *)payload)[1] : 0;
 		wl->cmd_response = response;
 		wl->cmd_response_capacity = response_capacity;
 		wl->cmd_response_len = 0;

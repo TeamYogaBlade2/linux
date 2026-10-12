@@ -210,6 +210,7 @@ struct mt6628_wlan {
 	u8 cmd_pending_seq;
 	u8 cmd_pending_id;
 	u8 cmd_pending_eid;
+	u8 cmd_pending_token;
 	u8 *cmd_response;
 	size_t cmd_response_len;
 	size_t cmd_response_capacity;
