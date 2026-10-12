@@ -471,6 +471,9 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mt6628_uart_pins>;
+	/* Temporary diagnostic: test UART in PIO mode. */
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
 
 	mt6628-stp-uart {
 		compatible = "mediatek,mt6628-stp-uart";
