@@ -121,20 +121,16 @@ struct mt6628_wmt {
 	struct mutex wmt_lock;
 	struct completion wmt_done;
 	struct completion tx_ack_done;
-	struct completion raw_done;
 
 	struct mt6628_stp_endpoint endpoint[MT6628_STP_TASK_MAX];
 	bool stopping;
 	bool full_mode;
 	bool wmt_waiting;
 	bool tx_waiting;
-	bool raw_waiting;
 	u8 wmt_wait_opcode;
 	int wmt_status;
 	u8 wmt_response[MT6628_WMT_RESPONSE_MAX];
 	size_t wmt_response_len;
-	u8 raw_response[sizeof(mt6628_wmt_wakeup_evt)];
-	size_t raw_response_len;
 
 	/* UART-full STP is stop-and-wait here: one unacknowledged TX frame. */
 	u8 tx_seq;
@@ -461,15 +457,6 @@ static void mt6628_uart_rx_work(struct work_struct *work)
 			break;
 
 		for (i = 0; i < count; i++) {
-			if (READ_ONCE(wmt->raw_waiting)) {
-				if (wmt->raw_response_len < sizeof(wmt->raw_response))
-					wmt->raw_response[wmt->raw_response_len++] = data[i];
-				if (wmt->raw_response_len == sizeof(wmt->raw_response)) {
-					WRITE_ONCE(wmt->raw_waiting, false);
-					complete(&wmt->raw_done);
-				}
-				continue;
-			}
 			mt6628_uart_parse_byte(wmt, data[i]);
 		}
 	}
@@ -783,6 +770,7 @@ static int mt6628_wmt_set_baud(struct mt6628_wmt *wmt)
 	u8 cmd[] = { 0x01, 0x04, 0x05, 0x00, 0x01, 0, 0, 0, 0x00 };
 	u8 response[MT6628_WMT_RESPONSE_MAX];
 	size_t response_len = sizeof(response);
+	unsigned long timeout;
 	int ret;
 
 	ret = mt6628_wmt_cmd(wmt, mt6628_wmt_query_baud_cmd,
@@ -822,21 +810,51 @@ static int mt6628_wmt_set_baud(struct mt6628_wmt *wmt)
 		return -EINVAL;
 	msleep(5);
 
-	/* Downstream sends raw 0xff and expects a raw WMT wake event here. */
-	reinit_completion(&wmt->raw_done);
-	wmt->raw_response_len = 0;
-	WRITE_ONCE(wmt->raw_waiting, true);
+	/*
+	 * The wakeup trigger is a raw 0xff byte, but the observed
+	 * wakeup event is carried in a mandatory-mode STP frame.
+	 * Leave RX parsing enabled and wait for WMT opcode 0x03.
+	 */
+	reinit_completion(&wmt->wmt_done);
+	mutex_lock(&wmt->wmt_lock);
+	wmt->wmt_waiting = true;
+	wmt->wmt_wait_opcode = 0x03;
+	wmt->wmt_status = -ETIMEDOUT;
+	wmt->wmt_response_len = 0;
+	mutex_unlock(&wmt->wmt_lock);
+
 	ret = mt6628_uart_write(wmt, (const u8[]){ 0xff }, 1);
 	if (ret) {
-		WRITE_ONCE(wmt->raw_waiting, false);
+		mutex_lock(&wmt->wmt_lock);
+		wmt->wmt_waiting = false;
+		wmt->wmt_wait_opcode = 0xff;
+		mutex_unlock(&wmt->wmt_lock);
 		return ret;
 	}
-	if (!wait_for_completion_timeout(&wmt->raw_done,
-					 msecs_to_jiffies(1000))) {
-		WRITE_ONCE(wmt->raw_waiting, false);
-		return -ETIMEDOUT;
+
+	timeout = wait_for_completion_timeout(&wmt->wmt_done,
+					      msecs_to_jiffies(1000));
+	mutex_lock(&wmt->wmt_lock);
+	if (!timeout && wmt->wmt_waiting) {
+		wmt->wmt_waiting = false;
+		ret = -ETIMEDOUT;
+		dev_err(&wmt->serdev->dev,
+			"WMT wake event timeout after raw 0xff\n");
+	} else {
+		ret = wmt->wmt_status;
 	}
-	if (memcmp(wmt->raw_response, mt6628_wmt_wakeup_evt,
+	if (!ret) {
+		response_len = min_t(size_t, wmt->wmt_response_len,
+				     sizeof(response));
+		memcpy(response, wmt->wmt_response, response_len);
+	}
+	wmt->wmt_wait_opcode = 0xff;
+	mutex_unlock(&wmt->wmt_lock);
+
+	if (ret)
+		return ret;
+	if (response_len != sizeof(mt6628_wmt_wakeup_evt) ||
+	    memcmp(response, mt6628_wmt_wakeup_evt,
 		   sizeof(mt6628_wmt_wakeup_evt)))
 		return -EPROTO;
 
@@ -1317,7 +1335,6 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	INIT_KFIFO(wmt->rx_fifo);
 	init_completion(&wmt->wmt_done);
 	init_completion(&wmt->tx_ack_done);
-	init_completion(&wmt->raw_done);
 	INIT_WORK(&wmt->rx_work, mt6628_uart_rx_work);
 	wmt->rx_expected_seq = 0;
 	wmt->rx_ack = 7;
