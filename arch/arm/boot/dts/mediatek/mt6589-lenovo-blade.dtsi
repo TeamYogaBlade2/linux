@@ -44,6 +44,18 @@
 	};
 
 	/*
+	 * The MT6320 VIBR LDO is the only vibrator control on this board.
+	 * Keep its output at the vendor default and use regulator-haptic
+	 * only to switch the supply on and off.
+	 */
+	vibrator {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6320_ldo_vibr>;
+		min-microvolt = <2800000>;
+		max-microvolt = <2800000>;
+	};
+
+	/*
 	 * Backlight.
 	 *
 	 * Declared here at root level rather than as a child of &bls: a child
