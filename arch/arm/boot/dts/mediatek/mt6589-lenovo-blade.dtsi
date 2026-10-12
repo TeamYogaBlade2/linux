@@ -466,7 +466,8 @@
 };
 
 /* MT6628 shared Bluetooth/FM/GNSS transport selected by UART_RTS strap. */
-&uart3 {
+/* UART0 = UTXD3/URXD3 */
+&uart2 {
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mt6628_uart_pins>;
