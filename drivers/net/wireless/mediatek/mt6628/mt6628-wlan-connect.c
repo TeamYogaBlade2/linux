@@ -7,6 +7,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/etherdevice.h>
+#include <linux/if_ether.h>
 #include <linux/ieee80211.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -201,6 +202,8 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
 	wl->connected = false;
 	wl->conn_secure = false;
+	WRITE_ONCE(wl->control_port, false);
+	WRITE_ONCE(wl->port_authorized, true);
 	wl->conn_aid = 0;
 	wl->conn_auth_mode = MT6628_AUTH_MODE_OPEN;
 	wl->conn_enc_status = MT6628_ENCRYPTION_DISABLED;
@@ -547,7 +550,18 @@ static bool mt6628_connect_is_wpa_psk(
 	if (crypto->n_akm_suites != 1 ||
 	    crypto->akm_suites[0] != WLAN_AKM_SUITE_PSK)
 		return false;
-	if (crypto->control_port || crypto->control_port_over_nl80211)
+	/*
+	 * EAPOL is supported through the Ethernet data path, where the
+	 * runtime TX code marks ETH_P_PAE as an 802.1X HIF frame.
+	 * Control-port frames transported over nl80211, custom control-port
+	 * EtherTypes, and the no-encrypt variant are not implemented.
+	 */
+	if (crypto->control_port_over_nl80211 ||
+	    (crypto->control_port &&
+	     (crypto->control_port_no_encrypt ||
+	      (crypto->control_port_ethertype &&
+	       crypto->control_port_ethertype !=
+				cpu_to_be16(ETH_P_PAE)))))
 		return false;
 	if (sme->mfp != NL80211_MFP_NO)
 		return false;
@@ -1395,6 +1409,12 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	wl->conn_band = wl->conn_bss->channel->band;
 	wl->conn_channel = wl->conn_bss->channel->hw_value;
 	wl->conn_secure = secure;
+	/*
+	 * cfg80211 requires the data port to start unauthorized when
+	 * userspace controls the 802.1X port. EAPOL remains permitted.
+	 */
+	WRITE_ONCE(wl->port_authorized, !sme->crypto.control_port);
+	WRITE_ONCE(wl->control_port, sme->crypto.control_port);
 	wl->conn_auth_mode = auth_mode;
 	wl->conn_enc_status = enc_status;
 	wl->conn_key_idx = sme->key_idx;

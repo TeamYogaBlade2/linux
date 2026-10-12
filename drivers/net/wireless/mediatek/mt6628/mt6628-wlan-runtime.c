@@ -323,6 +323,18 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
 	}
 }
 
+/*
+ * When userspace controls the 802.1X port, only EAPOL may pass until
+ * userspace marks the associated AP authorized.
+ */
+static bool mt6628_control_port_allows(struct mt6628_wlan *wl,
+				       const struct sk_buff *skb)
+{
+	return !READ_ONCE(wl->control_port) ||
+	       READ_ONCE(wl->port_authorized) ||
+	       skb->protocol == htons(ETH_P_PAE);
+}
+
 static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 {
 	struct mt6628_wlan *wl = container_of(napi, struct mt6628_wlan, napi);
@@ -337,6 +349,11 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 
 		skb->dev = wl->netdev;
 		skb->protocol = eth_type_trans(skb, wl->netdev);
+		if (unlikely(!mt6628_control_port_allows(wl, skb))) {
+			dev_kfree_skb_any(skb);
+			work_done++;
+			continue;
+		}
 		skb->ip_summed = CHECKSUM_NONE;
 		napi_gro_receive(napi, skb);
 		work_done++;
@@ -819,6 +836,15 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 		return 0;
 	}
 
+	/*
+	 * Check again in the worker: the authorization state may have
+	 * changed after this packet was queued by ndo_start_xmit().
+	 */
+	if (unlikely(!mt6628_control_port_allows(wl, skb))) {
+		dev_kfree_skb_any(skb);
+		return 0;
+	}
+
 	tc = mt6628_runtime_tc_from_skb(skb);
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	if (!wl->tx_free[tc]) {
@@ -925,6 +951,11 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 	struct mt6628_wlan *wl = mt6628_wlan_from_ndev(ndev);
 
 	if (unlikely(!wl->runtime_started || !wl->fw_running || !wl->connected)) {
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
+	}
+
+	if (unlikely(!mt6628_control_port_allows(wl, skb))) {
 		dev_kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}

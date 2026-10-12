@@ -955,11 +955,54 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 	return 0;
 }
 
+static int mt6628_cfg80211_change_station(struct wiphy *wiphy,
+					  struct wireless_dev *wdev,
+					  const u8 *mac,
+					  struct station_parameters *params)
+{
+	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
+	u32 authorized_flag = BIT(NL80211_STA_FLAG_AUTHORIZED);
+	int ret = 0;
+
+	if (!wl || !mac)
+		return -EINVAL;
+
+	mutex_lock(&wl->cfg_mutex);
+
+	/*
+	 * In station mode there is only one peer, the AP we are connected
+	 * to. Validate that peer before accepting changes to its flags.
+	 */
+	if (wl->conn_state != MT6628_CONN_CONNECTED ||
+	    !ether_addr_equal(wl->conn_bssid, mac)) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	ret = cfg80211_check_station_change(wiphy, params,
+					    CFG80211_STA_AP_STA);
+	if (ret)
+		goto out;
+
+	if (params->sta_flags_mask & authorized_flag) {
+		bool authorized = !!(params->sta_flags_set & authorized_flag);
+
+		WRITE_ONCE(wl->port_authorized, authorized);
+		dev_dbg(&wl->func->dev, "802.1X port for %pM: %s\n",
+			mac, authorized ? "authorized" : "unauthorized");
+	}
+
+out:
+	mutex_unlock(&wl->cfg_mutex);
+	return ret;
+}
+
 static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.scan = mt6628_scan_start,
 	.abort_scan = mt6628_abort_scan,
 	.connect = mt6628_cfg80211_connect,
 	.disconnect = mt6628_cfg80211_disconnect,
+	.change_station = mt6628_cfg80211_change_station,
 	.add_key = mt6628_cfg80211_add_key,
 	.del_key = mt6628_cfg80211_del_key,
 	.set_default_key = mt6628_cfg80211_set_default_key,

@@ -119,6 +119,9 @@ struct mt6628_wlan {
 	atomic_t recovery_pending;
 	bool connected;
 	bool conn_secure;
+	/* Userspace-controlled 802.1X port state. */
+	bool control_port;
+	bool port_authorized;
 	u8 sta_rec_idx;
 	u8 conn_state;
 	u8 conn_bssid[ETH_ALEN];
