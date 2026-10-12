@@ -113,6 +113,19 @@ static void mt6628_conn_put_bss(struct mt6628_wlan *wl)
 }
 
 /*
+ * cfg80211_connect_bss() consumes the BSS reference passed to it.  Detach
+ * the reference from connection state before transferring ownership so
+ * later disconnect/timeout cleanup cannot put it a second time.
+ */
+static struct cfg80211_bss *mt6628_conn_detach_bss(struct mt6628_wlan *wl)
+{
+	struct cfg80211_bss *bss = wl->conn_bss;
+
+	wl->conn_bss = NULL;
+	return bss;
+}
+
+/*
  * Tear down the firmware-side connection state.  Keys are indexed by peer,
  * so mt6628_conn_fw_cleanup() removes them before this runs.
  *
@@ -1610,11 +1623,11 @@ static void mt6628_connect_auth_result_locked(struct mt6628_wlan *wl,
 	int ret;
 
 	if (status_code != WLAN_STATUS_SUCCESS) {
-		cfg80211_connect_bss(wl->netdev, wl->conn_bssid, wl->conn_bss,
+		cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
+				     mt6628_conn_detach_bss(wl),
 				     wl->conn_req_ie, wl->conn_req_ie_len, NULL, 0,
 				     status_code, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
-		mt6628_conn_put_bss(wl);
 		mt6628_conn_set_disconnected(wl);
 		mt6628_conn_fw_cleanup_locked(wl);
 		mt6628_conn_free_ies(wl);
@@ -1656,14 +1669,14 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 
 	if (le16_to_cpu(mgmt->u.assoc_resp.status_code) !=
 	    WLAN_STATUS_SUCCESS) {
-		cfg80211_connect_bss(wl->netdev, wl->conn_bssid, wl->conn_bss,
+		cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
+				     mt6628_conn_detach_bss(wl),
 				     wl->conn_req_ie, wl->conn_req_ie_len,
 				     mgmt->u.assoc_resp.variable,
 				     frame_len - offsetof(struct ieee80211_mgmt,
 							     u.assoc_resp.variable),
 				     le16_to_cpu(mgmt->u.assoc_resp.status_code),
 				     GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
-		mt6628_conn_put_bss(wl);
 		mt6628_conn_set_disconnected(wl);
 		mt6628_conn_fw_cleanup_locked(wl);
 		mt6628_conn_free_ies(wl);
@@ -1697,12 +1710,12 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 	if (wl->netdev)
 		netif_carrier_on(wl->netdev);
 
-	cfg80211_connect_bss(wl->netdev, wl->conn_bssid, wl->conn_bss,
+	cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
+			     mt6628_conn_detach_bss(wl),
 			     wl->conn_req_ie, wl->conn_req_ie_len,
 			     wl->conn_resp_ie, wl->conn_resp_ie_len,
 			     WLAN_STATUS_SUCCESS, GFP_KERNEL,
 			     NL80211_TIMEOUT_UNSPECIFIED);
-	mt6628_conn_put_bss(wl);
 	mt6628_wlan_release_channel(wl);
 	mt6628_conn_free_ies(wl);
 	return;
@@ -1827,11 +1840,11 @@ auth_done:
 			cfg80211_disconnected(wl->netdev, reason, NULL, 0, false,
 				      GFP_KERNEL);
 		} else {
-			cfg80211_connect_bss(wl->netdev, wl->conn_bssid, wl->conn_bss,
+			cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
+				     mt6628_conn_detach_bss(wl),
 				     wl->conn_req_ie, wl->conn_req_ie_len, NULL, 0,
 				     WLAN_STATUS_UNSPECIFIED_FAILURE, GFP_KERNEL,
 				     NL80211_TIMEOUT_UNSPECIFIED);
-			mt6628_conn_put_bss(wl);
 			mt6628_conn_set_disconnected(wl);
 			mt6628_conn_fw_cleanup_locked(wl);
 			mt6628_conn_free_ies(wl);
