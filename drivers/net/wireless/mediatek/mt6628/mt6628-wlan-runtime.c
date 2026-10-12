@@ -620,8 +620,39 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 }
 
 /*
- * Synchronize firmware status before and after the polled BASIC_CONFIG
- * command, following the downstream startup order:
+ * Recover TX-release counters if a resource wait times out without an SDIO
+ * IRQ. WTSR is a read-and-consume release counter, so account the values
+ * here instead of merely logging them.
+ */
+int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
+			       u32 *wtsr0_out, u32 *wtsr1_out)
+{
+	u32 wtsr0, wtsr1;
+	int ret;
+
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		return ret;
+
+	sdio_claim_host(wl->func);
+	wtsr0 = sdio_readl(wl->func, MT6628_MCR_WTSR0, &ret);
+	if (!ret)
+		wtsr1 = sdio_readl(wl->func, MT6628_MCR_WTSR1, &ret);
+	else
+		wtsr1 = 0;
+	sdio_release_host(wl->func);
+	if (ret)
+		return ret;
+
+	*wtsr0_out = wtsr0;
+	*wtsr1_out = wtsr1;
+	mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
+	return 0;
+}
+
+ /*
+  * Synchronize firmware status before and after the polled BASIC_CONFIG
+  * command, following the downstream startup order:
  *
  *   read WHISR/WTSR -> reset the normal TX resource counters -> query MAC
  *

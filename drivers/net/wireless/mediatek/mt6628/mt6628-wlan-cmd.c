@@ -31,24 +31,30 @@ static bool mt6628_cmd_tc_available(struct mt6628_wlan *wl)
 static int mt6628_cmd_acquire_tc(struct mt6628_wlan *wl)
 {
 	unsigned long flags;
+	u32 wtsr0 = 0, wtsr1 = 0;
 	unsigned int credits, credits_max;
+	int poll_ret;
 
 	if (!wait_event_timeout(wl->tx_wait,
 				!wl->runtime_started ||
 				mt6628_cmd_tc_available(wl),
 				msecs_to_jiffies(MT6628_CMD_TIMEOUT_MS))) {
+		poll_ret = mt6628_wlan_poll_tx_status(wl, &wtsr0, &wtsr1);
 		spin_lock_irqsave(&wl->tx_lock, flags);
 		credits = wl->tx_free[MT6628_TX_TC_CMD];
 		credits_max = wl->tx_max[MT6628_TX_TC_CMD];
 		spin_unlock_irqrestore(&wl->tx_lock, flags);
 		dev_warn_ratelimited(&wl->func->dev,
 			"command TX credit timeout: TC=%u free=%u/%u "
-			"runtime=%u pm_idle=%u driver_owned=%u\n",
+			"runtime=%u pm_idle=%u driver_owned=%u "
+			"poll=%d WTSR0=%#010x WTSR1=%#010x\n",
 			MT6628_TX_TC_CMD, credits, credits_max,
 			(unsigned int)wl->runtime_started,
 			(unsigned int)wl->pm_idle,
-			(unsigned int)wl->driver_owned);
-		return -EBUSY;
+			(unsigned int)wl->driver_owned,
+			poll_ret, wtsr0, wtsr1);
+		if (!credits)
+			return -EBUSY;
 	}
 
 	if (!wl->runtime_started)

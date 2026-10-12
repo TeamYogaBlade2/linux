@@ -19,7 +19,6 @@
 #define MT6628_SCAN_MAX_SSIDS		4
 #define MT6628_SCAN_MAX_CHANNELS	32
 #define MT6628_SCAN_MAX_IE_LEN		600
-#define MT6628_SCAN_DWELL_TIME_TU	20
 #define MT6628_SCAN_SSID_WILDCARD	BIT(0)
 #define MT6628_SCAN_SSID_SPECIFIC	BIT(2)
 #define MT6628_SCAN_CHANNEL_SPECIFIED	4
@@ -242,21 +241,6 @@ static int mt6628_channel_to_hif(const struct ieee80211_channel *channel,
 	return 0;
 }
 
-static u16 mt6628_scan_dwell_time_tu(
-	const struct cfg80211_scan_request *request)
-{
-	u64 tu;
-
-	if (request->duration <= 0)
-		return MT6628_SCAN_DWELL_TIME_TU;
-
-	/* Firmware uses TU (1024 us), cfg80211 uses milliseconds. */
-	tu = DIV_ROUND_UP_ULL((u64)request->duration * 1000, 1024);
-	tu = clamp_t(u64, tu, 1, U16_MAX);
-
-	return (u16)tu;
-}
-
 static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 				  struct cfg80211_scan_request *request)
 {
@@ -308,24 +292,28 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 			goto out_free;
 	}
 
-	ssid_type = request->n_ssids ? MT6628_SCAN_SSID_SPECIFIC :
-		MT6628_SCAN_SSID_WILDCARD;
+	/* DEBUG? */
+	ssid_type = request->n_ssids ? 0 : MT6628_SCAN_SSID_WILDCARD;
 	cmd->network_type = 0;
 	cmd->scan_type = passive ? MT6628_SCAN_TYPE_PASSIVE :
 		MT6628_SCAN_TYPE_ACTIVE;
-	cmd->ssid_type = ssid_type;
 	cmd->probe_delay_time = cpu_to_le16(0);
-	cmd->channel_dwell_time = cpu_to_le16(
-		mt6628_scan_dwell_time_tu(request));
+	/* The vendor sets this field only for P2P listen/search scans. */
+	cmd->channel_dwell_time = cpu_to_le16(0);
 	cmd->channel_type = MT6628_SCAN_CHANNEL_SPECIFIED;
 	cmd->channel_list_num = n_channels;
 	cmd->ie_len = cpu_to_le16(request->ie_len);
 
 	for (i = 0; i < request->n_ssids; i++) {
+		if (request->ssids[i].ssid_len)
+			ssid_type |= MT6628_SCAN_SSID_SPECIFIC;
+		else
+			ssid_type |= MT6628_SCAN_SSID_WILDCARD;
 		cmd->ssids[i].len = cpu_to_le32(request->ssids[i].ssid_len);
 		memcpy(cmd->ssids[i].ssid, request->ssids[i].ssid,
 		       request->ssids[i].ssid_len);
 	}
+	cmd->ssid_type = ssid_type;
 	if (request->ie_len)
 		memcpy(cmd->ie, request->ie, request->ie_len);
 
