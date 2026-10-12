@@ -1220,6 +1220,9 @@ int mmc_attach_sdio(struct mmc_host *host)
 	err = mmc_send_io_op_cond(host, 0, &ocr);
 	if (err)
 		return err;
+	dev_info(mmc_dev(host),
+		 "SDIO CMD5 R4=%#010x; function count=%u\n",
+		 ocr, (ocr >> 28) & 0x7);
 
 	mmc_attach_bus(host, &mmc_sdio_ops);
 	if (host->ocr_avail_sdio)
@@ -1333,4 +1336,3 @@ err:
 
 	return err;
 }
-

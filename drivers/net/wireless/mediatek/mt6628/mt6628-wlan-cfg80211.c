@@ -403,6 +403,11 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->scan_req) {
+		dev_warn(&wl->func->dev,
+			 "scan request rejected: previous scan still active "
+			 "(seq=%u, channels=%u/%u)\n",
+			 wl->scan_seq, wl->scan_chan_idx,
+			 wl->scan_req->n_channels);
 		mutex_unlock(&wl->cfg_mutex);
 		ret = -EBUSY;
 		return ret;
@@ -414,6 +419,15 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 	mutex_unlock(&wl->cfg_mutex);
 
 	ret = mt6628_scan_send_chunk(wl, request);
+	if (ret)
+		dev_err(&wl->func->dev,
+			"scan request send failed: seq=%u ret=%d\n",
+			wl->scan_seq, ret);
+	else
+		dev_info(&wl->func->dev,
+			 "scan request sent: seq=%u ssids=%u channels=%u ie_len=%zu\n",
+			 wl->scan_seq, request->n_ssids, request->n_channels,
+			 request->ie_len);
 	if (ret) {
 		mutex_lock(&wl->cfg_mutex);
 		if (wl->scan_req == request)
@@ -1128,6 +1142,11 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 
 	mutex_lock(&wl->cfg_mutex);
 	request = wl->scan_req;
+	dev_info(&wl->func->dev,
+		 "SCAN_DONE event: seq=%u expected=%u request=%s channel=%u/%u\n",
+		 scan_done->seq_num, wl->scan_seq,
+		 request ? "active" : "none", wl->scan_chan_idx,
+		 request ? request->n_channels : 0);
 	if (request && scan_done->seq_num == wl->scan_seq) {
 		if (wl->scan_chan_idx < request->n_channels) {
 			next_chunk = true;

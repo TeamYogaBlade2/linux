@@ -198,6 +198,13 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 		if (matched)
 			goto drop;
 
+		if (event->eid == MT6628_EVENT_ID_CMD_RESULT && body_len == 4)
+			dev_info_ratelimited(&wl->func->dev,
+				"unmatched CMD_RESULT: seq=%u cid=%u status=%u\n",
+				event->seq_num,
+				skb->data[MT6628_WIFI_EVENT_HEADER_LEN],
+				skb->data[MT6628_WIFI_EVENT_HEADER_LEN + 1]);
+
 		if (event->eid == MT6628_EVENT_ID_TX_DONE) {
 			const struct mt6628_event_tx_done *tx_done;
 
@@ -511,6 +518,12 @@ int ret;
 		if (skb_queue_len(&wl->event_queue) >=
 		    MT6628_RUNTIME_QUEUE_LIMIT)
 			goto drop_packet;
+		if (packet_len >= MT6628_WIFI_EVENT_HEADER_LEN &&
+		    (buf[4] == MT6628_EVENT_ID_CMD_RESULT ||
+		     buf[4] == MT6628_EVENT_ID_SCAN_DONE))
+			dev_info_ratelimited(&wl->func->dev,
+				"firmware event RX: eid=%#x seq=%u len=%u\n",
+				buf[4], buf[5], packet_len);
 
 		skb = alloc_skb(event_len, GFP_KERNEL);
 		if (!skb) {
