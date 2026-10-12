@@ -379,6 +379,7 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 {
 	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(request->wdev);
 	int ret;
+	bool activate_bss;
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
@@ -401,15 +402,28 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 		return ret;
 	}
 
+	activate_bss = !wl->connected;
 	wl->scan_req = request;
 	wl->scan_chan_idx = 0;
 	wl->scan_done_pending = false;
 	mutex_unlock(&wl->cfg_mutex);
 
-	ret = mt6628_scan_send_chunk(wl, request);
+	/* Match the vendor AIS FSM: activate the AIS network before scanning. */
+	if (activate_bss) {
+		ret = mt6628_wlan_activate_bss(wl, true);
+		if (ret)
+			dev_err(&wl->func->dev,
+				"failed to activate AIS BSS before scan: %d\n", ret);
+		else
+			dev_info(&wl->func->dev, "activated AIS BSS before scan\n");
+	} else {
+		ret = 0;
+	}
+	if (!ret)
+		ret = mt6628_scan_send_chunk(wl, request);
 	if (ret)
 		dev_err(&wl->func->dev,
-			"scan request send failed: seq=%u ret=%d\n",
+			"scan setup/send failed: seq=%u ret=%d\n",
 			wl->scan_seq, ret);
 	else
 		dev_info(&wl->func->dev,
