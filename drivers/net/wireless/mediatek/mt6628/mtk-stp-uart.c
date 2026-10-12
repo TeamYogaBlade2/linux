@@ -216,15 +216,12 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 		if (len < 4 || buf[0] != 0x02)
 			return;
 		payload_len = get_unaligned_le16(buf + 2);
-		/*
-		 * MTK WMT register-read events have a 4-byte length field
-		 * but occupy 16 bytes in total, including the echoed
-		 * register address and value. See WMT_SET_REG_RD_EVT in
-		 * the downstream wmt_core.c implementation.
-		 */
-		if (payload_len != len - 4 &&
-		    !(buf[1] == 0x08 && payload_len == 4 && len == 16))
+		if (payload_len != len - 4) {
+			dev_dbg(&wmt->serdev->dev,
+				"invalid WMT event length: opcode=%#x field=%u packet=%zu\n",
+				buf[1], payload_len, len);
 			return;
+		}
 
 		mutex_lock(&wmt->wmt_lock);
 		if (wmt->wmt_waiting && buf[1] == wmt->wmt_wait_opcode) {
@@ -727,14 +724,13 @@ static int mt6628_wmt_reg_read(struct mt6628_wmt *wmt,
 			     response, &response_len);
 	if (ret)
 		return ret;
-	if (response_len < 16 || response[0] != 0x02 || response[1] != 0x08)
+	if (response_len != 16 ||
+	    response[0] != 0x02 || response[1] != 0x08)
 		return -EPROTO;
-	/*
-	 * The downstream MTK register-read event is 16 bytes in total,
-	 * although its header length field is 4. Validate the actual
-	 * received size and register fields instead of that length field.
-	 */
-	if (response[4] || response[5] != 0 || response[6] != 0 ||
+
+	payload_len = get_unaligned_le16(response + 2);
+	if (payload_len != response_len - 4 ||
+	    response[4] || response[5] != 0 || response[6] != 0 ||
 	    response[7] != 1 ||
 	    get_unaligned_le32(response + 8) != addr)
 		return -EPROTO;
