@@ -296,7 +296,11 @@ static int mt6628_bt_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	bt->hdev = hdev;
+#ifdef CONFIG_MTK_MT6628_STP_UART
+	hdev->bus = HCI_UART;
+#else
 	hdev->bus = HCI_SDIO;
+#endif
 	hdev->open = mt6628_bt_open;
 	hdev->close = mt6628_bt_close;
 	hdev->flush = mt6628_bt_flush;

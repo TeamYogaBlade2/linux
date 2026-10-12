@@ -211,6 +211,19 @@
 			bias-pull-up;
 		};
 	};
+
+	/* MT6628 BGF UART: GPIO219 is URXD3 and GPIO220 is UTXD3. */
+	mt6628_uart_pins: mt6628-uart-pins {
+		pin-uart-rx {
+			pinmux = <MT6589_GPIO219__FUNC_URXD3>;
+			input-enable;
+			bias-disable;
+		};
+		pin-uart-tx {
+			pinmux = <MT6589_GPIO220__FUNC_UTXD3>;
+			bias-disable;
+		};
+	};
 };
 
 &pmic {
@@ -450,6 +463,33 @@
 	status = "okay";
 };
 
+/* MT6628 shared Bluetooth/FM/GNSS transport selected by UART_RTS strap. */
+&uart3 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&mt6628_uart_pins>;
+
+	mt6628-stp-uart {
+		compatible = "mediatek,mt6628-stp-uart";
+		mediatek,baudrate = <4000000>;
+		mediatek,coex-ant-mode = <1>;
+		mediatek,sdio-driving-cfg = <0x00077777>;
+		mediatek,fm-strap-mode = <2>;
+
+		bluetooth {
+			compatible = "mediatek,mt6628-bt";
+		};
+
+		fm {
+			compatible = "mediatek,mt6628-fm";
+		};
+
+		gnss {
+			compatible = "mediatek,mt6628-gnss";
+		};
+	};
+};
+
 /* Internal storage */
 &mmc0 {
 	status = "okay";
@@ -659,10 +699,10 @@
 	sd-uhs-ddr50;
 
 	/*
-	 * The MT6628 combo chip exposes WLAN as SDIO function 1 and the
-	 * STP transport (Bluetooth/FM/GNSS) as function 2.  Both function
-	 * nodes have to exist for the hardware to be enumerated: without
-	 * this one the WLAN is never probed.
+	 * WLAN is carried by SDIO function 1. The UART_RTS strap selects
+	 * UART for BGF/STP on these Lenovo boards, with its MFD children
+	 * under &uart3 below. Keep the function-2 node/children for the
+	 * selectable SDIO backend and the MT6589 host DT matching path.
 	 */
 	mt6628-wlan@1 {
 		reg = <1>;
@@ -670,6 +710,8 @@
 
 	mt6628-stp@2 {
 		reg = <2>;
+		/* UART_RTS pull down */
+		status = "disabled";
 
 		/*
 		 * WiFi/BT/FM antenna multiplexing mode and SDIO output drive
