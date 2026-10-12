@@ -6,10 +6,12 @@
  */
 
 #include <linux/etherdevice.h>
+#include <linux/ieee80211.h>
 #include <linux/kernel.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/unaligned.h>
 
 #include "mtk-wlan-hif.h"
 #include "mtk-wlan.h"
@@ -375,12 +377,112 @@ int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
 	return ret;
 }
 
+struct mt6628_peer_caps {
+	bool has_ht;
+	bool is_qos;
+	bool uapsd;
+	bool sup_mcs32;
+	__le16 ht_cap_info;
+	__le16 ht_extended_cap;
+	__le32 tx_beamforming_cap;
+	u8 mcs_set;
+	u8 ampdu_param;
+	u8 asel_cap;
+};
+
+/*
+ * The STA-REC describes the peer AP, not our own advertised capabilities.
+ * The downstream driver builds these fields from the AP's scan record and
+ * association response before syncing STA_STATE_3 to firmware. Without the
+ * QoS flag, firmware can activate the record but reject the AP's QoS Data
+ * frames (including EAPOL).
+ */
+static void mt6628_wlan_parse_peer_caps(struct mt6628_wlan *wl,
+					struct mt6628_peer_caps *caps)
+{
+	const u8 *ie = wl->conn_resp_ie;
+	size_t len = wl->conn_resp_ie_len;
+
+	memset(caps, 0, sizeof(*caps));
+
+	while (len >= 2) {
+		size_t ie_len = ie[1];
+
+		if (ie_len + 2 > len)
+			break;
+
+		switch (ie[0]) {
+		case WLAN_EID_HT_CAPABILITY:
+			if (ie_len >= sizeof(struct ieee80211_ht_cap)) {
+				caps->has_ht = true;
+				caps->is_qos = true;
+				caps->ht_cap_info =
+					cpu_to_le16(get_unaligned_le16(ie + 2));
+				caps->ampdu_param = ie[4];
+				caps->mcs_set = ie[5];
+				/* MCS 32 is bit 0 of the fifth RX MCS mask octet. */
+				caps->sup_mcs32 = !!(ie[9] & BIT(0));
+				caps->ht_extended_cap =
+					cpu_to_le16(get_unaligned_le16(ie + 21));
+				caps->tx_beamforming_cap =
+					cpu_to_le32(get_unaligned_le32(ie + 23));
+				caps->asel_cap = ie[27];
+			}
+			break;
+		case WLAN_EID_VENDOR_SPECIFIC:
+			/* WMM Information or Parameter IE, OUI 00:50:f2, type 2. */
+			if (ie_len >= 7 && ie[2] == 0x00 && ie[3] == 0x50 &&
+			    ie[4] == 0xf2 && ie[5] == 0x02 &&
+			    (ie[6] == 0x00 || ie[6] == 0x01) && ie[7] == 0x01) {
+				caps->is_qos = true;
+				if (ie[8] & BIT(7))
+					caps->uapsd = true;
+			}
+			break;
+		default:
+			break;
+		}
+
+		ie += ie_len + 2;
+		len -= ie_len + 2;
+	}
+
+	/* U-APSD support is advertised by the AP's beacon/probe response. */
+	if (wl->conn_bss) {
+		const struct cfg80211_bss_ies *bss_ies;
+
+		rcu_read_lock();
+		bss_ies = rcu_dereference(wl->conn_bss->ies);
+		if (bss_ies) {
+			ie = bss_ies->data;
+			len = bss_ies->len;
+			while (len >= 2) {
+				size_t ie_len = ie[1];
+
+				if (ie_len + 2 > len)
+					break;
+				if (ie[0] == WLAN_EID_VENDOR_SPECIFIC && ie_len >= 7 &&
+				    ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 &&
+				    ie[5] == 0x02 &&
+				    (ie[6] == 0x00 || ie[6] == 0x01) && ie[7] == 0x01) {
+					caps->uapsd |= !!(ie[8] & BIT(7));
+					break;
+				}
+				ie += ie_len + 2;
+				len -= ie_len + 2;
+			}
+		}
+		rcu_read_unlock();
+	}
+}
+ 
 int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 				enum mt6628_sta_state state,
 				u16 assoc_id, const u8 *bssid)
 {
 	struct mt6628_cmd_update_sta_record cmd = {};
 	struct mt6628_event_activate_sta_rec event;
+	struct mt6628_peer_caps caps;
 	size_t response_len = 0;
 	int ret;
 
@@ -421,6 +523,23 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	cmd.ampdu_param = MT6628_HT_AMPDU_PARAM;
 	cmd.ht_cap_info = cpu_to_le16(MT6628_HT_CAP_SGI_20 |
 					       MT6628_HT_CAP_SUP_WIDTH_20_40);
+	if (state == MT6628_STA_STATE_3) {
+		mt6628_wlan_parse_peer_caps(wl, &caps);
+		cmd.is_qos = caps.is_qos;
+		cmd.is_uapsd_supported = caps.uapsd;
+		cmd.desired_phy_type_set = caps.has_ht ?
+			(wl->conn_band == NL80211_BAND_2GHZ ?
+			 MT6628_PHY_TYPE_SET_11BGN : MT6628_PHY_TYPE_SET_11AN) :
+			(wl->conn_band == NL80211_BAND_2GHZ ?
+			 MT6628_PHY_TYPE_SET_11BG : MT6628_PHY_TYPE_SET_11A);
+		cmd.mcs_set = caps.mcs_set;
+		cmd.sup_mcs32 = caps.sup_mcs32;
+		cmd.ampdu_param = caps.ampdu_param;
+		cmd.ht_cap_info = caps.ht_cap_info;
+		cmd.ht_extended_cap = caps.ht_extended_cap;
+		cmd.tx_beamforming_cap = caps.tx_beamforming_cap;
+		cmd.asel_cap = caps.asel_cap;
+	}
 	/* STA_STATE_3 activates the record and must be acknowledged by firmware. */
 	cmd.need_resp = state == MT6628_STA_STATE_3;
 	if (!cmd.need_resp)
@@ -448,12 +567,13 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 
 	if (!ether_addr_equal(event.mac_addr, bssid) ||
 	    event.sta_rec_idx != wl->sta_rec_idx ||
-	    event.network_type_index != 0) {
+	    event.network_type_index != 0 ||
+	    event.is_qos != cmd.is_qos || !event.is_ap) {
 		dev_err(&wl->func->dev,
-			"STA-REC activation mismatch: peer=%pM index=%u bss=%u qos=%u ap=%u; expected peer=%pM index=%u bss=0\n",
+			"STA-REC activation mismatch: peer=%pM index=%u bss=%u qos=%u ap=%u; expected peer=%pM index=%u bss=0 qos=%u ap=1\n",
 			event.mac_addr, event.sta_rec_idx, event.network_type_index,
 			event.is_qos, event.is_ap,
-			bssid, wl->sta_rec_idx);
+			bssid, wl->sta_rec_idx, cmd.is_qos);
 		return -EPROTO;
 	}
 
@@ -469,15 +589,20 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 			     const u8 *bssid, bool connected)
 {
 	struct mt6628_cmd_set_bss_info cmd = {};
+	struct mt6628_peer_caps caps = {};
 
 	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND ||
 	    !ssid || !ssid_len || ssid_len > IEEE80211_MAX_SSID_LEN ||
 	    !bssid || !channel)
 		return -EINVAL;
 
+	if (connected)
+		mt6628_wlan_parse_peer_caps(wl, &caps);
+
 	cmd.net_type_index = 0;
 	cmd.connection_state = connected;
 	cmd.current_op_mode = 0;
+	cmd.is_qbss = connected && caps.is_qos;
 	cmd.ssid_len = ssid_len;
 	memcpy(cmd.ssid, ssid, ssid_len);
 	ether_addr_copy(cmd.bssid, bssid);
@@ -502,7 +627,8 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 		cmd.bss_basic_rate_set =
 			cpu_to_le16(MT6628_BASIC_RATE_SET_11BG);
 		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_ERP;
-		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11BGN;
+		cmd.phy_type_set = !connected || caps.has_ht ?
+			MT6628_PHY_TYPE_SET_11BGN : MT6628_PHY_TYPE_SET_11BG;
 		cmd.rlm.rf_band = MT6628_BAND_2GHZ;
 		break;
 	case NL80211_BAND_5GHZ:
@@ -513,7 +639,8 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 		cmd.bss_basic_rate_set =
 			cpu_to_le16(MT6628_BASIC_RATE_SET_11A);
 		cmd.non_ht_basic_phy_type = MT6628_BASIC_PHY_TYPE_OFDM;
-		cmd.phy_type_set = MT6628_PHY_TYPE_SET_11AN;
+		cmd.phy_type_set = !connected || caps.has_ht ?
+			MT6628_PHY_TYPE_SET_11AN : MT6628_PHY_TYPE_SET_11A;
 		cmd.rlm.rf_band = MT6628_BAND_5GHZ;
 		break;
 	default:

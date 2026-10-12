@@ -867,7 +867,8 @@ static int mt6628_send_assoc(struct mt6628_wlan *wl)
 	ether_addr_copy(mgmt->da, wl->conn_bssid);
 	ether_addr_copy(mgmt->sa, wl->netdev->dev_addr);
 	ether_addr_copy(mgmt->bssid, wl->conn_bssid);
-	mgmt->u.assoc_req.capab_info = cpu_to_le16(MT6628_ASSOC_CAPABILITY);
+	mgmt->u.assoc_req.capab_info = cpu_to_le16(MT6628_ASSOC_CAPABILITY |
+		(wl->conn_secure ? WLAN_CAPABILITY_PRIVACY : 0));
 	mgmt->u.assoc_req.listen_interval =
 		cpu_to_le16(MT6628_ASSOC_LISTEN_INTERVAL);
 	memcpy(mgmt->u.assoc_req.variable, wl->conn_req_ie,
@@ -1693,12 +1694,17 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 	wl->conn_aid = le16_to_cpu(mgmt->u.assoc_resp.aid) & 0x3fff;
 	wl->conn_rf_sco = mt6628_assoc_ht_sco(resp_ie, resp_ie_len);
 
-	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_3,
-					    wl->conn_aid, wl->conn_bssid);
-	if (ret)
-		goto timeout;
+	/*
+	 * Match the vendor AIS join ordering: publish the negotiated BSS/QoS
+	 * state before asking firmware to activate its STA-REC. The activation
+	 * event is the point at which the firmware begins accepting peer frames.
+	 */
 	ret = mt6628_wlan_set_bss_info(wl, wl->conn_channel, wl->conn_ssid,
 					wl->conn_ssid_len, wl->conn_bssid, true);
+	if (ret)
+		goto timeout;
+	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_3,
+					    wl->conn_aid, wl->conn_bssid);
 	if (ret)
 		goto timeout;
 
