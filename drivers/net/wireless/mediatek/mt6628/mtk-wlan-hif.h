@@ -139,8 +139,8 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_CIPHER_SUITE_CCMP	4
 #define MT6628_CIPHER_SUITE_WEP104	5
 
-#define MT6628_BAND_2GHZ		0
-#define MT6628_BAND_5GHZ		1
+#define MT6628_BAND_2GHZ		1 /* BAND_2G4; 0 is reserved */
+#define MT6628_BAND_5GHZ		2 /* BAND_5G */
 
 struct mt6628_wifi_cmd_hdr {
 	__le16 tx_byte_count_user_priority;
