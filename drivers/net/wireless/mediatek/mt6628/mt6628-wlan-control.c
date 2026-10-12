@@ -173,6 +173,15 @@ struct mt6628_cmd_update_sta_record {
 	u8 reserved[3];
 } __packed;
 
+struct mt6628_event_activate_sta_rec {
+	u8 mac_addr[ETH_ALEN];
+	u8 sta_rec_idx;
+	u8 network_type_index;
+	u8 is_qos;
+	u8 is_ap;
+	u8 reserved[2];
+} __packed;
+
 struct mt6628_cmd_bss_activate_ctrl {
 	u8 net_type_index;
 	u8 active;
@@ -246,6 +255,7 @@ static_assert(sizeof(struct mt6628_event_ch_privilege) == 12);
 static_assert(sizeof(struct mt6628_cmd_set_bss_rlm_param) == 16);
 static_assert(sizeof(struct mt6628_cmd_set_bss_info) == 80);
 static_assert(sizeof(struct mt6628_cmd_update_sta_record) == 40);
+static_assert(sizeof(struct mt6628_event_activate_sta_rec) == 12);
 static_assert(sizeof(struct mt6628_cmd_bss_activate_ctrl) == 4);
 static_assert(sizeof(struct mt6628_cmd_remove_sta_record) == 8);
 static_assert(sizeof(struct mt6628_cmd_ps_profile) == 4);
@@ -370,6 +380,9 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 				u16 assoc_id, const u8 *bssid)
 {
 	struct mt6628_cmd_update_sta_record cmd = {};
+	struct mt6628_event_activate_sta_rec event;
+	size_t response_len = 0;
+	int ret;
 
 	if (wl->sta_rec_idx == MT6628_STA_REC_INDEX_NOT_FOUND || !bssid)
 		return -EINVAL;
@@ -407,11 +420,48 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	cmd.sup_mcs32 = 0;
 	cmd.ampdu_param = MT6628_HT_AMPDU_PARAM;
 	cmd.ht_cap_info = cpu_to_le16(MT6628_HT_CAP_SGI_20 |
-				       MT6628_HT_CAP_SUP_WIDTH_20_40);
-	cmd.need_resp = 0;
+					       MT6628_HT_CAP_SUP_WIDTH_20_40);
+	/* STA_STATE_3 activates the record and must be acknowledged by firmware. */
+	cmd.need_resp = state == MT6628_STA_STATE_3;
+	if (!cmd.need_resp)
+		return mt6628_wlan_send_cmd(wl,
+					    MT6628_CMD_ID_UPDATE_STA_RECORD, 1,
+					    &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
 
-	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_UPDATE_STA_RECORD, 1,
-				    &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
+	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_UPDATE_STA_RECORD, 1,
+				   &cmd, sizeof(cmd), &event, sizeof(event),
+				   &response_len,
+				   MT6628_EVENT_ID_ACTIVATE_STA_REC, 1000);
+	if (ret) {
+		dev_err(&wl->func->dev,
+			"STA-REC activation response failed: index=%u peer=%pM ret=%d\n",
+			wl->sta_rec_idx, bssid, ret);
+		return ret;
+	}
+
+	if (response_len != sizeof(event)) {
+		dev_err(&wl->func->dev,
+			"invalid STA-REC activation response length: %zu\n",
+			response_len);
+		return -EPROTO;
+	}
+
+	if (!ether_addr_equal(event.mac_addr, bssid) ||
+	    event.sta_rec_idx != wl->sta_rec_idx ||
+	    event.network_type_index != 0) {
+		dev_err(&wl->func->dev,
+			"STA-REC activation mismatch: peer=%pM index=%u bss=%u qos=%u ap=%u; expected peer=%pM index=%u bss=0\n",
+			event.mac_addr, event.sta_rec_idx, event.network_type_index,
+			event.is_qos, event.is_ap,
+			bssid, wl->sta_rec_idx);
+		return -EPROTO;
+	}
+
+	dev_info(&wl->func->dev,
+		 "STA-REC activated: peer=%pM index=%u bss=%u qos=%u ap=%u\n",
+		 event.mac_addr, event.sta_rec_idx, event.network_type_index,
+		 event.is_qos, event.is_ap);
+	return 0;
 }
 
 int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
