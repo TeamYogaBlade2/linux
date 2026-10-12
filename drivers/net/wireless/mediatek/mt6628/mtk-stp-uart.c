@@ -42,7 +42,11 @@
 #define MT6628_WMT_GEN_FVR                  0x80000004
 #define MT6628_WMT_GEN_VER_MASK             0x0000ffff
 #define MT6628_WMT_PATCH_HDR_SIZE           28
-#define MT6628_WMT_PATCH_HWVER_OFFSET       22
+/*
+ * The vendor launcher matches the low byte of the 16-bit firmware
+ * version stored at bytes 22..23 of the on-disk patch header.
+ */
+#define MT6628_WMT_PATCH_FWVER_LSB_OFFSET   23
 #define MT6628_WMT_PATCH_INFO_OFFSET        24
 #define MT6628_WMT_PATCH_FRAG_SIZE          1000
 #define MT6628_WMT_UART_BOOT_BAUD            115200
@@ -869,13 +873,26 @@ static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 	u8 patch_num, patch_seq, address[4];
 	int ret;
 
-	if (fw->size < MT6628_WMT_PATCH_HDR_SIZE ||
-	    fw->data[MT6628_WMT_PATCH_HWVER_OFFSET] != (wmt->rom_ver & 0xff))
+	if (fw->size <= MT6628_WMT_PATCH_HDR_SIZE) {
+		dev_err(&wmt->serdev->dev,
+			"patch image is too small: %zu bytes\n", fw->size);
 		return -EINVAL;
+	}
+	if (fw->data[MT6628_WMT_PATCH_FWVER_LSB_OFFSET] !=
+	    (u8)wmt->rom_ver) {
+		dev_err(&wmt->serdev->dev,
+			"patch version mismatch: header bytes[22:23]=%02x %02x, ROM=%#x\n",
+			fw->data[22], fw->data[23], wmt->rom_ver);
+		return -EINVAL;
+	}
 	patch_num = (fw->data[MT6628_WMT_PATCH_INFO_OFFSET] >> 4) & 0x0f;
 	patch_seq = fw->data[MT6628_WMT_PATCH_INFO_OFFSET] & 0x0f;
-	if (!patch_num || !patch_seq || patch_seq > patch_num)
+	if (!patch_num || !patch_seq || patch_seq > patch_num) {
+		dev_err(&wmt->serdev->dev,
+			"invalid patch sequence: patch=%u/%u\n",
+			patch_seq, patch_num);
 		return -EPROTO;
+	}
 	memcpy(address, fw->data + MT6628_WMT_PATCH_INFO_OFFSET, sizeof(address));
 	address[0] = 0;
 
@@ -969,16 +986,38 @@ static int mt6628_wmt_patch_download(struct mt6628_wmt *wmt)
 	}
 
 	for (i = 0; i < count; i++) {
+		u8 file_patch_num;
+
 		ret = request_firmware(&fw[i], names[i], &wmt->serdev->dev);
 		if (ret) {
 			dev_err(&wmt->serdev->dev, "failed to load %s: %d\n",
 				names[i], ret);
 			goto out;
 		}
-		if (fw[i]->size < MT6628_WMT_PATCH_HDR_SIZE ||
-		    fw[i]->data[MT6628_WMT_PATCH_HWVER_OFFSET] !=
-			    (wmt->rom_ver & 0xff) ||
-		    ((fw[i]->data[MT6628_WMT_PATCH_INFO_OFFSET] >> 4) & 0x0f) != count) {
+
+		if (fw[i]->size <= MT6628_WMT_PATCH_HDR_SIZE) {
+			dev_err(&wmt->serdev->dev,
+				"%s: invalid patch size %zu\n",
+				names[i], fw[i]->size);
+			ret = -EINVAL;
+			goto out;
+		}
+		if (fw[i]->data[MT6628_WMT_PATCH_FWVER_LSB_OFFSET] !=
+		    (u8)wmt->rom_ver) {
+			dev_err(&wmt->serdev->dev,
+				"%s: patch version mismatch: bytes[22:23]=%02x %02x, ROM=%#x\n",
+				names[i], fw[i]->data[22], fw[i]->data[23],
+				wmt->rom_ver);
+			ret = -EINVAL;
+			goto out;
+		}
+
+		file_patch_num =
+			(fw[i]->data[MT6628_WMT_PATCH_INFO_OFFSET] >> 4) & 0x0f;
+		if (file_patch_num != count) {
+			dev_err(&wmt->serdev->dev,
+				"%s: patch set declares %u patches, expected %u\n",
+				names[i], file_patch_num, count);
 			ret = -EINVAL;
 			goto out;
 		}
