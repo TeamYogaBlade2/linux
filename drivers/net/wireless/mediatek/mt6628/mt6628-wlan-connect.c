@@ -1304,11 +1304,19 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->conn_state != MT6628_CONN_DISCONNECTED) {
+		dev_warn(&wl->func->dev,
+			 "connect rejected: conn_state=%u connected=%u "
+			 "sta_rec_idx=%u runtime=%u fw_running=%u\n",
+			 wl->conn_state, wl->connected, wl->sta_rec_idx,
+			 wl->runtime_started, wl->fw_running);
 		mutex_unlock(&wl->cfg_mutex);
 		kfree(conn_key);
 		return -EBUSY;
 	}
 	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+		dev_warn(&wl->func->dev,
+			 "connect found stale STA-REC before cleanup: index=%u\n",
+			 wl->sta_rec_idx);
 		mutex_unlock(&wl->cfg_mutex);
 
 		/*
@@ -1320,6 +1328,10 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 		mutex_lock(&wl->cfg_mutex);
 		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+			dev_err(&wl->func->dev,
+				"connect rejected: stale STA-REC cleanup failed, "
+				"index=%u conn_state=%u\n",
+				wl->sta_rec_idx, wl->conn_state);
 			mutex_unlock(&wl->cfg_mutex);
 			kfree(conn_key);
 			return -EIO;
