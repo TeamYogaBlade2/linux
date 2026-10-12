@@ -9,10 +9,12 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/io.h>
 #include <linux/iommu.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
@@ -168,6 +170,10 @@ OVL_RDMA2_FIFO_UND_INT | OVL_RDMA3_FIFO_UND_INT)
 #define MT6589_ROUTE_RDMA0_OUT_SEL		0x034
 #define MT6589_ROUTE_COLOR_SEL			0x04c
 #define MT6589_ROUTE_BLS_SEL			0x054
+#define MT6589_ROUTE_PATH_DEBUG0		0x070
+#define MT6589_ROUTE_PATH_DEBUG1		0x074
+#define MT6589_ROUTE_PATH_DEBUG2		0x078
+#define MT6589_ROUTE_PATH_DEBUG3		0x07c
 
 #define GMC_THRESHOLD_BITS	16
 #define GMC_THRESHOLD_HIGH	((1 << GMC_THRESHOLD_BITS) / 4)
@@ -395,6 +401,7 @@ struct mtk_disp_ovl {
 	 * node names a dispsys syscon parent to borrow the mapping from.
 	 */
 	struct regmap			*cfg_regmap;
+	void __iomem			*cfg_regs;
 	struct cmdq_client_reg		cmdq_reg;
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
@@ -514,6 +521,21 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 			       src_con,
 			       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
 			       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
+
+			/*
+			 * Sample the live DISPSYS direct-link handshake while
+			 * OVL RDMA0 is active, not before the first frame starts.
+			 */
+			if (priv->cfg_regs)
+				pr_err("MT6589 path debug: valid0=%#x valid1=%#x ready0=%#x ready1=%#x\n",
+				       readl(priv->cfg_regs +
+					     MT6589_ROUTE_PATH_DEBUG0),
+				       readl(priv->cfg_regs +
+					     MT6589_ROUTE_PATH_DEBUG1),
+				       readl(priv->cfg_regs +
+					     MT6589_ROUTE_PATH_DEBUG2),
+				       readl(priv->cfg_regs +
+					     MT6589_ROUTE_PATH_DEBUG3));
 		}
 	}
 
@@ -1529,10 +1551,18 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	 */
 	if (priv->data->has_dispsys_cfg) {
 		struct device_node *np;
+		struct resource cfg_res;
 
 		np = of_parse_phandle(dev->of_node, "clocks", 0);
 		if (np) {
 			priv->cfg_regmap = syscon_node_to_regmap(np);
+			if (!of_address_to_resource(np, 0, &cfg_res)) {
+				priv->cfg_regs = devm_ioremap(dev, cfg_res.start,
+							      resource_size(&cfg_res));
+				if (!priv->cfg_regs)
+					dev_warn(dev,
+						 "failed to map DISPSYS path-debug registers\n");
+			}
 			of_node_put(np);
 			if (IS_ERR(priv->cfg_regmap))
 				priv->cfg_regmap = NULL;
