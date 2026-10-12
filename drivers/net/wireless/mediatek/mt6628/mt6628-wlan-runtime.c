@@ -483,6 +483,15 @@ int ret;
 	}
 
 	packet_type = le16_to_cpu(rx_hdr->packet_type) & GENMASK(1, 0);
+	if (packet_type == MT6628_HIF_RX_PKT_TYPE_EVENT &&
+	    packet_len >= sizeof(struct mt6628_wifi_event_hdr)) {
+		const struct mt6628_wifi_event_hdr *event =
+			(const struct mt6628_wifi_event_hdr *)buf;
+
+		dev_info_ratelimited(&wl->func->dev,
+			"RX event packet: port=%u len=%u eid=%u seq=%u\n",
+			port, packet_len, event->eid, event->seq_num);
+	}
 	header_offset = rx_hdr->header_len_offset & GENMASK(1, 0);
 	switch (packet_type) {
 	case MT6628_HIF_RX_PKT_TYPE_DATA:
@@ -630,6 +639,7 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	u32 wtsr0, wtsr1;
 	u32 whlpcr = 0, whcr = 0, whier = 0, wrplr = 0;
 	int diag_ret = 0;
+	bool rx_pending;
 	int ret;
 
 	ret = mt6628_wlan_pm_busy(wl);
@@ -654,6 +664,7 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	sdio_release_host(wl->func);
 	if (ret)
 		return ret;
+	rx_pending = !diag_ret && wrplr;
 	if (!diag_ret)
 		dev_warn_ratelimited(&wl->func->dev,
 			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
@@ -667,6 +678,12 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	*wtsr0_out = wtsr0;
 	*wtsr1_out = wtsr1;
 	mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
+	if (rx_pending && READ_ONCE(wl->runtime_started)) {
+		dev_warn_ratelimited(&wl->func->dev,
+			"RX data pending during TX poll; scheduling IRQ worker: WRPLR=%#010x\n",
+			wrplr);
+		schedule_work(&wl->irq_work);
+	}
 	return 0;
 }
 
@@ -1010,8 +1027,6 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		if (!tx_status_ret &&
 		    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
 			mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
-		if (!whisr)
-			break;
 
 		if (whisr & MT6628_WHISR_ABNORMAL) {
 			u32 wasr;
@@ -1047,15 +1062,20 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 				schedule_work(&wl->recovery_work);
 		}
 
-		if (!(whisr & (MT6628_WHISR_RX0_DONE | MT6628_WHISR_RX1_DONE)))
-			continue;
-
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WRPLR, &rx_len);
 		if (ret)
 			break;
 
 		rx0_len = rx_len & 0xffff;
 		rx1_len = rx_len >> 16;
+		if (!whisr && !rx0_len && !rx1_len)
+			break;
+		if (!(whisr & (MT6628_WHISR_RX0_DONE | MT6628_WHISR_RX1_DONE)) &&
+		    (rx0_len || rx1_len))
+			dev_warn_ratelimited(&wl->func->dev,
+				"RX length pending without WHISR RX_DONE: "
+				"WHISR=%#010x WRPLR=%#010x\n", whisr, rx_len);
+
 		if (rx0_len) {
 			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
 			if (ret && ret != -ENOBUFS)
