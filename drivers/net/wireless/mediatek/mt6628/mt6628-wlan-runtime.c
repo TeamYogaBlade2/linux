@@ -92,6 +92,23 @@ static int mt6628_runtime_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 	return sdio_memcpy_toio(wl->func, reg, &tmp, sizeof(tmp));
 }
 
+/*
+ * WHLPCR global interrupt enable/disable is a CMD52 byte write in the
+ * downstream driver. Callers of this helper already hold the SDIO host
+ * where required by their context, just as they do for runtime_write32().
+ */
+static int mt6628_runtime_write8(struct mt6628_wlan *wl, u32 reg, u8 val)
+{
+	int ret;
+
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		return ret;
+
+	sdio_writeb(wl->func, val, reg, &ret);
+	return ret;
+}
+
 static void mt6628_runtime_free_queues(struct mt6628_wlan *wl)
 {
 	struct sk_buff *skb;
@@ -571,6 +588,100 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 	}
 }
 
+/*
+ * Synchronize firmware status before and after the polled BASIC_CONFIG
+ * command, following the downstream startup order:
+ *
+ *   read WHISR/WTSR -> reset the normal TX resource counters -> query MAC
+ *
+ * Any RX packet already present is consumed through the ordinary RX parser.
+ * In particular, do not discard RX0 just because BASIC_CONFIG is expected
+ * on RX1: its packet identity cannot be inferred from WRPLR alone.
+ *
+ * reset_resources=true is used before BASIC_CONFIG, when INIT/download
+ * credits must not leak into the normal TX resource counters. With it
+ * false, release counts include completion of the BASIC_CONFIG command and
+ * must be added back to the normal counters before interrupts are enabled.
+ * The caller holds the SDIO host for this whole operation.
+ */
+static int mt6628_runtime_sync_startup(struct mt6628_wlan *wl,
+				      bool reset_resources)
+{
+	unsigned long flags;
+	u32 whisr, wtsr0, wtsr1, rx_len;
+	unsigned int loops, i;
+	int ret;
+
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
+	if (ret)
+		return ret;
+
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WTSR0, &wtsr0);
+	if (ret)
+		return ret;
+
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1);
+	if (ret)
+		return ret;
+
+	if (!reset_resources &&
+	    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
+		mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
+
+	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
+		u16 rx0_len, rx1_len;
+
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WRPLR, &rx_len);
+		if (ret)
+			return ret;
+
+		rx0_len = rx_len & 0xffff;
+		rx1_len = rx_len >> 16;
+		if (!rx0_len && !rx1_len)
+			break;
+
+		if (rx0_len) {
+			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
+			if (ret && ret != -ENOBUFS && ret != -EPROTO &&
+			    ret != -EOPNOTSUPP) {
+				dev_err(&wl->func->dev,
+					"startup RX0 read failed: %d\n", ret);
+				return ret;
+			}
+			if (ret)
+				dev_warn_ratelimited(&wl->func->dev,
+					"startup RX0 packet rejected: %d\n",
+					ret);
+		}
+
+		if (rx1_len) {
+			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
+			if (ret && ret != -ENOBUFS && ret != -EPROTO &&
+			    ret != -EOPNOTSUPP) {
+				dev_err(&wl->func->dev,
+					"startup RX1 read failed: %d\n", ret);
+				return ret;
+			}
+			if (ret)
+				dev_warn_ratelimited(&wl->func->dev,
+					"startup RX1 packet rejected: %d\n",
+					ret);
+		}
+	}
+
+	if (reset_resources) {
+		spin_lock_irqsave(&wl->tx_lock, flags);
+		for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++)
+			wl->tx_free[i] = wl->tx_max[i];
+		spin_unlock_irqrestore(&wl->tx_lock, flags);
+	}
+
+	dev_dbg(&wl->func->dev,
+		"startup status synchronized: WHISR=%#010x reset_resources=%u\n",
+		whisr, reset_resources);
+	return 0;
+}
+
 static unsigned int mt6628_runtime_tc_from_skb(struct sk_buff *skb)
 {
 	if (is_multicast_ether_addr(eth_hdr(skb)->h_dest))
@@ -855,7 +966,8 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	}
 
 	if (wl->runtime_started)
-		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
+		mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+				      MT6628_INT_EN_SET);
 	sdio_release_host(wl->func);
 
 	if (!skb_queue_empty(&wl->event_queue))
@@ -898,8 +1010,8 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 	 */
 	ret = mt6628_wlan_pm_busy_irq(wl);
 	if (!ret)
-		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
-				       MT6628_INT_EN_CLR);
+		mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+				      MT6628_INT_EN_CLR);
 	schedule_work(&wl->irq_work);
 }
 
@@ -976,10 +1088,22 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 
 	/*
 	 * Query BASIC_CONFIG by polling RX1 first, matching the downstream
-	 * nicRxWaitResponse() path. Enable asynchronous runtime IRQ handling
-	 * only after this initial command has completed.
+	 * nicRxWaitResponse() path. First consume any packet left pending by
+	 * firmware startup, and synchronize the TX status/resource counters
+	 * before issuing that command.
 	 */
 	wl->runtime_started = true;
+	sdio_claim_host(wl->func);
+	ret = mt6628_runtime_sync_startup(wl, true);
+	sdio_release_host(wl->func);
+	if (ret) {
+		dev_err(&wl->func->dev,
+			"failed to synchronize startup status: %d\n", ret);
+		wl->runtime_started = false;
+		wl->fw_running = false;
+		goto err_unregister;
+	}
+
 	ret = mt6628_wlan_query_basic_config(wl);
 	if (ret) {
 		dev_err(&wl->func->dev,
@@ -991,10 +1115,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	}
 
 	sdio_claim_host(wl->func);
-	ret = sdio_claim_irq(wl->func, mt6628_runtime_irq);
-	if (!ret)
-		wl->irq_claimed = true;
-	if (!ret) {
+	{
 		u32 whcr;
 
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHCR, &whcr);
@@ -1003,11 +1124,18 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 						     whcr & ~MT6628_WHCR_W_INT_CLR_CTRL);
 	}
 	if (!ret)
+		ret = mt6628_runtime_sync_startup(wl, false);
+	if (!ret) {
+		ret = sdio_claim_irq(wl->func, mt6628_runtime_irq);
+		if (!ret)
+			wl->irq_claimed = true;
+	}
+	if (!ret)
 		ret = mt6628_runtime_write32(wl, MT6628_MCR_WHIER,
 					     MT6628_WHIER_RUNTIME);
 	if (!ret)
-		ret = mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
-					     MT6628_INT_EN_SET);
+		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+					    MT6628_INT_EN_SET);
 	if (ret && wl->irq_claimed) {
 		sdio_release_irq(wl->func);
 		wl->irq_claimed = false;
@@ -1018,6 +1146,12 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		wl->fw_running = false;
 		goto err_unregister;
 	}
+
+	if (!skb_queue_empty(&wl->event_queue))
+		schedule_work(&wl->event_work);
+	if (!skb_queue_empty(&wl->mgmt_queue))
+		schedule_work(&wl->mgmt_work);
+	mt6628_runtime_schedule_rx(wl);
 
 	return 0;
 
@@ -1078,7 +1212,8 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	if (wl->irq_claimed) {
 		sdio_claim_host(wl->func);
 		mt6628_runtime_write32(wl, MT6628_MCR_WHIER, 0);
-		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
+		mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+				      MT6628_INT_EN_CLR);
 		sdio_release_irq(wl->func);
 		wl->irq_claimed = false;
 		sdio_release_host(wl->func);
@@ -1152,6 +1287,7 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	/* Consume anything already latched before releasing the chip. */
 	if (val & (MT6628_WHISR_TX_DONE | MT6628_WHISR_RX0_DONE |
 		   MT6628_WHISR_RX1_DONE | MT6628_WHISR_ABNORMAL |
+		   MT6628_WHISR_FW_OWN_BACK |
 		   MT6628_WHISR_D2H_SW_ASSERT_INFO)) {
 		ret = -EBUSY;
 		goto out_release;

@@ -47,9 +47,25 @@ enum mt6628_sta_state {
 	MT6628_STA_STATE_3,
 };
 
+/*
+ * WEP key material cached for cfg80211 .set_default_key().
+ * The firmware key command combines installing a key and selecting
+ * whether it is a transmit key, so the key has to be replayed when the
+ * default transmit key changes.
+ */
+struct mt6628_wep_key {
+	bool valid;
+	u32 cipher;
+	u8 key_len;
+	u8 key[13];
+};
+
 struct mt6628_wlan {
 	struct sdio_func *func;
-	u8 seq_num;
+	/* INIT and runtime commands share the firmware sequence counter. */
+	u8 cmd_seq_num;
+	/* INIT protocol TC0 credits are independent of runtime TC credits. */
+	u8 init_tx_free;
 	bool fw_running;
 	bool driver_owned;
 	/*
@@ -124,6 +140,9 @@ struct mt6628_wlan {
 	 */
 	u8 pairwise_key_mask;
 	u8 group_key_mask;
+	struct mt6628_wep_key wep_keys[MT6628_WLAN_KEY_INDEX_MAX + 1];
+	u8 default_wep_key;
+	bool default_wep_key_valid;
 	struct cfg80211_bss *conn_bss;
 	u8 *conn_req_ie;
 	size_t conn_req_ie_len;
@@ -188,7 +207,6 @@ struct mt6628_wlan {
 	u8 cmd_pending_seq;
 	u8 cmd_pending_id;
 	u8 cmd_pending_eid;
-	u8 cmd_seq_num;
 	u8 *cmd_response;
 	size_t cmd_response_len;
 	size_t cmd_response_capacity;
@@ -238,6 +256,8 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 			const struct key_params *params);
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 			bool pairwise, const u8 *mac_addr);
+int mt6628_wlan_set_default_key(struct mt6628_wlan *wl, u8 key_index,
+				bool unicast, bool multicast);
 void mt6628_wlan_flush_keys(struct mt6628_wlan *wl);
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled);
 struct mt6628_event_sta_statistics;

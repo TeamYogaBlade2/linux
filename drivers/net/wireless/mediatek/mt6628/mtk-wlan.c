@@ -48,6 +48,8 @@
 #define MT6628_FW_DL_MODE_ACK		BIT(31)
 #define MT6628_INIT_EVENT_CMD_RESULT	1
 #define MT6628_INIT_EVENT_SIZE		8
+#define MT6628_INIT_TX_TC0_RESOURCES	8
+#define MT6628_INIT_TX_TIMEOUT_MS	1000
 
 struct mt6628_fw_section {
 	__le32 offset;
@@ -94,6 +96,76 @@ static int mt6628_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 	return ret;
 }
 
+/*
+ * WHLPCR interrupt-enable changes use CMD52 in the downstream driver.
+ * Keep those byte-wide writes separate from the 32-bit ownership commands.
+ */
+static int mt6628_write8(struct mt6628_wlan *wl, u32 reg, u8 val)
+{
+	int ret;
+
+	sdio_claim_host(wl->func);
+	sdio_writeb(wl->func, val, reg, &ret);
+	sdio_release_host(wl->func);
+
+	return ret;
+}
+
+/*
+ * INIT commands use TC0. The downstream driver reserves eight TC0 credits
+ * and polls the release counters before sending another INIT command.
+ * Only the low byte of WTSR0 belongs to TC0; still read WTSR1 so that the
+ * status registers are consumed consistently while the INIT path is active.
+ */
+static int mt6628_init_read_tx_released(struct mt6628_wlan *wl)
+{
+	u32 wtsr0, wtsr1;
+	int ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WTSR0, &wtsr0);
+	if (ret)
+		return ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WTSR1, &wtsr1);
+	if (ret)
+		return ret;
+
+	wl->init_tx_free = min_t(unsigned int,
+				 wl->init_tx_free + (wtsr0 & 0xff),
+				 MT6628_INIT_TX_TC0_RESOURCES);
+
+	return 0;
+}
+
+static int mt6628_init_acquire_resource(struct mt6628_wlan *wl)
+{
+	unsigned long timeout;
+	int ret;
+
+	timeout = jiffies + msecs_to_jiffies(MT6628_INIT_TX_TIMEOUT_MS);
+
+	do {
+		ret = mt6628_init_read_tx_released(wl);
+		if (ret)
+			return ret;
+
+		if (wl->init_tx_free) {
+			wl->init_tx_free--;
+			return 0;
+		}
+
+		usleep_range(50, 100);
+	} while (time_before(jiffies, timeout));
+
+	return -ETIMEDOUT;
+}
+
+static void mt6628_init_release_resource(struct mt6628_wlan *wl)
+{
+	wl->init_tx_free = min_t(unsigned int, wl->init_tx_free + 1,
+				 MT6628_INIT_TX_TC0_RESOURCES);
+}
+
 static int mt6628_poll_ready(struct mt6628_wlan *wl)
 {
 	unsigned int tries = 512;
@@ -131,8 +203,11 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		 wcir, wcir & MT6628_WCIR_CHIP_ID,
 		 !!(wcir & MT6628_WCIR_WLAN_READY));
 
+	ret = mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
+	if (ret)
+		return ret;
+
 	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
-			     MT6628_INT_EN_CLR |
 			     MT6628_FW_OWN_REQ_CLR);
 	if (ret)
 		return ret;
@@ -215,6 +290,13 @@ static int mt6628_fw_own(struct mt6628_wlan *wl)
 int mt6628_wlan_force_firmware_reset(struct mt6628_wlan *wl)
 {
 	int ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret)
+		return ret;
+
+	msleep(10);
 
 	ret = mt6628_write32(wl, MT6628_MCR_WSICR,
 			     MT6628_WSICR_H2D_SW_INT_SET);
@@ -311,6 +393,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	size_t tx_len = ALIGN(pkt_len, MT6628_WLAN_SDIO_BLK_SIZE);
 	u8 seq_num;
 	u8 *pkt;
+	bool resource_reserved = false;
 	int ret;
 
 	pkt = kzalloc(tx_len, GFP_KERNEL);
@@ -328,7 +411,7 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	pkt[2] = 0;			/* ether type offset */
 	pkt[3] = 0;			/* checksum flags: none */
 	pkt[4] = cid;
-	seq_num = ++wl->seq_num;
+	seq_num = ++wl->cmd_seq_num;
 	pkt[5] = seq_num;
 	put_unaligned_le16(0, pkt + 6);
 
@@ -336,6 +419,15 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 		memcpy(pkt + hdr_len, extra, extra_len);
 	if (data_len)
 		memcpy(pkt + hdr_len + extra_len, data, data_len);
+
+	/*
+	 * Reserve an INIT TC0 credit before writing WTDR0. Keep that credit
+	 * consumed until firmware reports it released in WTSR0.
+	 */
+	ret = mt6628_init_acquire_resource(wl);
+	if (ret)
+		goto out_free;
+	resource_reserved = true;
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
 	ret = mt6628_wlan_pm_busy(wl);
@@ -347,6 +439,8 @@ static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
 	sdio_release_host(func);
 
 out_free:
+	if (ret && resource_reserved)
+		mt6628_init_release_resource(wl);
 	kfree(pkt);
 
 	if (ret)
@@ -427,7 +521,8 @@ static int mt6628_download_firmware(struct mt6628_wlan *wl)
 	 * Start the firmware-init command sequence at 1 and keep the final
 	 * sequence number for subsequent runtime commands.
 	 */
-	wl->seq_num = 0;
+	wl->cmd_seq_num = 0;
+	wl->init_tx_free = MT6628_INIT_TX_TC0_RESOURCES;
 
 	dev_info(&wl->func->dev, "firmware %s (%zu bytes)\n", fwname,
 		 fw->size);
@@ -654,6 +749,15 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 	sdio_claim_host(func);
 	ret = sdio_set_block_size(func, 512);
 	sdio_release_host(func);
+	if (ret)
+		goto err_disable;
+
+	/*
+	 * Program the interrupt mask before starting firmware, like
+	 * nicInitializeAdapter() in the downstream driver. Global interrupts
+	 * remain disabled until the runtime path has drained startup status.
+	 */
+	ret = mt6628_write32(wl, MT6628_MCR_WHIER, MT6628_WHIER_RUNTIME);
 	if (ret)
 		goto err_disable;
 

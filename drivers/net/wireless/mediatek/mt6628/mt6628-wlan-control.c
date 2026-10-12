@@ -9,6 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #include "mtk-wlan-hif.h"
 #include "mtk-wlan.h"
@@ -586,11 +587,160 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	mutex_lock(&wl->cfg_mutex);
 	if (pairwise)
 		wl->pairwise_key_mask |= BIT(key_index);
-	else
+	else {
 		wl->group_key_mask |= BIT(key_index);
+
+		/*
+		 * add_key() is issued with tx_key=false for a group key.
+		 * Cache only WEP material, which set_default_key() must replay
+		 * with tx_key=true. A replacement invalidates any previous
+		 * default-key bookkeeping for this index.
+		 */
+		if (wl->default_wep_key_valid &&
+		    wl->default_wep_key == key_index)
+			wl->default_wep_key_valid = false;
+
+		if ((params->cipher == WLAN_CIPHER_SUITE_WEP40 &&
+		     params->key_len == 5) ||
+		    (params->cipher == WLAN_CIPHER_SUITE_WEP104 &&
+		     params->key_len == 13)) {
+			struct mt6628_wep_key *wep = &wl->wep_keys[key_index];
+
+			memzero_explicit(wep, sizeof(*wep));
+			wep->valid = true;
+			wep->cipher = params->cipher;
+			wep->key_len = params->key_len;
+			memcpy(wep->key, params->key, params->key_len);
+		} else {
+			memzero_explicit(&wl->wep_keys[key_index],
+					 sizeof(wl->wep_keys[key_index]));
+		}
+	}
 	mutex_unlock(&wl->cfg_mutex);
 
 	return 0;
+}
+
+static int
+mt6628_wlan_program_wep_key(struct mt6628_wlan *wl, u8 key_index,
+			    const struct mt6628_wep_key *key, bool tx_key)
+{
+	struct mt6628_cmd_add_remove_key cmd = {};
+	u8 response[4];
+	size_t response_len;
+
+	if (!key->valid || !key->key_len ||
+	    key->key_len > sizeof(key->key))
+		return -EINVAL;
+
+	switch (key->cipher) {
+	case WLAN_CIPHER_SUITE_WEP40:
+		if (key->key_len != 5)
+			return -EINVAL;
+		cmd.algorithm_id = MT6628_CIPHER_SUITE_WEP40;
+		break;
+	case WLAN_CIPHER_SUITE_WEP104:
+		if (key->key_len != 13)
+			return -EINVAL;
+		cmd.algorithm_id = MT6628_CIPHER_SUITE_WEP104;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	cmd.add_remove = 1;
+	cmd.tx_key = tx_key;
+	cmd.key_type = 0;
+	cmd.is_authenticator = 0;
+	eth_broadcast_addr(cmd.peer_addr);
+	cmd.net_type_index = 0;
+	cmd.key_id = key_index;
+	cmd.key_len = key->key_len;
+	memcpy(cmd.key_material, key->key, key->key_len);
+
+	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
+				    &cmd, sizeof(cmd), response,
+				    sizeof(response), &response_len,
+				    MT6628_EVENT_ID_CMD_RESULT, 1000);
+}
+
+int mt6628_wlan_set_default_key(struct mt6628_wlan *wl, u8 key_index,
+				bool unicast, bool multicast)
+{
+	struct mt6628_wep_key target = {}, previous = {};
+	u8 previous_index = 0;
+	bool previous_valid = false;
+	int ret, restore_ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+	if (key_index > MT6628_KEY_INDEX_MAX)
+		return -EINVAL;
+	if (!unicast && !multicast)
+		return -EINVAL;
+
+	/*
+	 * The MT6628 key command has a transmit-key selector but no separate
+	 * unicast/multicast default-key selectors. Only installed WEP group
+	 * keys can therefore be selected through this callback.
+	 */
+	mutex_lock(&wl->cfg_mutex);
+	if (!(wl->group_key_mask & BIT(key_index)) ||
+	    !wl->wep_keys[key_index].valid) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -EOPNOTSUPP;
+	}
+
+	target = wl->wep_keys[key_index];
+	if (wl->default_wep_key_valid &&
+	    wl->default_wep_key != key_index &&
+	    wl->default_wep_key <= MT6628_KEY_INDEX_MAX &&
+	    wl->wep_keys[wl->default_wep_key].valid) {
+		previous_index = wl->default_wep_key;
+		previous = wl->wep_keys[previous_index];
+		previous_valid = true;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	/* Stop using the old WEP key for transmission before selecting the new one. */
+	if (previous_valid) {
+		ret = mt6628_wlan_program_wep_key(wl, previous_index,
+						  &previous, false);
+		if (ret)
+			goto out;
+	}
+
+	ret = mt6628_wlan_program_wep_key(wl, key_index, &target, true);
+	if (ret) {
+		/*
+		 * Roll back the previous default if the new key could not be
+		 * selected. If rollback also fails, stop claiming that a
+		 * particular default key is active.
+		 */
+		if (previous_valid) {
+			restore_ret = mt6628_wlan_program_wep_key(
+				wl, previous_index, &previous, true);
+			if (restore_ret) {
+				mutex_lock(&wl->cfg_mutex);
+				wl->default_wep_key_valid = false;
+				mutex_unlock(&wl->cfg_mutex);
+				dev_warn(&wl->func->dev,
+					 "failed to restore default WEP key: %d\n",
+					 restore_ret);
+			}
+		}
+		goto out;
+	}
+
+	mutex_lock(&wl->cfg_mutex);
+	wl->default_wep_key = key_index;
+	wl->default_wep_key_valid = true;
+	mutex_unlock(&wl->cfg_mutex);
+
+out:
+	memzero_explicit(&target, sizeof(target));
+	memzero_explicit(&previous, sizeof(previous));
+	return ret;
 }
 
 int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
@@ -637,8 +787,14 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 		mutex_lock(&wl->cfg_mutex);
 		if (pairwise)
 			wl->pairwise_key_mask &= ~BIT(key_index);
-		else
+		else {
 			wl->group_key_mask &= ~BIT(key_index);
+			memzero_explicit(&wl->wep_keys[key_index],
+					 sizeof(wl->wep_keys[key_index]));
+			if (wl->default_wep_key_valid &&
+			    wl->default_wep_key == key_index)
+				wl->default_wep_key_valid = false;
+		}
 		mutex_unlock(&wl->cfg_mutex);
 	}
 
@@ -664,6 +820,9 @@ void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 	group_mask = wl->group_key_mask;
 	wl->pairwise_key_mask = 0;
 	wl->group_key_mask = 0;
+	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++)
+		memzero_explicit(&wl->wep_keys[i], sizeof(wl->wep_keys[i]));
+	wl->default_wep_key_valid = false;
 	mutex_unlock(&wl->cfg_mutex);
 
 	/*

@@ -495,6 +495,26 @@ static int mt6628_cfg80211_del_key(struct wiphy *wiphy,
 	return mt6628_wlan_del_key(wl, key_index, pairwise, mac_addr);
 }
 
+static int mt6628_cfg80211_set_default_key(struct wiphy *wiphy,
+					   struct net_device *ndev,
+					   int link_id, u8 key_index,
+					   bool unicast, bool multicast)
+{
+	struct mt6628_wlan *wl;
+
+	if (!ndev)
+		return -EINVAL;
+	if (link_id != -1)
+		return -EOPNOTSUPP;
+
+	wl = *(struct mt6628_wlan **)netdev_priv(ndev);
+	if (!wl)
+		return -ENODEV;
+
+	return mt6628_wlan_set_default_key(wl, key_index,
+					   unicast, multicast);
+}
+
 static int mt6628_cfg80211_set_power_mgmt(struct wiphy *wiphy,
 					struct net_device *dev,
 					bool enabled, int timeout)
@@ -911,6 +931,7 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.disconnect = mt6628_cfg80211_disconnect,
 	.add_key = mt6628_cfg80211_add_key,
 	.del_key = mt6628_cfg80211_del_key,
+	.set_default_key = mt6628_cfg80211_set_default_key,
 	.set_power_mgmt = mt6628_cfg80211_set_power_mgmt,
 	.mgmt_tx = mt6628_cfg80211_mgmt_tx,
 	.get_station = mt6628_cfg80211_get_station,
