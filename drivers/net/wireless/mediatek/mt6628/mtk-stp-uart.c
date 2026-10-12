@@ -769,6 +769,9 @@ static int mt6628_wmt_set_baud(struct mt6628_wmt *wmt)
 {
 	u8 cmd[] = { 0x01, 0x04, 0x05, 0x00, 0x01, 0, 0, 0, 0x00 };
 	u8 response[MT6628_WMT_RESPONSE_MAX];
+	u8 expected_baud_evt[] = {
+		0x02, 0x04, 0x06, 0x00, 0x00, 0x02, 0, 0, 0, 0,
+	};
 	size_t response_len = sizeof(response);
 	unsigned long timeout;
 	int ret;
@@ -857,6 +860,26 @@ static int mt6628_wmt_set_baud(struct mt6628_wmt *wmt)
 	    memcmp(response, mt6628_wmt_wakeup_evt,
 		   sizeof(mt6628_wmt_wakeup_evt)))
 		return -EPROTO;
+
+	/*
+	 * The downstream performs a baud-rate query after waking the chip.
+	 * Verify that both ends are operating at the requested rate before
+	 * beginning firmware download.
+	 */
+	put_unaligned_le32(wmt->baudrate, expected_baud_evt + 6);
+	response_len = sizeof(response);
+	ret = mt6628_wmt_cmd(wmt, mt6628_wmt_query_baud_cmd,
+			     sizeof(mt6628_wmt_query_baud_cmd), 0x04, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+	if (response_len != sizeof(expected_baud_evt) ||
+	    memcmp(response, expected_baud_evt, sizeof(expected_baud_evt))) {
+		dev_err(&wmt->serdev->dev,
+			"unexpected baud-rate event after switching to %u baud\n",
+			wmt->baudrate);
+		return -EPROTO;
+	}
 
 	return 0;
 }
