@@ -483,8 +483,14 @@ static size_t mt6628_uart_receive_buf(struct serdev_device *serdev,
 	return copied;
 }
 
+static void mt6628_uart_write_wakeup(struct serdev_device *serdev)
+{
+	serdev_device_write_wakeup(serdev);
+}
+
 static const struct serdev_device_ops mt6628_uart_serdev_ops = {
 	.receive_buf = mt6628_uart_receive_buf,
+	.write_wakeup = mt6628_uart_write_wakeup,
 };
 
 static int mt6628_stp_send_mandatory(struct mt6628_wmt *wmt,
