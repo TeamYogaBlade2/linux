@@ -834,7 +834,19 @@ mtk_iommu_v1_get_or_create_mapping(struct device *dev)
 	mtk_mapping = data->mapping;
 	if (!mtk_mapping) {
 		/* MTK IOMMU supports a 4 GiB IOVA address space. */
-		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
+		/*
+		 * Keep IOVA 0 unmapped. The MT6589 OVL currently fetches
+		 * its framebuffer from IOVA 0, but its internal RDMA keeps
+		 * reporting EOF-abnormal. Test with a non-zero DMA address
+		 * before attributing the failure to the display routing.
+		 *
+		 * The ARM IOMMU allocator rounds its bitmap capacity to
+		 * 128 MiB chunks. Limit the mapping to 31 chunks so that
+		 * the resulting IOVA range stays within the 32-bit space
+		 * even with the non-zero base.
+		 */
+		mtk_mapping = arm_iommu_create_mapping(dev, SZ_2M,
+						       (1ULL << 32) - SZ_128M);
 		if (IS_ERR(mtk_mapping))
 			goto out_unlock;
 		if (!mtk_mapping) {
