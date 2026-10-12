@@ -158,6 +158,9 @@
 #define DSI_STATE_DBG3		0x154
 #define DSI_STATE_DBG4		0x158
 #define DSI_STATE_DBG6		0x160
+#define DSI_STATE_DBG7		0x164
+#define DSI_STATE_DBG8		0x168
+#define DSI_STATE_DBG9		0x16c
 /*
  * Field masks for DSI_STATE_DBG0.  These are spelled as u32 constants rather
  * than GENMASK() because GENMASK() expands to an unsigned long expression,
@@ -782,6 +785,7 @@ static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 {
 	u32 con_ctrl, mode_ctrl, txrx, start, sta, intsta, inten, trig, dbg0;
 	u32 phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6;
+	u32 dbg7, dbg8, dbg9;
 	u32 psctrl, vact, hsa, hbp, hfp;
 
 	/*
@@ -818,21 +822,24 @@ static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 	dbg3 = readl(dsi->regs + DSI_STATE_DBG3);
 	dbg4 = readl(dsi->regs + DSI_STATE_DBG4);
 	dbg6 = readl(dsi->regs + DSI_STATE_DBG6);
+	dbg7 = readl(dsi->regs + DSI_STATE_DBG7);
+	dbg8 = readl(dsi->regs + DSI_STATE_DBG8);
+	dbg9 = readl(dsi->regs + DSI_STATE_DBG9);
 	psctrl = readl(dsi->regs + DSI_PSCTRL);
 	vact = readl(dsi->regs + DSI_VACT_NL);
 	hsa = readl(dsi->regs + DSI_HSA_WC);
 	hbp = readl(dsi->regs + DSI_HBP_WC);
 	hfp = readl(dsi->regs + DSI_HFP_WC);
-	dev_info(dsi->host.dev, "DSI %s detail: phy_lc=%#x phy_ld0=%#x dbg1=%#x dbg2=%#x dbg3=%#x dbg4=%#x dbg6=%#x ps=%#x vact=%#x hsa=%#x hbp=%#x hfp=%#x\n",
+	dev_info(dsi->host.dev, "DSI %s detail: phy_lc=%#x phy_ld0=%#x dbg1=%#x dbg2=%#x dbg3=%#x dbg4=%#x dbg6=%#x dbg7=%#x dbg8=%#x dbg9=%#x ps=%#x vact=%#x hsa=%#x hbp=%#x hfp=%#x\n",
 		 when, phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6,
-		 psctrl, vact, hsa, hbp, hfp);
+		 dbg7, dbg8, dbg9, psctrl, vact, hsa, hbp, hfp);
 
 	dev_info(dsi->host.dev,
 		 "DSI %s: con_ctrl=%#x mode_ctrl=%#x txrx=%#x start=%#x "
-		 "sta=%#x intsta=%#x trig=%#x ack=%u ctl_state=%#x "
-		 "hx_state=%#x rx0=%#x\n",
-		 when, con_ctrl, mode_ctrl, txrx, start, sta, intsta,
-		 trig, !!(trig & TRIG_ACK),
+		 "sta=%#x intsta=%#x inten=%#x trig=%#x ack=%u dbg0=%#x "
+		 "ctl_state=%#x hx_state=%#x rx0=%#x\n",
+		 when, con_ctrl, mode_ctrl, txrx, start, sta, intsta, inten,
+		 trig, !!(trig & TRIG_ACK), dbg0,
 		 FIELD_GET(CTL_STATE_C, dbg0),
 		 FIELD_GET(HX_TX_STATE_C, dbg0),
 		 readb(dsi->regs + DSI_RX_DATA0));
@@ -1276,7 +1283,9 @@ void mtk_dsi_ddp_start(struct device *dev)
 	 */
 	mtk_dsi_lane_ready(dsi);
 	mtk_dsi_clk_hs_mode(dsi, true);
+	mtk_dsi_dump_status(dsi, "ddp-pre-start");
 	mtk_output_dsi_enable(dsi);
+	mtk_dsi_dump_status(dsi, "ddp-post-start");
 }
 
 void mtk_dsi_ddp_stop(struct device *dev)
