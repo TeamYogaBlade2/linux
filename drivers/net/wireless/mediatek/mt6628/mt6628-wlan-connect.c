@@ -1296,19 +1296,24 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			return -ENOMEM;
 	} else if (secure) {
 		if (!mt6628_connect_is_wpa_psk(sme, &auth_mode, &enc_status)) {
-			dev_warn(&wl->func->dev,
-				 "connect rejected: unsupported WPA params: "
-				 "versions=%#x group=%#x pairwise_count=%u "
-				 "pairwise0=%#x akm_count=%u akm0=%#x mfp=%u\n",
-				 sme->crypto.wpa_versions,
-				 sme->crypto.cipher_group,
-				 sme->crypto.n_ciphers_pairwise,
-				 sme->crypto.n_ciphers_pairwise ?
-				 sme->crypto.ciphers_pairwise[0] : 0,
-				 sme->crypto.n_akm_suites,
-				 sme->crypto.n_akm_suites ?
-				 sme->crypto.akm_suites[0] : 0,
-				 sme->mfp);
+		dev_warn(&wl->func->dev,
+			 "connect rejected: unsupported WPA params: "
+			 "versions=%#x group=%#x pairwise_count=%u "
+			 "pairwise0=%#x akm_count=%u akm0=%#x mfp=%u "
+			 "control_port=%u control_port_nl80211=%u key_len=%u key_present=%u\n",
+			 sme->crypto.wpa_versions,
+			 sme->crypto.cipher_group,
+			 sme->crypto.n_ciphers_pairwise,
+			 sme->crypto.n_ciphers_pairwise ?
+			 sme->crypto.ciphers_pairwise[0] : 0,
+			 sme->crypto.n_akm_suites,
+			 sme->crypto.n_akm_suites ?
+			 sme->crypto.akm_suites[0] : 0,
+			 sme->mfp,
+			 sme->crypto.control_port,
+			 sme->crypto.control_port_over_nl80211,
+			 sme->key_len,
+			 !!sme->key);
 			return -EOPNOTSUPP;
 		}
 	} else if (sme->mfp != NL80211_MFP_NO ||
