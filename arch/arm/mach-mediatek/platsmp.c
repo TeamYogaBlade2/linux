@@ -55,6 +55,15 @@ static const struct mtk_hotplug_info mtk_mt6572_hotplug = {
 	.spm_l1_pdn_bits = { BIT(0) },
 	.spm_l1_pdn_ack_bits = { BIT(8) },
 };
+
+static const struct mtk_hotplug_info mtk_mt6582_hotplug = {
+	.spm_compat = "mediatek,mt6582-scpsys",
+	.mcusys_compat = "mediatek,mt6582-mcusys",
+	.spm_pwr_con = { 0x218, 0x21c, 0x220 },
+	.spm_pwr_status_bits = { BIT(11), BIT(10), BIT(9) },
+	.spm_l1_pdn_bits = { BIT(0) },
+	.spm_l1_pdn_ack_bits = { BIT(8) },
+};
 #endif
 
 struct mtk_smp_boot_info {
@@ -82,6 +91,15 @@ static const struct mtk_smp_boot_info mtk_mt6572_boot = {
 #endif
 };
 
+static const struct mtk_smp_boot_info mtk_mt6582_boot = {
+	0x10202000, 0x34,
+	{ 0x534c4131, 0x4c415332, 0x41534c33 },
+	{ 0x38, 0x3c, 0x40 },
+#ifdef CONFIG_HOTPLUG_CPU
+	&mtk_mt6582_hotplug,
+#endif
+};
+
 static const struct mtk_smp_boot_info mtk_mt6589_boot = {
 	0x10002000, 0x34,
 	{ 0x534c4131, 0x4c415332, 0x41534c33 },
@@ -103,7 +121,7 @@ static const struct of_device_id mtk_tz_smp_boot_infos[] __initconst = {
 
 static const struct of_device_id mtk_smp_boot_infos[] __initconst = {
 	{ .compatible   = "mediatek,mt6572", .data = &mtk_mt6572_boot },
-	{ .compatible   = "mediatek,mt6582", .data = &mtk_mt7623_boot },
+	{ .compatible   = "mediatek,mt6582", .data = &mtk_mt6582_boot },
 	{ .compatible   = "mediatek,mt6589", .data = &mtk_mt6589_boot },
 	{ .compatible   = "mediatek,mt7623", .data = &mtk_mt7623_boot },
 	{ .compatible   = "mediatek,mt7629", .data = &mtk_mt7623_boot },
