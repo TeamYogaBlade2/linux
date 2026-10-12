@@ -1450,12 +1450,39 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct mtk_disp_ovl *priv;
+	struct iommu_domain *domain;
+	struct iommu_fwspec *fwspec;
 	int irq;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
+
+	priv->data = of_device_get_match_data(dev);
+	if (!priv->data)
+		return -ENODEV;
+
+	/*
+	 * MT6589 allocates display buffers against the OVL device.
+	 * Do not start the display pipeline without the IOMMU domain
+	 * needed to interpret its DMA addresses.
+	 *
+	 * The IOMMU provider may not have been ready when the bus first
+	 * configured DMA. Deferring this probe lets the driver core retry
+	 * DMA configuration after the provider becomes available.
+	 */
+	if (priv->data->has_dispsys_cfg) {
+		fwspec = dev_iommu_fwspec_get(dev);
+		domain = iommu_get_domain_for_dev(dev);
+		if (!fwspec || !fwspec->num_ids ||
+		    !dev->iommu_group || !domain)
+			return dev_err_probe(dev, -EPROBE_DEFER,
+					     "waiting for M4U domain "
+					     "(fwspec=%u group=%u domain=%u)\n",
+					     !!fwspec, !!dev->iommu_group,
+					     !!domain);
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -1488,8 +1515,6 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 	 * node whose data fails the invariant check must not be left with
 	 * its clocks on and its registers half-written.
 	 */
-	priv->data = of_device_get_match_data(dev);
-
 	ret = mtk_disp_ovl_check_data(dev, priv->data);
 	if (ret)
 		return ret;
