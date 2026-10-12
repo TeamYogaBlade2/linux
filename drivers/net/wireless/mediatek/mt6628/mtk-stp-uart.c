@@ -960,8 +960,12 @@ static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 		cmd[0] = 0x01;
 		cmd[1] = 0x01;
 		put_unaligned_le16(frag + 1, cmd + 2);
-		cmd[4] = offset == MT6628_WMT_PATCH_HDR_SIZE ? 0x01 :
-			 (offset + frag == fw->size ? 0x03 : 0x02);
+		if (offset + frag == fw->size)
+			cmd[4] = 0x03;	/* LAST */
+		else if (offset == MT6628_WMT_PATCH_HDR_SIZE)
+			cmd[4] = 0x01;	/* FIRST */
+		else
+			cmd[4] = 0x02;	/* MIDDLE */
 		memcpy(cmd + 5, fw->data + offset, frag);
 		response_len = sizeof(response);
 		ret = mt6628_wmt_cmd(wmt, cmd, frag + 5, 0x01, 1000,
