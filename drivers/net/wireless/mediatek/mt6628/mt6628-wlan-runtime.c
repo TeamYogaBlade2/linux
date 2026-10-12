@@ -628,6 +628,8 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 			       u32 *wtsr0_out, u32 *wtsr1_out)
 {
 	u32 wtsr0, wtsr1;
+	u32 whlpcr = 0, whcr = 0, whier = 0, wrplr = 0;
+	int diag_ret = 0;
 	int ret;
 
 	ret = mt6628_wlan_pm_busy(wl);
@@ -640,9 +642,27 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 		wtsr1 = sdio_readl(wl->func, MT6628_MCR_WTSR1, &ret);
 	else
 		wtsr1 = 0;
+	if (!ret) {
+		whlpcr = sdio_readl(wl->func, MT6628_MCR_WHLPCR, &diag_ret);
+		if (!diag_ret)
+			whcr = sdio_readl(wl->func, MT6628_MCR_WHCR, &diag_ret);
+		if (!diag_ret)
+			whier = sdio_readl(wl->func, MT6628_MCR_WHIER, &diag_ret);
+		if (!diag_ret)
+			wrplr = sdio_readl(wl->func, MT6628_MCR_WRPLR, &diag_ret);
+	}
 	sdio_release_host(wl->func);
 	if (ret)
 		return ret;
+	if (!diag_ret)
+		dev_warn_ratelimited(&wl->func->dev,
+			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
+			"WHIER=%#010x WRPLR=%#010x\n",
+			whlpcr, whcr, whier, wrplr);
+	else
+		dev_warn_ratelimited(&wl->func->dev,
+			"failed to read TX poll diagnostic registers: %d\n",
+			diag_ret);
 
 	*wtsr0_out = wtsr0;
 	*wtsr1_out = wtsr1;
@@ -1046,9 +1066,13 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		}
 	}
 
-	if (wl->runtime_started)
-		mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
-				      MT6628_INT_EN_SET);
+	if (wl->runtime_started) {
+		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+					    MT6628_INT_EN_SET);
+		if (ret)
+			dev_err_ratelimited(&wl->func->dev,
+				"failed to re-enable SDIO interrupts: %d\n", ret);
+	}
 	sdio_release_host(wl->func);
 
 	if (!skb_queue_empty(&wl->event_queue))
@@ -1094,9 +1118,18 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 	 * same code as in every other path.
 	 */
 	ret = mt6628_wlan_pm_busy_irq(wl);
-	if (!ret)
-		mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
-				      MT6628_INT_EN_CLR);
+	if (!ret) {
+		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
+					    MT6628_INT_EN_CLR);
+		if (ret)
+			dev_warn_ratelimited(&wl->func->dev,
+				"failed to mask SDIO interrupts in callback: %d\n",
+				ret);
+	} else {
+		dev_warn_ratelimited(&wl->func->dev,
+			"failed to acquire driver ownership in SDIO IRQ: %d\n",
+			ret);
+	}
 	schedule_work(&wl->irq_work);
 }
 
