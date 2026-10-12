@@ -281,6 +281,7 @@ static int mt6628_bt_probe(struct platform_device *pdev)
 {
 	struct mt6628_bt *bt;
 	struct hci_dev *hdev;
+	enum mt6628_stp_hif hif;
 	int ret;
 
 	bt = devm_kzalloc(&pdev->dev, sizeof(*bt), GFP_KERNEL);
@@ -291,16 +292,16 @@ static int mt6628_bt_probe(struct platform_device *pdev)
 	if (!bt->wmt)
 		return -EPROBE_DEFER;
 
+	ret = mt6628_stp_get_hif(bt->wmt, &hif);
+	if (ret)
+		return ret;
+
 	hdev = hci_alloc_dev();
 	if (!hdev)
 		return -ENOMEM;
 
 	bt->hdev = hdev;
-#ifdef CONFIG_MTK_MT6628_STP_UART
-	hdev->bus = HCI_UART;
-#else
-	hdev->bus = HCI_SDIO;
-#endif
+	hdev->bus = hif == MT6628_STP_HIF_UART ? HCI_UART : HCI_SDIO;
 	hdev->open = mt6628_bt_open;
 	hdev->close = mt6628_bt_close;
 	hdev->flush = mt6628_bt_flush;

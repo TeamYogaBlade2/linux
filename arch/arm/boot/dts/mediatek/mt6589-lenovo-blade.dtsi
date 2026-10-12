@@ -95,6 +95,8 @@
 	mt6628_pwrseq: mt6628-pwrseq {
 		compatible = "mediatek,mt6628-pwrseq";
 		status = "okay";
+		/* Switch to "sdio" to select function 2 instead. */
+		mediatek,bgf-hif = "uart";
 		mediatek,rtc = <&mt6320_rtc>;
 
 		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
@@ -471,6 +473,7 @@
 
 	mt6628-stp-uart {
 		compatible = "mediatek,mt6628-stp-uart";
+		mediatek,combo-pwrseq = <&mt6628_pwrseq>;
 		mediatek,baudrate = <4000000>;
 		mediatek,coex-ant-mode = <1>;
 		mediatek,sdio-driving-cfg = <0x00077777>;
@@ -710,8 +713,9 @@
 
 	mt6628-stp@2 {
 		reg = <2>;
-		/* UART_RTS pull down */
-		status = "disabled";
+		mediatek,combo-pwrseq = <&mt6628_pwrseq>;
+		/* Probe is gated by mediatek,bgf-hif on mt6628_pwrseq. */
+		status = "okay";
 
 		/*
 		 * WiFi/BT/FM antenna multiplexing mode and SDIO output drive

@@ -25,6 +25,8 @@
 
 #include <linux/mfd/mt6628.h>
 
+#include "mtk-stp-internal.h"
+
 #define MT6628_STP_CHLPCR		0x0004
 #define MT6628_STP_CHISR		0x0010
 #define MT6628_STP_CHIER		0x0014
@@ -559,7 +561,7 @@ out_free:
 	return ret;
 }
 
-int mt6628_stp_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
+static int mt6628_sdio_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
 			const void *buf, size_t len)
 {
 	int ret;
@@ -573,9 +575,8 @@ int mt6628_stp_send(struct mt6628_wmt *wmt, enum mt6628_stp_task task,
 
 	return ret ? ret : len;
 }
-EXPORT_SYMBOL_GPL(mt6628_stp_send);
 
-int mt6628_stp_register_rx(struct mt6628_wmt *wmt,
+static int mt6628_sdio_register_rx(struct mt6628_wmt *wmt,
 				 enum mt6628_stp_task task,
 				 mt6628_stp_rx_cb cb, void *priv)
 {
@@ -593,9 +594,8 @@ int mt6628_stp_register_rx(struct mt6628_wmt *wmt,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(mt6628_stp_register_rx);
 
-void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
+static void mt6628_sdio_unregister_rx(struct mt6628_wmt *wmt,
 				      enum mt6628_stp_task task,
 				      mt6628_stp_rx_cb cb, void *priv)
 {
@@ -610,7 +610,6 @@ void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
 	}
 	mutex_unlock(&wmt->rx_lock);
 }
-EXPORT_SYMBOL_GPL(mt6628_stp_unregister_rx);
 
 static int mt6628_wmt_cmd(struct mt6628_wmt *wmt,
 			  const u8 *cmd, size_t len, u8 opcode,
@@ -1309,7 +1308,7 @@ static int mt6628_wmt_set_sdio_driving(struct mt6628_wmt *wmt)
 			      NULL, NULL);
 }
 
-int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
+static int mt6628_sdio_wmt_func_ctrl(struct mt6628_wmt *wmt,
 			 enum mt6628_wmt_func func, bool on)
 {
 	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
@@ -1322,9 +1321,8 @@ int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 	return mt6628_wmt_cmd(wmt, cmd, ARRAY_SIZE(cmd), 0x06, 1000,
 			      NULL, NULL);
 }
-EXPORT_SYMBOL_GPL(mt6628_wmt_func_ctrl);
 
-int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
+static int mt6628_sdio_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
 {
 	u32 value;
 
@@ -1336,9 +1334,8 @@ int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
 	return mt6628_wmt_reg_write(wmt, 0x80050078,
 				    value, 0x7U << 28);
 }
-EXPORT_SYMBOL_GPL(mt6628_wmt_gps_sync_ctrl);
 
-int mt6628_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
+static int mt6628_sdio_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
 			 enum mt6628_wmt_dsns type)
 {
 	static const u8 expected[] = {
@@ -1367,7 +1364,53 @@ int mt6628_wmt_dsns_ctrl(struct mt6628_wmt *wmt,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(mt6628_wmt_dsns_ctrl);
+
+static int mt6628_sdio_send_op(void *context, enum mt6628_stp_task task,
+                               const void *buf, size_t len)
+{
+	return mt6628_sdio_send(context, task, buf, len);
+}
+
+static int mt6628_sdio_register_rx_op(void *context,
+                                      enum mt6628_stp_task task,
+                                      mt6628_stp_rx_cb cb, void *priv)
+{
+	return mt6628_sdio_register_rx(context, task, cb, priv);
+}
+
+static void mt6628_sdio_unregister_rx_op(void *context,
+                                          enum mt6628_stp_task task,
+                                          mt6628_stp_rx_cb cb, void *priv)
+{
+	mt6628_sdio_unregister_rx(context, task, cb, priv);
+}
+
+static int mt6628_sdio_wmt_func_ctrl_op(void *context,
+                                        enum mt6628_wmt_func func, bool on)
+{
+	return mt6628_sdio_wmt_func_ctrl(context, func, on);
+}
+
+static int mt6628_sdio_wmt_gps_sync_ctrl_op(void *context, bool on)
+{
+	return mt6628_sdio_wmt_gps_sync_ctrl(context, on);
+}
+
+static int mt6628_sdio_wmt_dsns_ctrl_op(void *context,
+                                       enum mt6628_wmt_dsns type)
+{
+	return mt6628_sdio_wmt_dsns_ctrl(context, type);
+}
+
+static const struct mt6628_stp_transport_ops mt6628_sdio_transport_ops = {
+	.hif = MT6628_STP_HIF_SDIO,
+	.send = mt6628_sdio_send_op,
+	.register_rx = mt6628_sdio_register_rx_op,
+	.unregister_rx = mt6628_sdio_unregister_rx_op,
+	.wmt_func_ctrl = mt6628_sdio_wmt_func_ctrl_op,
+	.wmt_gps_sync_ctrl = mt6628_sdio_wmt_gps_sync_ctrl_op,
+	.wmt_dsns_ctrl = mt6628_sdio_wmt_dsns_ctrl_op,
+};
 
 static const struct mfd_cell mt6628_stp_cells[] = {
 	{
@@ -1391,6 +1434,8 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	int ret;
 
 	if (func->num != 2)
+		return -ENODEV;
+	if (!mt6628_stp_transport_selected(&func->dev, "sdio"))
 		return -ENODEV;
 
 	dev_info(&func->dev, "MT6628 shared STP function detected\n");
@@ -1475,11 +1520,18 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	if (ret)
 		goto err_irq_disable;
 
+	ret = mt6628_stp_register_transport(&func->dev, wmt,
+					    &mt6628_sdio_transport_ops);
+	if (ret)
+		goto err_irq_disable;
+
 	ret = mfd_add_devices(&func->dev, PLATFORM_DEVID_AUTO,
 			      mt6628_stp_cells,
 			      ARRAY_SIZE(mt6628_stp_cells), NULL, 0, NULL);
-	if (ret)
+	if (ret) {
+		mt6628_stp_unregister_transport(wmt);
 		goto err_irq_disable;
+	}
 
 	dev_info(&func->dev, "MT6628 shared STP transport ready\n");
 	return 0;
@@ -1514,6 +1566,7 @@ static void mt6628_stp_remove(struct sdio_func *func)
 
 	/* Children may need FUNC_OFF, so keep transport/IRQ alive first. */
 	mfd_remove_devices(&func->dev);
+	mt6628_stp_unregister_transport(wmt);
 	WRITE_ONCE(wmt->stopping, true);
 	wake_up_all(&wmt->tx_waitq);
 

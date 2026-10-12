@@ -6,6 +6,11 @@
 
 struct mt6628_wmt;
 
+enum mt6628_stp_hif {
+	MT6628_STP_HIF_SDIO,
+	MT6628_STP_HIF_UART,
+};
+
 enum mt6628_stp_task {
 	MT6628_STP_TASK_BT = 0,
 	MT6628_STP_TASK_FM = 1,
@@ -39,6 +44,7 @@ int mt6628_stp_register_rx(struct mt6628_wmt *wmt,
 void mt6628_stp_unregister_rx(struct mt6628_wmt *wmt,
 				    enum mt6628_stp_task task,
 				    mt6628_stp_rx_cb cb, void *priv);
+int mt6628_stp_get_hif(struct mt6628_wmt *wmt, enum mt6628_stp_hif *hif);
 int mt6628_wmt_func_ctrl(struct mt6628_wmt *wmt,
 				enum mt6628_wmt_func func, bool on);
 int mt6628_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on);
