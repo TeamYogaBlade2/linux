@@ -281,6 +281,7 @@ struct mtk_dsi_driver_data {
 	 */
 	bool has_mem_conti;
 	bool has_lane_clk;
+	bool has_reset;
 };
 
 struct mtk_dsi {
@@ -291,6 +292,7 @@ struct mtk_dsi {
 	struct drm_bridge *next_bridge;
 	struct drm_connector *connector;
 	struct phy *phy;
+	struct reset_control *rstc;
 
 	void __iomem *regs;
 
@@ -986,6 +988,21 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		}
 	}
 
+	/*
+	 * MT6589 has a separate DISPSYS reset for the DSI controller.
+	 * Resetting DSI_COM_CTRL alone does not release this external
+	 * reset.  Pulse it with the engine clocks enabled before
+	 * programming the controller registers.
+	 */
+	if (dsi->rstc) {
+		ret = reset_control_reset(dsi->rstc);
+		if (ret) {
+			dev_err(dev, "Failed to reset DSI controller: %d\n",
+				ret);
+			goto err_disable_lane_clk;
+		}
+	}
+
 	mtk_dsi_enable(dsi);
 
 	/*
@@ -1015,6 +1032,9 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	mtk_dsi_set_interrupt_enable(dsi);
 
 	return 0;
+err_disable_lane_clk:
+	if (dsi->lane_clk)
+		clk_disable_unprepare(dsi->lane_clk);
 err_disable_digital_clk:
 	clk_disable_unprepare(dsi->digital_clk);
 err_disable_engine_clk:
@@ -1546,6 +1566,13 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 
 	dsi->driver_data = of_device_get_match_data(dev);
 
+	if (dsi->driver_data->has_reset) {
+		dsi->rstc = devm_reset_control_get(dev, NULL);
+		if (IS_ERR(dsi->rstc))
+			return dev_err_probe(dev, PTR_ERR(dsi->rstc),
+					     "Failed to get DSI reset control\n");
+	}
+
 	dsi->engine_clk = devm_clk_get(dev, "engine");
 	if (IS_ERR(dsi->engine_clk))
 		return dev_err_probe(dev, PTR_ERR(dsi->engine_clk),
@@ -1638,6 +1665,7 @@ static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.timcon2_no_da_hs_sync = true,
 	.has_mem_conti = true,
 	.has_lane_clk = true,
+	.has_reset = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
