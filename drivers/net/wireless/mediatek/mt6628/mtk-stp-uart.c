@@ -715,6 +715,7 @@ static int mt6628_wmt_reg_read(struct mt6628_wmt *wmt,
 	u8 cmd[20] = { 0x01, 0x08, 0x10, 0x00, 0x02, 0x01, 0x00, 0x01 };
 	u8 response[MT6628_WMT_RESPONSE_MAX];
 	size_t response_len = sizeof(response);
+	u16 payload_len;
 	int ret;
 
 	put_unaligned_le32(addr, cmd + 8);
