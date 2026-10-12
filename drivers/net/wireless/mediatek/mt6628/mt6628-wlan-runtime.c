@@ -581,6 +581,7 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 {
 	unsigned long flags;
 	unsigned int i;
+	unsigned int cmd_credits;
 	u8 released;
 	bool wake = false;
 
@@ -598,8 +599,15 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 			wake = true;
 		}
 	}
+	cmd_credits = wl->tx_free[MT6628_TX_TC_CMD];
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
 
+	if (wake)
+		dev_info_ratelimited(&wl->func->dev,
+			"TX credits released: WTSR0=%#010x WTSR1=%#010x "
+			"CMD TC free=%u/%u\n",
+			wtsr0, wtsr1, cmd_credits,
+			wl->tx_max[MT6628_TX_TC_CMD]);
 	if (wake)
 		wake_up_all(&wl->tx_wait);
 	if (wake) {
@@ -912,18 +920,37 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
 		u32 whisr, wtsr0, wtsr1, rx_len;
 		u16 rx0_len, rx1_len;
+		int tx_status_ret;
 
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
-		if (ret)
+		if (ret) {
+			dev_warn_ratelimited(&wl->func->dev,
+				"failed to read WHISR in IRQ worker: %d\n", ret);
 			break;
+		}
 
 		/*
 		 * The MT6628 downstream also treats non-zero WTSR values as a
 		 * TX-done indication.  In enhanced SDIO mode the status may be
 		 * observed before WHISR_TX_DONE is latched.
 		 */
-		if (!mt6628_runtime_read32(wl, MT6628_MCR_WTSR0, &wtsr0) &&
-		    !mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1) &&
+		tx_status_ret = mt6628_runtime_read32(wl, MT6628_MCR_WTSR0,
+						     &wtsr0);
+		if (!tx_status_ret)
+			tx_status_ret = mt6628_runtime_read32(wl,
+						MT6628_MCR_WTSR1, &wtsr1);
+		if (tx_status_ret) {
+			wtsr0 = 0;
+			wtsr1 = 0;
+			dev_warn_ratelimited(&wl->func->dev,
+				"failed to read TX status registers: %d\n",
+				tx_status_ret);
+		}
+		dev_info_ratelimited(&wl->func->dev,
+			"runtime SDIO IRQ status: WHISR=%#010x "
+			"WTSR0=%#010x WTSR1=%#010x\n",
+			whisr, wtsr0, wtsr1);
+		if (!tx_status_ret &&
 		    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
 			mt6628_runtime_tx_release(wl, wtsr0, wtsr1);
 		if (!whisr)
@@ -1015,6 +1042,10 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 
 	if (!wl || !wl->runtime_started)
 		return;
+
+	dev_info_ratelimited(&wl->func->dev,
+		"SDIO IRQ callback: pm_idle=%u driver_owned=%u\n",
+		(unsigned int)wl->pm_idle, (unsigned int)wl->driver_owned);
 
 	/*
 	 * This runs in hard IRQ context, so it must not sleep.  Reclaiming
