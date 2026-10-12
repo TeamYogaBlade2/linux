@@ -209,7 +209,14 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 		if (len < 4 || buf[0] != 0x02)
 			return;
 		payload_len = get_unaligned_le16(buf + 2);
-		if (payload_len != len - 4)
+		/*
+		 * MTK WMT register-read events have a 4-byte length field
+		 * but occupy 16 bytes in total, including the echoed
+		 * register address and value. See WMT_SET_REG_RD_EVT in
+		 * the downstream wmt_core.c implementation.
+		 */
+		if (payload_len != len - 4 &&
+		    !(buf[1] == 0x08 && payload_len == 4 && len == 16))
 			return;
 
 		mutex_lock(&wmt->wmt_lock);
