@@ -60,7 +60,7 @@ static const u8 mt6628_tx_default_resources[MT6628_WLAN_TX_TC_NUM] = {
 
 static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 {
-	__le32 tmp;
+	u32 value;
 	int ret;
 
 	/*
@@ -73,23 +73,32 @@ static int mt6628_runtime_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
 	if (ret)
 		return ret;
 
-	ret = sdio_memcpy_fromio(wl->func, &tmp, reg, sizeof(tmp));
+	/*
+	 * sdio_readl() uses the SDIO function's temporary buffer. Do not
+	 * pass a stack object to sdio_memcpy_fromio(): the MTK MSDC host
+	 * transfers SDIO data through DMA.
+	 */
+	value = sdio_readl(wl->func, reg, &ret);
 	if (!ret)
-		*val = le32_to_cpu(tmp);
+		*val = value;
 
 	return ret;
 }
 
 static int mt6628_runtime_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
 {
-	__le32 tmp = cpu_to_le32(val);
 	int ret;
 
 	ret = mt6628_wlan_pm_busy(wl);
 	if (ret)
 		return ret;
 
-	return sdio_memcpy_toio(wl->func, reg, &tmp, sizeof(tmp));
+	/*
+	 * Match sdio_readl() above: sdio_writel() uses the SDIO function's
+	 * temporary buffer instead of a stack object for the DMA transfer.
+	 */
+	sdio_writel(wl->func, val, reg, &ret);
+	return ret;
 }
 
 /*

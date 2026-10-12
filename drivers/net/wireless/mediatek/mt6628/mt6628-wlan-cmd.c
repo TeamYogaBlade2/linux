@@ -15,6 +15,7 @@
 #include "mtk-wlan-hif.h"
 
 #define MT6628_CMD_TIMEOUT_MS	1000
+#define MT6628_CMD_DIAG_RX_LEN	64
 
 static bool mt6628_cmd_tc_available(struct mt6628_wlan *wl)
 {
@@ -183,10 +184,16 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		u8 reserved;
 		__le16 rx_checksum;
 		__le16 tx_checksum;
-	} __packed request = {}, response;
+	} __packed *request;
+	struct {
+		u8 mac[ETH_ALEN];
+		u8 native_80211;
+		u8 reserved;
+		__le16 rx_checksum;
+		__le16 tx_checksum;
+	} __packed response;
 	struct mt6628_wifi_event_hdr *event;
-	u8 event_buf[MT6628_WIFI_EVENT_HEADER_LEN + sizeof(response)];
-	u8 rx0_diag[64] = {};
+	u8 *rx_buf;
 	unsigned long timeout;
 	u32 rx_len_reg = 0;
 	size_t rx_len = 0;
@@ -196,6 +203,21 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
+
+	/*
+	 * sdio_writesb()/sdio_readsb() submit their buffers to the MMC host.
+	 * Keep these port-transfer buffers out of the kernel stack because
+	 * this platform's MSDC controller uses DMA for data transfers.
+	 */
+	request = kzalloc(sizeof(*request), GFP_KERNEL);
+	if (!request)
+		return -ENOMEM;
+
+	rx_buf = kmalloc(MT6628_CMD_DIAG_RX_LEN, GFP_KERNEL);
+	if (!rx_buf) {
+		kfree(request);
+		return -ENOMEM;
+	}
 
 	mutex_lock(&wl->cmd_mutex);
 
@@ -207,23 +229,23 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 	 * Match the downstream BASIC_CONFIG query format and sequence:
 	 * send the complete command, then poll WRPLR and read WRDR1.
 	 */
-	request.hdr.tx_byte_count_user_priority =
-		cpu_to_le16(sizeof(request));
-	request.hdr.resource_pkt_type_csflags =
+	request->hdr.tx_byte_count_user_priority =
+		cpu_to_le16(sizeof(*request));
+	request->hdr.resource_pkt_type_csflags =
 		(MT6628_TX_TC_CMD << MT6628_HIF_TX_RESOURCE_OFFSET) |
 		(MT6628_HIF_TX_PKT_TYPE_CMD <<
 		 MT6628_HIF_TX_PACKET_TYPE_OFFSET);
-	request.hdr.cid = MT6628_CMD_ID_BASIC_CONFIG;
-	request.hdr.set_query = 0;
-	request.hdr.seq_num = ++wl->cmd_seq_num;
+	request->hdr.cid = MT6628_CMD_ID_BASIC_CONFIG;
+	request->hdr.set_query = 0;
+	request->hdr.seq_num = ++wl->cmd_seq_num;
 
 	ret = mt6628_wlan_pm_busy(wl);
 	if (ret)
 		goto out_release_tc;
 
 	sdio_claim_host(wl->func);
-	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, &request,
-			   mt6628_sdio_xfer_len(sizeof(request)));
+	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, request,
+			   mt6628_sdio_xfer_len(sizeof(*request)));
 	if (!ret) {
 		timeout = jiffies + msecs_to_jiffies(MT6628_CMD_TIMEOUT_MS);
 
@@ -253,7 +275,7 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 				"BASIC_CONFIG poll timeout: "
 				"seq=%u WRPLR=%#010x WHISR=%#010x "
 				"read_err=%d\n",
-				request.hdr.seq_num, rx_len_reg, whisr,
+				request->hdr.seq_num, rx_len_reg, whisr,
 				diag_ret);
 
 			/*
@@ -266,9 +288,9 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 			 */
 			rx0_len = rx_len_reg & 0xffff;
 			if (rx0_len >= sizeof(*event) &&
-			    rx0_len <= sizeof(rx0_diag)) {
+			    rx0_len <= MT6628_CMD_DIAG_RX_LEN) {
 				rx0_diag_len = rx0_len;
-				packet_ret = sdio_readsb(wl->func, rx0_diag,
+				packet_ret = sdio_readsb(wl->func, rx_buf,
 							 MT6628_MCR_WRDR0,
 							 rx0_diag_len);
 				if (packet_ret) {
@@ -281,9 +303,9 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 						"RX0 packet length=%u\n",
 						rx0_len);
 					print_hex_dump(KERN_ERR,
-						       "mtk_wlan RX0: ",
-						       DUMP_PREFIX_OFFSET, 16, 1,
-						       rx0_diag, rx0_len, false);
+					       "mtk_wlan RX0: ",
+					       DUMP_PREFIX_OFFSET, 16, 1,
+					       rx_buf, rx0_len, false);
 				}
 
 				wrplr_after = sdio_readl(wl->func,
@@ -304,22 +326,23 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		}
 
 		if (!ret && (rx_len < sizeof(*event) ||
-			     rx_len > sizeof(event_buf)))
+			     rx_len > MT6628_WIFI_EVENT_HEADER_LEN +
+				      sizeof(response)))
 			ret = -EMSGSIZE;
 
 		if (!ret)
-			ret = sdio_readsb(wl->func, event_buf,
+			ret = sdio_readsb(wl->func, rx_buf,
 					  MT6628_MCR_WRDR1, rx_len);
 	}
 	sdio_release_host(wl->func);
 	if (ret)
 		goto out_release_tc;
 
-	event = (struct mt6628_wifi_event_hdr *)event_buf;
+	event = (struct mt6628_wifi_event_hdr *)rx_buf;
 	if (le16_to_cpu(event->packet_len) != rx_len ||
 	    (le16_to_cpu(event->packet_type) & GENMASK(1, 0)) != 1 ||
 	    event->eid != MT6628_EVENT_ID_BASIC_CONFIG ||
-	    event->seq_num != request.hdr.seq_num) {
+	    event->seq_num != request->hdr.seq_num) {
 		ret = -EPROTO;
 		goto out_release_tc;
 	}
@@ -329,7 +352,7 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 		goto out_release_tc;
 	}
 
-	memcpy(&response, event_buf + sizeof(*event), sizeof(response));
+	memcpy(&response, rx_buf + sizeof(*event), sizeof(response));
 	if (is_multicast_ether_addr(response.mac) ||
 	    is_zero_ether_addr(response.mac)) {
 		ret = -EPROTO;
@@ -351,6 +374,8 @@ out_release_tc:
 	mt6628_cmd_release_tc(wl);
 out_unlock:
 	mutex_unlock(&wl->cmd_mutex);
+	kfree(rx_buf);
+	kfree(request);
 	return ret;
 }
 
