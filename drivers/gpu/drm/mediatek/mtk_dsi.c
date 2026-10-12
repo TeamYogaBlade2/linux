@@ -292,7 +292,6 @@ struct mtk_dsi {
 	struct drm_bridge *next_bridge;
 	struct drm_connector *connector;
 	struct phy *phy;
-	struct reset_control *rstc;
 
 	void __iomem *regs;
 
@@ -939,6 +938,7 @@ static void mtk_dsi_lane_ready(struct mtk_dsi *dsi)
 static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 {
 	struct device *dev = dsi->host.dev;
+	struct reset_control *rstc;
 	int ret;
 	u32 bit_per_pixel;
 
@@ -992,10 +992,30 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	 * MT6589 has a separate DISPSYS reset for the DSI controller.
 	 * Resetting DSI_COM_CTRL alone does not release this external
 	 * reset.  Pulse it with the engine clocks enabled before
-	 * programming the controller registers.
+	 * programming the controller registers.  Acquire the handle here,
+	 * rather than in probe, so it does not conflict with device_reset()
+	 * during component binding.
 	 */
-	if (dsi->rstc) {
-		ret = reset_control_reset(dsi->rstc);
+	if (dsi->driver_data->has_reset) {
+		rstc = reset_control_get_exclusive(dev, NULL);
+		if (IS_ERR(rstc)) {
+			ret = PTR_ERR(rstc);
+			dev_err(dev, "Failed to get DSI reset control: %d\n",
+				ret);
+			goto err_disable_lane_clk;
+		}
+
+		ret = reset_control_acquire(rstc);
+		if (ret) {
+			dev_err(dev, "Failed to acquire DSI reset control: %d\n",
+				ret);
+			reset_control_put(rstc);
+			goto err_disable_lane_clk;
+		}
+
+		ret = reset_control_reset(rstc);
+		reset_control_release(rstc);
+		reset_control_put(rstc);
 		if (ret) {
 			dev_err(dev, "Failed to reset DSI controller: %d\n",
 				ret);
@@ -1565,13 +1585,6 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 		return PTR_ERR(dsi);
 
 	dsi->driver_data = of_device_get_match_data(dev);
-
-	if (dsi->driver_data->has_reset) {
-		dsi->rstc = devm_reset_control_get(dev, NULL);
-		if (IS_ERR(dsi->rstc))
-			return dev_err_probe(dev, PTR_ERR(dsi->rstc),
-					     "Failed to get DSI reset control\n");
-	}
 
 	dsi->engine_clk = devm_clk_get(dev, "engine");
 	if (IS_ERR(dsi->engine_clk))
