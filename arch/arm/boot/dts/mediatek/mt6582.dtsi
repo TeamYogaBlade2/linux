@@ -51,10 +51,10 @@
 			opp-microvolt = <1250000>;
 		};
 
-		opp-1495000000 {
-			opp-hz = /bits/ 64 <1495000000>;
-			opp-microvolt = <1250000>;
-		};
+		// opp-1495000000 {
+		// 	opp-hz = /bits/ 64 <1495000000>;
+		// 	opp-microvolt = <1300000>;
+		// };
 	};
 
 	/*
@@ -65,17 +65,22 @@
 
 		opp-26000000 {
 			opp-hz = /bits/ 64 <26000000>;
-			opp-microvolt = <1150000>;
+			opp-microvolt = <1250000>;
 		};
 
 		opp-364000000 {
 			opp-hz = /bits/ 64 <364000000>;
-			opp-microvolt = <1150000>;
+			opp-microvolt = <1250000>;
 		};
 
 		opp-416000000 {
 			opp-hz = /bits/ 64 <416000000>;
-			opp-microvolt = <1150000>;
+			opp-microvolt = <1250000>;
+		};
+
+		opp-500500000 {
+			opp-hz = /bits/ 64 <500500000>;
+			opp-microvolt = <1250000>;
 		};
 	};
 
@@ -170,6 +175,17 @@
 		cache-unified;
 	};
 
+	timer {
+		compatible = "arm,armv7-timer";
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>,
+			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>,
+			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>,
+			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;
+		clock-frequency = <13000000>;
+		arm,cpu-registers-not-fw-configured;
+	};
+
 	pmu {
 		compatible = "arm,cortex-a7-pmu";
 		interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_LOW>,
@@ -198,7 +214,7 @@
 					type = "hot";
 				};
 
-				cpu-crit {
+				cpu_crit: cpu-critical {
 					temperature = <120000>;
 					hysteresis = <2000>;
 					type = "critical";
@@ -225,25 +241,34 @@
 	};
 
 	clk26m: clk26m {
-            compatible = "fixed-clock";
-            #clock-cells = <0>;
-            clock-frequency = <26000000>;
-            clock-output-names = "clk26m";
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "clk26m";
 	};
 
 	clk32k: clk32k {
-            compatible = "fixed-clock";
-            #clock-cells = <0>;
-            clock-frequency = <32768>;
-            clock-output-names = "clk32k";
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+		clock-output-names = "clk32k";
         };
 
 	dmpll: dmpll {
-            compatible = "fixed-clock";
-            #clock-cells = <0>;
-            clock-frequency = <533000000>;
-            clock-output-names = "dmpll";
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <533000000>;
+		clock-output-names = "dmpll";
         };
+
+	dummy_vgpu: gpu-dummy-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vmali";
+		regulator-min-microvolt = <1250000>;
+		regulator-max-microvolt = <1250000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
 
 	soc {
 		#address-cells = <1>;
@@ -311,6 +336,7 @@
 				power-domain@MT6582_POWER_DOMAIN_DIS {
 					reg = <MT6582_POWER_DOMAIN_DIS>;
 					clocks = <&topckgen CLK_TOP_MM_SEL>;
+					// clocks = <&mmsys CLK_MM_MUTEX_32K>;
 					clock-names = "mm";
 					#power-domain-cells = <0>;
 					mediatek,infracfg = <&infracfg>;
@@ -396,6 +422,11 @@
 			clocks = <&infracfg CLK_INFRA_KP>;
 			clock-names = "kpd";
         	};
+
+		mcusys: syscon@10200000 {
+			compatible = "mediatek,mt6582-mcusys", "syscon";
+			reg = <0x10200000 0x1000>;
+		};
 
 		sysirq: interrupt-controller@10200100 {
 			compatible = "mediatek,mt6582-sysirq", "mediatek,mt6577-sysirq";
@@ -650,9 +681,8 @@
 			clock-names = "bus", "core";
 			power-domains = <&spm MT6582_POWER_DOMAIN_MFG>;
 			resets = <&mfg MFG_G3D_RESET>;
+			mali-supply = <&dummy_vgpu>;
 			operating-points-v2 = <&gpu_opp_table>;
-			// assigned-clocks = <&topckgen CLK_TOP_MFG_SEL>;
-			// assigned-clock-parents = <&topckgen CLK_TOP_SYSPLL_D3>;
 			status = "disabled";
 		};
 
