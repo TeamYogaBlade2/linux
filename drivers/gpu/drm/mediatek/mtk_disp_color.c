@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mtk_crtc.h"
@@ -40,6 +41,7 @@ struct mtk_disp_color_data {
 	unsigned int color_offset;
 	bool enable_main_bit29;		/* set BIT(29) in CFG_MAIN */
 	void (*init)(struct mtk_disp_color *color);	/* extra init sequence */
+	bool has_reset;
 };
 
 struct mtk_disp_color {
@@ -124,6 +126,8 @@ static void mt6589_color_init(struct mtk_disp_color *color)
 	 * this driver does not service COLOR interrupts.
 	 */
 	writel(0x333, regs + DISP_COLOR_START_MT2701 + 0x0c);
+	/* Match DpEngine_COLORonInit(): this driver has no PQ demo mode. */
+	writel(0, regs + 0x420);
 }
 
 void mtk_color_start(struct device *dev)
@@ -177,6 +181,7 @@ static int mtk_disp_color_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct mtk_disp_color *priv;
+	struct reset_control *rstc;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -199,6 +204,32 @@ static int mtk_disp_color_probe(struct platform_device *pdev)
 #endif
 
 	priv->data = of_device_get_match_data(dev);
+	if (!priv->data)
+		return -ENODEV;
+
+	/*
+	 * MT6589 declares a COLOR reset in the Device Tree.  Pulse it before
+	 * registering the component, while its functional clock is running,
+	 * so stale COLOR state cannot break the OVL -> COLOR -> RDMA0 path.
+	 * Other compatibles do not declare a reset and must not look one up.
+	 */
+	if (priv->data->has_reset) {
+		rstc = devm_reset_control_get(dev, NULL);
+		if (IS_ERR(rstc))
+			return dev_err_probe(dev, PTR_ERR(rstc),
+					     "failed to get color reset\n");
+
+		ret = clk_prepare_enable(priv->clk);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to enable color clock for reset\n");
+
+		ret = reset_control_reset(rstc);
+		clk_disable_unprepare(priv->clk);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to reset color\n");
+	}
+
 	platform_set_drvdata(pdev, priv);
 
 	ret = component_add(dev, &mtk_disp_color_component_ops);
@@ -229,6 +260,7 @@ static const struct mtk_disp_color_data mt6589_color_driver_data = {
 	.color_offset = DISP_COLOR_START_MT2701,	/* same as MT2701: 0x0f00 */
 	.enable_main_bit29 = true,
 	.init = mt6589_color_init,
+	.has_reset = true,
 };
 
 static const struct of_device_id mtk_disp_color_driver_dt_match[] = {
