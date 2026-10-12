@@ -652,15 +652,20 @@ static int mtk_iommu_v1_attach_device(struct iommu_domain *domain,
 	int ret;
 
 	/*
-	 * Only allow the domain created internally.  The mapping is fetched
-	 * rather than read straight out of @data so that a missing mapping is
-	 * reported as an error instead of being dereferenced; it was built once
-	 * in .of_xlate() before the core ever got here, so by construction this
-	 * cannot be the first client of the M4U.
+	 * The IOMMU core attaches its default DMA domain before calling
+	 * .probe_finalize(), where the shared ARM DMA mapping is created.
+	 * Accept this initial attachment without programming the hardware;
+	 * .probe_finalize() will attach the shared mapping afterwards.
 	 */
 	mtk_mapping = mtk_iommu_v1_get_mapping(dev);
-	if (IS_ERR(mtk_mapping))
+	if (IS_ERR(mtk_mapping)) {
+		if (PTR_ERR(mtk_mapping) == -ENODEV &&
+		    (domain->type == IOMMU_DOMAIN_DMA ||
+		     domain->type == IOMMU_DOMAIN_DMA_FQ))
+			return 0;
+
 		return PTR_ERR(mtk_mapping);
+	}
 
 	if (mtk_mapping->domain != domain) {
 		dev_warn(dev, "Ignoring attach request for foreign domain\n");
@@ -792,48 +797,8 @@ static phys_addr_t mtk_iommu_v1_iova_to_phys(struct iommu_domain *domain, dma_ad
 static const struct iommu_ops mtk_iommu_v1_ops;
 
 /*
- * MTK generation one iommu HW only support one iommu domain, and all the client
- * sharing the same iova address space.  That is why the mapping is created
- * once and then attached to each client in turn, rather than built per device:
- * a second mapping would be a second page-table bitmap over the same IOVA range
- * and a second domain the hardware cannot translate with.
- *
- * The creation is under data->mapping_lock and the NULL test is inside that
- * lock, because the clients are probed concurrently - from the bus notifier,
- * from the replay bus_iommu_probe() runs at iommu_device_register(), and from
- * any late iommu_probe_device() a driver binding late triggers - and they all
- * share this one @data.  An unsynchronised "if (!data->mapping)" lets two
- * clients each build a mapping: one wins and the other is silently orphaned,
- * leaking its bitmap and its 4 MiB page table, while the loser still attaches
- * the winner's.  Check-and-create in one critical section makes the second
- * caller wait and then find the mapping already there, so exactly one mapping
- * exists for the lifetime of the M4U and every client attaches that same
- * pointer.
- *
- * Returns the shared mapping, or an error pointer.
- */
-/*
- * mtk_iommu_v1_get_mapping - return the M4U's one shared mapping.
- * @dev: any client of this M4U
- *
- * Returns the shared mapping, or an error pointer.  This NEVER creates: the
- * mapping is built once in .of_xlate and every later caller only reads it.
- *
- * The creation deliberately does not happen here.  .attach_dev is called from
- * iommu_setup_default_domain() -> __iommu_group_set_domain() inside
- * __iommu_probe_device() (drivers/iommu/iommu.c), which is strictly before
- * .probe_finalize() (iommu.c:722).  So a lazy create in either of those
- * callbacks runs too early for the first client of an M4U, and doing it there
- * also means the first attach - rather than the first fwspec - decides when
- * hardware state is programmed.
- *
- * Instead .of_xlate() creates it.  That runs once per client, early, with no
- * group and no domain involved, and it is exactly where the M4U's private data
- * is first resolved from the phandle - so this is the first point at which we
- * can know which M4U we belong to.  arm_iommu_create_mapping() ending in
- * iommu_paging_domain_alloc() is a problem for .attach_dev and .probe_finalize
- * (no group yet) but not here, because it allocates the domain that the later
- * attach will find and reuse.
+ * Return the M4U's shared mapping. It is created from .probe_finalize(),
+ * after the IOMMU core has initialized the device's IOMMU instance.
  */
 static struct dma_iommu_mapping *
 mtk_iommu_v1_get_mapping(struct device *dev)
@@ -848,6 +813,40 @@ mtk_iommu_v1_get_mapping(struct device *dev)
 	if (!mtk_mapping)
 		return ERR_PTR(-ENODEV);
 
+	return mtk_mapping;
+}
+
+/*
+ * Create the single DMA mapping shared by all clients of this M4U.
+ * iommu_paging_domain_alloc() requires the IOMMU core to have initialized
+ * dev->iommu->iommu_dev, so this must not be called from .of_xlate().
+ */
+static struct dma_iommu_mapping *
+mtk_iommu_v1_get_or_create_mapping(struct device *dev)
+{
+	struct mtk_iommu_v1_data *data = dev_iommu_priv_get(dev);
+	struct dma_iommu_mapping *mtk_mapping;
+
+	if (!data)
+		return ERR_PTR(-ENODEV);
+
+	mutex_lock(&data->mapping_lock);
+	mtk_mapping = data->mapping;
+	if (!mtk_mapping) {
+		/* MTK IOMMU supports a 4 GiB IOVA address space. */
+		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
+		if (IS_ERR(mtk_mapping))
+			goto out_unlock;
+		if (!mtk_mapping) {
+			mtk_mapping = ERR_PTR(-ENODEV);
+			goto out_unlock;
+		}
+
+		data->mapping = mtk_mapping;
+	}
+
+out_unlock:
+	mutex_unlock(&data->mapping_lock);
 	return mtk_mapping;
 }
 
@@ -875,10 +874,7 @@ mtk_iommu_v1_get_mapping(struct device *dev)
 static int mtk_iommu_v1_of_xlate(struct device *dev,
 				const struct of_phandle_args *args)
 {
-	struct mtk_iommu_v1_data *data;
-	struct dma_iommu_mapping *mtk_mapping;
 	struct platform_device *m4updev;
-	int ret;
 
 	if (args->args_count != 1) {
 		dev_err(dev, "invalid #iommu-cells(%d) property for IOMMU\n",
@@ -896,37 +892,6 @@ static int mtk_iommu_v1_of_xlate(struct device *dev,
 
 		put_device(&m4updev->dev);
 	}
-
-	data = dev_iommu_priv_get(dev);
-
-	/*
-	 * Create the M4U's single mapping here, once, if the first client of
-	 * this M4U got here first.  See mtk_iommu_v1_get_mapping() for why this
-	 * is the only place it may happen: .attach_dev and .probe_finalize are
-	 * both too late to be the first, and .probe_device is too early to know
-	 * the M4U.  Later clients of the same M4U find it already set.
-	 */
-	mutex_lock(&data->mapping_lock);
-	if (!data->mapping) {
-		/* MTK iommu support 4GB iova address space. */
-		mtk_mapping = arm_iommu_create_mapping(dev, 0, 1ULL << 32);
-		if (IS_ERR(mtk_mapping) || !mtk_mapping) {
-			/*
-			 * A NULL is not an error pointer, so IS_ERR() alone would
-			 * let it through and store NULL in @mapping - which both
-			 * .attach_dev and .probe_finalize would then hand to
-			 * arm_iommu_attach_device().  The !CONFIG_ARM stub above
-			 * expands to a plain NULL, so both spellings are refused.
-			 */
-			ret = IS_ERR(mtk_mapping) ? PTR_ERR(mtk_mapping) :
-						     -ENODEV;
-			mutex_unlock(&data->mapping_lock);
-			return ret;
-		}
-
-		data->mapping = mtk_mapping;
-	}
-	mutex_unlock(&data->mapping_lock);
 
 	return iommu_fwspec_add_ids(dev, args->args, 1);
 }
@@ -1009,26 +974,20 @@ static struct iommu_device *mtk_iommu_v1_probe_device(struct device *dev)
  * mtk_iommu_v1_probe_finalize - attach the shared mapping to one client.
  * @dev: the client, now in a group and attached to the group's domain
  *
- * The mapping is created in .of_xlate(), which is the only callback that runs
- * early enough to be the first for a given M4U: .attach_dev and this both run
- * from inside __iommu_probe_device() and its call to
- * iommu_setup_default_domain(), whereas .of_xlate runs before the device has a
- * group or a domain at all.
- *
- * So the shape is: of_xlate collects the master ids and builds the one mapping
- * the M4U has, probe_device validates the ids and links the consumer to its
- * LARB, and this attaches that mapping to this device.  Every client ends up
- * attached to the same mapping, which is what "one page table, one IOVA space"
- * requires.
+ * The IOMMU core first attaches a default DMA domain. The shared ARM DMA
+ * mapping is created here, after the device has an IOMMU instance and group,
+ * and then replaces that default domain for the client.
  */
 static void mtk_iommu_v1_probe_finalize(struct device *dev)
 {
 	struct dma_iommu_mapping *mtk_mapping;
 	int ret;
 
-	mtk_mapping = mtk_iommu_v1_get_mapping(dev);
+	mtk_mapping = mtk_iommu_v1_get_or_create_mapping(dev);
 	if (IS_ERR(mtk_mapping)) {
-		dev_err(dev, "Can't create IOMMU mapping - DMA-OPS will not work\n");
+		dev_err(dev,
+			"Failed to create shared IOMMU mapping (%ld); DMA ops will not work\n",
+			PTR_ERR(mtk_mapping));
 		return;
 	}
 
