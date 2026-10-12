@@ -161,6 +161,21 @@
 		};
 	};
 
+	mt6628_gnss_pins_default: mt6628-gnss-pins-default {
+		pin-gps-sync {
+			pinmux = <MT6589_GPIO141__FUNC_GPIO141>;
+			output-low;
+			bias-disable;
+		};
+	};
+
+	mt6628_gnss_pins_sync: mt6628-gnss-pins-sync {
+		pin-gps-sync {
+			pinmux = <MT6589_GPIO141__FUNC_MD1_GPS_SYNC>;
+			bias-disable;
+		};
+	};
+
 	/*
 	 * GPIO128 is the board's active-low, level-triggered Wi-Fi wake
 	 * interrupt (EINT9 in the vendor board configuration). It is used
@@ -493,6 +508,9 @@
 
 		gnss {
 			compatible = "mediatek,mt6628-gnss";
+			pinctrl-names = "default", "gps-sync";
+			pinctrl-0 = <&mt6628_gnss_pins_default>;
+			pinctrl-1 = <&mt6628_gnss_pins_sync>;
 		};
 	};
 };

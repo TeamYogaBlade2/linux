@@ -40,8 +40,14 @@ static void mtk_gnss_rx(void *priv, const u8 *buf, size_t len)
 	struct mtk_gnss *gnss = priv;
 
 	mutex_lock(&gnss->lock);
-	if (gnss->open)
+	if (gnss->open) {
+		dev_dbg(&gnss->gdev->dev, "STP GPS RX: %zu bytes\n", len);
 		gnss_insert_raw(gnss->gdev, buf, len);
+	} else {
+		dev_dbg(&gnss->gdev->dev,
+			"discarding STP GPS data while GNSS is closed: %zu bytes\n",
+			len);
+	}
 	mutex_unlock(&gnss->lock);
 }
 
@@ -69,35 +75,34 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
+	mutex_unlock(&priv->lock);
 
 	if (priv->gps_sync) {
 		ret = pinctrl_select_state(priv->pinctrl,
 					   priv->gps_sync);
-		if (ret) {
-			mutex_unlock(&priv->lock);
+		if (ret)
 			return ret;
-		}
 	}
 
 	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
+	if (ret)
+		goto err_restore_pinctrl;
+
+	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
 	if (ret) {
-		if (priv->pinctrl_default)
-			pinctrl_select_state(priv->pinctrl,
-					     priv->pinctrl_default);
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		goto err_restore_pinctrl;
 	}
-	if (!ret) {
-		ret = mt6628_wmt_func_ctrl(priv->wmt,
-					   MT6628_WMT_FUNC_GPS, true);
-		if (ret) {
-			mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
-			if (priv->pinctrl_default)
-				pinctrl_select_state(priv->pinctrl,
-						     priv->pinctrl_default);
-		}
-	}
-	if (!ret)
-		priv->open = true;
+
+	mutex_lock(&priv->lock);
+	priv->open = true;
 	mutex_unlock(&priv->lock);
+
+	return 0;
+
+err_restore_pinctrl:
+	if (priv->pinctrl_default)
+		pinctrl_select_state(priv->pinctrl, priv->pinctrl_default);
 
 	return ret;
 }
