@@ -212,11 +212,24 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 		if (event->eid == MT6628_EVENT_ID_TX_DONE) {
 			const struct mt6628_event_tx_done *tx_done;
 
-			if (body_len != sizeof(*tx_done))
+			/*
+			 * The reference firmware defines a 16-byte TX_DONE body,
+			 * but the firmware on this board sends a compact 4-byte
+			 * body. The fields we use are present in both formats.
+			 */
+			if (body_len != 4 && body_len != sizeof(*tx_done)) {
+				dev_warn_ratelimited(&wl->func->dev,
+					"unexpected TX_DONE body length: %zu\n",
+					body_len);
 				goto drop;
+			}
 
 			tx_done = (const struct mt6628_event_tx_done *)
 				(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
+			if (body_len == 4)
+				dev_info_ratelimited(&wl->func->dev,
+					"compact TX_DONE: packet_seq=%u status=%u\n",
+					tx_done->packet_seq, tx_done->status);
 
 			spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
 			if (wl->mgmt_tx_pending &&
