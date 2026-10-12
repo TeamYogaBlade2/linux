@@ -534,6 +534,18 @@ int ret;
 
 		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
 			header_offset;
+		if (payload_len >= ETH_HLEN) {
+			const struct ethhdr *eth = (const struct ethhdr *)
+				(buf + MT6628_HIF_RX_HEADER_LEN + header_offset);
+
+			if (eth->h_proto == cpu_to_be16(ETH_P_PAE))
+				dev_info_ratelimited(&wl->func->dev,
+					"RX EAPOL data: len=%u src=%pM dst=%pM "
+					"sta_rec=%u conn_state=%u\n",
+					payload_len, eth->h_source, eth->h_dest,
+					rx_hdr->sta_rec_idx,
+					READ_ONCE(wl->conn_state));
+		}
 		if (skb_queue_len(&wl->rx_queue) >= MT6628_RUNTIME_QUEUE_LIMIT)
 			goto drop_packet;
 
