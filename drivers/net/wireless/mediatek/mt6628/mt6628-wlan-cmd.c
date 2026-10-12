@@ -242,7 +242,9 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 
 		if (!ret && !rx_len) {
 			u32 whisr;
+			u32 wrplr_after;
 			int diag_ret;
+			int after_ret;
 			int packet_ret;
 
 			whisr = sdio_readl(wl->func, MT6628_MCR_WHISR,
@@ -255,17 +257,17 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 				diag_ret);
 
 			/*
-			 * A 12-byte packet on RX0 may be a normal runtime
-			 * CMD_RESULT event. Do not assume that from its length
-			 * alone: capture the complete RX packet, including the
-			 * hardware-appended dword, before decoding its header.
-			 * This probe path is already failing, so consuming the
-			 * pending RX0 packet does not discard a usable response.
+			 * Match nicRxWaitResponse() in the downstream driver:
+			 * response polling reads exactly the length reported by
+			 * WRPLR. The extra hardware DWORD is used by the regular
+			 * RX-buffer path, not this response-polling path.
+			 *
+			 * Do not infer packet type from the reported length.
 			 */
 			rx0_len = rx_len_reg & 0xffff;
 			if (rx0_len >= sizeof(*event) &&
-			    rx0_len <= sizeof(rx0_diag) - 4) {
-				rx0_diag_len = ALIGN((size_t)rx0_len, 4) + 4;
+			    rx0_len <= sizeof(rx0_diag)) {
+				rx0_diag_len = rx0_len;
 				packet_ret = sdio_readsb(wl->func, rx0_diag,
 							 MT6628_MCR_WRDR0,
 							 rx0_diag_len);
@@ -283,6 +285,19 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 						       DUMP_PREFIX_OFFSET, 16, 1,
 						       rx0_diag, rx0_len, false);
 				}
+
+				wrplr_after = sdio_readl(wl->func,
+							 MT6628_MCR_WRPLR,
+							 &after_ret);
+				if (!after_ret)
+					dev_err(&wl->func->dev,
+						"after RX0 read: WRPLR=%#010x "
+						"(before=%#010x)\n",
+						wrplr_after, rx_len_reg);
+				else
+					dev_err(&wl->func->dev,
+						"failed to reread WRPLR after "
+						"RX0 read: %d\n", after_ret);
 			}
 
 			ret = -ETIMEDOUT;
