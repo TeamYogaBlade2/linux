@@ -10,6 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/jiffies.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #include "mtk-wlan.h"
 #include "mtk-wlan-hif.h"
@@ -1082,6 +1083,8 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	}
 
 	SET_NETDEV_DEV(ndev, &wl->func->dev);
+	/* alloc_etherdev() defaults to eth%d, but this is a WLAN interface. */
+	strscpy(ndev->name, "wlan%d", sizeof(ndev->name));
 	ndev->netdev_ops = &mt6628_netdev_ops;
 	eth_hw_addr_random(ndev);
 	netif_carrier_off(ndev);

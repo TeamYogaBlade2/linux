@@ -1042,61 +1042,9 @@ from the FM and WLAN frequency changes, and GPS_SYNC.
 
 ## STP transport — gaps
 
-### CRC16 is computed on transmit and verified on receive — unlike the SDIO reference
+### SDIO trailer must remain zero (corrected)
 
-This driver writes a real CRC16 in the two trailer bytes on TX and checks it
-on RX. That is a deliberate divergence from the downstream SDIO path, and it is
-worth being precise about what it does and does not buy:
-
-- **The algorithm is the vendor's.** `mt6628_stp_crc16()` in `mtk-stp.c` carries
-  the vendor's 256-entry table and loop verbatim from
-  `conn_soc/common/linux/pub/osal.c:55-291`. That table is the *reflected*
-  polynomial `0xa001` seeded with zero with no final inversion — CRC-16/ARC
-  (a.k.a. CRC-16/IBM), **not** CRC-16/CCITT. This was confirmed by
-  regenerating the table from the polynomial and comparing all 256 entries;
-  `0xa001` reproduces it exactly and `0x8408` does not.
-- **The trailer covers the payload only**, matching the downstream BTIF/UART
-  write (`stp_core.c:950-952`: `crc = osal_crc16(buffer, length)` then
-  low byte, then high byte).
-- **Downstream does not do this over SDIO.** Its SDIO branch writes
-  `temp[0] = 0x00; temp[1] = 0x00;` (`stp_core.c:898-899`) and the SDIO RX
-  parser steps straight over the two CRC bytes without reading them
-  (`MTKSTP_CRC1` → `MTKSTP_CRC2` → discard, `stp_core.c:1873-1877`, with the
-  alignment padding skipped at `:1877-1897`). Checking `stp_core.c` for
-  `stp_check_crc()`
-  inside the SDIO parser branch returns zero hits — the single call site
-  (`:2352`) is reached only from the BTIF/UART parser.
-- **So: does the chip validate the CRC over SDIO?** There is no evidence
-  either way. The vendor's SDIO driver, which is the shipping configuration
-  for this exact transport, neither computes nor checks it, so the MCU cannot
-  be shown to be checking it. Computing it on TX is therefore *not* known to
-  be necessary — but it is also not known to be harmful, since the trailer is
-  two reserved bytes that the SDIO path leaves zero and the MCU demonstrably
-  tolerates whatever the host puts there (it is the same two bytes the UART
-  path fills with a real CRC).
-- **"Verified" on RX therefore means verified by this driver**, not verified by
-  the chip. A mismatching frame is dropped and counted in
-  `wmt->rx_crc_errors`, with a rate-limited warning naming the task.
-
-The conservative reading is that a zero trailer is what the vendor ships and
-what the MCU is known to accept, and that this driver's RX check is stricter
-than the reference. The reasons to keep the check anyway:
-
-1. **It is self-consistent by construction.** The checksum written on TX is
-   computed by the same function that checks it on RX, so it cannot reject a
-   frame that arrived intact.
-2. **The cost of not checking is high.** The RX path feeds WMT command
-   responses straight into command parsing. A corrupted payload with a wrong
-   length or opcode byte is interpreted as a different, valid-looking WMT
-   response, which fails silently and far from the cause.
-3. **It is observable.** `rx_crc_errors` gives the bring-up a signal that the
-   SDIO link is corrupting data, which matters on a bring-up where the link
-   has not yet been shown to be reliable.
-
-If hardware testing ever shows the MCU to reject non-zero trailer bytes, the
-correct change is to zero the trailer on TX only; the RX check would then
-have to go with it, since a firmware that computes nothing must also be one
-that expects nothing.
+The vendor's SDIO STP path writes `00 00` to the two trailer bytes and steps over those bytes without CRC validation (`stp_core.c`, SDIO TX/RX branches). This port must mirror that framing. The UART/BTIF CRC16 algorithm is not part of the SDIO protocol; checking the SDIO trailer against it can discard WMT replies. The WMT version query uses this transport, and failure there aborts `mt6628_stp_probe()` before `mfd_add_devices()`, leaving Bluetooth, FM, and GNSS unregistered. `mtk-stp.c` now leaves the transmit trailer zero and ignores it on receive. A probe failure is logged explicitly.
 
 ### Sequence numbering and ACK windowing — investigated, and deliberately not ported
 
