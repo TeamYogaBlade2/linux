@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2026 
+ * Copyright (c) 2026
  * Author: Burst_Caster <swer15l23@gmail.com>
  */
  
 /dts-v1/;
-//#include "mt6582-new.dtsi"
 #include "mt6582.dtsi"
+#include "mt6323.dtsi"
 #include <dt-bindings/pinctrl/mt6582-pinfunc.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/power/mediatek,mt6582-power.h>
+#include <dt-bindings/iio/adc/mediatek,mt6323-auxadc.h>
 
 
 
 / {
-	model = "Lenovo A7600-h";
+	model = "Lenovo IdeaTab A7600-h";
 	compatible = "lenovo,a7600h", "mediatek,mt6582";
 
 	aliases {
@@ -28,8 +29,7 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		
-		bootargs = "console=ttyS0,921600n8 console=tty0 clk_ignore_unused pd_ignore_unused regulator_ignore_unused loglevel=8  earlycon fw_devlink=off coherent_pool=32M  root=/dev/mmcblk1p1 rootwait rw "; //fbcon=map:0 video=mediatekdrmfb:1280x800-24@60
-		//bootargs = "earlyprintk console=ttyS0,921600n8 console=tty0 clk_ignore_unused ignore_loglevel keep_bootcon fbcon=map:0 earlycon";
+		bootargs = "console=ttyS0,921600n8 console=tty0 clk_ignore_unused pd_ignore_unused regulator_ignore_unused loglevel=8  earlycon root=/dev/mmcblk1p1 rootwait rw "; 
 		stdout-path = "serial0:921600n8";
 
 		// framebuffer: framebuffer@be900000 {
@@ -82,11 +82,11 @@
 	panel_backlight: backlight {
         	compatible = "pwm-backlight";
         	pwms = <&bls 0 20000>; 
-        	// gpios = <&pio 18 GPIO_ACTIVE_HIGH>;
+        	gpios = <&pio 18 GPIO_ACTIVE_HIGH>;
         	post-pwm-on-delay-ms = <10>;
         	pwm-off-delay-ms = <10>;
         	brightness-levels = <
-              		0   4   8  12  16  20  24  28
+              		4   8  12  16  20  24  28
              		32  40  48  56  64  72  80  88
              		96 112 128 144 160 176 192 208
             		224 240 255 >;
@@ -100,20 +100,21 @@
     		regulator-name = "vcc-3v3";
     		regulator-min-microvolt = <3300000>;
     		regulator-max-microvolt = <3300000>;
-    
-
 			
-    		// gpios = <&pio 118 GPIO_ACTIVE_HIGH>; 
-    		///enable-active-high;
+    		// gpios = <&pio 118 GPIO_ACTIVE_LOW>; 
+		// startup_delay = <10000>;
 
-		// states = <3300000 1>,
-        	// 	<0 0>;
+	};
 
-		// pinctrl-names = "default";
-		// pinctrl-0 = <&panel_pins>;
-		startup_delay = <10000>;
-		
-		
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp = <6340000>;
+		voltage-min-microvolt = <3200000>;
+		voltage-max-microvolt = <4200000>;
+		constant-charge-current-microamp = <2000000>;
+		constant-charge-voltage-microvolt = <4200000>;
+		precharge-current-microamp = <200000>;
+		charge-term-current-microamp = <100000>;
 	};
 
 };
@@ -128,275 +129,17 @@
 		pinctrl-names = "default";
         	pinctrl-0 = <&pmic_int_pins>;
 
-		mt6323_adc: adc {
-			compatible = "mediatek,mt6323-auxadc";
-			#io-channel-cells = <1>;
-		};
-
 		mt6323_leds: leds {
-			compatible = "mediatek,mt6323-led";
-			#address-cells = <1>;
-			#size-cells = <0>;
 			status = "disabled";
 		};	
 		
 		mt6323regulator: mt6323regulator {
-			compatible = "mediatek,mt6323-regulator";
-
-			mt6323_vproc_reg: buck_vproc {
-				regulator-name = "vproc";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
-				regulator-ramp-delay = <12500>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vsys_reg: buck_vsys {
-				regulator-name = "vsys";
-				regulator-min-microvolt = <1400000>;
-				regulator-max-microvolt = <2987500>;
-				regulator-ramp-delay = <25000>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vpa_reg: buck_vpa {
-				regulator-name = "vpa";
-				regulator-min-microvolt = < 500000>;
-				regulator-max-microvolt = <3650000>;
-			};
-
-			mt6323_vtcxo_reg: ldo_vtcxo {
-				regulator-name = "vtcxo";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <90>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vcn28_reg: ldo_vcn28 {
-				regulator-name = "vcn28";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <185>;
-			};
-
-			mt6323_vcn33_bt_reg: ldo_vcn33_bt {
-				regulator-name = "vcn33_bt";
-				regulator-min-microvolt = <3300000>;
-				regulator-max-microvolt = <3600000>;
-				regulator-enable-ramp-delay = <185>;
-			};
-
-			mt6323_vcn33_wifi_reg: ldo_vcn33_wifi {
-				regulator-name = "vcn33_wifi";
-				regulator-min-microvolt = <3300000>;
-				regulator-max-microvolt = <3600000>;
-				regulator-enable-ramp-delay = <185>;
-			};
-
-			mt6323_va_reg: ldo_va {
-				regulator-name = "va";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <216>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vcama_reg: ldo_vcama {
-				regulator-name = "vcama";
-				regulator-min-microvolt = <1500000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vio28_reg: ldo_vio28 {
-				regulator-name = "vio28";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <216>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
 			mt6323_vusb_reg: ldo_vusb {
-				regulator-name = "vusb";
-				regulator-min-microvolt = <3300000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <216>;
-				regulator-boot-on;
 				regulator-always-on;
-			};
-
-			mt6323_vmc_reg: ldo_vmc {
-				regulator-name = "vmc";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <36>;
-				regulator-boot-on;
-			};
-
-			mt6323_vmch_reg: ldo_vmch {
-				regulator-name = "vmch";
-				regulator-min-microvolt = <3000000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <36>;
-				regulator-boot-on;
-			};
-
-			mt6323_vemc3v3_reg: ldo_vemc3v3 {
-				regulator-name = "vemc3v3";
-				regulator-min-microvolt = <3000000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <36>;
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			mt6323_vgp1_reg: ldo_vgp1 {
-				regulator-name = "vgp1";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vgp2_reg: ldo_vgp2 {
-				regulator-name = "vgp2";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3000000>;
-				// regulator-min-microvolt = <2800000>;
-    				// regulator-max-microvolt = <2800000>;
-				regulator-enable-ramp-delay = <216>;
-				regulator-boot-on;
-				regulator-always-on;
-			};
-
-			mt6323_vgp3_reg: ldo_vgp3 {
-				regulator-name = "vgp3";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vcn18_reg: ldo_vcn18 {
-				regulator-name = "vcn18";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vsim1_reg: ldo_vsim1 {
-				regulator-name = "vsim1";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <3000000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vsim2_reg: ldo_vsim2 {
-				regulator-name = "vsim2";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <3000000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vrtc_reg: ldo_vrtc {
-				regulator-name = "vrtc";
-				regulator-min-microvolt = <2800000>;
-				regulator-max-microvolt = <2800000>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vcamaf_reg: ldo_vcamaf {
-				regulator-name = "vcamaf";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vibr_reg: ldo_vibr {
-				regulator-name = "vibr";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3300000>;
-				regulator-enable-ramp-delay = <36>;
-			};
-
-			mt6323_vrf18_reg: ldo_vrf18 {
-				regulator-name = "vrf18";
-				regulator-min-microvolt = <1825000>;
-				regulator-max-microvolt = <1825000>;
-				regulator-enable-ramp-delay = <187>;
-			};
-
-			mt6323_vm_reg: ldo_vm {
-				regulator-name = "vm";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <216>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vio18_reg: ldo_vio18 {
-				regulator-name = "vio18";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <316>;
-				regulator-always-on;
-				regulator-boot-on;
-			};
-
-			mt6323_vcamd_reg: ldo_vcamd {
-				regulator-name = "vcamd";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <216>;
-			};
-
-			mt6323_vcamio_reg: ldo_vcamio {
-				regulator-name = "vcamio";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
-				regulator-enable-ramp-delay = <216>;
 			};
 		}; 
-
-		mt6323keys: mt6323keys {
-			compatible = "mediatek,mt6323-keys";
-			mediatek,long-press-mode = <1>;
-			power-off-time-sec = <0>;
-
-			power {
-				linux,keycodes = <116>;
-				wakeup-source;
-			};
-
-		};
-
-		codec: mt6397codec {
-			compatible = "mediatek,mt6397-codec";
-		};
-
-		power-controller {
-			compatible = "mediatek,mt6323-pwrc";
-		};
-
-		rtc {
-			compatible = "mediatek,mt6323-rtc";
-			//interrupts = <MT6323_IRQ_RTC>; 
-		};
 	};
 
-	usb_gadget_vbus: usb-gadget-vbus {
-		compatible = "regulator-fixed";
-		regulator-name = "usb_gadget_vbus";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		regulator-always-on;
-	};
 };
 
 &pio {
@@ -416,7 +159,7 @@
 	status = "okay";
 	
 	dr_mode = "otg";
-	usb-role-switch-default-mode = "peripherial";
+	usb-role-switch-default-mode = "peripheral";
 	usb-role-switch;
 	connector {
 			compatible = "gpio-usb-b-connector", "usb-b-connector";
@@ -431,13 +174,11 @@
 
 &u2phy0 {
 	status = "okay";
-	// phy-supply = <&mt6323_vusb_reg>;
-	// vbus-supply = <&usb_otg_vbus>;
+	phy-supply = <&mt6323_vusb_reg>;
 };
 
 &u2port0 {
 	status = "okay";
-	// phy-supply = <&mt6323_vusb_reg>;
 };
 
 &mmc0 {
@@ -453,7 +194,6 @@
 	non-removable;
 	mmc-ddr-1_8v;
 	mmc-hs200-1_8v;
-	non-removable;
 	no-sd;
 	no-sdio;
 	mediatek,latch-ck = <0>;
@@ -465,16 +205,17 @@
 	pinctrl-1 = <&msdc1_pins_uhs>;
 	status = "okay";
 	bus-width = <4>;
-	max-frequency = <100000000>;
+	// max-frequency = <100000000>;
+	max-frequency = <50000000>;
 	cap-sd-highspeed;
 	cd-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
 	vmmc-supply = <&mt6323_vmch_reg>;
 	vqmmc-supply = <&mt6323_vmc_reg>;
 	sd-uhs-sdr12;
 	sd-uhs-sdr25;
-	sd-uhs-sdr50;
-	sd-uhs-sdr104;
-	sd-uhs-ddr50;
+	// sd-uhs-sdr50;
+	// sd-uhs-sdr104;
+	// sd-uhs-ddr50;
 	cap-sd-highspeed;
 	no-mmc;
 	no-sdio;
@@ -518,10 +259,12 @@
 	pinctrl-0 = <&i2c1_pins>;
 	clock-frequency = <400000>;
 
-	bq27510g3: fuel-gauge@55 {
+	bq27541_fg: fuel-gauge@55 {
 		compatible = "ti,bq27541";
 		reg = <0x55>;
-		// monitored-battery = <&battery>;
+		interrupt-parent = <&pio>;
+		interrupts = <5 IRQ_TYPE_EDGE_FALLING>;
+		monitored-battery = <&battery>;
       	};
 
 	charger: bq24196@6b {
@@ -533,12 +276,10 @@
 		interrupt-parent = <&pio>;
 		interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
 
-		ti,charge-enable-gpio = <&pio 19 GPIO_ACTIVE_LOW>;
-
-		ti,system-minimum-voltage-mv = <3200>;
-		ti,input-current-limit-microamp = <2500000>;
-		ti,charge-current-microamp = <2000000>;
-
+		ce-gpios = <&pio 19 GPIO_ACTIVE_LOW>;
+		omit-battery-class;
+		ti,system-minimum-microvolt = <3200000>;
+		monitored-battery = <&battery>;
 		usb_otg_vbus: usb-otg-vbus {};
 	};
 };
@@ -547,7 +288,20 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c2_pins>;
-	clock-frequency = <100000>;
+	clock-frequency = <400000>;
+	
+	accelerometer@e {
+		compatible = "kionix,kxtj21009";
+		reg = <0x0e>;
+		vddio-supply = <&mt6323_vio18_reg>;
+            	vdd-supply = <&mt6323_vio28_reg>;
+		interrupt-parent = <&pio>;
+		interrupts = <11 IRQ_TYPE_EDGE_RISING>;
+
+		mount-matrix = "0", "1", "0",
+			"1", "0", "0",
+			"0", "0", "-1";
+	};
 };
 
 &pio {
@@ -646,7 +400,7 @@
 
 	usb0_id_pin: usb0 {
 		pins-usb-id{
-			pinmux = <MT6582_PIN_17_EINT17__FUNC_GPIO17>;
+			pinmux = <MT6582_PIN_17_EINT17__FUNC_IDDIG>;
 			bias-pull-up;
 			input-enable;
 			debounce-interval = <1000>;
@@ -655,19 +409,23 @@
 
 	backlight_pins: backlight-pins {
 		pins_bl_pwm {
-			pinmux = <MT6582_PIN_90_DISP_PWM__FUNC_DISP_PWM>; /* Имя макроса зависит от вашего ядра */
+			pinmux = <MT6582_PIN_90_DISP_PWM__FUNC_DISP_PWM>;
 			drive-strength = <MTK_DRIVE_8mA>;
 		};
 	
-
     	};
 };
 
+&gpu_opp_table: opp-table-gpu {
+
+		opp-598000000 {
+			opp-hz = /bits/ 64 <598000000>;
+			opp-microvolt = <1250000>;
+		};
+	};
+
 &mali {
 	status = "okay";
-	// status = "disabled";
-	/* MFG shares the CPU buck (vproc) on this board: same rail as proc-supply above */
-	mali-supply = <&mt6323_vproc_reg>;
 };
 
 &mmsys {
@@ -793,13 +551,7 @@
 		reg = <0>;
 		
 		power-supply = <&vcc_3v3_tps>; 
-
-		// vcc-supply = <&vcc_3v3_tps>;
-
 		panel-orientation = "normal"; 
-
-		data-lanes = <0 1 2 3>; 
-
 		backlight = <&panel_backlight>;
 		ports {
 			#address-cells = <1>;
@@ -814,9 +566,9 @@
 	};
 };
 
-&dsi_out {
-	remote-endpoint = <&panel_in>;
-};
+// &dsi_out {
+// 	remote-endpoint = <&panel_in>;
+// };
 
 &bls {
 	status = "okay";
