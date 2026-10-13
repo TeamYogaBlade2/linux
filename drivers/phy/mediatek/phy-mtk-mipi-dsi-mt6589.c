@@ -304,6 +304,23 @@ static void mt6589_mipi_tx_power_on_signal(struct phy *phy)
 
 	/* Return control to DSI host */
 	writel(0, base + MIPITX_DSI_SW_CTRL);
+	dev_info(mipi_tx->dev,
+		 "MT6589 MIPITX: rate=%u con=%#x bg=%#x top=%#x pll=%#x pwr=%#x "
+		 "lanes=%#x/%#x/%#x/%#x/%#x sw=%#x/%#x/%#x\n",
+		 mipi_tx->data_rate,
+		 readl(base + MIPITX_DSI_CON),
+		 readl(base + MIPITX_DSI_BG_CON),
+		 readl(base + MIPITX_DSI_TOP_CON),
+		 readl(base + MIPITX_DSI_PLL_CON0),
+		 readl(base + MIPITX_DSI_PLL_PWR),
+		 readl(base + MIPITX_DSI_LANE0),
+		 readl(base + MIPITX_DSI_LANE1),
+		 readl(base + MIPITX_DSI_LANE2),
+		 readl(base + MIPITX_DSI_LANE3),
+		 readl(base + MIPITX_DSI_CLK_LANE),
+		 readl(base + MIPITX_DSI_SW_CTRL),
+		 readl(base + MIPITX_DSI_SW_CTRL_CON0),
+		 readl(base + MIPITX_DSI_SW_CTRL_CON1));
 }
 
 static void mt6589_mipi_tx_power_off_signal(struct phy *phy)
