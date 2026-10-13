@@ -877,7 +877,7 @@ static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 	u16 cmd_len;
 	int ret;
 
-	if (fw->size < MT6628_WMT_PATCH_HDR_SIZE)
+	if (fw->size <= MT6628_WMT_PATCH_HDR_SIZE)
 		return -EINVAL;
 
 	/*
@@ -1057,7 +1057,7 @@ static int mt6628_wmt_patch_download(struct mt6628_wmt *wmt,
 			goto out_release;
 		}
 
-		if (fw[i]->size < MT6628_WMT_PATCH_HDR_SIZE ||
+		if (fw[i]->size <= MT6628_WMT_PATCH_HDR_SIZE ||
 		    fw[i]->data[MT6628_WMT_PATCH_HWVER_OFFSET] !=
 			    (rom_ver & 0xff)) {
 			dev_err(&wmt->func->dev,

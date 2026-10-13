@@ -218,7 +218,7 @@ struct mtk_fm_rds {
 	u8 ps_seg[FM_RDS_PS_SEGMENTS * 2];
 	u8 ps_hits[FM_RDS_PS_SEGMENTS];
 	u8 ps_seg_ok;
-	char ps[FM_RDS_PS_LEN];
+	char ps[FM_RDS_PS_LEN + 1];
 
 	/* Radio text: 16 segments of up to 4 characters. */
 	u8 rt_seg[FM_RDS_RT_SEGMENTS * 4];
@@ -226,7 +226,7 @@ struct mtk_fm_rds {
 	u16 rt_seg_ok;
 	bool rt_ab_valid;
 	bool rt_ab;
-	char rt[FM_RDS_RT_LEN];
+	char rt[FM_RDS_RT_LEN + 1];
 	unsigned int rt_len;
 };
 
@@ -350,6 +350,8 @@ static void mtk_fm_rds_reset(struct mtk_fm *fm)
 	 */
 	memset(rds->ps, ' ', sizeof(rds->ps));
 	memset(rds->rt, ' ', sizeof(rds->rt));
+	rds->ps[FM_RDS_PS_LEN] = '\0';
+	rds->rt[FM_RDS_RT_LEN] = '\0';
 }
 
 /*
@@ -378,7 +380,7 @@ static void mtk_fm_rds_set_rt(struct mtk_fm *fm)
 	 * cut rather than overflowing.
 	 */
 	fm->rds.rt[min_t(unsigned int, fm->rds.rt_len,
-			 FM_RDS_RT_LEN - 1)] = '\0';
+			 FM_RDS_RT_LEN)] = '\0';
 	v4l2_ctrl_s_ctrl_string(fm->rds_rt, fm->rds.rt);
 }
 
@@ -391,6 +393,7 @@ static void mtk_fm_rds_reset_rt(struct mtk_fm *fm, bool ab)
 	rds->rt_seg_ok = 0;
 	rds->rt_len = 0;
 	memset(rds->rt, ' ', sizeof(rds->rt));
+	rds->rt[FM_RDS_RT_LEN] = '\0';
 	rds->rt_ab = ab;
 	rds->rt_ab_valid = true;
 	mtk_fm_rds_set_rt(fm);
@@ -1970,6 +1973,10 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	if (min_freq < 7600 || max_freq > 10800 ||
 	    min_freq > max_freq)
 		return -EINVAL;
+	min_chan = DIV_ROUND_UP(min_freq - 6400, 5);
+	max_chan = (max_freq - 6400) / 5;
+	if (min_chan > max_chan)
+		return -EINVAL;
 
 	/*
 	 * VIDIOC_S_HW_FREQ_SEEK requires the current frequency to be
@@ -1985,10 +1992,6 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 		repositioned = true;
 	}
 
-	min_chan = DIV_ROUND_UP(min_freq - 6400, 5);
-	max_chan = (max_freq - 6400) / 5;
-	if (min_chan > max_chan)
-		return -EINVAL;
 	spacing_code = mtk_fm_seek_spacing_code(spacing);
 
 	buf[0] = FM_TASK_COMMAND_PKT_TYPE;

@@ -43,10 +43,11 @@
 #define MT6628_WMT_GEN_VER_MASK             0x0000ffff
 #define MT6628_WMT_PATCH_HDR_SIZE           28
 /*
- * The vendor launcher matches the low byte of the 16-bit firmware
- * version stored at bytes 22..23 of the on-disk patch header.
+ * The vendor launcher matches byte 22 (the low byte of the version field
+ * at bytes 22..23) against the low byte of FVR. Keep this in sync with
+ * the SDIO backend's MT6628_WMT_PATCH_HWVER_OFFSET.
  */
-#define MT6628_WMT_PATCH_FWVER_LSB_OFFSET   23
+#define MT6628_WMT_PATCH_FWVER_LSB_OFFSET   22
 #define MT6628_WMT_PATCH_INFO_OFFSET        24
 #define MT6628_WMT_PATCH_FRAG_SIZE          1000
 #define MT6628_WMT_UART_BOOT_BAUD            115200
