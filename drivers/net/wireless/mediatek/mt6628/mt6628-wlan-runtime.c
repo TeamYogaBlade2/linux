@@ -37,6 +37,7 @@
  * this short enough that an idle interface actually releases the bus.
  */
 #define MT6628_PM_IDLE_DELAY_MS		200
+#define MT6628_IRQ_RETRY_DELAY_MS	100
 
 struct mt6628_hif_tx_hdr {
 	__le16 tx_byte_count_user_priority;
@@ -126,6 +127,7 @@ static void mt6628_runtime_free_queues(struct mt6628_wlan *wl)
 	skb_queue_purge(&wl->tx_queue);
 	skb_queue_purge(&wl->rx_queue);
 	skb_queue_purge(&wl->event_queue);
+	skb_queue_purge(&wl->async_event_queue);
 
 	/*
 	 * mgmt_pending counts the frames in mgmt_queue, and it is only
@@ -297,27 +299,40 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			goto drop;
 		}
 
-		if (wl->event_handler && wl->event_handler(wl, skb))
-			continue;
-
 		/*
-		 * Unhandled event.  The firmware raises about forty event
-		 * ids and only the few above mean anything in station mode;
-		 * the rest are AP/P2P, debug or test paths.  There is no
-		 * consumer for async_event_queue, so queueing the skb here
-		 * only pins it until the device goes away: it is never
-		 * dequeued, never inspected, and nothing else frees it.  That
-		 * leaked every such event for the lifetime of the driver, and
-		 * because mt6628_wlan_give_firmware_own() refuses to hand the
-		 * chip over while this queue is non-empty, the radio could
-		 * never enter its idle state once one arrived.
-		 *
-		 * Drop it, as the bounded path already did.
+		 * Unsolicited-event handlers may block on cfg_mutex or issue
+		 * synchronous firmware commands. Keep them off event_work:
+		 * that worker must remain able to consume the CMD_RESULT or
+		 * TX_DONE event which releases a waiter.
 		 */
+		if (wl->event_handler &&
+		    skb_queue_len(&wl->async_event_queue) <
+				MT6628_RUNTIME_QUEUE_LIMIT) {
+			skb_queue_tail(&wl->async_event_queue, skb);
+			schedule_work(&wl->event_dispatch_work);
+			continue;
+		}
+
+		if (wl->event_handler)
+			dev_warn_ratelimited(&wl->func->dev,
+				"async event queue full, dropping eid=%u\n",
+				event->eid);
 		goto drop;
 
 drop:
 		kfree_skb(skb);
+	}
+}
+
+static void mt6628_runtime_event_dispatch_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(work, struct mt6628_wlan, event_dispatch_work);
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&wl->async_event_queue))) {
+		if (!wl->event_handler || !wl->event_handler(wl, skb))
+			kfree_skb(skb);
 	}
 }
 
@@ -829,6 +844,10 @@ static int mt6628_runtime_sync_startup(struct mt6628_wlan *wl,
 
 static unsigned int mt6628_runtime_tc_from_skb(struct sk_buff *skb)
 {
+	/* EAPOL must use TC4/HIF TX1 even though its destination is multicast. */
+	if (skb->protocol == htons(ETH_P_PAE))
+		return MT6628_TX_TC_CMD;
+
 	if (is_multicast_ether_addr(eth_hdr(skb)->h_dest))
 		return 5;
 
@@ -856,6 +875,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	struct mt6628_hif_tx_hdr hdr = {};
 	unsigned long flags;
 	unsigned int tc;
+	unsigned int port;
 	size_t packet_len, xfer_len;
 	u8 *buf;
 	int ret;
@@ -875,6 +895,9 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	}
 
 	tc = mt6628_runtime_tc_from_skb(skb);
+	port = tc == MT6628_TX_TC_CMD ?
+		MT6628_MCR_WTDR1 : MT6628_MCR_WTDR0;
+
 	spin_lock_irqsave(&wl->tx_lock, flags);
 	if (!wl->tx_free[tc]) {
 		netif_stop_queue(wl->netdev);
@@ -926,7 +949,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	}
 
 	sdio_claim_host(wl->func);
-	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR0, buf, xfer_len);
+	ret = sdio_writesb(wl->func, port, buf, xfer_len);
 	sdio_release_host(wl->func);
 
 	kfree(buf);
@@ -1043,12 +1066,27 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	unsigned int loops;
 	int ret;
 
+	if (!READ_ONCE(wl->runtime_started))
+		return;
+
 	/*
 	 * The firmware may have been holding the chip in its low power
 	 * state, so take Driver Own back before reading anything.  This has
 	 * to happen in process context: the transition polls and can sleep.
 	 */
-	mt6628_wlan_pm_resume(wl);
+	ret = mt6628_wlan_pm_resume(wl);
+	if (ret) {
+		dev_warn_ratelimited(&wl->func->dev,
+			"deferring SDIO IRQ processing until Driver Own is restored: %d\n",
+			ret);
+		if (READ_ONCE(wl->runtime_started))
+			mod_delayed_work(system_wq, &wl->irq_retry_work,
+				msecs_to_jiffies(MT6628_IRQ_RETRY_DELAY_MS));
+		return;
+	}
+
+	if (!READ_ONCE(wl->runtime_started))
+		return;
 
 	sdio_claim_host(wl->func);
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
@@ -1221,6 +1259,8 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 
 static void mt6628_runtime_pm_work(struct work_struct *work);
 
+static void mt6628_runtime_irq_retry_work(struct work_struct *work);
+
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 {
 	struct net_device *ndev = NULL;
@@ -1229,9 +1269,13 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	int ret;
 
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
+	INIT_DELAYED_WORK(&wl->irq_retry_work,
+			  mt6628_runtime_irq_retry_work);
 	INIT_WORK(&wl->recovery_work, mt6628_runtime_recovery_work);
 	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
+	INIT_WORK(&wl->event_dispatch_work,
+		  mt6628_runtime_event_dispatch_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
 	INIT_DELAYED_WORK(&wl->pm_work, mt6628_runtime_pm_work);
 	spin_lock_init(&wl->tx_lock);
@@ -1239,6 +1283,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	skb_queue_head_init(&wl->tx_queue);
 	skb_queue_head_init(&wl->rx_queue);
 	skb_queue_head_init(&wl->event_queue);
+	skb_queue_head_init(&wl->async_event_queue);
 	skb_queue_head_init(&wl->mgmt_queue);
 	init_waitqueue_head(&wl->event_wait);
 	atomic_set(&wl->mgmt_pending, 0);
@@ -1355,6 +1400,8 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 
 	if (!skb_queue_empty(&wl->event_queue))
 		schedule_work(&wl->event_work);
+	if (!skb_queue_empty(&wl->async_event_queue))
+		schedule_work(&wl->event_dispatch_work);
 	if (!skb_queue_empty(&wl->mgmt_queue))
 		schedule_work(&wl->mgmt_work);
 	mt6628_runtime_schedule_rx(wl);
@@ -1426,8 +1473,10 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	}
 
 	cancel_work_sync(&wl->irq_work);
+	cancel_delayed_work_sync(&wl->irq_retry_work);
 	cancel_delayed_work_sync(&wl->tx_work);
 	cancel_work_sync(&wl->event_work);
+	cancel_work_sync(&wl->event_dispatch_work);
 	cancel_work_sync(&wl->mgmt_work);
 	cancel_delayed_work_sync(&wl->pm_work);
 
@@ -1565,6 +1614,16 @@ int mt6628_wlan_pm_resume(struct mt6628_wlan *wl)
 	wl->pm_idle = false;
 	wl->driver_owned = true;
 	return 0;
+}
+
+static void mt6628_runtime_irq_retry_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(to_delayed_work(work), struct mt6628_wlan,
+			     irq_retry_work);
+
+	if (READ_ONCE(wl->runtime_started))
+		schedule_work(&wl->irq_work);
 }
 
 static void mt6628_runtime_pm_work(struct work_struct *work)

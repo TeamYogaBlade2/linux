@@ -1134,7 +1134,7 @@ bool mt6628_wlan_handle_rx_ba_event(struct mt6628_wlan *wl, u8 eid,
 	 * follows turns out to be unusable.
 	 *
 	 * No lock is taken.  Events are dispatched one at a time from the
-	 * single event_work item, so this cannot race another event, and the
+	 * single event_dispatch_work item, so this cannot race another event, and the
 	 * counters are only ever incremented from that one context.  The
 	 * counters saturate rather than wrap, so a long-lived counter cannot
 	 * roll back to zero and read as "never happened".

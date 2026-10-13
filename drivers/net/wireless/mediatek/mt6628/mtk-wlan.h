@@ -104,11 +104,13 @@ struct mt6628_wlan {
 	unsigned int channel_grant_ms;	/* firmware-granted interval */
 
 	struct work_struct irq_work;
+	struct delayed_work irq_retry_work;
 	struct work_struct recovery_work;
 	struct delayed_work tx_work;
 	struct work_struct scan_work;
 	struct napi_struct napi;
 	struct work_struct event_work;
+	struct work_struct event_dispatch_work;
 	struct work_struct mgmt_work;
 	struct net_device *netdev;
 	struct wiphy *wiphy;
@@ -188,6 +190,7 @@ struct mt6628_wlan {
 
 	struct sk_buff_head rx_queue;
 	struct sk_buff_head event_queue;
+	struct sk_buff_head async_event_queue;
 	struct sk_buff_head mgmt_queue;
 	atomic_t mgmt_pending;
 	wait_queue_head_t event_wait;

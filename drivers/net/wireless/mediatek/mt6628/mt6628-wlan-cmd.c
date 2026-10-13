@@ -119,7 +119,11 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 	}
 
 	cmd = (struct mt6628_wifi_cmd_hdr *)buf;
-	cmd->tx_byte_count_user_priority = cpu_to_le16(ALIGN(packet_len, 4));
+	/*
+	 * The HIF byte count describes the actual command packet. SDIO
+	 * transfer padding is handled separately by xfer_len below.
+	 */
+	cmd->tx_byte_count_user_priority = cpu_to_le16(packet_len);
 	cmd->resource_pkt_type_csflags =
 		(MT6628_TX_TC_CMD << MT6628_HIF_TX_RESOURCE_OFFSET) |
 		(MT6628_HIF_TX_PKT_TYPE_CMD << MT6628_HIF_TX_PACKET_TYPE_OFFSET);
