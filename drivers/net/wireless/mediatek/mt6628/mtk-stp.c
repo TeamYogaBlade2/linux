@@ -1215,6 +1215,8 @@ static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
 {
 	int ret;
 
+	// downstream: MTK_WCN_CMB_MERGE_INTERFACE_SUPPORT
+
 	ret = mt6628_wmt_reg_write(wmt, 0x80050078,
 				   0x11010000, 0x07770000);
 	if (ret)
