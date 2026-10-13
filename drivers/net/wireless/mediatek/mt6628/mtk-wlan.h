@@ -122,6 +122,9 @@ struct mt6628_wlan {
 	struct wireless_dev wdev;
 	bool runtime_initialized;
 	bool runtime_started;
+	/* Prevent new PM handoffs while stopping or suspending. */
+	bool runtime_stopping;
+	bool pm_suspending;
 	bool irq_claimed;
 	atomic_t recovery_pending;
 	bool connected;

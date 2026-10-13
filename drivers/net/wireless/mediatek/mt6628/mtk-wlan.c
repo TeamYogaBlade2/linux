@@ -850,7 +850,8 @@ static int mt6628_wlan_suspend(struct device *dev)
 	 * Cancel first: the idle work takes the SDIO host lock, and letting
 	 * it run while we are suspending would race the handoff below.
 	 */
-	cancel_delayed_work(&wl->pm_work);
+	WRITE_ONCE(wl->pm_suspending, true);
+	cancel_delayed_work_sync(&wl->pm_work);
 
 	if (!wl->runtime_started)
 		return 0;
@@ -869,6 +870,8 @@ static int mt6628_wlan_suspend(struct device *dev)
 		 */
 		dev_warn_ratelimited(dev,
 				     "deferring suspend, traffic still in flight\n");
+		WRITE_ONCE(wl->pm_suspending, false);
+		mt6628_wlan_pm_idle(wl);
 		return -EBUSY;
 	}
 
@@ -876,6 +879,8 @@ static int mt6628_wlan_suspend(struct device *dev)
 		dev_warn_ratelimited(dev,
 				     "failed to hand the chip to the firmware: %d\n",
 				     ret);
+		WRITE_ONCE(wl->pm_suspending, false);
+		mt6628_wlan_pm_idle(wl);
 		return ret;
 	}
 
@@ -908,7 +913,16 @@ static int mt6628_wlan_resume(struct device *dev)
 	 * already running and owned by the firmware, and forcing it off would
 	 * tear down a working state that a later reclaim can recover.
 	 */
-	return mt6628_wlan_pm_resume(wl);
+	{
+		int ret = mt6628_wlan_pm_resume(wl);
+
+		if (ret)
+			return ret;
+	}
+
+	WRITE_ONCE(wl->pm_suspending, false);
+	mt6628_wlan_pm_idle(wl);
+	return 0;
 }
 
 static const struct dev_pm_ops mt6628_wlan_pm_ops = {

@@ -1481,6 +1481,16 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	if (!wl->runtime_initialized)
 		return;
 
+	WRITE_ONCE(wl->runtime_stopping, true);
+	WRITE_ONCE(wl->pm_suspending, true);
+
+	/* Drain outstanding handoffs before tearing down firmware state. */
+	cancel_delayed_work_sync(&wl->pm_work);
+
+	if (ndev)
+		netif_stop_queue(ndev);
+	cancel_delayed_work_sync(&wl->tx_work);
+
 	mt6628_cfg80211_abort_scan(wl);
 
 	spin_lock_irqsave(&wl->cmd_lock, flags);
@@ -1499,6 +1509,18 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	 */
 	mt6628_cfg80211_connect_deinit(wl);
 
+	/*
+	 * No more firmware commands should be issued by teardown. Reclaim
+	 * Driver Own while runtime_started still permits the ownership path.
+	 */
+	if (READ_ONCE(wl->pm_idle)) {
+		ret = mt6628_wlan_pm_resume(wl);
+		if (ret)
+			dev_warn(&wl->func->dev,
+				 "failed to reclaim Driver Own during stop: %d\n",
+				 ret);
+	}
+
 	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
 	if (wl->mgmt_tx_pending) {
 		wl->mgmt_tx_status = -ESHUTDOWN;
@@ -1507,7 +1529,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	}
 	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
 
-	wl->runtime_started = false;
+	WRITE_ONCE(wl->runtime_started, false);
 	wake_up_all(&wl->tx_wait);
 
 	if (wl->irq_claimed) {
@@ -1768,8 +1790,15 @@ static bool mt6628_pm_own_pending(struct mt6628_wlan *wl)
  */
 int mt6628_wlan_pm_busy(struct mt6628_wlan *wl)
 {
-	if (!wl || !wl->runtime_started)
+	if (!wl)
 		return 0;
+
+	if (!READ_ONCE(wl->runtime_started)) {
+		if (READ_ONCE(wl->runtime_stopping) &&
+		    READ_ONCE(wl->pm_idle))
+			return -EAGAIN;
+		return 0;
+	}
 
 	/* Any register access starts by taking Driver Own back. */
 	return mt6628_wlan_pm_resume(wl);
