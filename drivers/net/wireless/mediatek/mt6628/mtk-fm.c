@@ -2306,6 +2306,14 @@ static int mtk_fm_g_tuner(struct file *file, void *priv,
 	if (tuner->index)
 		return -EINVAL;
 
+	/*
+	 * FM_REG_FORCE_MS (0x75) is accessed through the 0x3007 register
+	 * window, as in the downstream mt6628_Get/SetMonoStereo path.
+	 */
+	ret = mtk_fm_write_reg(fm, FM_REG_CG_CTRL, 0x3007);
+	if (ret)
+		return ret;
+
 	ret = mtk_fm_read_reg(fm, FM_REG_FORCE_MS, &force_ms);
 	if (ret)
 		return ret;
