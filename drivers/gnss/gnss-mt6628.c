@@ -184,8 +184,8 @@ static int mtk_gnss_probe(struct platform_device *pdev)
 	}
 
 	gdev = gnss_allocate_device(&pdev->dev);
-	if (IS_ERR(gdev))
-		return PTR_ERR(gdev);
+	if (!gdev)
+		return -ENOMEM;
 
 	priv->gdev = gdev;
 	gdev->ops = &mtk_gnss_ops;
