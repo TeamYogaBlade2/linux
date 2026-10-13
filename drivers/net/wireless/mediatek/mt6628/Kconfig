@@ -22,18 +22,14 @@ config MTK_MT6628_STP_SDIO
 	depends on OF
 	select MTK_MT6628_STP
 	help
-	  Build the shared WMT/STP transport over SDIO function 2. This may be
-	  enabled together with the UART backend; mediatek,bgf-hif selects which
-	  backend binds on a particular board.
+	  Build the shared WMT/STP transport over SDIO function 2.
 
 config MTK_MT6628_STP_UART
 	tristate "UART transport for MT6628 BGF/STP"
 	depends on SERIAL_DEV_BUS && SERIAL_DEV_CTRL_TTYPORT
 	select MTK_MT6628_STP
 	help
-	  Build the shared WMT/STP transport over serdev UART. This may be enabled
-	  together with the SDIO function-2 backend; mediatek,bgf-hif selects which
-	  backend binds on a particular board. WLAN remains on SDIO function 1.
+	  Build the shared WMT/STP transport over serdev UART.
 
 config MTK_MT6628_FM
 	tristate "MediaTek MT6628 FM radio support"
