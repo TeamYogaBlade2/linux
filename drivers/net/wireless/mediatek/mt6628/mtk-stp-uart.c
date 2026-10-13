@@ -701,12 +701,26 @@ static int mt6628_wmt_cmd(struct mt6628_wmt *wmt, const u8 *cmd,
 static int mt6628_wmt_reg_write(struct mt6628_wmt *wmt,
 				u32 addr, u32 value, u32 mask)
 {
+	static const u8 expected[] = {
+		0x02, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01,
+	};
 	u8 cmd[20] = { 0x01, 0x08, 0x10, 0x00, 0x01, 0x01, 0x00, 0x01 };
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
 
 	put_unaligned_le32(addr, cmd + 8);
 	put_unaligned_le32(value, cmd + 12);
 	put_unaligned_le32(mask, cmd + 16);
-	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000, NULL, NULL);
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
 }
 
 static int mt6628_wmt_reg_read(struct mt6628_wmt *wmt,
@@ -761,9 +775,21 @@ static int mt6628_wmt_read_versions(struct mt6628_wmt *wmt)
 
 static int mt6628_wmt_reset(struct mt6628_wmt *wmt)
 {
-	return mt6628_wmt_cmd(wmt, mt6628_wmt_reset_cmd,
-			      sizeof(mt6628_wmt_reset_cmd), 0x07, 1000,
-			      NULL, NULL);
+	static const u8 expected[] = { 0x02, 0x07, 0x01, 0x00, 0x00 };
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
+
+	ret = mt6628_wmt_cmd(wmt, mt6628_wmt_reset_cmd,
+			     sizeof(mt6628_wmt_reset_cmd), 0x07, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
 }
 
 static int mt6628_wmt_set_baud(struct mt6628_wmt *wmt)
@@ -1159,23 +1185,14 @@ static int mt6628_wmt_coex_init(struct mt6628_wmt *wmt)
  */
 static int mt6628_wmt_set_sdio_driving(struct mt6628_wmt *wmt)
 {
-	u8 cmd[] = {
-		0x01, 0x08, 0x10, 0x00,
-		0x01, 0x01, 0x00, 0x01,
-		0x50, 0x00, 0x05, 0x80,
-		0x00, 0x00, 0x00, 0x00,
-		0x77, 0x77, 0x07, 0x00,
-	};
+	u32 value;
 
 	if (!wmt->sdio_driving_configured)
 		return 0;
 
-	cmd[12] = wmt->sdio_driving_cfg & 0x77;
-	cmd[13] = (wmt->sdio_driving_cfg >> 8) & 0x77;
-	cmd[14] = (wmt->sdio_driving_cfg >> 16) & 0x07;
+	value = wmt->sdio_driving_cfg & 0x00077777;
 
-	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x08, 1000,
-			      NULL, NULL);
+	return mt6628_wmt_reg_write(wmt, 0x80050050, value, 0x00077777);
 }
 
 static int mt6628_wmt_merge_if_init(struct mt6628_wmt *wmt)
@@ -1213,10 +1230,23 @@ static int mt6628_wmt_co_clock_init(struct mt6628_wmt *wmt)
 
 static int mt6628_wmt_set_fm_strap(struct mt6628_wmt *wmt)
 {
+	u8 expected[] = { 0x02, 0x05, 0x02, 0x00, 0x00, 0x02 };
 	u8 cmd[] = { 0x01, 0x05, 0x02, 0x00, 0x02, 0x02 };
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
 
 	cmd[5] = wmt->fm_strap_mode;
-	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x05, 1000, NULL, NULL);
+	expected[5] = wmt->fm_strap_mode;
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x05, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
 }
 
 static int mt6628_wmt_init(struct mt6628_wmt *wmt)
@@ -1286,14 +1316,26 @@ static int mt6628_wmt_init(struct mt6628_wmt *wmt)
 }
 
 static int mt6628_uart_wmt_func_ctrl(struct mt6628_wmt *wmt,
-			 enum mt6628_wmt_func func, bool on)
+				 enum mt6628_wmt_func func, bool on)
 {
+	static const u8 expected[] = { 0x02, 0x06, 0x01, 0x00, 0x00 };
 	u8 cmd[] = { 0x01, 0x06, 0x02, 0x00, func, on ? 1 : 0 };
+	u8 response[MT6628_WMT_RESPONSE_MAX];
+	size_t response_len = sizeof(response);
+	int ret;
 
 	if (!wmt || (func != MT6628_WMT_FUNC_BT &&
 		     func != MT6628_WMT_FUNC_FM && func != MT6628_WMT_FUNC_GPS))
 		return -EINVAL;
-	return mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x06, 1000, NULL, NULL);
+	ret = mt6628_wmt_cmd(wmt, cmd, sizeof(cmd), 0x06, 1000,
+			     response, &response_len);
+	if (ret)
+		return ret;
+	if (response_len != sizeof(expected) ||
+	    memcmp(response, expected, sizeof(expected)))
+		return -EPROTO;
+
+	return 0;
 }
 
 static int mt6628_uart_wmt_gps_sync_ctrl(struct mt6628_wmt *wmt, bool on)
