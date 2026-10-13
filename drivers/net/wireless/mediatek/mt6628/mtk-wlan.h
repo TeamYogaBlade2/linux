@@ -99,6 +99,7 @@ struct mt6628_wlan {
 	u64 roc_cookie_next;
 	u64 roc_cookie;
 	bool roc_starting;
+	bool roc_finishing;
 	struct ieee80211_channel *roc_chans[2];
 	unsigned int roc_n_chans;
 	unsigned int roc_duration;

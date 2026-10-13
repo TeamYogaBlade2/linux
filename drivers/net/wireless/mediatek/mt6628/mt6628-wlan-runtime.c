@@ -554,6 +554,8 @@ int ret;
 
 		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
 			header_offset;
+		if (payload_len < ETH_HLEN)
+			goto bad_packet;
 		if (!netif_running(wl->netdev)) {
 			ret = 0;
 			break;
@@ -1330,6 +1332,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->channel_grant_ms = 0;
 	wl->roc_cookie = 0;
 	wl->roc_starting = false;
+	wl->roc_finishing = false;
 	wl->roc_chans[0] = NULL;
 	wl->roc_chans[1] = NULL;
 	wl->roc_n_chans = 0;

@@ -661,17 +661,20 @@ static bool mt6628_roc_release_pending(struct mt6628_wlan *wl)
  * owns cleanup; later cfg80211 cancels must not retire the same window again.
  */
 static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
-			      struct ieee80211_channel *chan)
+			      struct ieee80211_channel *chan, bool claimed)
 {
 	unsigned long retry;
 	int ret;
 
-	mutex_lock(&wl->cfg_mutex);
-	if (wl->roc_cookie != cookie) {
+	if (!claimed) {
+		mutex_lock(&wl->cfg_mutex);
+		if (wl->roc_cookie != cookie || wl->roc_finishing) {
+			mutex_unlock(&wl->cfg_mutex);
+			return;
+		}
+		wl->roc_finishing = true;
 		mutex_unlock(&wl->cfg_mutex);
-		return;
 	}
-	mutex_unlock(&wl->cfg_mutex);
 
 	/*
 	 * Give the channel back.  Without this the firmware would still be
@@ -688,6 +691,7 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 		wl->roc_duration = 0;
 		wl->roc_chans[0] = NULL;
 		wl->roc_chans[1] = NULL;
+		wl->roc_finishing = false;
 
 		/*
 		 * mt6628_wlan_release_channel() only clears the firmware
@@ -727,7 +731,7 @@ static void mt6628_roc_expire(struct mt6628_wlan *wl, u64 cookie)
 		chan = wl->roc_chans[0];
 	mutex_unlock(&wl->cfg_mutex);
 
-	mt6628_roc_finish(wl, cookie, chan);
+	mt6628_roc_finish(wl, cookie, chan, false);
 }
 
 static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
@@ -744,15 +748,20 @@ static int mt6628_roc_cancel(struct mt6628_wlan *wl, u64 cookie)
 	 * been handed back, which is what keeps this cookie from being handed
 	 * out again while the cancel is still in flight.
 	 */
-	active = wl->roc_cookie && wl->roc_cookie == cookie;
+	active = wl->roc_cookie && wl->roc_cookie == cookie &&
+		 !wl->roc_finishing;
 	if (active && wl->roc_n_chans)
 		chan = wl->roc_chans[0];
+	if (active)
+		wl->roc_finishing = true;
 	mutex_unlock(&wl->cfg_mutex);
 
 	if (!active)
 		return -ENOENT;
 
-	mt6628_roc_finish(wl, cookie, chan);
+	/* Claim before canceling, so a stale cancel cannot stop a newer timer. */
+	cancel_delayed_work_sync(&wl->roc_work);
+	mt6628_roc_finish(wl, cookie, chan, true);
 	return 0;
 }
 
@@ -880,15 +889,6 @@ static int mt6628_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy,
 	if (!wl)
 		return -EINVAL;
 
-	/* A stale cancel must not cancel the timer for a newer ROC window. */
-	mutex_lock(&wl->cfg_mutex);
-	if (!cookie || wl->roc_cookie != cookie) {
-		mutex_unlock(&wl->cfg_mutex);
-		return -ENOENT;
-	}
-	mutex_unlock(&wl->cfg_mutex);
-
-	cancel_delayed_work_sync(&wl->roc_work);
 	return mt6628_roc_cancel(wl, cookie);
 }
 
