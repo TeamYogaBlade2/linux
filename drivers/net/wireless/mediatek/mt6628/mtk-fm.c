@@ -2401,6 +2401,8 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 			  const struct v4l2_tuner *tuner)
 {
 	struct mtk_fm *fm = video_drvdata(file);
+	bool force_mono;
+	int ret;
 
 	if (tuner->index)
 		return -EINVAL;
@@ -2413,17 +2415,23 @@ static int mtk_fm_s_tuner(struct file *file, void *priv,
 		return -EINVAL;
 	}
 
+	force_mono = tuner->audmode == V4L2_TUNER_MODE_MONO;
+
 	/*
-	 * Record the request first, so it survives the radio being closed and
-	 * powered down before mtk_fm_open() re-applies it.  See
-	 * mtk_fm_set_force_mono() for the vendor sequence this reproduces.
+	 * Cache the request while powered off. When powered on, commit it
+	 * only after the hardware update succeeds.
 	 */
-	fm->force_mono = tuner->audmode == V4L2_TUNER_MODE_MONO;
-
-	if (!mtk_fm_is_powered(fm))
+	if (!mtk_fm_is_powered(fm)) {
+		fm->force_mono = force_mono;
 		return 0;
+	}
 
-	return mtk_fm_set_force_mono(fm, fm->force_mono);
+	ret = mtk_fm_set_force_mono(fm, force_mono);
+	if (ret)
+		return ret;
+
+	fm->force_mono = force_mono;
+	return 0;
 }
 
 static int mtk_fm_g_frequency(struct file *file, void *priv,
