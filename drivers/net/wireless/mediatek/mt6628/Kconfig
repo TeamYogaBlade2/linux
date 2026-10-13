@@ -2,10 +2,7 @@
 config WLAN_VENDOR_MEDIATEK_MT6628
 	tristate "MediaTek MT6628 support"
 	depends on MMC || (SERIAL_DEV_BUS && SERIAL_DEV_CTRL_TTYPORT)
-	# Built-in consumers cannot call into a modular pwrseq provider.
-	# Keep MT6628 consumers modular when PWRSEQ_MT6628 is a module, while
-	# still permitting boards which do not use the optional provider.
-	depends on PWRSEQ_MT6628 || PWRSEQ_MT6628 = n
+	depends on PWRSEQ_MT6628 || !PWRSEQ_MT6628
 	help
 	  Enable support for the MediaTek MT6628 combo chip.
 
