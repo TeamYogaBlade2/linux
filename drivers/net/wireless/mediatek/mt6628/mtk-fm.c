@@ -1991,16 +1991,23 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	    rangelow > rangehigh)
 		return -EINVAL;
 
-	min_freq = DIV_ROUND_CLOSEST(rangelow, 160);
-	max_freq = DIV_ROUND_CLOSEST(rangehigh, 160);
-
-	if (min_freq < 7600 || max_freq > 10800 ||
-	    min_freq > max_freq)
-		return -EINVAL;
-	min_chan = DIV_ROUND_UP(min_freq - 6400, 5);
-	max_chan = (max_freq - 6400) / 5;
+	/*
+	 * Convert the original V4L2 bounds (62.5 Hz units) directly to
+	 * the MT6628 50 kHz channel grid. A channel is
+	 * (6400 + 5 * channel) in 10 kHz units, or
+	 * (6400 + 5 * channel) * 160 in V4L2 units.
+	 *
+	 * Round the lower bound up and the upper bound down so the
+	 * hardware cannot seek outside the range requested by userspace.
+	 */
+	min_chan = DIV_ROUND_UP(rangelow - 6400 * 160, 5 * 160);
+	max_chan = (rangehigh - 6400 * 160) / (5 * 160);
 	if (min_chan > max_chan)
 		return -EINVAL;
+
+	/* Keep the range endpoints aligned to the supported channel grid. */
+	min_freq = 6400 + min_chan * 5;
+	max_freq = 6400 + max_chan * 5;
 
 	/*
 	 * VIDIOC_S_HW_FREQ_SEEK requires the current frequency to be
@@ -2069,7 +2076,8 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	 * little-endian 16-bit frequency in 10 kHz units.
 	 */
 	result = get_unaligned_le16(fm->cmd_data);
-	if (result < min_freq || result > max_freq) {
+	if (result < min_freq || result > max_freq ||
+	    (result - 6400) % 5) {
 		ret = -ENODATA;
 		goto restore;
 	}
