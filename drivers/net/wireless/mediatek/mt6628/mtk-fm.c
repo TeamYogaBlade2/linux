@@ -19,12 +19,15 @@
 #include <linux/firmware.h>
 #include <linux/completion.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/mfd/mt6628.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/workqueue.h>
 #include <linux/unaligned.h>
 
 #include <media/v4l2-ctrls.h>
@@ -180,11 +183,10 @@ static const u16 mtk_fm_vol_tbl[16] = {
 #define FM_RDS_SEG_MIN_HITS		2
 
 /*
- * Alternative frequencies.  The vendor keeps up to 8 pairs and accepts AF_H
- * in 225..249 as the pair count and AF_L in 1..204 as the frequency offset
- * in 100 kHz from 87.5 MHz (core/fm_rds_parser.c:1021-1035).
+ * RDS can announce up to 25 alternative frequencies (AF codes 225..249).
+ * Ordinary AF codes 1..204 represent 87.6..107.9 MHz in 100-kHz units.
  */
-#define FM_RDS_AF_MAX			8
+#define FM_RDS_AF_MAX			25
 
 /* One decoded group: the four blocks plus the chip's per-block status. */
 struct mtk_fm_rds_grp {
@@ -198,7 +200,7 @@ struct mtk_fm_rds {
 
 	/* Alternative frequency list, in 100 kHz units. */
 	u16 af[FM_RDS_AF_MAX];
-	u32 af_mask;
+	u8 af_expected_count;
 	unsigned int af_count;
 
 	u8 pty;
@@ -222,8 +224,17 @@ struct mtk_fm_rds {
 	u8 rt_seg[FM_RDS_RT_SEGMENTS * 4];
 	u8 rt_hits[FM_RDS_RT_SEGMENTS];
 	u16 rt_seg_ok;
+	bool rt_ab_valid;
+	bool rt_ab;
 	char rt[FM_RDS_RT_LEN];
 	unsigned int rt_len;
+};
+
+struct mtk_fm_rds_event {
+	struct list_head node;
+	size_t len;
+	bool reset;
+	u8 data[];
 };
 
 /*
@@ -276,6 +287,9 @@ struct mtk_fm {
 	struct completion cmd_done;
 	struct mutex cmd_lock;
 	struct mutex power_lock;
+	spinlock_t rds_queue_lock;
+	struct list_head rds_queue;
+	struct work_struct rds_work;
 	struct v4l2_ctrl *ctrl_mute;	/* V4L2_CID_AUDIO_MUTE */
 	struct v4l2_ctrl *ctrl_deemph;	/* V4L2_CID_TUNE_DEEMPHASIS */
 	struct v4l2_ctrl *rds_ps;	/* V4L2_CID_RDS_RX_PS_NAME */
@@ -366,6 +380,20 @@ static void mtk_fm_rds_set_rt(struct mtk_fm *fm)
 	fm->rds.rt[min_t(unsigned int, fm->rds.rt_len,
 			 FM_RDS_RT_LEN - 1)] = '\0';
 	v4l2_ctrl_s_ctrl_string(fm->rds_rt, fm->rds.rt);
+}
+
+static void mtk_fm_rds_reset_rt(struct mtk_fm *fm, bool ab)
+{
+	struct mtk_fm_rds *rds = &fm->rds;
+
+	memset(rds->rt_seg, 0, sizeof(rds->rt_seg));
+	memset(rds->rt_hits, 0, sizeof(rds->rt_hits));
+	rds->rt_seg_ok = 0;
+	rds->rt_len = 0;
+	memset(rds->rt, ' ', sizeof(rds->rt));
+	rds->rt_ab = ab;
+	rds->rt_ab_valid = true;
+	mtk_fm_rds_set_rt(fm);
 }
 
 /*
@@ -477,11 +505,16 @@ static bool mtk_fm_rds_rt_segment(struct mtk_fm *fm, unsigned int seg,
 {
 	struct mtk_fm_rds *rds = &fm->rds;
 	unsigned int i;
-	unsigned int pos = seg * 4;
+	unsigned int pos;
 	bool same = true;
 
 	if (seg >= FM_RDS_RT_SEGMENTS)
 		return false;
+
+	/* Group 2B carries two characters per segment; 2A carries four. */
+	if (seg_len != 2 && seg_len != 4)
+		return false;
+	pos = seg * seg_len;
 
 	/*
 	 * Compare the whole segment against what was last seen for it.  The
@@ -528,53 +561,57 @@ static bool mtk_fm_rds_rt_segment(struct mtk_fm *fm, unsigned int seg,
 
 	/* No end marker: complete only once every segment is confirmed. */
 	if (rds->rt_seg_ok == 0xffff)
-		rds->rt_len = FM_RDS_RT_LEN;
+		rds->rt_len = FM_RDS_RT_SEGMENTS * seg_len;
 
 	return rds->rt_seg_ok == 0xffff;
 }
 
 /*
- * Collect the alternative frequency list from group 0A.
- *
- * The vendor accepts AF_H in 225..249 as the number of pairs and AF_L in
- * 1..204 as the frequency offset in 100 kHz from 87.5 MHz
- * (core/fm_rds_parser.c:1021-1035), adding 875 to convert to the 100 kHz
- * units its frequency API uses.
- *
- * V4L2 has no control for the AF list in this tree's UAPI, so the list is
- * decoded and kept but not published.  It is filled in so that a later
- * addition of a control does not have to re-derive it.
+ * Decode the alternative-frequency codes from a group 0A block C. Codes
+ * 225..249 announce the number of AF entries; ordinary codes 1..204 map to
+ * 87.6..107.9 MHz in 100-kHz units from 87.5 MHz. Keep a bounded list because
+ * this tree's V4L2 UAPI does not expose an AF-list control yet.
  */
+static void mtk_fm_rds_af_add(struct mtk_fm_rds *rds, unsigned int code)
+{
+	unsigned int freq, i;
+
+	if (!code || code > 204 || !rds->af_expected_count ||
+	    rds->af_count >= rds->af_expected_count ||
+	    rds->af_count >= FM_RDS_AF_MAX)
+		return;
+
+	freq = code + 875;
+	for (i = 0; i < rds->af_count; i++)
+		if (rds->af[i] == freq)
+			return;
+
+	rds->af[rds->af_count++] = freq;
+}
+
 static void mtk_fm_rds_af(struct mtk_fm *fm, u16 blk_c)
 {
 	struct mtk_fm_rds *rds = &fm->rds;
-	unsigned int count = (blk_c >> 8) & 0xff;
-	unsigned int freq = blk_c & 0xff;
-	unsigned int i;
+	unsigned int af_h = (blk_c >> 8) & 0xff;
+	unsigned int af_l = blk_c & 0xff;
+	unsigned int count;
 
-	/* Valid pair counts are 225..249. */
-	if (count < 225 || count > 249)
+	if (af_h >= 225 && af_h <= 249) {
+		count = af_h - 224;
+		if (rds->af_expected_count != count) {
+			memset(rds->af, 0, sizeof(rds->af));
+			rds->af_count = 0;
+			rds->af_expected_count = count;
+		}
+		mtk_fm_rds_af_add(rds, af_l);
 		return;
-
-	count -= 224;
-
-	/* Valid VHF offsets are 1..204, i.e. 87.6..102.0 MHz. */
-	if (freq < 1 || freq > 204)
-		return;
-
-	/* 87.5 MHz base in 100 kHz units plus the offset. */
-	freq += 875;
-	if (freq > 1080)
-		return;
-
-	for (i = 0; i < count && i < FM_RDS_AF_MAX; i++) {
-		if (rds->af_mask & (1 << i))
-			continue;
-
-		rds->af[i] = freq;
-		rds->af_mask |= 1 << i;
-		rds->af_count++;
 	}
+
+	/* Once the count code is seen, ordinary C-blocks carry two AF codes. */
+	if (!rds->af_expected_count)
+		return;
+	mtk_fm_rds_af_add(rds, af_h);
+	mtk_fm_rds_af_add(rds, af_l);
 }
 
 /*
@@ -603,6 +640,7 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 	u16 blk_d = g->blk[3];
 	unsigned int type;
 	bool version_b;
+	bool text_ab;
 	u8 chars[4];
 
 	/* Without a usable block B there is no group type, so nothing to do. */
@@ -614,30 +652,36 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 
 	switch (type) {
 	case 0:			/* PS, TA, AF, TMC */
-		if (!(g->crc & FM_RDS_GDBK_IND_A))
-			return;
-
 		/* PI, including the country and programme bits, is all of block A. */
-		rds->pi = g->blk[0];
+		if (g->crc & FM_RDS_GDBK_IND_A)
+			rds->pi = g->blk[0];
 
 		rds->ta = blk_b & BIT(4);
 		rds->ms = blk_b & BIT(3);
 		rds->pty = (blk_b >> 5) & 0x1f;
 		rds->tp = blk_b & BIT(10);
 
-		if (!(g->crc & FM_RDS_GDBK_IND_D))
-			return;
-
-		/* PS is two characters in block D, at segment blkB[1:0]. */
-		if (mtk_fm_rds_ps_segment(fm, blk_b & 0x3, blk_d >> 8,
-					  blk_d & 0xff))
-			mtk_fm_rds_set_ps(fm);
+		if (g->crc & FM_RDS_GDBK_IND_D) {
+			/* PS is two characters in block D, at segment blkB[1:0]. */
+			if (mtk_fm_rds_ps_segment(fm, blk_b & 0x3, blk_d >> 8,
+						  blk_d & 0xff))
+				mtk_fm_rds_set_ps(fm);
+		}
 
 		/* The AF list is in block C of the version A form only. */
 		if (!version_b && (g->crc & FM_RDS_GDBK_IND_C))
 			mtk_fm_rds_af(fm, blk_c);
 		break;
 	case 2:			/* radio text */
+		/* Bit 4 toggles whenever the broadcaster starts a new RT message. */
+		text_ab = !!(blk_b & BIT(4));
+		if (!rds->rt_ab_valid) {
+			rds->rt_ab = text_ab;
+			rds->rt_ab_valid = true;
+		} else if (rds->rt_ab != text_ab) {
+			mtk_fm_rds_reset_rt(fm, text_ab);
+		}
+
 		if (version_b) {
 			/* 2B: block D only, two characters. */
 			if (!(g->crc & FM_RDS_GDBK_IND_D))
@@ -648,8 +692,9 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 				mtk_fm_rds_set_rt(fm);
 		} else {
 			/* 2A: blocks C and D, four characters. */
-			if (!(g->crc & (FM_RDS_GDBK_IND_C |
-					FM_RDS_GDBK_IND_D)))
+			if ((g->crc & (FM_RDS_GDBK_IND_C |
+				FM_RDS_GDBK_IND_D)) !=
+			    (FM_RDS_GDBK_IND_C | FM_RDS_GDBK_IND_D))
 				return;
 
 			mtk_fm_rds_rt_chars(blk_c, blk_d, false, chars);
@@ -672,7 +717,8 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
  * core/fm_rds_parser.c:73-85 derives the group count by subtracting the
  * 4-byte header and dividing by the 12-byte record, which is done here too.
  *
- * This runs in the STP receive workqueue, so it must not sleep.
+ * This runs in the dedicated FM RDS work item; the STP receive callback only
+ * queues the event so FM command responses can continue to be dispatched.
  */
 static void mtk_fm_rds_parse(struct mtk_fm *fm, const u8 *buf, size_t len)
 {
@@ -708,11 +754,106 @@ static void mtk_fm_rds_parse(struct mtk_fm *fm, const u8 *buf, size_t len)
 	mtk_fm_rds_publish(fm);
 }
 
+static void mtk_fm_queue_rds_event(struct mtk_fm *fm, const u8 *buf,
+				   size_t len, bool reset)
+{
+	struct mtk_fm_rds_event *event;
+	unsigned long flags;
+
+	event = kmalloc(sizeof(*event) + len, GFP_KERNEL);
+	if (!event) {
+		dev_warn_ratelimited(fm->dev,
+				     "dropping RDS event: allocation failed\n");
+		return;
+	}
+
+	INIT_LIST_HEAD(&event->node);
+	event->len = len;
+	event->reset = reset;
+	if (len)
+		memcpy(event->data, buf, len);
+
+	spin_lock_irqsave(&fm->rds_queue_lock, flags);
+	list_add_tail(&event->node, &fm->rds_queue);
+	spin_unlock_irqrestore(&fm->rds_queue_lock, flags);
+	schedule_work(&fm->rds_work);
+}
+
+static void mtk_fm_rds_reset_controls(struct mtk_fm *fm)
+{
+	if (fm->rds_ps)
+		v4l2_ctrl_s_ctrl_string(fm->rds_ps, "");
+	if (fm->rds_rt)
+		v4l2_ctrl_s_ctrl_string(fm->rds_rt, "");
+	if (fm->rds_pty)
+		v4l2_ctrl_s_ctrl(fm->rds_pty, 0);
+	if (fm->rds_ta)
+		v4l2_ctrl_s_ctrl(fm->rds_ta, 0);
+	if (fm->rds_tp)
+		v4l2_ctrl_s_ctrl(fm->rds_tp, 0);
+	if (fm->rds_ms)
+		v4l2_ctrl_s_ctrl(fm->rds_ms, 0);
+}
+
+static void mtk_fm_rds_work(struct work_struct *work)
+{
+	struct mtk_fm *fm = container_of(work, struct mtk_fm, rds_work);
+	struct mtk_fm_rds_event *event;
+	unsigned long flags;
+
+	for (;;) {
+		spin_lock_irqsave(&fm->rds_queue_lock, flags);
+		if (list_empty(&fm->rds_queue)) {
+			spin_unlock_irqrestore(&fm->rds_queue_lock, flags);
+			break;
+		}
+
+		event = list_first_entry(&fm->rds_queue,
+					 struct mtk_fm_rds_event, node);
+		list_del(&event->node);
+		spin_unlock_irqrestore(&fm->rds_queue_lock, flags);
+
+		if (event->reset) {
+			mtk_fm_rds_reset(fm);
+			mtk_fm_rds_reset_controls(fm);
+		} else if (READ_ONCE(fm->powered) &&
+			   READ_ONCE(fm->rds_on)) {
+			mtk_fm_rds_parse(fm, event->data, event->len);
+		}
+
+		kfree(event);
+	}
+}
+
+static void mtk_fm_queue_rds_reset(struct mtk_fm *fm)
+{
+	mtk_fm_queue_rds_event(fm, NULL, 0, true);
+}
+
+static void mtk_fm_free_rds_queue(struct mtk_fm *fm)
+{
+	struct mtk_fm_rds_event *event;
+	unsigned long flags;
+
+	for (;;) {
+		spin_lock_irqsave(&fm->rds_queue_lock, flags);
+		if (list_empty(&fm->rds_queue)) {
+			spin_unlock_irqrestore(&fm->rds_queue_lock, flags);
+			break;
+		}
+
+		event = list_first_entry(&fm->rds_queue,
+					 struct mtk_fm_rds_event, node);
+		list_del(&event->node);
+		spin_unlock_irqrestore(&fm->rds_queue_lock, flags);
+		kfree(event);
+	}
+}
+
 static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
 {
 	struct mtk_fm *fm = priv;
 	u16 payload_len;
-	bool powered;
 
 	if (len < 4 || buf[0] != FM_TASK_EVENT_PKT_TYPE)
 		return;
@@ -731,14 +872,11 @@ static void mtk_fm_rx(void *priv, const u8 *buf, size_t len)
 	 * flight when the radio is closed.
 	 */
 	if (buf[1] == FM_RDS_DATA_OPCODE) {
-		mutex_lock(&fm->power_lock);
-		powered = fm->powered && fm->rds_on;
-		mutex_unlock(&fm->power_lock);
-
-		if (!powered)
+		if (!READ_ONCE(fm->powered) || !READ_ONCE(fm->rds_on))
 			return;
 
-		mtk_fm_rds_parse(fm, buf + 4, payload_len);
+		/* Never run V4L2 control updates on the shared STP RX worker. */
+		mtk_fm_queue_rds_event(fm, buf + 4, payload_len, false);
 		return;
 	}
 
@@ -1393,7 +1531,7 @@ static int mtk_fm_power_get(struct mtk_fm *fm)
 		goto out_unlock;
 	}
 
-	fm->powered = true;
+	WRITE_ONCE(fm->powered, true);
 	fm->users = 1;
 	ret = 0;
 
@@ -1424,7 +1562,7 @@ static void mtk_fm_power_put(struct mtk_fm *fm)
 		if (ret)
 			dev_warn(fm->dev,
 				 "FM power-down failed: %d\n", ret);
-		fm->powered = false;
+		WRITE_ONCE(fm->powered, false);
 	}
 
 	ret = mt6628_wmt_func_ctrl(fm->wmt,
@@ -1496,7 +1634,7 @@ static int mtk_fm_open(struct file *file)
 	 */
 	if (fm->rds_on) {
 		if (!mtk_fm_set_rds(fm, true))
-			mtk_fm_rds_reset(fm);
+			mtk_fm_queue_rds_reset(fm);
 		else
 			dev_warn(fm->dev, "failed to enable FM RDS\n");
 	}
@@ -1664,6 +1802,7 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 	}
 
 	fm->freq = freq;
+	mtk_fm_queue_rds_reset(fm);
 	return 0;
 
 restore_desense:
@@ -1903,6 +2042,7 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	}
 
 	fm->freq = result;
+	mtk_fm_queue_rds_reset(fm);
 
 	/*
 	 * Ask for the channel quality figures of the channel just found and
@@ -1978,35 +2118,46 @@ static int mtk_fm_s_ctrl(struct v4l2_ctrl *ctrl)
 		 * of the radio open there is nothing listening anyway, so it
 		 * is better to honour the request than to fail it.
 		 */
-		fm->mute = ctrl->val;
-
-		if (!mtk_fm_is_powered(fm))
+		if (!mtk_fm_is_powered(fm)) {
+			fm->mute = ctrl->val;
 			return 0;
+		}
 
-		return mtk_fm_set_mute(fm, ctrl->val);
+		ret = mtk_fm_set_mute(fm, ctrl->val);
+		if (!ret)
+			fm->mute = ctrl->val;
+		return ret;
 	case V4L2_CID_AUDIO_VOLUME:
-		fm->volume = ctrl->val;
-
-		if (!mtk_fm_is_powered(fm))
+		if (!mtk_fm_is_powered(fm)) {
+			fm->volume = ctrl->val;
 			return 0;
+		}
 
-		return mtk_fm_set_volume(fm, ctrl->val);
+		ret = mtk_fm_set_volume(fm, ctrl->val);
+		if (!ret)
+			fm->volume = ctrl->val;
+		return ret;
 	case V4L2_CID_TUNE_DEEMPHASIS:
-		fm->deemph_75us = ctrl->val == V4L2_DEEMPHASIS_75_uS;
-
-		if (!mtk_fm_is_powered(fm))
+		if (!mtk_fm_is_powered(fm)) {
+			fm->deemph_75us = ctrl->val == V4L2_DEEMPHASIS_75_uS;
 			return 0;
+		}
 
-		return mtk_fm_set_deemphasis(fm, fm->deemph_75us);
+		ret = mtk_fm_set_deemphasis(fm,
+					    ctrl->val == V4L2_DEEMPHASIS_75_uS);
+		if (!ret)
+			fm->deemph_75us = ctrl->val == V4L2_DEEMPHASIS_75_uS;
+		return ret;
 	case V4L2_CID_RDS_RECEPTION:
-		fm->rds_on = ctrl->val;
-
-		if (!mtk_fm_is_powered(fm))
+		if (!mtk_fm_is_powered(fm)) {
+			WRITE_ONCE(fm->rds_on, ctrl->val);
 			return 0;
+		}
 
-		ret = mtk_fm_set_rds(fm, fm->rds_on);
+		ret = mtk_fm_set_rds(fm, ctrl->val);
 		if (ret)
 			return ret;
+		WRITE_ONCE(fm->rds_on, ctrl->val);
 
 		/*
 		 * Turning RDS on or off invalidates every decoded field, so the
@@ -2014,7 +2165,7 @@ static int mtk_fm_s_ctrl(struct v4l2_ctrl *ctrl)
 		 * place (mt6628_RDS_OnOff() calls mt6628_RDS_Init_Data() for
 		 * both directions, pub/mt6628_fm_rds.c:233-250).
 		 */
-		mtk_fm_rds_reset(fm);
+		mtk_fm_queue_rds_reset(fm);
 
 		return 0;
 	default:
@@ -2325,6 +2476,9 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	init_completion(&fm->cmd_done);
 	mutex_init(&fm->cmd_lock);
 	mutex_init(&fm->power_lock);
+	spin_lock_init(&fm->rds_queue_lock);
+	INIT_LIST_HEAD(&fm->rds_queue);
+	INIT_WORK(&fm->rds_work, mtk_fm_rds_work);
 	fm->waiting_opcode = 0xff;
 
 	fm->freq = 8750;	/* 87.5 MHz in 10kHz units */
@@ -2452,6 +2606,8 @@ err_free_ctrls:
 err_unregister_rx:
 	mt6628_stp_unregister_rx(wmt, MT6628_STP_TASK_FM,
 				 mtk_fm_rx, fm);
+	cancel_work_sync(&fm->rds_work);
+	mtk_fm_free_rds_queue(fm);
 	return ret;
 }
 
@@ -2464,10 +2620,12 @@ static void mtk_fm_remove(struct platform_device *pdev)
 
 	video_unregister_device(&fm->vdev);
 	mtk_fm_power_put(fm);
-	v4l2_ctrl_handler_free(&fm->ctrl_handler);
-	v4l2_device_unregister(&fm->v4l2_dev);
 	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
 				 mtk_fm_rx, fm);
+	cancel_work_sync(&fm->rds_work);
+	mtk_fm_free_rds_queue(fm);
+	v4l2_ctrl_handler_free(&fm->ctrl_handler);
+	v4l2_device_unregister(&fm->v4l2_dev);
 }
 
 static struct platform_driver mtk_fm_driver = {
