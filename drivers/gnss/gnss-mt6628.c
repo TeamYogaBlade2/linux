@@ -41,8 +41,14 @@ static void mtk_gnss_rx(void *priv, const u8 *buf, size_t len)
 
 	mutex_lock(&gnss->lock);
 	if (gnss->open) {
+		int ret;
+
 		dev_dbg(&gnss->gdev->dev, "STP GPS RX: %zu bytes\n", len);
-		gnss_insert_raw(gnss->gdev, buf, len);
+		ret = gnss_insert_raw(gnss->gdev, buf, len);
+		if (ret >= 0 && (size_t)ret < len)
+			dev_warn_ratelimited(&gnss->gdev->dev,
+					     "GNSS RX FIFO full; dropped %zu of %zu bytes\n",
+					     len - (size_t)ret, len);
 	} else {
 		dev_dbg(&gnss->gdev->dev,
 			"discarding STP GPS data while GNSS is closed: %zu bytes\n",
@@ -56,6 +62,9 @@ static int mtk_gnss_write_raw(struct gnss_device *gdev, const u8 *buf,
 {
 	struct mtk_gnss *priv = gnss_get_drvdata(gdev);
 	int ret;
+
+	if (!READ_ONCE(priv->open))
+		return -EHOSTDOWN;
 
 	ret = mt6628_stp_send(priv->wmt, MT6628_STP_TASK_GPS, buf, len);
 
@@ -95,7 +104,7 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 	}
 
 	mutex_lock(&priv->lock);
-	priv->open = true;
+	WRITE_ONCE(priv->open, true);
 	mutex_unlock(&priv->lock);
 
 	return 0;
@@ -114,7 +123,7 @@ static void mtk_gnss_close(struct gnss_device *gdev)
 
 	mutex_lock(&priv->lock);
 	was_open = priv->open;
-	priv->open = false;
+	WRITE_ONCE(priv->open, false);
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
@@ -215,7 +224,7 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 
 	mutex_lock(&priv->lock);
 	was_open = priv->open;
-	priv->open = false;
+	WRITE_ONCE(priv->open, false);
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
@@ -262,7 +271,7 @@ static int mtk_gnss_suspend(struct device *dev)
 	 * bytes that arrive on the way down belong to a session that is
 	 * being torn down.
 	 */
-	priv->open = false;
+	WRITE_ONCE(priv->open, false);
 	mutex_unlock(&priv->lock);
 
 	if (!was_open)
