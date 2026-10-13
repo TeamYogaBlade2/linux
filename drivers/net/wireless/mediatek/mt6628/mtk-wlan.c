@@ -27,7 +27,9 @@
 #include <linux/firmware.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/mfd/mt6628-pwrseq.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/mmc/sdio_func.h>
@@ -674,6 +676,7 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 				  const struct sdio_device_id *id)
 {
 	struct mt6628_wlan *wl;
+	struct mt6628_pwrseq *pwrseq;
 	u32 wcir;
 	u8 raw[4] = {};
 	int raw_ret[4] = {};
@@ -684,6 +687,22 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 		dev_dbg(&func->dev, "ignoring function %d\n", func->num);
 		return -ENODEV;
 	}
+
+	pwrseq = devm_mt6628_pwrseq_get(&func->dev);
+	if (IS_ERR(pwrseq))
+		return dev_err_probe(&func->dev, PTR_ERR(pwrseq),
+				     "waiting for MT6628 power sequence\n");
+
+	/*
+	 * Only boards with a physical UART STP connection set "mediatek,stp".
+	 * On those boards, WMT must finish initialization before WLAN downloads
+	 * firmware. Returning -EPROBE_DEFER here lets the successful UART
+	 * transport probe trigger a retry; SDIO-STP boards need no UART gate.
+	 */
+	if (func->dev.of_node &&
+	    of_find_property(func->dev.of_node, "mediatek,stp", NULL) &&
+	    (!pwrseq || !mt6628_pwrseq_is_stp_ready(pwrseq)))
+		return -EPROBE_DEFER;
 
 	wl = devm_kzalloc(&func->dev, sizeof(*wl), GFP_KERNEL);
 	if (!wl)

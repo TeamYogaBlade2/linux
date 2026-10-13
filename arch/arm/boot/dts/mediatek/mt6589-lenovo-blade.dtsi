@@ -91,6 +91,7 @@
 		compatible = "mediatek,mt6628-pwrseq";
 		status = "okay";
 		mediatek,rtc = <&mt6320_rtc>;
+		vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
 		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
@@ -483,8 +484,9 @@
 	/delete-property/ dmas;
 	/delete-property/ dma-names;
 
-	mt6628-stp-uart {
+	mt6628_stp_uart: mt6628-stp-uart {
 		compatible = "mediatek,mt6628-stp-uart";
+		mediatek,combo-pwrseq = <&mt6628_pwrseq>;
 		mediatek,baudrate = <4000000>;
 
 		/*
@@ -781,6 +783,8 @@
 	 */
 	mt6628-wlan@1 {
 		reg = <1>;
+		mediatek,combo-pwrseq = <&mt6628_pwrseq>;
+		mediatek,stp = <&mt6628_stp_uart>;
 	};
 };
 

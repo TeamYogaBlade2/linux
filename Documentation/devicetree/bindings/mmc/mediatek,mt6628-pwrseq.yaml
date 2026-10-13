@@ -32,6 +32,14 @@ properties:
     maxItems: 1
     description: Active-low combo-chip reset.
 
+  vmmc-supply:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Reference to the rail used by the MT6628 SDIO interface. The provider
+      holds an additional regulator reference while non-MMC consumers use
+      the combo chip, so an MMC power-off cannot remove this rail underneath
+      an active UART STP transport.
+
   pinctrl-names:
     items:
       - const: default
@@ -44,6 +52,7 @@ required:
   - mediatek,rtc
   - pmu-gpios
   - reset-gpios
+  - vmmc-supply
   - pinctrl-names
   - pinctrl-0
 

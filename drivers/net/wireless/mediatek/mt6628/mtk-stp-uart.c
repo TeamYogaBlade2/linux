@@ -27,6 +27,7 @@
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 
+#include <linux/mfd/mt6628-pwrseq.h>
 #include <linux/mfd/mt6628.h>
 
 #include "mtk-stp-internal.h"
@@ -117,6 +118,7 @@ enum mt6628_uart_rx_state {
 
 struct mt6628_wmt {
 	struct serdev_device *serdev;
+	struct mt6628_pwrseq *pwrseq;
 	struct work_struct rx_work;
 	DECLARE_KFIFO(rx_fifo, u8, MT6628_STP_RX_FIFO_SIZE);
 	spinlock_t rx_fifo_lock;
@@ -1439,6 +1441,11 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	if (!wmt)
 		return -ENOMEM;
 	wmt->serdev = serdev;
+	wmt->pwrseq = devm_mt6628_pwrseq_get(&serdev->dev);
+	if (IS_ERR(wmt->pwrseq))
+		return dev_err_probe(&serdev->dev, PTR_ERR(wmt->pwrseq),
+				     "waiting for MT6628 power sequence\n");
+
 	wmt->baudrate = MT6628_WMT_UART_DEFAULT_BAUD;
 	wmt->fm_strap_mode = 2;
 	mutex_init(&wmt->tx_lock);
@@ -1493,12 +1500,10 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	}
 
 	/*
-	 * UART3 may probe before MSDC3 has run the board's existing MT6628
-	 * power sequence. Wait once for PMU/RTC/reset, but never restart the
-	 * complete initialization blindly: after the full-STP handoff the chip
-	 * is no longer speaking mandatory-mode framing.
+	 * devm_mt6628_pwrseq_get() has waited for the provider's electrical
+	 * power-ready completion and acquired a shared power lease. Do not use
+	 * a fixed delay as a substitute for sequencing.
 	 */
-	msleep(500);
 	ret = mt6628_wmt_read_versions(wmt);
 	if (ret) {
 		dev_err(&serdev->dev,
@@ -1528,6 +1533,9 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 		mt6628_stp_unregister_transport(wmt);
 		goto err_close;
 	}
+
+	/* WMT is initialized and the MFD consumer devices are registered. */
+	mt6628_pwrseq_set_stp_ready(wmt->pwrseq, true);
 	return 0;
 
 err_close:
@@ -1544,6 +1552,7 @@ static void mt6628_stp_uart_remove(struct serdev_device *serdev)
 
 	if (!wmt)
 		return;
+	mt6628_pwrseq_set_stp_ready(wmt->pwrseq, false);
 	mfd_remove_devices(&serdev->dev);
 	mt6628_stp_unregister_transport(wmt);
 	WRITE_ONCE(wmt->stopping, true);
