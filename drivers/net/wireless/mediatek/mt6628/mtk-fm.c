@@ -656,10 +656,10 @@ static void mtk_fm_rds_group(struct mtk_fm *fm, const struct mtk_fm_rds_grp *g)
 		if (g->crc & FM_RDS_GDBK_IND_A)
 			rds->pi = g->blk[0];
 
-		rds->ta = blk_b & BIT(4);
-		rds->ms = blk_b & BIT(3);
+		rds->ta = !!(blk_b & BIT(4));
+		rds->ms = !!(blk_b & BIT(3));
 		rds->pty = (blk_b >> 5) & 0x1f;
-		rds->tp = blk_b & BIT(10);
+		rds->tp = !!(blk_b & BIT(10));
 
 		if (g->crc & FM_RDS_GDBK_IND_D) {
 			/* PS is two characters in block D, at segment blkB[1:0]. */
@@ -1458,8 +1458,10 @@ static int mtk_fm_power_up(struct mtk_fm *fm)
 	put_unaligned_le16(pkt - 4, buf + 2);
 
 	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_ENABLE_OPCODE, 5000);
-	if (!ret)
+	if (!ret) {
 		fm->freq = 8750;
+		fm->cqi_valid = false;
+	}
 
 out_free:
 	kfree(buf);
@@ -1764,6 +1766,7 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 	if (freq < 7600 || freq > 10800)
 		return -EINVAL;
 
+	freq = 7600 + DIV_ROUND_CLOSEST(freq - 7600, 5) * 5;
 	mtk_fm_update_desense(fm, freq);
 
 	tune_value = (freq - 6400) * 2 / 10;
@@ -1802,6 +1805,7 @@ static int mtk_fm_tune(struct mtk_fm *fm, u32 freq)
 	}
 
 	fm->freq = freq;
+	fm->cqi_valid = false;
 	mtk_fm_queue_rds_reset(fm);
 	return 0;
 
@@ -1981,8 +1985,10 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 		repositioned = true;
 	}
 
-	min_chan = (min_freq - 6400) * 2 / 10;
-	max_chan = (max_freq - 6400) * 2 / 10;
+	min_chan = DIV_ROUND_UP(min_freq - 6400, 5);
+	max_chan = (max_freq - 6400) / 5;
+	if (min_chan > max_chan)
+		return -EINVAL;
 	spacing_code = mtk_fm_seek_spacing_code(spacing);
 
 	buf[0] = FM_TASK_COMMAND_PKT_TYPE;
@@ -2506,14 +2512,16 @@ static int mtk_fm_probe(struct platform_device *pdev)
 			  V4L2_CID_AUDIO_VOLUME, 0, ARRAY_SIZE(mtk_fm_vol_tbl) - 1,
 			  1, ARRAY_SIZE(mtk_fm_vol_tbl) - 1);
 	/*
-	 * De-emphasis is the standard 3-value menu (disabled / 50 us / 75 us).
-	 * Only 50 and 75 us correspond to a hardware state, so "disabled"
-	 * leaves FM_MAIN_CG2_CTRL[12] as the power-up sequence left it.
+	 * The receiver supports 50 us or 75 us de-emphasis, but cannot disable
+	 * de-emphasis entirely. Expose the two supported values and use 50 us
+	 * as the default; the disabled menu entry is therefore skipped.
 	 */
 	fm->ctrl_deemph = v4l2_ctrl_new_std_menu(&fm->ctrl_handler,
 						 &mtk_fm_ctrl_ops,
 						 V4L2_CID_TUNE_DEEMPHASIS,
-						 V4L2_DEEMPHASIS_50_uS, 0, 0);
+						 V4L2_DEEMPHASIS_75_uS,
+						 BIT(V4L2_DEEMPHASIS_DISABLED),
+						 V4L2_DEEMPHASIS_50_uS);
 	/* RDS on/off, default off to match the power-up default. */
 	v4l2_ctrl_new_std(&fm->ctrl_handler, &mtk_fm_ctrl_ops,
 			  V4L2_CID_RDS_RECEPTION, 0, 1, 1, 0);

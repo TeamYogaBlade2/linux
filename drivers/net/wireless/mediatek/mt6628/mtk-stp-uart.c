@@ -229,7 +229,16 @@ static void mt6628_stp_dispatch(struct mt6628_wmt *wmt,
 				wmt->wmt_status = -EPROTO;
 				wmt->wmt_response_len = 0;
 			} else {
-				wmt->wmt_status = buf[4] ? -EIO : 0;
+				/*
+				 * WMT crystal-trim uses response byte 4 as the
+				 * GET/SET selector, not a status code. The command
+				 * helper validates that selector and the returned
+				 * trim value.
+				 */
+				if (buf[1] == MT6628_WMT_CRYSTAL_TRIM_OPCODE)
+					wmt->wmt_status = 0;
+				else
+					wmt->wmt_status = buf[4] ? -EIO : 0;
 				wmt->wmt_response_len =
 					min_t(size_t, len, sizeof(wmt->wmt_response));
 				memcpy(wmt->wmt_response, buf,
