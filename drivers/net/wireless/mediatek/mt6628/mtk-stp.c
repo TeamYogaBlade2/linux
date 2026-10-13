@@ -25,6 +25,7 @@
 #include <linux/property.h>
 
 #include <linux/mfd/mt6628.h>
+#include <linux/mfd/mt6628-pwrseq.h>
 
 #include "mtk-stp-internal.h"
 
@@ -100,6 +101,7 @@ struct mt6628_stp_endpoint {
 
 struct mt6628_wmt {
 	struct sdio_func *func;
+	struct mt6628_pwrseq *pwrseq;
 	struct work_struct rx_work;
 
 	struct mutex tx_lock;
@@ -1464,6 +1466,11 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	if (!wmt)
 		return -ENOMEM;
 
+	wmt->pwrseq = devm_mt6628_pwrseq_get(&func->dev);
+	if (IS_ERR(wmt->pwrseq))
+		return dev_err_probe(&func->dev, PTR_ERR(wmt->pwrseq),
+				     "waiting for MT6628 power sequence\n");
+
 	wmt->func = func;
 	mutex_init(&wmt->tx_lock);
 	mutex_init(&wmt->rx_lock);
@@ -1555,6 +1562,8 @@ static int mt6628_stp_probe(struct sdio_func *func,
 		goto err_irq_disable;
 	}
 
+	/* Publish readiness only after WMT, transport and child setup succeed. */
+	mt6628_pwrseq_set_stp_ready(wmt->pwrseq, true);
 	dev_info(&func->dev, "MT6628 shared STP transport ready\n");
 	return 0;
 
@@ -1586,6 +1595,8 @@ static void mt6628_stp_remove(struct sdio_func *func)
 	if (!wmt)
 		return;
 
+	/* Prevent WLAN probe from using this transport while children unwind. */
+	mt6628_pwrseq_set_stp_ready(wmt->pwrseq, false);
 	/* Children may need FUNC_OFF, so keep transport/IRQ alive first. */
 	mfd_remove_devices(&func->dev);
 	mt6628_stp_unregister_transport(wmt);
