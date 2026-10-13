@@ -2097,6 +2097,7 @@ static int mtk_fm_seek(struct mtk_fm *fm, bool seek_upward,
 	}
 
 	fm->freq = result;
+	mtk_fm_update_desense(fm, result);
 	mtk_fm_queue_rds_reset(fm);
 
 	/*
