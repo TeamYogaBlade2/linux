@@ -1219,8 +1219,9 @@ static bool mt6628_mgmt_tc_available(struct mt6628_wlan *wl)
 	return available;
 }
 
-int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
-			 size_t frame_len, bool wait_for_status, bool need_ack)
+int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
+			       size_t frame_len, bool wait_for_status,
+			       bool need_ack, bool *submitted)
 {
 	struct mt6628_hif_mgmt_tx_hdr hdr = {};
 	unsigned long flags;
@@ -1229,6 +1230,9 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 	u8 packet_seq = 0;
 	long timeout;
 	int ret;
+
+	if (submitted)
+		*submitted = false;
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
@@ -1344,9 +1348,12 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 		goto err_resource;
 	}
 
+	if (submitted)
+		*submitted = true;
+
 	if (wait_for_status) {
 		timeout = wait_for_completion_timeout(&wl->mgmt_tx_done,
-						      msecs_to_jiffies(1000));
+							      msecs_to_jiffies(1000));
 
 		spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
 		if (!timeout && wl->mgmt_tx_pending &&
@@ -1383,8 +1390,25 @@ err_resource:
 					       wl->tx_free[MT6628_TX_TC_MGMT] + 1,
 					       wl->tx_max[MT6628_TX_TC_MGMT]);
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
+	/* A pre-submit allocation error must not leave the status slot busy. */
+	if (wait_for_status && packet_seq) {
+		spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+		if (wl->mgmt_tx_pending &&
+		    wl->mgmt_tx_packet_seq == packet_seq) {
+			wl->mgmt_tx_status = ret;
+			wl->mgmt_tx_pending = false;
+		}
+		spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+	}
 	wake_up_all(&wl->tx_wait);
 	return ret;
+}
+
+int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
+			 size_t frame_len, bool wait_for_status, bool need_ack)
+{
+	return mt6628_wlan_mgmt_tx_status(wl, frame, frame_len,
+					  wait_for_status, need_ack, NULL);
 }
 
 EXPORT_SYMBOL_GPL(mt6628_wlan_request_channel);
@@ -1397,5 +1421,7 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_remove_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_add_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_del_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_flush_keys);
+EXPORT_SYMBOL_GPL(mt6628_wlan_set_default_key);
 EXPORT_SYMBOL_GPL(mt6628_wlan_set_power_mgmt);
+EXPORT_SYMBOL_GPL(mt6628_wlan_mgmt_tx_status);
 EXPORT_SYMBOL_GPL(mt6628_wlan_mgmt_tx);

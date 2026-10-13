@@ -569,28 +569,38 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 {
 	struct mt6628_wlan *wl = mt6628_wlan_from_wdev(wdev);
 	u64 tx_cookie;
+	bool submitted;
 	int ret;
 
 	if (!params->buf || params->len < sizeof(struct ieee80211_hdr))
 		return -EINVAL;
+	if (params->chan) {
+		bool same_channel;
+
+		mutex_lock(&wl->cfg_mutex);
+		same_channel = params->chan->band == wl->conn_band &&
+			params->chan->hw_value == wl->conn_channel;
+		mutex_unlock(&wl->cfg_mutex);
+		if (!same_channel)
+			return -EOPNOTSUPP;
+	}
 
 	tx_cookie = ++wl->mgmt_tx_cookie;
 	if (!tx_cookie)
 		tx_cookie = ++wl->mgmt_tx_cookie;
 	*cookie = tx_cookie;
 
-	ret = mt6628_wlan_mgmt_tx(wl, params->buf, params->len,
-				  !params->dont_wait_for_ack,
-				  !params->dont_wait_for_ack);
-	if (ret)
+	ret = mt6628_wlan_mgmt_tx_status(wl, params->buf, params->len,
+					 !params->dont_wait_for_ack,
+					 !params->dont_wait_for_ack,
+					 &submitted);
+	if (!submitted)
 		return ret;
 
 	/*
-	 * Report the real outcome.  mgmt_tx() has already waited for the
-	 * firmware to confirm the frame by the time it returns zero, and
-	 * the firmware reports the 802.11 ACK result in the TX_DONE event,
-	 * so an unacknowledged frame is a genuine transmission failure and
-	 * must not be reported as a success.
+	 * Once the frame has been submitted, cfg80211 expects its status
+	 * callback even when TX_DONE reports no ACK or the status wait times
+	 * out.  A pre-submit error is returned synchronously above instead.
 	 */
 	if (!params->dont_wait_for_ack)
 		cfg80211_mgmt_tx_status(wdev, tx_cookie, params->buf,
@@ -646,9 +656,9 @@ static bool mt6628_roc_release_pending(struct mt6628_wlan *wl)
  * release turns such a request into a plain -EBUSY, and it also keeps the
  * firmware channel token from being aborted twice.
  *
- * The cookie is dropped only once the channel has actually been released, so a
- * window is always retired exactly once and the timer that expires it is
- * never left with nothing to expire.
+ * The cookie is retired after this release attempt, even if the firmware
+ * refuses it. In that case the channel token remains live and the retry timer
+ * owns cleanup; later cfg80211 cancels must not retire the same window again.
  */
 static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 			      struct ieee80211_channel *chan)
@@ -676,6 +686,8 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 		wl->roc_cookie = 0;
 		wl->roc_n_chans = 0;
 		wl->roc_duration = 0;
+		wl->roc_chans[0] = NULL;
+		wl->roc_chans[1] = NULL;
 
 		/*
 		 * mt6628_wlan_release_channel() only clears the firmware
@@ -816,22 +828,28 @@ static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	 * twice.
 	 */
 	mutex_lock(&wl->cfg_mutex);
-	if (wl->roc_cookie) {
+	if (wl->roc_cookie || wl->roc_starting || wl->channel_token) {
 		mutex_unlock(&wl->cfg_mutex);
 		return -EBUSY;
 	}
 
-	new_cookie = wl->roc_cookie + 1;
+	new_cookie = ++wl->roc_cookie_next;
 	if (!new_cookie)
-		new_cookie = 1;
+		new_cookie = ++wl->roc_cookie_next;
+	wl->roc_starting = true;
 	mutex_unlock(&wl->cfg_mutex);
 
 	ret = mt6628_wlan_ch_privilege(wl, chan, NULL,
 					MT6628_CH_REQ_TYPE_P2P_LISTEN, true);
-	if (ret)
+	if (ret) {
+		mutex_lock(&wl->cfg_mutex);
+		wl->roc_starting = false;
+		mutex_unlock(&wl->cfg_mutex);
 		return ret;
+	}
 
 	mutex_lock(&wl->cfg_mutex);
+	wl->roc_starting = false;
 	wl->roc_cookie = new_cookie;
 	wl->roc_chans[0] = chan;
 	wl->roc_n_chans = 1;
@@ -862,6 +880,14 @@ static int mt6628_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy,
 	if (!wl)
 		return -EINVAL;
 
+	/* A stale cancel must not cancel the timer for a newer ROC window. */
+	mutex_lock(&wl->cfg_mutex);
+	if (!cookie || wl->roc_cookie != cookie) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -ENOENT;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
 	cancel_delayed_work_sync(&wl->roc_work);
 	return mt6628_roc_cancel(wl, cookie);
 }
@@ -871,14 +897,16 @@ static int mt6628_cfg80211_get_station(struct wiphy *wiphy,
 				       const u8 *mac,
 				       struct station_info *sinfo)
 {
-	struct mt6628_wlan *wl =
-		*(struct mt6628_wlan **)netdev_priv(wdev->netdev);
+	struct mt6628_wlan *wl;
 	struct mt6628_event_sta_statistics stats;
 	u32 scaled;
 	__le16 link_speed;
 	bool connected;
 
-	if (!wl || !wdev->netdev)
+	if (!wdev->netdev)
+		return -ENODEV;
+	wl = *(struct mt6628_wlan **)netdev_priv(wdev->netdev);
+	if (!wl)
 		return -ENODEV;
 
 	mutex_lock(&wl->cfg_mutex);
@@ -1013,6 +1041,28 @@ static const struct cfg80211_ops mt6628_cfg80211_ops = {
 	.cancel_remain_on_channel = mt6628_cfg80211_cancel_remain_on_channel,
 };
 
+/*
+ * cfg80211 refuses management-frame TX and RX registration when mgmt_stypes
+ * is NULL, even if .mgmt_tx exists.  Keep the STA-mode surface explicit.
+ */
+static const struct ieee80211_txrx_stypes mt6628_mgmt_stypes[NUM_NL80211_IFTYPES] = {
+	[NL80211_IFTYPE_STATION] = {
+		.tx = BIT(IEEE80211_STYPE_ACTION >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DISASSOC >> 4),
+		.rx = BIT(IEEE80211_STYPE_ASSOC_RESP >> 4) |
+		      BIT(IEEE80211_STYPE_REASSOC_RESP >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_RESP >> 4) |
+		      BIT(IEEE80211_STYPE_DISASSOC >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
+		      BIT(IEEE80211_STYPE_ACTION >> 4),
+	},
+};
+
 static int mt6628_rx_channel(const struct mt6628_hif_rx_hdr *hdr)
 {
 	unsigned int channel = hdr->hw_channel_num;
@@ -1080,12 +1130,6 @@ void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 	if (mt6628_cfg80211_connection_mgmt(wl, skb))
 		return;
 
-	mutex_lock(&wl->cfg_mutex);
-	request = wl->scan_req;
-	mutex_unlock(&wl->cfg_mutex);
-	if (!request)
-		goto out;
-
 	if (skb->len < MT6628_HIF_RX_HEADER_LEN)
 		goto out;
 
@@ -1103,23 +1147,33 @@ void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 
 	mgmt = (struct ieee80211_mgmt *)
 		(skb->data + MT6628_HIF_RX_HEADER_LEN + offset);
-	if (!ieee80211_is_beacon(mgmt->frame_control) &&
-	    !ieee80211_is_probe_resp(mgmt->frame_control))
-		goto out;
 
 	freq = mt6628_rx_frequency(wl, hdr);
 	if (!freq)
 		goto out;
 
-	channel = ieee80211_get_channel(wl->wiphy, freq);
-	if (!channel)
-		goto out;
+	if (ieee80211_is_beacon(mgmt->frame_control) ||
+	    ieee80211_is_probe_resp(mgmt->frame_control)) {
+		mutex_lock(&wl->cfg_mutex);
+		request = wl->scan_req;
+		mutex_unlock(&wl->cfg_mutex);
 
-	bss = cfg80211_inform_bss_frame(wl->wiphy, channel, mgmt, frame_len,
-					       mt6628_rcpi_to_mbm(hdr->rcpi),
-					       GFP_KERNEL);
-	if (bss)
-		cfg80211_put_bss(wl->wiphy, bss);
+		if (request) {
+			channel = ieee80211_get_channel(wl->wiphy, freq);
+			if (channel) {
+				bss = cfg80211_inform_bss_frame(wl->wiphy, channel,
+								 mgmt, frame_len,
+								 mt6628_rcpi_to_mbm(hdr->rcpi),
+								 GFP_KERNEL);
+				if (bss)
+					cfg80211_put_bss(wl->wiphy, bss);
+			}
+		}
+	}
+
+	/* Deliver registered action and other management frames outside scans. */
+	cfg80211_rx_mgmt(&wl->wdev, freq, mt6628_rcpi_to_dbm(hdr->rcpi),
+			 (const u8 *)mgmt, frame_len, 0);
 
 out:
 	kfree_skb(skb);
@@ -1275,6 +1329,7 @@ int mt6628_cfg80211_init(struct mt6628_wlan *wl)
 	INIT_WORK(&wl->scan_work, mt6628_scan_work);
 	wl->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	wl->wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
+	wl->wiphy->mgmt_stypes = mt6628_mgmt_stypes;
 	wl->wiphy->max_remain_on_channel_duration = 30000;
 	wl->wiphy->max_scan_ssids = MT6628_SCAN_MAX_SSIDS;
 	wl->wiphy->max_scan_ie_len = MT6628_SCAN_MAX_IE_LEN;

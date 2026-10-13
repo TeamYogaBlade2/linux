@@ -29,6 +29,7 @@
 #define MT6628_RX_MAX_PACKET		(28 + 2312 + 12)
 #define MT6628_RUNTIME_RX_LOOPS		32
 #define MT6628_RUNTIME_QUEUE_LIMIT	256
+#define MT6628_RUNTIME_EVENT_RESERVED	16
 #define MT6628_TX_QUEUE_LIMIT		128
 
 /*
@@ -374,8 +375,10 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 	int work_done = 0;
 
 	while (work_done < budget && (skb = skb_dequeue(&wl->rx_queue))) {
-		if (!netif_carrier_ok(wl->netdev)) {
+		if (!netif_carrier_ok(wl->netdev) ||
+		    !READ_ONCE(wl->connected)) {
 			dev_kfree_skb_any(skb);
+			work_done++;
 			continue;
 		}
 
@@ -400,7 +403,9 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 static void mt6628_runtime_schedule_rx(struct mt6628_wlan *wl)
 {
 	if (wl->netdev && netif_running(wl->netdev) &&
-	    netif_carrier_ok(wl->netdev) && !skb_queue_empty(&wl->rx_queue))
+	    (netif_carrier_ok(wl->netdev) ||
+	     READ_ONCE(wl->conn_state) == MT6628_CONN_DISCONNECTED) &&
+	    !skb_queue_empty(&wl->rx_queue))
 		napi_schedule(&wl->napi);
 }
 
@@ -549,6 +554,10 @@ int ret;
 
 		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
 			header_offset;
+		if (!netif_running(wl->netdev)) {
+			ret = 0;
+			break;
+		}
 		if (payload_len >= ETH_HLEN) {
 			const struct ethhdr *eth = (const struct ethhdr *)
 				(buf + MT6628_HIF_RX_HEADER_LEN + header_offset);
@@ -585,9 +594,26 @@ int ret;
 		 * The remaining four HIF bytes are part of the event payload.
 		 */
 		event_len = packet_len;
-		if (skb_queue_len(&wl->event_queue) >=
-		    MT6628_RUNTIME_QUEUE_LIMIT)
-			goto drop_packet;
+		{
+			unsigned int limit = MT6628_RUNTIME_QUEUE_LIMIT;
+
+			/* Preserve slots for events which release synchronous waiters. */
+			switch (buf[4]) {
+			case MT6628_EVENT_ID_CMD_RESULT:
+			case MT6628_EVENT_ID_SCAN_DONE:
+			case MT6628_EVENT_ID_TX_DONE:
+			case MT6628_EVENT_ID_CH_PRIVILEGE:
+			case MT6628_EVENT_ID_BSS_BEACON_TIMEOUT:
+			case MT6628_EVENT_ID_SEND_DEAUTH:
+			case MT6628_EVENT_ID_STA_STATISTICS:
+				break;
+			default:
+				limit -= MT6628_RUNTIME_EVENT_RESERVED;
+				break;
+			}
+			if (skb_queue_len(&wl->event_queue) >= limit)
+				goto drop_packet;
+		}
 		if (packet_len >= MT6628_WIFI_EVENT_HEADER_LEN &&
 		    (buf[4] == MT6628_EVENT_ID_CMD_RESULT ||
 		     buf[4] == MT6628_EVENT_ID_SCAN_DONE))
@@ -1031,7 +1057,10 @@ static int mt6628_ndo_open(struct net_device *ndev)
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
 
-	netif_carrier_off(ndev);
+	if (READ_ONCE(wl->connected))
+		netif_carrier_on(ndev);
+	else
+		netif_carrier_off(ndev);
 	napi_enable(&wl->napi);
 	netif_start_queue(ndev);
 	return 0;
@@ -1051,6 +1080,7 @@ static int mt6628_ndo_stop(struct net_device *ndev)
 	napi_disable(&wl->napi);
 	cancel_delayed_work_sync(&wl->tx_work);
 	skb_queue_purge(&wl->tx_queue);
+	skb_queue_purge(&wl->rx_queue);
 	return 0;
 }
 
@@ -1294,6 +1324,16 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->mgmt_tx_packet_seq = 0;
 	wl->mgmt_tx_cookie = 0;
 	wl->mgmt_tx_status = 0;
+	/* A restarted firmware no longer owns the previous channel grant. */
+	wl->channel_token = 0;
+	wl->channel_req_type = MT6628_CH_REQ_TYPE_JOIN;
+	wl->channel_grant_ms = 0;
+	wl->roc_cookie = 0;
+	wl->roc_starting = false;
+	wl->roc_chans[0] = NULL;
+	wl->roc_chans[1] = NULL;
+	wl->roc_n_chans = 0;
+	wl->roc_duration = 0;
 	mutex_init(&wl->cmd_mutex);
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
@@ -1517,6 +1557,8 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_stop);
 int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 {
 	u32 val;
+	unsigned long flags;
+	bool mgmt_tx_pending;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -1525,14 +1567,38 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 		return 0;
 
 	/*
+	 * Do not hand ownership away while a command owns the serialized
+	 * command slot. This can run in event_work, so trylock must not wait
+	 * for a command whose response this same worker may need to consume.
+	 */
+	if (!mutex_trylock(&wl->cmd_mutex))
+		return -EBUSY;
+	if (!wl->runtime_started || !wl->fw_running) {
+		ret = -ENODEV;
+		goto out_unlock_cmd;
+	}
+	if (wl->pm_idle || !wl->driver_owned) {
+		ret = 0;
+		goto out_unlock_cmd;
+	}
+
+	/*
 	 * Pending traffic means the firmware still wants the host to run.
 	 * Keep ownership and let the caller try again later.
 	 */
 	if (!skb_queue_empty(&wl->rx_queue) ||
 	    !skb_queue_empty(&wl->event_queue) ||
+	    !skb_queue_empty(&wl->async_event_queue) ||
 	    !skb_queue_empty(&wl->mgmt_queue) ||
 	    !skb_queue_empty(&wl->tx_queue))
-		return -EBUSY;
+		goto out_busy;
+
+	/* A TX_DONE waiter is still using the firmware's completion path. */
+	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+	mgmt_tx_pending = wl->mgmt_tx_pending;
+	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+	if (mgmt_tx_pending)
+		goto out_busy;
 
 	sdio_claim_host(wl->func);
 	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &val);
@@ -1574,6 +1640,13 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 
 out_release:
 	sdio_release_host(wl->func);
+	mutex_unlock(&wl->cmd_mutex);
+	return ret;
+
+out_busy:
+	ret = -EBUSY;
+out_unlock_cmd:
+	mutex_unlock(&wl->cmd_mutex);
 	return ret;
 }
 

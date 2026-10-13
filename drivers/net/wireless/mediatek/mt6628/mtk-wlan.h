@@ -95,7 +95,10 @@ struct mt6628_wlan {
 	bool fw_sleepy;
 	struct delayed_work pm_work;
 	/* Remain-on-channel state, including the request we granted it with. */
+	/* Keep the sequence across runtime stop/start so old cookies stay stale. */
+	u64 roc_cookie_next;
 	u64 roc_cookie;
+	bool roc_starting;
 	struct ieee80211_channel *roc_chans[2];
 	unsigned int roc_n_chans;
 	unsigned int roc_duration;
@@ -274,6 +277,9 @@ int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
 				   struct mt6628_event_sta_statistics *stats);
 int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 			 size_t frame_len, bool wait_for_status, bool need_ack);
+int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
+			       size_t frame_len, bool wait_for_status,
+			       bool need_ack, bool *submitted);
 bool mt6628_wlan_handle_rx_ba_event(struct mt6628_wlan *wl, u8 eid,
 				    const void *body, size_t body_len);
 

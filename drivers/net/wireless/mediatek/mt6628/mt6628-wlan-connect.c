@@ -236,6 +236,7 @@ static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 	wl->conn_rf_sco = 0;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
+	skb_queue_purge(&wl->rx_queue);
 }
 
 /*
@@ -1428,6 +1429,19 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 					 sme->ssid, sme->ssid_len,
 						 IEEE80211_BSS_TYPE_ESS,
 						 privacy);
+	/* bssid_hint/channel_hint are preferences, not hard connection filters. */
+	if (!wl->conn_bss &&
+	    ((!sme->bssid && sme->bssid_hint) ||
+	     (!sme->channel && sme->channel_hint))) {
+		if (!sme->bssid)
+			requested_bssid = NULL;
+		if (!sme->channel)
+			channel = NULL;
+		wl->conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
+						 sme->ssid, sme->ssid_len,
+						 IEEE80211_BSS_TYPE_ESS,
+						 privacy);
+	}
 	if (!wl->conn_bss) {
 		dev_warn(&wl->func->dev,
 			 "connect target BSS not in cfg80211 cache: channel=%u privacy=%u\n",
@@ -1737,8 +1751,11 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 	wl->conn_state = MT6628_CONN_CONNECTED;
 	/* A working link earns a fresh roam budget for the next loss. */
 	wl->roam_count = 0;
-	if (wl->netdev)
+	if (wl->netdev) {
 		netif_carrier_on(wl->netdev);
+		if (netif_running(wl->netdev) && !skb_queue_empty(&wl->rx_queue))
+			napi_schedule(&wl->napi);
+	}
 
 	cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
 			     mt6628_conn_detach_bss(wl),
