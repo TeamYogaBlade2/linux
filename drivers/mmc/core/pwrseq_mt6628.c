@@ -81,7 +81,6 @@ struct mt6628_pwrseq {
 	struct regulator *vmmc;
 	struct mutex lock;
 	struct completion power_ready;
-	struct completion stp_ready;
 	unsigned int consumers;
 	bool power_ready_state;
 	bool power_transition;
@@ -412,13 +411,7 @@ void mt6628_pwrseq_set_stp_ready(struct mt6628_pwrseq *pwrseq, bool ready)
 		return;
 
 	mutex_lock(&pwrseq->lock);
-	if (pwrseq->stp_ready_state != ready) {
-		pwrseq->stp_ready_state = ready;
-		if (ready)
-			complete_all(&pwrseq->stp_ready);
-		else
-			reinit_completion(&pwrseq->stp_ready);
-	}
+	pwrseq->stp_ready_state = ready;
 	mutex_unlock(&pwrseq->lock);
 }
 EXPORT_SYMBOL_GPL(mt6628_pwrseq_set_stp_ready);
@@ -462,7 +455,6 @@ static int mmc_pwrseq_mt6628_probe(struct platform_device *pdev)
 
 	mutex_init(&pwrseq->lock);
 	init_completion(&pwrseq->power_ready);
-	init_completion(&pwrseq->stp_ready);
 
 	/*
 	 * The GPIO descriptors use logical values. PMU_EN is active-high
