@@ -970,8 +970,10 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	memcpy(buf + sizeof(hdr), skb->data, skb->len);
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	mutex_lock(&wl->cmd_mutex);
 	ret = mt6628_wlan_pm_busy(wl);
 	if (ret) {
+		mutex_unlock(&wl->cmd_mutex);
 		kfree(buf);
 		goto err_resource;
 	}
@@ -979,6 +981,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, port, buf, xfer_len);
 	sdio_release_host(wl->func);
+	mutex_unlock(&wl->cmd_mutex);
 
 	kfree(buf);
 	if (ret)
@@ -1338,6 +1341,8 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->roc_n_chans = 0;
 	wl->roc_duration = 0;
 	mutex_init(&wl->cmd_mutex);
+	mutex_init(&wl->channel_mutex);
+	mutex_init(&wl->scan_mutex);
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
 	init_completion(&wl->cmd_done);
@@ -1562,6 +1567,8 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	u32 val;
 	unsigned long flags;
 	bool mgmt_tx_pending;
+	bool tx_pending = false;
+	unsigned int i;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -1593,7 +1600,19 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	    !skb_queue_empty(&wl->event_queue) ||
 	    !skb_queue_empty(&wl->async_event_queue) ||
 	    !skb_queue_empty(&wl->mgmt_queue) ||
-	    !skb_queue_empty(&wl->tx_queue))
+		!skb_queue_empty(&wl->tx_queue))
+		goto out_busy;
+
+	/* TX credits stay consumed until firmware reports completion in WTSR. */
+	spin_lock_irqsave(&wl->tx_lock, flags);
+	for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
+		if (wl->tx_free[i] < wl->tx_max[i]) {
+			tx_pending = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&wl->tx_lock, flags);
+	if (tx_pending)
 		goto out_busy;
 
 	/* A TX_DONE waiter is still using the firmware's completion path. */

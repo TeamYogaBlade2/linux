@@ -255,14 +255,17 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	u8 seq;
 	int ret;
 
+	mutex_lock(&wl->scan_mutex);
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->scan_req != request) {
 		mutex_unlock(&wl->cfg_mutex);
+		mutex_unlock(&wl->scan_mutex);
 		return -ECANCELED;
 	}
 	start = wl->scan_chan_idx;
 	if (start >= request->n_channels) {
 		mutex_unlock(&wl->cfg_mutex);
+		mutex_unlock(&wl->scan_mutex);
 		return -EINVAL;
 	}
 	max_channels = min_t(unsigned int, request->n_channels - start,
@@ -282,8 +285,10 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	mutex_unlock(&wl->cfg_mutex);
 
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
-	if (!cmd)
+	if (!cmd) {
+		mutex_unlock(&wl->scan_mutex);
 		return -ENOMEM;
+	}
 
 	for (i = 0; i < n_channels; i++) {
 		ret = mt6628_channel_to_hif(request->channels[start + i],
@@ -343,6 +348,7 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 
 out_free:
 	kfree(cmd);
+	mutex_unlock(&wl->scan_mutex);
 	return ret;
 }
 
@@ -405,6 +411,13 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 		mutex_unlock(&wl->cfg_mutex);
 		ret = -EBUSY;
 		return ret;
+	}
+
+	if (wl->roc_cookie || wl->roc_starting || wl->roc_finishing ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_JOIN) ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN)) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -EBUSY;
 	}
 
 	activate_bss = !wl->connected;
@@ -482,10 +495,12 @@ void mt6628_cfg80211_abort_scan(struct mt6628_wlan *wl)
 	if (!request)
 		return;
 
+	mutex_lock(&wl->scan_mutex);
 	cmd.seq_num = seq;
 	if (wl->runtime_started && wl->fw_running)
 		mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SCAN_CANCEL, 1,
 					 &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
+	mutex_unlock(&wl->scan_mutex);
 
 	cfg80211_scan_done(request, &info);
 }
@@ -638,8 +653,8 @@ static int mt6628_rcpi_to_mbm(u8 rcpi)
  */
 static bool mt6628_roc_release_pending(struct mt6628_wlan *wl)
 {
-	return !wl->roc_cookie && wl->channel_token &&
-		wl->channel_req_type == MT6628_CH_REQ_TYPE_P2P_LISTEN;
+	return !wl->roc_cookie && wl->roc_finishing &&
+		mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN);
 }
 
 /*
@@ -682,7 +697,7 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 	 * reconnect, would be refused.  The cookie stays set across this
 	 * firmware command on purpose, see above.
 	 */
-	ret = mt6628_wlan_release_channel(wl);
+	ret = mt6628_wlan_release_channel_type(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN);
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->roc_cookie == cookie) {
@@ -691,7 +706,8 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 		wl->roc_duration = 0;
 		wl->roc_chans[0] = NULL;
 		wl->roc_chans[1] = NULL;
-		wl->roc_finishing = false;
+		wl->roc_finishing = mt6628_wlan_channel_active(
+			wl, MT6628_CH_REQ_TYPE_P2P_LISTEN);
 
 		/*
 		 * mt6628_wlan_release_channel() only clears the firmware
@@ -702,7 +718,7 @@ static void mt6628_roc_finish(struct mt6628_wlan *wl, u64 cookie,
 		 * is rejected with -ENOENT and this timer is what gives the
 		 * channel back.
 		 */
-		if (ret) {
+		if (wl->roc_finishing) {
 			retry = msecs_to_jiffies(MT6628_ROC_RELEASE_RETRY_MS);
 			mod_delayed_work(system_wq, &wl->roc_work, retry);
 		}
@@ -790,9 +806,13 @@ void mt6628_roc_work(struct work_struct *work)
 			unsigned long retry;
 
 			mutex_unlock(&wl->cfg_mutex);
-			mt6628_wlan_release_channel(wl);
+			mt6628_wlan_release_channel_type(
+				wl, MT6628_CH_REQ_TYPE_P2P_LISTEN);
 
 			mutex_lock(&wl->cfg_mutex);
+			if (!mt6628_wlan_channel_active(
+				    wl, MT6628_CH_REQ_TYPE_P2P_LISTEN))
+				wl->roc_finishing = false;
 			if (mt6628_roc_release_pending(wl)) {
 				retry = msecs_to_jiffies(MT6628_ROC_RELEASE_RETRY_MS);
 				mod_delayed_work(system_wq, &wl->roc_work,
@@ -837,7 +857,10 @@ static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	 * twice.
 	 */
 	mutex_lock(&wl->cfg_mutex);
-	if (wl->roc_cookie || wl->roc_starting || wl->channel_token) {
+	if (wl->roc_cookie || wl->roc_starting || wl->roc_finishing ||
+	    wl->scan_req || wl->conn_state != MT6628_CONN_DISCONNECTED ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_JOIN) ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN)) {
 		mutex_unlock(&wl->cfg_mutex);
 		return -EBUSY;
 	}
@@ -866,8 +889,6 @@ static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
 	*cookie = new_cookie;
 	mutex_unlock(&wl->cfg_mutex);
 
-	cfg80211_ready_on_channel(&wl->wdev, *cookie, chan, duration, GFP_KERNEL);
-
 	/*
 	 * The firmware grants the channel for an interval of its own
 	 * choosing, which may be shorter than the time we asked for, so
@@ -877,6 +898,7 @@ static int mt6628_cfg80211_remain_on_channel(struct wiphy *wiphy,
 		     (duration ? duration : 1000);
 	mod_delayed_work(system_wq, &wl->roc_work,
 			 msecs_to_jiffies(timeout_ms));
+	cfg80211_ready_on_channel(&wl->wdev, *cookie, chan, duration, GFP_KERNEL);
 	return 0;
 }
 

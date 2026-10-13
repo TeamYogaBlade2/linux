@@ -317,10 +317,19 @@ int mt6628_wlan_ch_privilege(struct mt6628_wlan *wl,
 	default:
 		return -EOPNOTSUPP;
 	}
+	if (req_type != MT6628_CH_REQ_TYPE_JOIN &&
+	    req_type != MT6628_CH_REQ_TYPE_P2P_LISTEN)
+		return -EINVAL;
 
-	token = wl->channel_token + 1;
+	mutex_lock(&wl->channel_mutex);
+	if (wl->channel_token) {
+		mutex_unlock(&wl->channel_mutex);
+		return -EBUSY;
+	}
+
+	token = ++wl->channel_token_next;
 	if (!token)
-		token = 1;
+		token = ++wl->channel_token_next;
 
 	cmd.net_type_index = 0;
 	cmd.token_id = token;
@@ -336,33 +345,41 @@ int mt6628_wlan_ch_privilege(struct mt6628_wlan *wl,
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_CH_PRIVILEGE, 1,
 				   &cmd, sizeof(cmd), &event, sizeof(event),
 				   &response_len, MT6628_EVENT_ID_CH_PRIVILEGE, 2000);
-	if (ret)
+	if (ret) {
+		mutex_unlock(&wl->channel_mutex);
 		return ret;
+	}
 
 	if (require_grant &&
 	    (response_len != sizeof(event) ||
 	     event.net_type_index != 0 || event.token_id != token ||
 	     event.status != MT6628_EVENT_CH_STATUS_GRANT ||
 	     event.primary_channel != channel->hw_value ||
-	     event.rf_band != rf_band))
+	     event.rf_band != rf_band)) {
+		mutex_unlock(&wl->channel_mutex);
 		return -EPROTO;
+	}
 
 	wl->channel_token = token;
 	wl->channel_req_type = req_type;
 	if (require_grant && response_len >= sizeof(event))
 		wl->channel_grant_ms = le32_to_cpu(event.grant_interval);
+	mutex_unlock(&wl->channel_mutex);
 
 	return 0;
 }
 
-int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
+static int mt6628_wlan_release_channel_locked(struct mt6628_wlan *wl,
+					      bool check_type, u8 req_type)
 {
 	struct mt6628_cmd_ch_privilege cmd = {};
 	u8 token = wl->channel_token;
 	int ret;
 
 	if (!token)
-		return 0;
+		return check_type ? -ENOENT : 0;
+	if (check_type && wl->channel_req_type != req_type)
+		return -ENOENT;
 
 	cmd.net_type_index = 0;
 	cmd.token_id = token;
@@ -375,6 +392,36 @@ int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
 		wl->channel_token = 0;
 
 	return ret;
+}
+
+int mt6628_wlan_release_channel(struct mt6628_wlan *wl)
+{
+	int ret;
+
+	mutex_lock(&wl->channel_mutex);
+	ret = mt6628_wlan_release_channel_locked(wl, false, 0);
+	mutex_unlock(&wl->channel_mutex);
+	return ret;
+}
+
+int mt6628_wlan_release_channel_type(struct mt6628_wlan *wl, u8 req_type)
+{
+	int ret;
+
+	mutex_lock(&wl->channel_mutex);
+	ret = mt6628_wlan_release_channel_locked(wl, true, req_type);
+	mutex_unlock(&wl->channel_mutex);
+	return ret;
+}
+
+bool mt6628_wlan_channel_active(struct mt6628_wlan *wl, u8 req_type)
+{
+	bool active;
+
+	mutex_lock(&wl->channel_mutex);
+	active = wl->channel_token && wl->channel_req_type == req_type;
+	mutex_unlock(&wl->channel_mutex);
+	return active;
 }
 
 struct mt6628_peer_caps {
@@ -1308,8 +1355,10 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 	memcpy(buf + sizeof(hdr), frame, frame_len);
 
 	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	mutex_lock(&wl->cmd_mutex);
 	ret = mt6628_wlan_pm_busy(wl);
 	if (ret) {
+		mutex_unlock(&wl->cmd_mutex);
 		/*
 		 * Nothing was written, so no EVENT_ID_TX_DONE will arrive.
 		 * Retire the wait the same way the transfer-failure path
@@ -1333,6 +1382,7 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 	sdio_claim_host(wl->func);
 	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);
 	sdio_release_host(wl->func);
+	mutex_unlock(&wl->cmd_mutex);
 	kfree(buf);
 	if (ret) {
 		if (wait_for_status) {
@@ -1414,6 +1464,8 @@ int mt6628_wlan_mgmt_tx(struct mt6628_wlan *wl, const u8 *frame,
 EXPORT_SYMBOL_GPL(mt6628_wlan_request_channel);
 EXPORT_SYMBOL_GPL(mt6628_wlan_ch_privilege);
 EXPORT_SYMBOL_GPL(mt6628_wlan_release_channel);
+EXPORT_SYMBOL_GPL(mt6628_wlan_release_channel_type);
+EXPORT_SYMBOL_GPL(mt6628_wlan_channel_active);
 EXPORT_SYMBOL_GPL(mt6628_wlan_update_sta_record);
 EXPORT_SYMBOL_GPL(mt6628_wlan_set_bss_info);
 EXPORT_SYMBOL_GPL(mt6628_wlan_activate_bss);

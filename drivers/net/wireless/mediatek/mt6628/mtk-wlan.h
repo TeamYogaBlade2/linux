@@ -104,6 +104,7 @@ struct mt6628_wlan {
 	unsigned int roc_n_chans;
 	unsigned int roc_duration;
 	struct delayed_work roc_work;
+	struct mutex channel_mutex;
 	u8 channel_req_type;
 	unsigned int channel_grant_ms;	/* firmware-granted interval */
 
@@ -180,10 +181,12 @@ struct mt6628_wlan {
 	} deauth_info[MT6628_MAX_DEAUTH_INFO_COUNT];
 
 	struct mutex cfg_mutex;
+	struct mutex scan_mutex;
 	struct cfg80211_scan_request *scan_req;
 	u8 scan_seq;
 	unsigned int scan_chan_idx;
 	u8 channel_token;
+	u8 channel_token_next;
 	bool scan_done_pending;
 
 	spinlock_t tx_lock;
@@ -254,6 +257,8 @@ int mt6628_wlan_request_channel(struct mt6628_wlan *wl,
 				const struct ieee80211_channel *channel,
 				const u8 *bssid);
 int mt6628_wlan_release_channel(struct mt6628_wlan *wl);
+int mt6628_wlan_release_channel_type(struct mt6628_wlan *wl, u8 req_type);
+bool mt6628_wlan_channel_active(struct mt6628_wlan *wl, u8 req_type);
 int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 					enum mt6628_sta_state state,
 					u16 assoc_id,

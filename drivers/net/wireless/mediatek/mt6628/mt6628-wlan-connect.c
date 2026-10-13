@@ -170,13 +170,10 @@ static void mt6628_conn_fw_teardown_locked(struct mt6628_wlan *wl)
 	 * release the JOIN grant.  A listen-class grant is owned by
 	 * remain-on-channel and must be left alone here.
 	 */
-	if (wl->channel_req_type == MT6628_CH_REQ_TYPE_JOIN) {
-		ret = mt6628_wlan_release_channel(wl);
-		if (ret)
-			dev_warn(&wl->func->dev,
-				 "failed to release channel privilege: %d\n",
-				 ret);
-	}
+	ret = mt6628_wlan_release_channel_type(wl, MT6628_CH_REQ_TYPE_JOIN);
+	if (ret && ret != -ENOENT)
+		dev_warn(&wl->func->dev,
+			 "failed to release JOIN channel privilege: %d\n", ret);
 }
 
 static bool mt6628_conn_fw_cleanup_possible(struct mt6628_wlan *wl)
@@ -1384,6 +1381,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	channel = sme->channel ? sme->channel : sme->channel_hint;
 
 	mutex_lock(&wl->cfg_mutex);
+	if (wl->roc_cookie || wl->roc_starting || wl->roc_finishing ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_JOIN) ||
+	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN)) {
+		mutex_unlock(&wl->cfg_mutex);
+		kfree(conn_key);
+		return -EBUSY;
+	}
 	if (wl->conn_state != MT6628_CONN_DISCONNECTED) {
 		dev_warn(&wl->func->dev,
 			 "connect rejected: conn_state=%u connected=%u "
