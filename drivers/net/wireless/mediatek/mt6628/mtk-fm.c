@@ -287,6 +287,12 @@ struct mtk_fm {
 	struct completion cmd_done;
 	struct mutex cmd_lock;
 	struct mutex power_lock;
+	/*
+	 * Serializes complete hardware operations, including multi-command
+	 * register updates. Also shared with the V4L2 ioctl core through
+	 * vdev.lock.
+	 */
+	struct mutex op_lock;
 	spinlock_t rds_queue_lock;
 	struct list_head rds_queue;
 	struct work_struct rds_work;
@@ -319,6 +325,8 @@ struct mtk_fm {
 	u32 freq;			/* in 10 kHz units */
 	unsigned int users;
 	bool powered;
+	bool disconnected;
+	bool vdev_registered;
 };
 
 /*
@@ -1597,9 +1605,15 @@ static int mtk_fm_open(struct file *file)
 	if (ret)
 		return ret;
 
+	mutex_lock(&fm->op_lock);
+	if (fm->disconnected) {
+		ret = -ENODEV;
+		goto out_unlock;
+	}
+
 	ret = mtk_fm_power_get(fm);
 	if (ret)
-		return ret;
+		goto out_unlock;
 
 	/*
 	 * The power-up sequence leaves FM_MAIN_CTRL[MUTE] clear and programs
@@ -1644,14 +1658,24 @@ static int mtk_fm_open(struct file *file)
 			dev_warn(fm->dev, "failed to enable FM RDS\n");
 	}
 
-	return 0;
+out_unlock:
+	mutex_unlock(&fm->op_lock);
+	return ret;
 }
 
 static int mtk_fm_release(struct file *file)
 {
 	struct mtk_fm *fm = video_drvdata(file);
 
-	mtk_fm_power_put(fm);
+	mutex_lock(&fm->op_lock);
+	/*
+	 * remove() drops all outstanding power references before the
+	 * transport disappears. An FD closed afterwards must not access it.
+	 */
+	if (!fm->disconnected)
+		mtk_fm_power_put(fm);
+	mutex_unlock(&fm->op_lock);
+
 	return 0;
 }
 
@@ -2466,6 +2490,27 @@ static const struct v4l2_file_operations mtk_fm_fops = {
 	.poll			= v4l2_ctrl_poll,
 };
 
+/*
+ * The video_device is embedded in struct mtk_fm. Keep the whole object
+ * alive until V4L2 has dropped its last reference, which can be later than
+ * platform remove() when userspace still has the device open.
+ *
+ * On a failed video_register_device(), this callback must not free fm:
+ * the probe error path still owns and cleans up that allocation.
+ */
+static void mtk_fm_vdev_release(struct video_device *vdev)
+{
+	struct mtk_fm *fm = container_of(vdev, struct mtk_fm, vdev);
+
+	if (!fm->vdev_registered)
+		return;
+
+	fm->vdev.ctrl_handler = NULL;
+	v4l2_ctrl_handler_free(&fm->ctrl_handler);
+	v4l2_device_unregister(&fm->v4l2_dev);
+	kfree(fm);
+}
+
 static int mtk_fm_probe(struct platform_device *pdev)
 {
 	struct mtk_fm *fm;
@@ -2476,7 +2521,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	if (!wmt)
 		return -EPROBE_DEFER;
 
-	fm = devm_kzalloc(&pdev->dev, sizeof(*fm), GFP_KERNEL);
+	fm = kzalloc(sizeof(*fm), GFP_KERNEL);
 	if (!fm)
 		return -ENOMEM;
 
@@ -2485,6 +2530,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	init_completion(&fm->cmd_done);
 	mutex_init(&fm->cmd_lock);
 	mutex_init(&fm->power_lock);
+	mutex_init(&fm->op_lock);
 	spin_lock_init(&fm->rds_queue_lock);
 	INIT_LIST_HEAD(&fm->rds_queue);
 	INIT_WORK(&fm->rds_work, mtk_fm_rds_work);
@@ -2494,8 +2540,10 @@ static int mtk_fm_probe(struct platform_device *pdev)
 
 	ret = mt6628_stp_register_rx(wmt, MT6628_STP_TASK_FM,
 				     mtk_fm_rx, fm);
-	if (ret)
+	if (ret) {
+		kfree(fm);
 		return ret;
+	}
 
 	ret = v4l2_device_register(&pdev->dev, &fm->v4l2_dev);
 	if (ret)
@@ -2594,10 +2642,11 @@ static int mtk_fm_probe(struct platform_device *pdev)
 	fm->vdev.v4l2_dev = &fm->v4l2_dev;
 	fm->vdev.fops = &mtk_fm_fops;
 	fm->vdev.ioctl_ops = &mtk_fm_ioctl_ops;
+	fm->vdev.lock = &fm->op_lock;
 	fm->vdev.device_caps = V4L2_CAP_RADIO |
 			       V4L2_CAP_TUNER |
 			       V4L2_CAP_HW_FREQ_SEEK;
-	fm->vdev.release = video_device_release_empty;
+	fm->vdev.release = mtk_fm_vdev_release;
 	video_set_drvdata(&fm->vdev, fm);
 
 	ret = video_register_device(&fm->vdev, VFL_TYPE_RADIO, -1);
@@ -2606,6 +2655,7 @@ static int mtk_fm_probe(struct platform_device *pdev)
 		goto err_free_ctrls;
 	}
 
+	fm->vdev_registered = true;
 	platform_set_drvdata(pdev, fm);
 
 	return 0;
@@ -2619,6 +2669,7 @@ err_unregister_rx:
 				 mtk_fm_rx, fm);
 	cancel_work_sync(&fm->rds_work);
 	mtk_fm_free_rds_queue(fm);
+	kfree(fm);
 	return ret;
 }
 
@@ -2629,14 +2680,36 @@ static void mtk_fm_remove(struct platform_device *pdev)
 	if (!fm)
 		return;
 
+	/*
+	 * Hold an extra device reference across unregister and transport
+	 * teardown. video_unregister_device() can otherwise invoke the
+	 * release callback synchronously when no userspace FD is open.
+	 */
+	get_device(&fm->vdev.dev);
+
+	/*
+	 * Drain in-flight ioctls and open/release operations before powering
+	 * down. Unregister under the same lock so an ioctl waiting for it
+	 * observes the device as unregistered before it can touch hardware.
+	 */
+	mutex_lock(&fm->op_lock);
+	WRITE_ONCE(fm->disconnected, true);
+	while (fm->users)
+		mtk_fm_power_put(fm);
 	video_unregister_device(&fm->vdev);
-	mtk_fm_power_put(fm);
+	mutex_unlock(&fm->op_lock);
+
 	mt6628_stp_unregister_rx(fm->wmt, MT6628_STP_TASK_FM,
 				 mtk_fm_rx, fm);
 	cancel_work_sync(&fm->rds_work);
 	mtk_fm_free_rds_queue(fm);
-	v4l2_ctrl_handler_free(&fm->ctrl_handler);
-	v4l2_device_unregister(&fm->v4l2_dev);
+
+	/*
+	 * Do not free the control handler or v4l2_device here: an existing FD
+	 * may still hold a reference to vdev. The final release callback owns
+	 * their cleanup. This is the last use of fm in remove().
+	 */
+	put_device(&fm->vdev.dev);
 }
 
 static struct platform_driver mtk_fm_driver = {
