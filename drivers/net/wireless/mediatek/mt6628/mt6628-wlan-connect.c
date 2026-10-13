@@ -436,7 +436,7 @@ static bool mt6628_roam_start(struct mt6628_wlan *wl)
 	struct cfg80211_connect_params params = {};
 	u8 candidate[ETH_ALEN];
 	u8 *ssid;
-	u8 *saved_bssid;
+	const u8 *saved_bssid;
 	bool have_cur_bssid;
 	int ret;
 
