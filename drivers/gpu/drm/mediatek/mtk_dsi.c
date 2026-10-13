@@ -273,6 +273,7 @@ struct mtk_dsi_driver_data {
 	bool has_size_ctl;
 	bool cmdq_long_packet_ctl;
 	bool support_per_frame_lp;
+	bool use_downstream_vdo_porch_timing;
 	/*
 	 * On this SoC DSI_PHY_TIMCON2[15:8] is reserved, not DA_HS_SYNC.
 	 * The real CONT_DET field is at [7:0].
@@ -645,7 +646,20 @@ static void mtk_dsi_config_vdo_timing_per_line_lp(struct mtk_dsi *dsi)
 	horizontal_front_back_byte = horizontal_frontporch_byte + horizontal_backporch_byte;
 	data_phy_cycles_byte = data_phy_cycles * dsi->lanes + delta;
 
-	if (horizontal_front_back_byte > data_phy_cycles_byte) {
+	if (dsi->driver_data->use_downstream_vdo_porch_timing) {
+		/*
+		 * The MT6589 downstream DSI_Config_VDO_Timing() keeps the
+		 * complete HBP/HFP intervals and aligns the resulting byte
+		 * counts to four bytes. Do not subtract the generic per-line
+		 * D-PHY transition budget on this controller: on the B8000
+		 * panel it changes the known-good LK values HBP=0x64/HFP=0x120
+		 * into HBP=0x44/HFP=0xd1, while the DSI path never asserts the
+		 * expected READY chain. Keep this MT6589-specific so other
+		 * MediaTek DSI variants retain the existing LP calculation.
+		 */
+		horizontal_backporch_byte = roundup(horizontal_backporch_byte, 4);
+		horizontal_frontporch_byte = roundup(horizontal_frontporch_byte - 12, 4);
+	} else if (horizontal_front_back_byte > data_phy_cycles_byte) {
 		horizontal_frontporch_byte -= data_phy_cycles_byte *
 					      horizontal_frontporch_byte /
 					      horizontal_front_back_byte;
@@ -1696,6 +1710,7 @@ static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.has_mem_conti = true,
 	.has_lane_clk = true,
 	.has_reset = true,
+	.use_downstream_vdo_porch_timing = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
