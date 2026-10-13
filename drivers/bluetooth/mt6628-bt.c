@@ -5,6 +5,7 @@
 
 #include <linux/mfd/mt6628.h>
 #include <linux/module.h>
+#include <linux/unaligned.h>
 #include <linux/platform_device.h>
 #include <linux/skbuff.h>
 
@@ -198,6 +199,10 @@ static int mt6628_bt_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	switch (hci_skb_pkt_type(skb)) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
+		if (skb->len >= 4 && get_unaligned_le16(skb->data) == 0x1004)
+			bt_dev_dbg(hdev,
+				   "HCI TX Read Local Extended Features page=%u",
+				   skb->data[3]);
 		break;
 	case HCI_ACLDATA_PKT:
 		hdev->stat.acl_tx++;
@@ -244,6 +249,13 @@ static void mt6628_bt_rx(void *priv, const u8 *buf, size_t len)
 	}
 
 	type = buf[0];
+	/* HCI Command Complete for Read Local Extended Features. */
+	if (type == HCI_EVENT_PKT && len >= 9 && buf[1] == 0x0e &&
+	    get_unaligned_le16(buf + 4) == 0x1004)
+		bt_dev_dbg(bt->hdev,
+			   "HCI RX Read Local Extended Features status=%#x page=%u max_page=%u len=%zu",
+			   buf[6], buf[7], buf[8], len - 1);
+
 	switch (type) {
 	case HCI_EVENT_PKT:
 	case HCI_ACLDATA_PKT:
