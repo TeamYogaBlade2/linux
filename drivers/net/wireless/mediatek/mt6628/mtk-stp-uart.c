@@ -2,12 +2,12 @@
 /*
  * MediaTek MT6628 shared WMT/STP transport over UART.
  *
- * This is the UART backend for the existing MT6628 child-device API.  It
- * implements the mandatory STP framing used during WMT bootstrap and the
- * sequenced/CRC-protected STP framing used after the UART-full handoff.
+ * This is the UART backend for the existing MT6628 child-device API. It
+ * implements mandatory STP framing during WMT bootstrap and sequenced,
+ * CRC-protected STP framing after the UART-full handoff.
  *
- * The SDIO backend remains a separate driver; exactly one backend should be
- * selected by Kconfig for a given board.
+ * The SDIO backend remains a separate driver. The board DT describes the
+ * physical BGF/STP connection, so only the matching transport node is used.
  */
 
 #include <linux/bitops.h>
@@ -1434,9 +1434,6 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	struct mt6628_wmt *wmt;
 	u32 val;
 	int ret;
-
-	if (!mt6628_stp_transport_selected(&serdev->dev, "uart"))
-		return -ENODEV;
 
 	wmt = devm_kzalloc(&serdev->dev, sizeof(*wmt), GFP_KERNEL);
 	if (!wmt)

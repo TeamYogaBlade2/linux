@@ -24,7 +24,4 @@ int mt6628_stp_register_transport(struct device *dev, void *context,
 				  const struct mt6628_stp_transport_ops *ops);
 void mt6628_stp_unregister_transport(void *context);
 
-/* Returns true only for the backend selected by mediatek,bgf-hif. */
-bool mt6628_stp_transport_selected(struct device *dev, const char *transport);
-
 #endif /* __MTK_MT6628_STP_INTERNAL_H */

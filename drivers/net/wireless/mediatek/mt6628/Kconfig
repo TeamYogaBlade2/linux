@@ -19,6 +19,7 @@ config MTK_MT6628_WLAN
 config MTK_MT6628_STP_SDIO
 	tristate "SDIO function-2 transport for MT6628 BGF/STP"
 	depends on MMC
+	depends on OF
 	select MTK_MT6628_STP
 	help
 	  Build the shared WMT/STP transport over SDIO function 2. This may be

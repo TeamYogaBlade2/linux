@@ -16,6 +16,7 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/unaligned.h>
@@ -1447,7 +1448,14 @@ static int mt6628_stp_probe(struct sdio_func *func,
 
 	if (func->num != 2)
 		return -ENODEV;
-	if (!mt6628_stp_transport_selected(&func->dev, "sdio"))
+
+	/*
+	 * SDIO IDs match regardless of whether this board describes
+	 * function 2 as an STP transport. Use the DT child node to select
+	 * SDIO STP only on boards whose BGF is physically routed to SDIO.
+	 */
+	if (!func->dev.of_node ||
+	    !of_device_is_available(func->dev.of_node))
 		return -ENODEV;
 
 	dev_info(&func->dev, "MT6628 shared STP function detected\n");

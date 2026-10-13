@@ -9,11 +9,8 @@
 
 #include <linux/list.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/property.h>
 #include <linux/rwsem.h>
 #include <linux/slab.h>
-#include <linux/string.h>
 
 #include <linux/mfd/mt6628.h>
 
@@ -228,40 +225,6 @@ int mt6628_stp_get_hif(struct mt6628_wmt *wmt, enum mt6628_stp_hif *hif)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mt6628_stp_get_hif);
-
-bool mt6628_stp_transport_selected(struct device *dev, const char *transport)
-{
-	struct device_node *selector;
-	const char *hif;
-	int ret;
-
-	if (!dev || !transport)
-		return false;
-
-	ret = device_property_read_string(dev, "mediatek,bgf-hif", &hif);
-	if (!ret)
-		return !strcmp(hif, transport);
-
-	/* UART points at the shared combo node; SDIO follows mmc-pwrseq. */
-	selector = NULL;
-	if (dev->of_node) {
-		selector = of_parse_phandle(dev->of_node,
-					    "mediatek,combo-pwrseq", 0);
-		if (!selector)
-			selector = of_parse_phandle(dev->of_node, "mmc-pwrseq", 0);
-	}
-
-	if (selector) {
-		ret = of_property_read_string(selector, "mediatek,bgf-hif", &hif);
-		of_node_put(selector);
-		if (!ret)
-			return !strcmp(hif, transport);
-	}
-
-	/* Preserve the original SDIO behaviour on DTs without an HIF selector. */
-	return !strcmp(transport, "sdio");
-}
-EXPORT_SYMBOL_GPL(mt6628_stp_transport_selected);
 
 MODULE_DESCRIPTION("MediaTek MT6628 transport-independent STP API");
 MODULE_LICENSE("GPL");
