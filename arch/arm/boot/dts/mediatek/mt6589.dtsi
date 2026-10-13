@@ -135,36 +135,6 @@
 		#size-cells = <0>;
 		enable-method = "mediatek,mt6589-smp";
 
-		/*
-		 * Every CPU below declares the same two clocks: the CPU clock mux
-		 * itself as "cpu", and the clock to park on as "intermediate" while
-		 * ARMPLL is being reprogrammed.
-		 *
-		 * The second one must be a PARENT of the first, because that is what
-		 * mediatek-cpufreq does with it: before changing ARMPLL's rate it
-		 * calls clk_set_parent(cpu_clk, inter_clk), and afterwards
-		 * clk_set_parent(cpu_clk, armpll).  CLK_INFRA_MUX1 has exactly four
-		 * parents - clk26m, armpll, mainpll and mmpll_d2
-		 * (clk-mt6589-infracfg.c, infra_mux1_parents[]) - and the switch is
-		 * rejected unless the target is one of them.
-		 *
-		 * So "intermediate" cannot be CLK_INFRA_ARMDIV1, which looks like the
-		 * natural choice but is the mux's own CHILD: it divides the mux output
-		 * through TOP_CKDIV1.clkdiv1_sel.  A child is not a legal parent, and
-		 * naming it here makes every DVFS transition fail with
-		 *
-		 *   cpu0: failed to re-parent cpu clock!
-		 *   cpufreq: __target_index: Failed to change cpu frequency: -22
-		 *
-		 * with the CPU then left at whatever rate it booted at, which is the
-		 * exact failure this was meant to avoid.
-		 *
-		 * It must also not be armpll itself: the whole point of the parking
-		 * step is to be OFF the PLL that is being reprogrammed.  clk26m is the
-		 * always-on 26 MHz oscillator and is the one parent that satisfies both
-		 * constraints, so the original text was right and stays.
-		 */
-
 		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
@@ -254,15 +224,6 @@
 			cache-sets = <2048>;
 			cache-unified;
 		};
-
-		/*
-		 * CPU_DCM is hardware-triggered when all Cortex-A7 cores enter
-		 * WFI, so it does not require a synthetic cpuidle state.
-		 *
-		 * Deeper system-idle states need the SPM power-domain sequences
-		 * from the vendor kernel. They remain undescribed until those
-		 * transitions are implemented.
-		 */
 	};
 
 	timer {

@@ -43,11 +43,6 @@
 		aux-devs = <&mt6320_accdet>;
 	};
 
-	/*
-	 * The MT6320 VIBR LDO is the only vibrator control on this board.
-	 * Keep its output at the vendor default and use regulator-haptic
-	 * only to switch the supply on and off.
-	 */
 	vibrator {
 		compatible = "regulator-haptic";
 		haptic-supply = <&mt6320_ldo_vibr>;
