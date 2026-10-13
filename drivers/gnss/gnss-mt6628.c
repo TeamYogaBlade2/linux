@@ -33,6 +33,7 @@ struct mtk_gnss {
 	struct pinctrl_state *pinctrl_default;
 	struct pinctrl_state *gps_sync;
 	bool open;
+	bool resume_pending;
 };
 
 static void mtk_gnss_rx(void *priv, const u8 *buf, size_t len)
@@ -105,6 +106,7 @@ static int mtk_gnss_open(struct gnss_device *gdev)
 
 	mutex_lock(&priv->lock);
 	WRITE_ONCE(priv->open, true);
+	priv->resume_pending = false;
 	mutex_unlock(&priv->lock);
 
 	return 0;
@@ -124,6 +126,7 @@ static void mtk_gnss_close(struct gnss_device *gdev)
 	mutex_lock(&priv->lock);
 	was_open = priv->open;
 	WRITE_ONCE(priv->open, false);
+	priv->resume_pending = false;
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
@@ -225,6 +228,8 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 	mutex_lock(&priv->lock);
 	was_open = priv->open;
 	WRITE_ONCE(priv->open, false);
+	if (was_open)
+		priv->resume_pending = true;
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
@@ -288,8 +293,79 @@ static int mtk_gnss_suspend(struct device *dev)
 	return 0;
 }
 
+/*
+ * GNSS core retains its open count across suspend and does not call .open()
+ * again on resume. Restore only a session that was open before suspend;
+ * a client that closed its FD is not powered up automatically.
+ */
+static int mtk_gnss_resume(struct device *dev)
+{
+	struct mtk_gnss *priv = dev_get_drvdata(dev);
+	bool should_resume;
+	bool resumed;
+	int ret;
+
+	if (!priv)
+		return 0;
+
+	mutex_lock(&priv->lock);
+	should_resume = priv->resume_pending && !priv->open;
+	mutex_unlock(&priv->lock);
+
+	if (!should_resume)
+		return 0;
+
+	if (priv->gps_sync) {
+		ret = pinctrl_select_state(priv->pinctrl, priv->gps_sync);
+		if (ret)
+			goto err_restore_pinctrl;
+	}
+
+	ret = mt6628_wmt_gps_sync_ctrl(priv->wmt, true);
+	if (ret)
+		goto err_restore_pinctrl;
+
+	ret = mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, true);
+	if (ret) {
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		goto err_restore_pinctrl;
+	}
+
+	mutex_lock(&priv->lock);
+	if (priv->resume_pending) {
+		WRITE_ONCE(priv->open, true);
+		priv->resume_pending = false;
+	}
+	resumed = priv->open;
+	mutex_unlock(&priv->lock);
+
+	/*
+	 * The session may have been closed while the hardware was starting.
+	 * Do not leave GPS enabled without an active GNSS session.
+	 */
+	if (!resumed) {
+		mt6628_wmt_gps_sync_ctrl(priv->wmt, false);
+		if (priv->pinctrl_default)
+			pinctrl_select_state(priv->pinctrl,
+					     priv->pinctrl_default);
+		mt6628_wmt_func_ctrl(priv->wmt, MT6628_WMT_FUNC_GPS, false);
+		return 0;
+	}
+
+	dev_dbg(dev, "restored the GNSS function after resume\n");
+	return 0;
+
+err_restore_pinctrl:
+	if (priv->pinctrl_default)
+		pinctrl_select_state(priv->pinctrl, priv->pinctrl_default);
+
+	dev_err(dev, "failed to restore GNSS after resume: %d\n", ret);
+	return ret;
+}
+
 static const struct dev_pm_ops mtk_gnss_pm_ops = {
 	.suspend = mtk_gnss_suspend,
+	.resume = mtk_gnss_resume,
 };
 
 static struct platform_driver mtk_gnss_driver = {
