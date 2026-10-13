@@ -33,6 +33,7 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
+#include <media/v4l2-fh.h>
 #include <media/v4l2-ioctl.h>
 
 /* FM BOP opcodes */
@@ -1605,6 +1606,10 @@ static int mtk_fm_open(struct file *file)
 	if (ret)
 		return ret;
 
+	ret = v4l2_fh_open(file);
+	if (ret)
+		return ret;
+
 	mutex_lock(&fm->op_lock);
 	if (fm->disconnected) {
 		ret = -ENODEV;
@@ -1660,6 +1665,9 @@ static int mtk_fm_open(struct file *file)
 
 out_unlock:
 	mutex_unlock(&fm->op_lock);
+	if (ret)
+		v4l2_fh_release(file);
+
 	return ret;
 }
 
@@ -1676,7 +1684,7 @@ static int mtk_fm_release(struct file *file)
 		mtk_fm_power_put(fm);
 	mutex_unlock(&fm->op_lock);
 
-	return 0;
+	return v4l2_fh_release(file);
 }
 
 struct mtk_fm_chan_para {
