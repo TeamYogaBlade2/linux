@@ -62,13 +62,12 @@ bool mt6628_conn_take_retry(struct mt6628_wlan *wl, struct cfg80211_connect_para
 
 	mutex_lock(&wl->cfg_mutex);
 	valid = wl->conn_retry_valid;
-	if (valid)
+	if (valid) {
 		*out = wl->conn_retry;
+		memset(&wl->conn_retry, 0, sizeof(wl->conn_retry));
+	}
 	wl->conn_retry_valid = false;
 	mutex_unlock(&wl->cfg_mutex);
-
-	if (valid)
-		memset(&wl->conn_retry, 0, sizeof(wl->conn_retry));
 
 	return valid;
 }
@@ -77,12 +76,25 @@ void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
 			       struct cfg80211_connect_params *params)
 {
 	mutex_lock(&wl->cfg_mutex);
+	/* Do not overwrite retry data saved by a newer connect attempt. */
+	if (wl->conn_retry_valid ||
+	    wl->conn_state != MT6628_CONN_DISCONNECTED) {
+		mutex_unlock(&wl->cfg_mutex);
+		kfree(params->ssid);
+		kfree(params->bssid);
+		kfree(params->ie);
+		kfree(params->key);
+		memset(params, 0, sizeof(*params));
+		return;
+	}
+
 	kfree(wl->conn_retry.ssid);
 	kfree(wl->conn_retry.bssid);
 	kfree(wl->conn_retry.ie);
 	kfree(wl->conn_retry.key);
 	wl->conn_retry = *params;
 	wl->conn_retry_valid = true;
+	memset(params, 0, sizeof(*params));
 	mutex_unlock(&wl->cfg_mutex);
 }
 
@@ -320,18 +332,19 @@ struct mt6628_roam_search {
 };
 
 /*
- * bss->signal is in dBm: this driver reports MBM, so cfg80211 normalises
- * to dBm for us when the entry is created.  Reject a value of 0, which
- * cfg80211 uses for "unknown".
+ * This wiphy reports MBM, so cfg80211_bss.signal is in mBm (100 * dBm).
+ * A value of 0 means that the signal is unknown.
  */
 static void mt6628_roam_consider(struct wiphy *wiphy,
 				 struct cfg80211_bss *bss, void *data)
 {
 	struct mt6628_roam_search *s = data;
 	const struct element *elem;
+	int signal_dbm;
 
-	if (!bss || bss->signal <= 0)
+	if (!bss || bss->signal == 0)
 		return;
+	signal_dbm = bss->signal / 100;
 
 	/* Never pick the AP we just lost; that is not a roam. */
 	if (s->avoid_bssid && !memcmp(bss->bssid, s->avoid_bssid, ETH_ALEN))
@@ -351,10 +364,10 @@ static void mt6628_roam_consider(struct wiphy *wiphy,
 	 * alternate.  Once one candidate clears the bar, prefer the best.
 	 */
 	if (!s->found &&
-	    bss->signal < s->cur_dbm + MT6628_ROAM_MIN_GAIN_DBM)
+	    signal_dbm < s->cur_dbm + MT6628_ROAM_MIN_GAIN_DBM)
 		return;
-	if (!s->found || bss->signal > s->best_dbm) {
-		s->best_dbm = bss->signal;
+	if (!s->found || signal_dbm > s->best_dbm) {
+		s->best_dbm = signal_dbm;
 		ether_addr_copy(s->bssid, bss->bssid);
 		s->found = true;
 	}
@@ -402,12 +415,12 @@ static void mt6628_roam_score_current(struct wiphy *wiphy,
 {
 	struct mt6628_roam_current *c = data;
 
-	if (c->found || !bss || bss->signal <= 0)
+	if (c->found || !bss || bss->signal == 0)
 		return;
 	if (memcmp(bss->bssid, c->bssid, ETH_ALEN))
 		return;
 
-	c->dbm = bss->signal;
+	c->dbm = bss->signal / 100;
 	c->found = true;
 }
 
@@ -423,6 +436,7 @@ static bool mt6628_roam_start(struct mt6628_wlan *wl)
 	struct cfg80211_connect_params params = {};
 	u8 candidate[ETH_ALEN];
 	u8 *ssid;
+	u8 *saved_bssid;
 	bool have_cur_bssid;
 	int ret;
 
@@ -482,28 +496,37 @@ static bool mt6628_roam_start(struct mt6628_wlan *wl)
 	}
 	kfree(ssid);
 
+	/* Keep the owned BSSID before pointing params at the stack candidate. */
+	saved_bssid = params.bssid;
 	params.bssid = candidate;
 	wl->roam_count++;
 
-	dev_info(&wl->func->dev,
-		 "roaming from %pM (%d dBm) to %pM\n",
-		 have_cur_bssid ? cur.bssid : (const u8 *)"", cur.dbm,
-		 candidate);
+	if (have_cur_bssid)
+		dev_info(&wl->func->dev,
+			 "roaming from %pM (%d dBm) to %pM\n",
+			 cur.bssid, cur.dbm, candidate);
+	else
+		dev_info(&wl->func->dev,
+			 "roaming to %pM (current AP RSSI unknown)\n",
+			 candidate);
 
 	ret = mt6628_cfg80211_connect(wl->wiphy, wl->netdev, &params);
-
-	/* connect() copied what it needs; these are ours to release. */
-	kfree(params.ie);
-	kfree(params.key);
 
 	if (ret) {
 		dev_info(&wl->func->dev,
 			 "roam attempt failed (%d), falling back to reconnect\n",
 			 ret);
-		mt6628_conn_schedule_retry(wl);
+		/* Restore the owned BSSID and transfer the saved parameters back. */
+		params.bssid = saved_bssid;
+		mt6628_conn_restore_retry(wl, &params);
 		return false;
 	}
 
+	/* connect() made its own saved copy, so release the original parameters. */
+	kfree(params.ssid);
+	kfree(saved_bssid);
+	kfree(params.ie);
+	kfree(params.key);
 	return true;
 }
 
@@ -1064,6 +1087,7 @@ static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
 	struct cfg80211_connect_params *r = &wl->conn_retry;
 
 	mutex_lock(&wl->cfg_mutex);
+	wl->conn_retry_valid = false;
 
 	/*
 	 * Release the previous copy first.  A reconnect attempt passes
