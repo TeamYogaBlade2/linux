@@ -345,6 +345,15 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	u32 data_rate_mhz = DIV_ROUND_UP(dsi->data_rate, HZ_PER_MHZ);
 	struct mtk_phy_timing *timing = &dsi->phy_timing;
 
+	if (dsi->driver_data->use_downstream_vdo_porch_timing) {
+		/* MT6589: match LK's known-good D-PHY values exactly */
+		writel(0x10090404, dsi->regs + DSI_PHY_TIMECON0);
+		writel(0x08140610, dsi->regs + DSI_PHY_TIMECON1);
+		writel(0x10120000, dsi->regs + DSI_PHY_TIMECON2);
+		writel(0x00080D04, dsi->regs + DSI_PHY_TIMECON3);
+		return;
+	}
+
 	timing->lpx = (60 * data_rate_mhz / (8 * 1000)) + 1;
 	timing->da_hs_prepare = (80 * data_rate_mhz + 4 * 1000) / 8000;
 	timing->da_hs_zero = (170 * data_rate_mhz + 10 * 1000) / 8000 + 1 -
