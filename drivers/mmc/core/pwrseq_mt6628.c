@@ -35,6 +35,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/device.h>
 #include <linux/completion.h>
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
@@ -257,6 +258,7 @@ out_put:
 struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 {
 	struct device_node *np;
+	struct device_link *link;
 	struct platform_device *pdev;
 	struct mt6628_pwrseq *pwrseq;
 	struct module *owner;
@@ -278,6 +280,18 @@ struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 	if (!pdev->dev.driver) {
 		put_device(&pdev->dev);
 		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	/*
+	 * The lease below stores a pointer into the provider's devm state.
+	 * Order unbind so this consumer releases its lease before the
+	 * supplier's remove callback can free that state.
+	 */
+	link = device_link_add(dev, &pdev->dev,
+			       DL_FLAG_AUTOREMOVE_CONSUMER);
+	if (!link) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-ENOMEM);
 	}
 
 	owner = pdev->dev.driver->owner;
