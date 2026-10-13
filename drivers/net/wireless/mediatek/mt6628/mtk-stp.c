@@ -1442,6 +1442,7 @@ static int mt6628_stp_probe(struct sdio_func *func,
 				const struct sdio_device_id *id)
 {
 	struct mt6628_wmt *wmt;
+	u32 val;
 	int ret;
 
 	if (func->num != 2)
@@ -1467,10 +1468,11 @@ static int mt6628_stp_probe(struct sdio_func *func,
 	INIT_WORK(&wmt->rx_work, mt6628_stp_rx_work);
 	sdio_set_drvdata(func, wmt);
 
-	if (!device_property_read_u8(&func->dev,
-				     "mediatek,coex-ant-mode",
-				     &wmt->coex_ant_mode))
+	if (!device_property_read_u32(&func->dev,
+				      "mediatek,coex-ant-mode", &val)) {
+		wmt->coex_ant_mode = val;
 		wmt->coex_configured = true;
+	}
 
 	wmt->co_clock_enabled =
 		device_property_read_bool(&func->dev,
@@ -1482,14 +1484,15 @@ static int mt6628_stp_probe(struct sdio_func *func,
 		wmt->sdio_driving_configured = true;
 
 	wmt->fm_strap_mode = 2;
-	device_property_read_u8(&func->dev,
-				"mediatek,fm-strap-mode",
-				&wmt->fm_strap_mode);
+	if (!device_property_read_u32(&func->dev,
+				      "mediatek,fm-strap-mode", &val))
+		wmt->fm_strap_mode = val;
 
-	if (!device_property_read_u8(&func->dev,
-				     "mediatek,crystal-trim",
-				     &wmt->crystal_trim))
+	if (!device_property_read_u32(&func->dev,
+				      "mediatek,crystal-trim", &val)) {
+		wmt->crystal_trim = val;
 		wmt->crystal_trim_configured = true;
+	}
 
 	sdio_claim_host(func);
 	ret = sdio_enable_func(func);

@@ -228,8 +228,7 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 	mutex_lock(&priv->lock);
 	was_open = priv->open;
 	WRITE_ONCE(priv->open, false);
-	if (was_open)
-		priv->resume_pending = true;
+	priv->resume_pending = false;
 	mutex_unlock(&priv->lock);
 
 	if (was_open) {
@@ -247,19 +246,9 @@ static void mtk_gnss_remove(struct platform_device *pdev)
 }
 
 /*
- * Release the GPS function when the system suspends.
- *
- * Downstream does exactly this: its suspend path sets GPS_PWRCTL_OFF
- * (gps/gps.c:369-380).  The matching resume deliberately does *not* power
- * the chip back on - the comment there is "don't power on device
- * automatically" (gps/gps.c:382-396) - because the GNSS session belongs to
- * userspace, which reopens the device and reasserts the WMT FUNC_ON
- * itself.  Driving that from a resume callback instead would race that
- * open and leave the function powered with nobody attached to it.
- *
- * So this only tears down, exactly as downstream does.  A GPS fix in
- * progress does not survive a suspend; that is the upstream behaviour and
- * is also what userspace expects.
+ * Stop the GNSS session for suspend. GNSS core retains the FD open count
+ * and does not call .open() again after resume, so remember whether this
+ * session was active and let mtk_gnss_resume() restore it.
  */
 static int mtk_gnss_suspend(struct device *dev)
 {
@@ -277,6 +266,7 @@ static int mtk_gnss_suspend(struct device *dev)
 	 * being torn down.
 	 */
 	WRITE_ONCE(priv->open, false);
+	priv->resume_pending = was_open;
 	mutex_unlock(&priv->lock);
 
 	if (!was_open)
