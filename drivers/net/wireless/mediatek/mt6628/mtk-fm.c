@@ -27,6 +27,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/string.h>
 #include <linux/workqueue.h>
 #include <linux/unaligned.h>
 
@@ -1895,6 +1896,8 @@ static u16 mtk_fm_seek_spacing_code(u32 spacing)
 static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 {
 	u8 buf[64] = {};
+	u8 cqi_data[FM_CQI_BUF_SIZE];
+	size_t cqi_len = 0;
 	size_t recs;
 	unsigned int i;
 	u16 ctrl;
@@ -1914,6 +1917,11 @@ static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 	put_unaligned_le16(pkt - 4, buf + 2);
 
 	ret = mtk_fm_send_cmd(fm, buf, pkt, FM_SCAN_OPCODE, FM_CQI_TIMEOUT_MS);
+	if (!ret) {
+		cqi_len = min_t(size_t, fm->cmd_data_len,
+				sizeof(cqi_data));
+		memcpy(cqi_data, fm->cmd_data, cqi_len);
+	}
 
 	/*
 	 * Clear the command bits again whatever the outcome, as the vendor
@@ -1932,21 +1940,19 @@ static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 
 	/*
 	 * A short answer means the firmware had no CQI queued, which happens
-	 * on a channel with no signal.  That is not an error: it just leaves
-	 * the caller's figures untouched.  mtk_fm_rx() has already truncated
-	 * the answer to sizeof(fm->cmd_data), which is exactly
-	 * FM_CQI_BUF_SIZE, so the record count below cannot run past the
-	 * buffer; walk whole records only, so a trailing partial record from
-	 * a short answer is ignored rather than read.
+	 * on a channel with no signal. That is not an error: it just leaves
+	 * the caller's figures untouched. cqi_data contains the response
+	 * copied before the register-cleanup commands reused fm->cmd_data.
+	 * Walk whole records only, ignoring a trailing partial record.
 	 */
-	if (fm->cmd_data_len < FM_CQI_REC_SIZE)
+	if (cqi_len < FM_CQI_REC_SIZE)
 		return -ENODATA;
 
-	recs = min_t(size_t, fm->cmd_data_len / FM_CQI_REC_SIZE,
+	recs = min_t(size_t, cqi_len / FM_CQI_REC_SIZE,
 		     FM_CQI_MAX_RECS);
 
 	for (i = 0; i < recs; i++) {
-		const u8 *p = fm->cmd_data + i * FM_CQI_REC_SIZE;
+		const u8 *p = cqi_data + i * FM_CQI_REC_SIZE;
 		u16 raw_ch = get_unaligned_le16(p);
 		s32 raw_rssi_s = (s16)get_unaligned_le16(p + 2);
 
