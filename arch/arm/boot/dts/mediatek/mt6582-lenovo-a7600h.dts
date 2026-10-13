@@ -79,6 +79,14 @@
 	// 	};
 	// };
 
+	gpu_opp_table: opp-table-gpu {
+
+		opp-598000000 {
+			opp-hz = /bits/ 64 <598000000>;
+			opp-microvolt = <1250000>;
+		};
+	};
+
 	panel_backlight: backlight {
         	compatible = "pwm-backlight";
         	pwms = <&bls 0 20000>; 
@@ -415,14 +423,6 @@
 	
     	};
 };
-
-&gpu_opp_table: opp-table-gpu {
-
-		opp-598000000 {
-			opp-hz = /bits/ 64 <598000000>;
-			opp-microvolt = <1250000>;
-		};
-	};
 
 &mali {
 	status = "okay";
