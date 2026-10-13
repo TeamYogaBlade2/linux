@@ -1435,6 +1435,9 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 {
 	struct mt6628_wmt *wmt;
 	u32 val;
+	unsigned int retry;
+	int recovery_ret;
+	bool needs_recovery = false;
 	int ret;
 
 	wmt = devm_kzalloc(&serdev->dev, sizeof(*wmt), GFP_KERNEL);
@@ -1504,16 +1507,24 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	 * power-ready completion and acquired a shared power lease. Do not use
 	 * a fixed delay as a substitute for sequencing.
 	 */
-	ret = mt6628_wmt_read_versions(wmt);
+	/* A transient UART/WMT response must not become endless deferral. */
+	for (retry = 0; retry < 3; retry++) {
+		ret = mt6628_wmt_read_versions(wmt);
+		if (!ret)
+			break;
+		if (retry < 2)
+			msleep(20);
+	}
 	if (ret) {
 		dev_err(&serdev->dev,
 			"MT6628 WMT version query failed at %u baud: %d\n",
 			MT6628_WMT_UART_BOOT_BAUD, ret);
-		/* This read-only probe does not change baud or STP framing. */
-		ret = -EPROBE_DEFER;
+		/* A protocol/I/O failure is not fixed by deferring probe. */
 		goto err_close;
 	}
 
+	/* WMT init may change chip baud and STP framing before it fails. */
+	needs_recovery = true;
 	ret = mt6628_wmt_init(wmt);
 	if (ret) {
 		/* Do not blindly retry after baud or STP mode may have changed. */
@@ -1542,6 +1553,13 @@ err_close:
 	WRITE_ONCE(wmt->stopping, true);
 	serdev_device_close(serdev);
 	cancel_work_sync(&wmt->rx_work);
+	if (needs_recovery && wmt->pwrseq) {
+		recovery_ret = mt6628_pwrseq_recover(wmt->pwrseq);
+		if (recovery_ret)
+			dev_warn(&serdev->dev,
+				 "could not recover MT6628 after STP setup failure: %d\n",
+				 recovery_ret);
+	}
 	serdev_device_set_drvdata(serdev, NULL);
 	return ret;
 }

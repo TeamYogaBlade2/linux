@@ -364,6 +364,48 @@ err_put:
 }
 EXPORT_SYMBOL_GPL(devm_mt6628_pwrseq_get);
 
+/*
+ * Restore a known chip startup state after a failed WMT/STP initialization.
+ * The caller must hold the only power lease: resetting the combo chip while
+ * WLAN or another STP client is active would break that client's transport.
+ */
+int mt6628_pwrseq_recover(struct mt6628_pwrseq *pwrseq)
+{
+	if (!pwrseq)
+		return -EINVAL;
+
+	mutex_lock(&pwrseq->lock);
+	if (pwrseq->consumers != 1 || pwrseq->power_transition ||
+	    pwrseq->power_off_pending || !pwrseq->vmmc_held) {
+		mutex_unlock(&pwrseq->lock);
+		return -EBUSY;
+	}
+
+	pwrseq->power_transition = true;
+	pwrseq->power_ready_state = false;
+	reinit_completion(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	/* RESET is active-low. Keep VMMC enabled through the recovery cycle. */
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 1);
+	msleep(MT6628_DFT_ON_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
+	msleep(MT6628_DFT_RST_STABLE_TIME);
+
+	mutex_lock(&pwrseq->lock);
+	pwrseq->power_ready_state = true;
+	pwrseq->power_transition = false;
+	complete_all(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_recover);
+
 void mt6628_pwrseq_set_stp_ready(struct mt6628_pwrseq *pwrseq, bool ready)
 {
 	if (!pwrseq)
