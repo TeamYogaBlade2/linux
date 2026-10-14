@@ -70,7 +70,7 @@
 #define MT6628_WMT_GEN_VER_MASK		0x0000ffff
 
 #define MT6628_WMT_PATCH_HDR_SIZE		28
-#define MT6628_WMT_PATCH_HWVER_OFFSET		22
+#define MT6628_WMT_PATCH_HWVER_OFFSET		23
 #define MT6628_WMT_PATCH_INFO_OFFSET		24
 #define MT6628_WMT_PATCH_FRAG_SIZE		1000
 
@@ -885,7 +885,7 @@ static int mt6628_wmt_patch_download_one(struct mt6628_wmt *wmt,
 
 	/*
 	 * The launcher compares the low byte of the patch HW version
-	 * (header byte 22) with the low byte of FVR.
+	 * (header byte 23) with the low byte of FVR.
 	 */
 	if (fw->data[MT6628_WMT_PATCH_HWVER_OFFSET] !=
 	    (rom_ver & 0xff))
