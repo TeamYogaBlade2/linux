@@ -1306,6 +1306,10 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
 	INIT_DELAYED_WORK(&wl->irq_retry_work,
 			  mt6628_runtime_irq_retry_work);
+	if (!wl->recovery_work_initialized) {
+		INIT_WORK(&wl->recovery_work, mt6628_runtime_recovery_work);
+		wl->recovery_work_initialized = true;
+	}
 	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
 	INIT_WORK(&wl->event_dispatch_work,
@@ -1446,6 +1450,10 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		wl->fw_running = false;
 		goto err_unregister;
 	}
+
+	/* A successful restart reopens the runtime and PM paths. */
+	WRITE_ONCE(wl->pm_suspending, false);
+	WRITE_ONCE(wl->runtime_stopping, false);
 
 	if (!skb_queue_empty(&wl->event_queue))
 		schedule_work(&wl->event_work);

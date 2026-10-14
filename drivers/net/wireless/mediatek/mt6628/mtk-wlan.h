@@ -111,6 +111,7 @@ struct mt6628_wlan {
 	struct work_struct irq_work;
 	struct delayed_work irq_retry_work;
 	struct work_struct recovery_work;
+	bool recovery_work_initialized;
 	struct delayed_work tx_work;
 	struct work_struct scan_work;
 	struct napi_struct napi;
