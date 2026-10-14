@@ -1504,6 +1504,15 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	spin_unlock_irqrestore(&wl->cmd_lock, flags);
 
 	/*
+	 * These workers can update connection state and its IE buffers.
+	 * Drain them before connect_deinit() frees that state. Keep event_work
+	 * alive until teardown commands have completed so command responses
+	 * can still be dispatched.
+	 */
+	cancel_work_sync(&wl->event_dispatch_work);
+	cancel_work_sync(&wl->mgmt_work);
+
+	/*
 	 * Keep the runtime command path and netdev alive while tearing
 	 * down firmware-side STA/BSS/channel state.  conn_fw_cleanup()
 	 * intentionally rejects cleanup after either one is cleared.
@@ -1547,8 +1556,6 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	cancel_delayed_work_sync(&wl->irq_retry_work);
 	cancel_delayed_work_sync(&wl->tx_work);
 	cancel_work_sync(&wl->event_work);
-	cancel_work_sync(&wl->event_dispatch_work);
-	cancel_work_sync(&wl->mgmt_work);
 	cancel_delayed_work_sync(&wl->pm_work);
 
 	if (ndev) {
