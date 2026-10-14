@@ -1101,7 +1101,7 @@ static int mt6628_rx_frequency(struct mt6628_wlan *wl,
 	int channel = mt6628_rx_channel(hdr);
 	int band;
 
-	if (hdr->hw_channel_num <= 14)
+	if (channel <= 14)
 		band = NL80211_BAND_2GHZ;
 	else
 		band = NL80211_BAND_5GHZ;
