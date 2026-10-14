@@ -184,6 +184,10 @@ struct mt6628_wlan {
 	} deauth_info[MT6628_MAX_DEAUTH_INFO_COUNT];
 
 	struct mutex cfg_mutex;
+	/* Serialize firmware connection cleanup sequences. */
+	struct mutex conn_cleanup_mutex;
+	/* Number of cleanup/teardown operations in flight; protected by cfg_mutex. */
+	unsigned int conn_cleanup_pending;
 	struct mutex scan_mutex;
 	struct cfg80211_scan_request *scan_req;
 	u8 scan_seq;

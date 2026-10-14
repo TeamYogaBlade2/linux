@@ -183,15 +183,24 @@ static bool mt6628_conn_fw_cleanup_possible(struct mt6628_wlan *wl)
 
 static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 {
-	if (!mt6628_conn_fw_cleanup_possible(wl))
+	mutex_lock(&wl->cfg_mutex);
+	if (!mt6628_conn_fw_cleanup_possible(wl)) {
+		mutex_unlock(&wl->cfg_mutex);
 		return;
+	}
+	wl->conn_cleanup_pending++;
+	mutex_unlock(&wl->cfg_mutex);
 
-	/* Keys are indexed by peer, so drop them before the STA-REC goes. */
-	mt6628_wlan_flush_keys(wl);
+	mutex_lock(&wl->conn_cleanup_mutex);
+	if (mt6628_conn_fw_cleanup_possible(wl))
+		mt6628_wlan_flush_keys(wl);
 
 	mutex_lock(&wl->cfg_mutex);
-	mt6628_conn_fw_teardown_locked(wl);
+	if (mt6628_conn_fw_cleanup_possible(wl))
+		mt6628_conn_fw_teardown_locked(wl);
+	wl->conn_cleanup_pending--;
 	mutex_unlock(&wl->cfg_mutex);
+	mutex_unlock(&wl->conn_cleanup_mutex);
 }
 
 /*
@@ -215,11 +224,22 @@ static void mt6628_conn_fw_cleanup_locked(struct mt6628_wlan *wl)
 	if (!mt6628_conn_fw_cleanup_possible(wl))
 		return;
 
+	/*
+	 * Publish the cleanup before dropping cfg_mutex. New connections and
+	 * incoming connection events must not reuse the state being torn down.
+	 */
+	wl->conn_cleanup_pending++;
 	mutex_unlock(&wl->cfg_mutex);
-	mt6628_wlan_flush_keys(wl);
-	mutex_lock(&wl->cfg_mutex);
 
-	mt6628_conn_fw_teardown_locked(wl);
+	mutex_lock(&wl->conn_cleanup_mutex);
+	if (mt6628_conn_fw_cleanup_possible(wl))
+		mt6628_wlan_flush_keys(wl);
+
+	mutex_lock(&wl->cfg_mutex);
+	if (mt6628_conn_fw_cleanup_possible(wl))
+		mt6628_conn_fw_teardown_locked(wl);
+	wl->conn_cleanup_pending--;
+	mutex_unlock(&wl->conn_cleanup_mutex);
 }
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
