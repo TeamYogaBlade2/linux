@@ -332,7 +332,8 @@ static void mt6628_runtime_event_dispatch_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&wl->async_event_queue))) {
-		if (!wl->event_handler || !wl->event_handler(wl, skb))
+		if (READ_ONCE(wl->runtime_stopping) ||
+		    !wl->event_handler || !wl->event_handler(wl, skb))
 			kfree_skb(skb);
 	}
 }
@@ -344,11 +345,10 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&wl->mgmt_queue))) {
-		if (wl->mgmt_handler) {
-			wl->mgmt_handler(wl, skb);
-		} else {
-			/* No handler installed: see the event path above. */
+		if (READ_ONCE(wl->runtime_stopping) || !wl->mgmt_handler) {
 			kfree_skb(skb);
+		} else {
+			wl->mgmt_handler(wl, skb);
 		}
 
 		if (atomic_dec_and_test(&wl->mgmt_pending))
@@ -1571,6 +1571,12 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	cancel_delayed_work_sync(&wl->irq_retry_work);
 	cancel_delayed_work_sync(&wl->tx_work);
 	cancel_work_sync(&wl->event_work);
+	/*
+	 * IRQ and event workers are now stopped, so no new deferred RX
+	 * callbacks can be queued. Drain anything queued during teardown.
+	 */
+	cancel_work_sync(&wl->event_dispatch_work);
+	cancel_work_sync(&wl->mgmt_work);
 	cancel_delayed_work_sync(&wl->pm_work);
 
 	if (ndev) {
