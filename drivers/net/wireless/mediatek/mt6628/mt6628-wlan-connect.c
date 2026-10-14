@@ -77,7 +77,8 @@ void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
 {
 	mutex_lock(&wl->cfg_mutex);
 	/* Do not overwrite retry data saved by a newer connect attempt. */
-	if (wl->conn_retry_valid ||
+	if (wl->conn_cleanup_pending ||
+	    wl->conn_retry_valid ||
 	    wl->conn_state != MT6628_CONN_DISCONNECTED) {
 		mutex_unlock(&wl->cfg_mutex);
 		kfree(params->ssid);
@@ -1353,6 +1354,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		*(struct mt6628_wlan **)netdev_priv(dev) : NULL;
 	const u8 *requested_bssid;
 	struct ieee80211_channel *channel;
+	struct cfg80211_bss *conn_bss;
 	enum ieee80211_privacy privacy;
 	bool secure;
 	bool wep;
@@ -1425,6 +1427,12 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	channel = sme->channel ? sme->channel : sme->channel_hint;
 
 	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending ||
+	    READ_ONCE(wl->runtime_stopping)) {
+		mutex_unlock(&wl->cfg_mutex);
+		kfree(conn_key);
+		return -EBUSY;
+	}
 	if (wl->roc_cookie || wl->roc_starting || wl->roc_finishing ||
 	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_JOIN) ||
 	    mt6628_wlan_channel_active(wl, MT6628_CH_REQ_TYPE_P2P_LISTEN)) {
@@ -1446,16 +1454,19 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		dev_warn(&wl->func->dev,
 			 "connect found stale STA-REC before cleanup: index=%u\n",
 			 wl->sta_rec_idx);
-		mutex_unlock(&wl->cfg_mutex);
 
 		/*
 		 * A previous cleanup may have failed after disconnecting the
 		 * logical connection.  Retry the firmware-side cleanup before
 		 * allocating a new STA-REC.
 		 */
-		mt6628_conn_fw_cleanup(wl);
+		mt6628_conn_fw_cleanup_locked(wl);
 
-		mutex_lock(&wl->cfg_mutex);
+		if (wl->conn_cleanup_pending) {
+			mutex_unlock(&wl->cfg_mutex);
+			kfree(conn_key);
+			return -EBUSY;
+		}
 		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
 			dev_err(&wl->func->dev,
 				"connect rejected: stale STA-REC cleanup failed, "
@@ -1465,32 +1476,28 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			kfree(conn_key);
 			return -EIO;
 		}
-		mutex_unlock(&wl->cfg_mutex);
-	} else {
-		mutex_unlock(&wl->cfg_mutex);
 	}
+	mutex_unlock(&wl->cfg_mutex);
 
 	if (requested_bssid && is_zero_ether_addr(requested_bssid))
 		requested_bssid = NULL;
 
-	wl->conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
-					 sme->ssid, sme->ssid_len,
-						 IEEE80211_BSS_TYPE_ESS,
-						 privacy);
+	conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
+				     sme->ssid, sme->ssid_len,
+				     IEEE80211_BSS_TYPE_ESS, privacy);
 	/* bssid_hint/channel_hint are preferences, not hard connection filters. */
-	if (!wl->conn_bss &&
+	if (!conn_bss &&
 	    ((!sme->bssid && sme->bssid_hint) ||
 	     (!sme->channel && sme->channel_hint))) {
 		if (!sme->bssid)
 			requested_bssid = NULL;
 		if (!sme->channel)
 			channel = NULL;
-		wl->conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
-						 sme->ssid, sme->ssid_len,
-						 IEEE80211_BSS_TYPE_ESS,
-						 privacy);
+		conn_bss = cfg80211_get_bss(wiphy, channel, requested_bssid,
+					    sme->ssid, sme->ssid_len,
+					    IEEE80211_BSS_TYPE_ESS, privacy);
 	}
-	if (!wl->conn_bss) {
+	if (!conn_bss) {
 		dev_warn(&wl->func->dev,
 			 "connect target BSS not in cfg80211 cache: channel=%u privacy=%u\n",
 			 channel ? channel->hw_value : 0,
@@ -1500,9 +1507,20 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	}
 
 	if (!requested_bssid)
-		requested_bssid = wl->conn_bss->bssid;
+		requested_bssid = conn_bss->bssid;
 
 	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending ||
+	    READ_ONCE(wl->runtime_stopping) ||
+	    wl->conn_state != MT6628_CONN_DISCONNECTED ||
+	    wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+		mutex_unlock(&wl->cfg_mutex);
+		cfg80211_put_bss(wiphy, conn_bss);
+		kfree(conn_key);
+		return -EBUSY;
+	}
+	wl->conn_bss = conn_bss;
+	conn_bss = NULL;
 	ether_addr_copy(wl->conn_bssid, requested_bssid);
 	memcpy(wl->conn_ssid, sme->ssid, sme->ssid_len);
 	wl->conn_ssid_len = sme->ssid_len;
@@ -1596,9 +1614,9 @@ err_reset:
 	dev_err(&wl->func->dev, "connect setup failed at %s: %d\n",
 		failure_stage, ret);
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
-	mt6628_conn_fw_cleanup(wl);
 	mutex_lock(&wl->cfg_mutex);
 	mt6628_conn_set_disconnected(wl);
+	mt6628_conn_fw_cleanup_locked(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
 	mutex_unlock(&wl->cfg_mutex);
@@ -1614,11 +1632,13 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	bool in_progress;
 	bool stale_sta;
 	u8 bssid[ETH_ALEN];
-	const u8 *req_ie;
+	u8 *req_ie;
 	size_t req_ie_len;
 
 	if (!wl)
 		return -ENODEV;
+	if (READ_ONCE(wl->runtime_stopping))
+		return -ESHUTDOWN;
 
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
 
@@ -1627,22 +1647,32 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	mt6628_conn_clear_retry(wl);
 
 	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending) {
+		mutex_unlock(&wl->cfg_mutex);
+		return -EBUSY;
+	}
 	connected = wl->conn_state == MT6628_CONN_CONNECTED;
 	in_progress = !connected &&
 		wl->conn_state != MT6628_CONN_DISCONNECTED;
 	if (wl->conn_state == MT6628_CONN_DISCONNECTED) {
 		stale_sta = wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND;
-		mutex_unlock(&wl->cfg_mutex);
-
 		if (stale_sta)
-			mt6628_conn_fw_cleanup(wl);
-
+			mt6628_conn_fw_cleanup_locked(wl);
+		mutex_unlock(&wl->cfg_mutex);
 		return 0;
 	}
 
 	ether_addr_copy(bssid, wl->conn_bssid);
-	req_ie = wl->conn_req_ie;
 	req_ie_len = wl->conn_req_ie_len;
+	req_ie = req_ie_len ? kmemdup(wl->conn_req_ie, req_ie_len,
+				      GFP_KERNEL) : NULL;
+	if (req_ie_len && !req_ie) {
+		dev_warn(&wl->func->dev,
+			 "could not copy request IE for disconnect notification\n");
+		req_ie_len = 0;
+	}
+	/* Reserve the old connection until its notification and freeing finish. */
+	wl->conn_cleanup_pending++;
 	mutex_unlock(&wl->cfg_mutex);
 
 	if (connected)
@@ -1654,11 +1684,13 @@ int mt6628_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	else if (in_progress)
 		cfg80211_connect_timeout(dev, bssid, req_ie, req_ie_len, GFP_KERNEL,
 					 NL80211_TIMEOUT_UNSPECIFIED);
+	kfree(req_ie);
 
 	mutex_lock(&wl->cfg_mutex);
 	mt6628_conn_set_disconnected(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
+	wl->conn_cleanup_pending--;
 	mutex_unlock(&wl->cfg_mutex);
 	return 0;
 }
