@@ -39,7 +39,6 @@
 #include <linux/completion.h>
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
-#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/mfd/mt6628-pwrseq.h>
 #include <linux/mfd/mt6397/rtc.h>
@@ -261,7 +260,6 @@ struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 	struct platform_device *pdev;
 	struct mt6628_pwrseq *pwrseq;
 	struct module *owner;
-	unsigned long deadline, remaining;
 	int ret;
 
 	if (!dev->of_node)
@@ -306,47 +304,33 @@ struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 	}
 
 	/*
-	 * Wait for the MMC power sequence to finish, not for an arbitrary
-	 * interval after UART probe. Recheck the state under the same lock
-	 * used by pre/post_power_on so that a power-off cannot race acquisition.
+	 * Do not wait for MMC power-up from a consumer's probe. The MMC host
+	 * may need to finish probing before it can run the power sequence;
+	 * blocking here can stall boot-time probe synchronization. Let the
+	 * driver core retry this consumer after deferred probing is triggered.
 	 */
-	deadline = jiffies +
-		   msecs_to_jiffies(MT6628_POWER_READY_TIMEOUT_MS);
-	for (;;) {
-		mutex_lock(&pwrseq->lock);
-		if (pwrseq->power_ready_state &&
-		    !pwrseq->power_transition) {
-			/*
-			 * Hold a second reference to the actual VMMC supply.
-			 * The MMC host may drop its own reference while UART STP
-			 * or WLAN is still using the combo chip.
-			 */
-			if (!pwrseq->consumers && !pwrseq->vmmc_held) {
-				ret = regulator_enable(pwrseq->vmmc);
-				if (ret) {
-					mutex_unlock(&pwrseq->lock);
-					goto err_put;
-				}
-				pwrseq->vmmc_held = true;
-			}
-			pwrseq->consumers++;
-			mutex_unlock(&pwrseq->lock);
-			break;
-		}
+	mutex_lock(&pwrseq->lock);
+	if (!pwrseq->power_ready_state || pwrseq->power_transition) {
 		mutex_unlock(&pwrseq->lock);
-
-		if (!time_before(jiffies, deadline)) {
-			ret = -EPROBE_DEFER;
-			goto err_put;
-		}
-
-		remaining = deadline - jiffies;
-		if (!wait_for_completion_timeout(&pwrseq->power_ready,
-						 remaining)) {
-			ret = -EPROBE_DEFER;
-			goto err_put;
-		}
+		ret = -EPROBE_DEFER;
+		goto err_put;
 	}
+
+	/*
+	 * Hold a second reference to the actual VMMC supply. The MMC host
+	 * may drop its own reference while UART STP or WLAN is still using
+	 * the combo chip.
+	 */
+	if (!pwrseq->consumers && !pwrseq->vmmc_held) {
+		ret = regulator_enable(pwrseq->vmmc);
+		if (ret) {
+			mutex_unlock(&pwrseq->lock);
+			goto err_put;
+		}
+		pwrseq->vmmc_held = true;
+	}
+	pwrseq->consumers++;
+	mutex_unlock(&pwrseq->lock);
 
 	ret = devm_add_action_or_reset(dev,
 				       mmc_pwrseq_mt6628_consumer_put,
