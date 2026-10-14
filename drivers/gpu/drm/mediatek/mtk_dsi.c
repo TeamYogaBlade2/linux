@@ -1189,18 +1189,18 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 		return;
 
 	/*
-	 * MT6589 defers the complete DDP start until this point: the panel
-	 * bridge has already run atomic_pre_enable, so its supply and enable
-	 * GPIO are ready before DSI starts transmitting and OVL starts fetching.
-	 * This is a no-op on SoCs whose CRTC start sequence was not deferred.
+	 * MT6589 defers the complete DDP start until this point, after the panel
+	 * bridge's atomic_pre_enable has enabled its supply/GPIO and the DSI PHY
+	 * is configured. The CRTC starts the DDP components in graph order, so
+	 * the source path is enabled before the DSI component pulses START.
 	 */
 	mtk_crtc_ddp_start_pending(dsi->encoder.crtc);
 	mtk_output_dsi_enable(dsi);
 	/*
-	 * On MT6589, the CRTC's DDP start hook now starts DSI before OVL.
-	 * Keep this snapshot in the bridge callback, which runs after the
-	 * CRTC component start sequence, to observe whether the sink and
-	 * source have actually begun streaming together.
+	 * The DSI component is the final element of the MT6589 path, so its
+	 * start hook has already pulsed START after RDMA0 was enabled. This
+	 * idempotent call is a no-op for that path; retain the final snapshot
+	 * here to compare the link after all components have started.
 	 */
 	mtk_dsi_dump_status(dsi, "post-start");
 }

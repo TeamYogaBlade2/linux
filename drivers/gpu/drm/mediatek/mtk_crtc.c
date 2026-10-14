@@ -479,17 +479,13 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	}
 
 	/*
-	 * MT6589's OVL begins fetching as soon as it is enabled. Start the
-	 * sink first so DSI and RDMA0 are ready before OVL starts a frame;
-	 * otherwise OVL can report RDMA0_EOF_ABNORMAL during initial startup.
+	 * Defer MT6589's start sequence until bridge enable, after the panel
+	 * supply/GPIO and DSI PHY are prepared. Then start in graph order: OVL,
+	 * COLOR, BLS, RDMA0, DSI. This matches the downstream path, which brings
+	 * up the source path before pulsing DSI START; OVL waits for DSI's MUTEX
+	 * SOF so RDMA0 is ready when the first frame begins.
 	 */
-	if (priv->data->start_reverse) {
-		/*
-		 * MT6589 starts DSI video before OVL to avoid backpressure, but
-		 * the CRTC enable callback runs before bridge atomic_pre_enable.
-		 * Defer the whole start sequence until the DSI bridge is enabled,
-		 * after the panel bridge has powered and prepared the panel.
-		 */
+	if (priv->data->defer_start_until_bridge) {
 		mtk_crtc->ddp_start_pending = true;
 	} else {
 		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
@@ -519,8 +515,8 @@ void mtk_crtc_ddp_start_pending(struct drm_crtc *crtc)
 
 	/* Clear first so a re-entrant enable cannot start the path twice. */
 	mtk_crtc->ddp_start_pending = false;
-	for (i = mtk_crtc->ddp_comp_nr; i > 0; i--)
-		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i - 1]);
+	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
+		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i]);
 }
 
 static void mtk_crtc_ddp_hw_fini(struct mtk_crtc *mtk_crtc)
