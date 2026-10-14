@@ -1450,10 +1450,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 		kfree(conn_key);
 		return -EBUSY;
 	}
-	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+	if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND ||
+	    wl->pairwise_key_mask || wl->group_key_mask) {
 		dev_warn(&wl->func->dev,
-			 "connect found stale STA-REC before cleanup: index=%u\n",
-			 wl->sta_rec_idx);
+			 "connect found stale firmware state: STA-REC=%u "
+			 "pairwise_keys=%#x group_keys=%#x\n",
+			 wl->sta_rec_idx, wl->pairwise_key_mask,
+			 wl->group_key_mask);
 
 		/*
 		 * A previous cleanup may have failed after disconnecting the
@@ -1467,11 +1470,13 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 			kfree(conn_key);
 			return -EBUSY;
 		}
-		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND) {
+		if (wl->sta_rec_idx != MT6628_STA_REC_INDEX_NOT_FOUND ||
+		    wl->pairwise_key_mask || wl->group_key_mask) {
 			dev_err(&wl->func->dev,
-				"connect rejected: stale STA-REC cleanup failed, "
-				"index=%u conn_state=%u\n",
-				wl->sta_rec_idx, wl->conn_state);
+				"connect rejected: stale firmware cleanup failed, "
+				"STA-REC=%u pairwise_keys=%#x group_keys=%#x\n",
+				wl->sta_rec_idx, wl->pairwise_key_mask,
+				wl->group_key_mask);
 			mutex_unlock(&wl->cfg_mutex);
 			kfree(conn_key);
 			return -EIO;

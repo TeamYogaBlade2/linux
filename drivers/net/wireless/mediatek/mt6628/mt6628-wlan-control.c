@@ -1104,43 +1104,56 @@ void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 	u8 pairwise_bssid[ETH_ALEN];
 	u8 broadcast[ETH_ALEN];
 	u8 i;
+	int ret;
 
 	/*
-	 * Take and clear the masks in one step.  add_key()/del_key() can run
-	 * concurrently with the teardown that flushes them, and reading then
-	 * clearing separately would drop a key that was installed in
-	 * between, leaving it installed in the firmware with nothing left to
-	 * remove it later.
+	 * key_mutex serializes this snapshot with add_key(), del_key() and
+	 * set_default_key(). Keep each mask bit until its firmware deletion
+	 * succeeds so a later cleanup can retry a failed command.
 	 */
 	mutex_lock(&wl->key_mutex);
 	mutex_lock(&wl->cfg_mutex);
 	pairwise_mask = wl->pairwise_key_mask;
 	group_mask = wl->group_key_mask;
 	ether_addr_copy(pairwise_bssid, wl->conn_bssid);
-	wl->pairwise_key_mask = 0;
-	wl->group_key_mask = 0;
-	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++)
-		memzero_explicit(&wl->wep_keys[i], sizeof(wl->wep_keys[i]));
-	wl->default_wep_key_valid = false;
-	mutex_unlock(&wl->cfg_mutex);
 
 	/*
-	 * Nothing to undo, or the firmware is already gone: either way the
-	 * masks above are cleared, because the keys cannot outlive the
-	 * connection they belonged to.
+	 * If firmware is gone, the keys disappeared with it. Otherwise the
+	 * delete helper clears each key's bookkeeping only after success.
 	 */
-	if (!pairwise_mask && !group_mask)
+	if (!wl->runtime_started || !wl->fw_running) {
+		wl->pairwise_key_mask = 0;
+		wl->group_key_mask = 0;
+		for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++)
+			memzero_explicit(&wl->wep_keys[i],
+					 sizeof(wl->wep_keys[i]));
+		wl->default_wep_key_valid = false;
+		mutex_unlock(&wl->cfg_mutex);
 		goto out_unlock;
-	if (!wl->runtime_started || !wl->fw_running)
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!pairwise_mask && !group_mask)
 		goto out_unlock;
 
 	eth_broadcast_addr(broadcast);
 
 	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++) {
-		if (pairwise_mask & BIT(i))
-			__mt6628_wlan_del_key(wl, i, true, pairwise_bssid);
-		if (group_mask & BIT(i))
-			__mt6628_wlan_del_key(wl, i, false, broadcast);
+		if (pairwise_mask & BIT(i)) {
+			ret = __mt6628_wlan_del_key(wl, i, true,
+						    pairwise_bssid);
+			if (ret)
+				dev_warn(&wl->func->dev,
+					 "failed to flush pairwise key %u: %d\n",
+					 i, ret);
+		}
+		if (group_mask & BIT(i)) {
+			ret = __mt6628_wlan_del_key(wl, i, false, broadcast);
+			if (ret)
+				dev_warn(&wl->func->dev,
+					 "failed to flush group key %u: %d\n",
+					 i, ret);
+		}
 	}
 
 out_unlock:
