@@ -214,11 +214,10 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
  * one call and retake it for the STA-REC, which keeps the keys ahead of the
  * record they belong to.
  *
- * The unlock window is the same one mt6628_cfg80211_fw_beacon_timeout() and
- * mt6628_connect_timeout_work() already use.  Callers must therefore have
- * published the disconnected state under the lock before calling this, so
- * that a connect() arriving in the window does not find live connection
- * state to race with.
+ * conn_cleanup_pending is incremented before cfg_mutex is dropped. Connect
+ * requests, retry restoration and incoming connection-management frames
+ * reject that interval, so the caller may keep AUTH/ASSOC state intact while
+ * a connect-timeout notification is being prepared.
  */
 static void mt6628_conn_fw_cleanup_locked(struct mt6628_wlan *wl)
 {
