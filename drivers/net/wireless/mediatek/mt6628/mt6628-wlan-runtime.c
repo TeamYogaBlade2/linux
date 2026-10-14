@@ -1624,6 +1624,8 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
+	if (atomic_read(&wl->recovery_pending))
+		return -EBUSY;
 	if (wl->pm_idle || !wl->driver_owned)
 		return 0;
 
@@ -1674,6 +1676,16 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 		goto out_busy;
 
 	sdio_claim_host(wl->func);
+	/*
+	 * The assert flag is set by irq_work while it holds this same
+	 * SDIO host. Check again under the host lock so an ownership
+	 * handoff cannot pass a recovery request that was just published.
+	 */
+	if (atomic_read(&wl->recovery_pending)) {
+		ret = -EBUSY;
+		goto out_release;
+	}
+
 	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &val);
 	if (ret)
 		goto out_release;
@@ -1786,8 +1798,9 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 
 	/* Traffic still outstanding: back off and try again shortly. */
 	if (ret == -EBUSY) {
-		schedule_delayed_work(&wlan->pm_work,
-				      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		if (!atomic_read(&wlan->recovery_pending))
+			schedule_delayed_work(&wlan->pm_work,
+				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
 		return;
 	}
 
