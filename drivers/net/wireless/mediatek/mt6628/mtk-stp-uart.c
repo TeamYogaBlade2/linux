@@ -1503,9 +1503,10 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 	}
 
 	/*
-	 * devm_mt6628_pwrseq_get() has waited for the provider's electrical
-	 * power-ready completion and acquired a shared power lease. Do not use
-	 * a fixed delay as a substitute for sequencing.
+	 * devm_mt6628_pwrseq_get() acquired a shared power lease only after
+	 * the provider reported the chip electrically ready. It returns
+	 * -EPROBE_DEFER rather than waiting for the initial MMC power-up.
+	 * Do not use a fixed delay as a substitute for sequencing.
 	 */
 	/* A transient UART/WMT response must not become endless deferral. */
 	for (retry = 0; retry < 3; retry++) {
