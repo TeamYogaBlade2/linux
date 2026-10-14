@@ -1349,6 +1349,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	spin_lock_init(&wl->cmd_lock);
 	mutex_init(&wl->cfg_mutex);
 	mutex_init(&wl->conn_cleanup_mutex);
+	mutex_init(&wl->key_mutex);
 	wl->conn_cleanup_pending = 0;
 	init_completion(&wl->cmd_done);
 	atomic_set(&wl->recovery_pending, 0);

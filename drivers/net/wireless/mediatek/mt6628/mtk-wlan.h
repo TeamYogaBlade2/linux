@@ -187,6 +187,8 @@ struct mt6628_wlan {
 	struct mutex cfg_mutex;
 	/* Serialize firmware connection cleanup sequences. */
 	struct mutex conn_cleanup_mutex;
+	/* Serialize firmware key updates with connection key flushing. */
+	struct mutex key_mutex;
 	/* Number of cleanup/teardown operations in flight; protected by cfg_mutex. */
 	unsigned int conn_cleanup_pending;
 	struct mutex scan_mutex;

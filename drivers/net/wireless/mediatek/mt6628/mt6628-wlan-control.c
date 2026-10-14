@@ -723,9 +723,10 @@ int mt6628_wlan_remove_sta_record(struct mt6628_wlan *wl, const u8 *bssid)
 				    &cmd, sizeof(cmd), NULL, 0, NULL, 0, 0);
 }
 
-int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
-			bool pairwise, bool tx_key, const u8 *mac_addr,
-			const struct key_params *params)
+static int __mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
+				 bool pairwise, bool tx_key,
+				 const u8 *mac_addr,
+				 const struct key_params *params)
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
@@ -736,8 +737,6 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
-	if (!wl->conn_secure)
-		return -ENOTCONN;
 	if (key_index > MT6628_KEY_INDEX_MAX)
 		return -EINVAL;
 	if (!params)
@@ -845,6 +844,33 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	return 0;
 }
 
+int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, bool tx_key, const u8 *mac_addr,
+			const struct key_params *params)
+{
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+
+	mutex_lock(&wl->key_mutex);
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending)
+		ret = -EBUSY;
+	else if (!wl->conn_secure)
+		ret = -ENOTCONN;
+	else
+		ret = 0;
+	mutex_unlock(&wl->cfg_mutex);
+
+	if (!ret)
+		ret = __mt6628_wlan_add_key(wl, key_index, pairwise, tx_key,
+					    mac_addr, params);
+
+	mutex_unlock(&wl->key_mutex);
+	return ret;
+}
+
 static int
 mt6628_wlan_program_wep_key(struct mt6628_wlan *wl, u8 key_index,
 			    const struct mt6628_wep_key *key, bool tx_key)
@@ -888,8 +914,9 @@ mt6628_wlan_program_wep_key(struct mt6628_wlan *wl, u8 key_index,
 				    MT6628_EVENT_ID_CMD_RESULT, 1000);
 }
 
-int mt6628_wlan_set_default_key(struct mt6628_wlan *wl, u8 key_index,
-				bool unicast, bool multicast)
+static int __mt6628_wlan_set_default_key(struct mt6628_wlan *wl,
+					 u8 key_index, bool unicast,
+					 bool multicast)
 {
 	struct mt6628_wep_key target = {}, previous = {};
 	u8 previous_index = 0;
@@ -967,8 +994,31 @@ out:
 	return ret;
 }
 
-int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
-			bool pairwise, const u8 *mac_addr)
+int mt6628_wlan_set_default_key(struct mt6628_wlan *wl, u8 key_index,
+				bool unicast, bool multicast)
+{
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return -ENODEV;
+
+	mutex_lock(&wl->key_mutex);
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending) {
+		mutex_unlock(&wl->cfg_mutex);
+		mutex_unlock(&wl->key_mutex);
+		return -EBUSY;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	ret = __mt6628_wlan_set_default_key(wl, key_index,
+					    unicast, multicast);
+	mutex_unlock(&wl->key_mutex);
+	return ret;
+}
+
+static int __mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
+				 bool pairwise, const u8 *mac_addr)
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
@@ -1025,10 +1075,33 @@ int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 	return ret;
 }
 
+int mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
+			bool pairwise, const u8 *mac_addr)
+{
+	int ret;
+
+	if (!wl->runtime_started || !wl->fw_running)
+		return 0;
+
+	mutex_lock(&wl->key_mutex);
+	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending) {
+		mutex_unlock(&wl->cfg_mutex);
+		mutex_unlock(&wl->key_mutex);
+		return -EBUSY;
+	}
+	mutex_unlock(&wl->cfg_mutex);
+
+	ret = __mt6628_wlan_del_key(wl, key_index, pairwise, mac_addr);
+	mutex_unlock(&wl->key_mutex);
+	return ret;
+}
+
 void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 {
 	u8 pairwise_mask;
 	u8 group_mask;
+	u8 pairwise_bssid[ETH_ALEN];
 	u8 broadcast[ETH_ALEN];
 	u8 i;
 
@@ -1039,9 +1112,11 @@ void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 	 * between, leaving it installed in the firmware with nothing left to
 	 * remove it later.
 	 */
+	mutex_lock(&wl->key_mutex);
 	mutex_lock(&wl->cfg_mutex);
 	pairwise_mask = wl->pairwise_key_mask;
 	group_mask = wl->group_key_mask;
+	ether_addr_copy(pairwise_bssid, wl->conn_bssid);
 	wl->pairwise_key_mask = 0;
 	wl->group_key_mask = 0;
 	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++)
@@ -1055,18 +1130,21 @@ void mt6628_wlan_flush_keys(struct mt6628_wlan *wl)
 	 * connection they belonged to.
 	 */
 	if (!pairwise_mask && !group_mask)
-		return;
+		goto out_unlock;
 	if (!wl->runtime_started || !wl->fw_running)
-		return;
+		goto out_unlock;
 
 	eth_broadcast_addr(broadcast);
 
 	for (i = 0; i <= MT6628_KEY_INDEX_MAX; i++) {
 		if (pairwise_mask & BIT(i))
-			mt6628_wlan_del_key(wl, i, true, wl->conn_bssid);
+			__mt6628_wlan_del_key(wl, i, true, pairwise_bssid);
 		if (group_mask & BIT(i))
-			mt6628_wlan_del_key(wl, i, false, broadcast);
+			__mt6628_wlan_del_key(wl, i, false, broadcast);
 	}
+
+out_unlock:
+	mutex_unlock(&wl->key_mutex);
 }
 
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
