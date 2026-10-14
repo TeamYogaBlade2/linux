@@ -437,6 +437,8 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	 */
 	wl->pairwise_key_mask = 0;
 	wl->group_key_mask = 0;
+	memzero_explicit(wl->wep_keys, sizeof(wl->wep_keys));
+	wl->default_wep_key_valid = false;
 	if (wl->netdev)
 		netif_carrier_off(wl->netdev);
 	mutex_unlock(&wl->cfg_mutex);
@@ -1356,7 +1358,6 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->roc_n_chans = 0;
 	wl->roc_duration = 0;
 	wl->conn_cleanup_pending = 0;
-	atomic_set(&wl->recovery_pending, 0);
 	wl->runtime_initialized = true;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
 	wl->event_handler = mt6628_cfg80211_event_handler;
