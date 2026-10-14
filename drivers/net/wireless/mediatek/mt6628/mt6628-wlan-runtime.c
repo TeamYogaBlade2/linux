@@ -1306,7 +1306,6 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	INIT_WORK(&wl->irq_work, mt6628_runtime_irq_work);
 	INIT_DELAYED_WORK(&wl->irq_retry_work,
 			  mt6628_runtime_irq_retry_work);
-	INIT_WORK(&wl->recovery_work, mt6628_runtime_recovery_work);
 	INIT_DELAYED_WORK(&wl->tx_work, mt6628_runtime_tx_work);
 	INIT_WORK(&wl->event_work, mt6628_runtime_event_work);
 	INIT_WORK(&wl->event_dispatch_work,
