@@ -478,6 +478,7 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 		if (retry_saved) {
 			kfree(retry.ssid);
 			kfree(retry.bssid);
+			kfree(retry.bssid_hint);
 			kfree(retry.ie);
 			kfree(retry.key);
 		}

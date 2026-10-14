@@ -83,6 +83,7 @@ void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
 		mutex_unlock(&wl->cfg_mutex);
 		kfree(params->ssid);
 		kfree(params->bssid);
+		kfree(params->bssid_hint);
 		kfree(params->ie);
 		kfree(params->key);
 		memset(params, 0, sizeof(*params));
@@ -91,6 +92,7 @@ void mt6628_conn_restore_retry(struct mt6628_wlan *wl,
 
 	kfree(wl->conn_retry.ssid);
 	kfree(wl->conn_retry.bssid);
+	kfree(wl->conn_retry.bssid_hint);
 	kfree(wl->conn_retry.ie);
 	kfree(wl->conn_retry.key);
 	wl->conn_retry = *params;
@@ -546,6 +548,7 @@ static bool mt6628_roam_start(struct mt6628_wlan *wl)
 	/* connect() made its own saved copy, so release the original parameters. */
 	kfree(params.ssid);
 	kfree(saved_bssid);
+	kfree(params.bssid_hint);
 	kfree(params.ie);
 	kfree(params.key);
 	return true;
@@ -1139,6 +1142,7 @@ static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
 	 */
 	kfree(r->ssid);
 	kfree(r->bssid);
+	kfree(r->bssid_hint);
 	kfree(r->ie);
 	kfree(r->key);
 	memset(r, 0, sizeof(*r));
@@ -1154,6 +1158,13 @@ static void mt6628_conn_save_retry(struct mt6628_wlan *wl,
 	if (sme->bssid) {
 		r->bssid = kmemdup(sme->bssid, ETH_ALEN, GFP_KERNEL);
 		if (!r->bssid)
+			goto fail;
+	}
+
+	if (sme->bssid_hint) {
+		r->bssid_hint = kmemdup(sme->bssid_hint, ETH_ALEN,
+					GFP_KERNEL);
+		if (!r->bssid_hint)
 			goto fail;
 	}
 
@@ -1201,6 +1212,7 @@ fail:
 	 */
 	kfree(r->ssid);
 	kfree(r->bssid);
+	kfree(r->bssid_hint);
 	kfree(r->ie);
 	kfree(r->key);
 	memset(r, 0, sizeof(*r));
@@ -1218,6 +1230,7 @@ static void mt6628_conn_clear_retry(struct mt6628_wlan *wl)
 	wl->conn_retry_count = 0;
 	kfree(r->ssid);
 	kfree(r->bssid);
+	kfree(r->bssid_hint);
 	kfree(r->ie);
 	kfree(r->key);
 	memset(r, 0, sizeof(*r));
@@ -1256,7 +1269,7 @@ static void mt6628_conn_retry_work(struct work_struct *work)
 					     struct mt6628_wlan,
 					     conn_retry_work);
 	struct cfg80211_connect_params retry;
-	u8 *ssid, *bssid, *ie, *key;
+	u8 *ssid, *bssid, *bssid_hint, *ie, *key;
 	bool retry_again;
 	int ret;
 
@@ -1281,14 +1294,18 @@ static void mt6628_conn_retry_work(struct work_struct *work)
 	retry = wl->conn_retry;
 	ssid = kmemdup(retry.ssid, retry.ssid_len, GFP_KERNEL);
 	bssid = retry.bssid ? kmemdup(retry.bssid, ETH_ALEN, GFP_KERNEL) : NULL;
+	bssid_hint = retry.bssid_hint ?
+		kmemdup(retry.bssid_hint, ETH_ALEN, GFP_KERNEL) : NULL;
 	ie = retry.ie ? kmemdup(retry.ie, retry.ie_len, GFP_KERNEL) : NULL;
 	key = retry.key ? kmemdup(retry.key, retry.key_len, GFP_KERNEL) : NULL;
 	mutex_unlock(&wl->cfg_mutex);
 
 	if (!ssid || (retry.bssid && !bssid) ||
+	    (retry.bssid_hint && !bssid_hint) ||
 	    (retry.ie && !ie) || (retry.key && !key)) {
 		kfree(ssid);
 		kfree(bssid);
+		kfree(bssid_hint);
 		kfree(ie);
 		kfree(key);
 		mt6628_conn_clear_retry(wl);
@@ -1298,6 +1315,7 @@ static void mt6628_conn_retry_work(struct work_struct *work)
 	retry.ssid = ssid;
 	retry.ssid_len = retry.ssid_len;
 	retry.bssid = bssid;
+	retry.bssid_hint = bssid_hint;
 	retry.ie = ie;
 	retry.ie_len = ie ? retry.ie_len : 0;
 	retry.key = key;
@@ -1313,6 +1331,7 @@ static void mt6628_conn_retry_work(struct work_struct *work)
 	 */
 	kfree(ssid);
 	kfree(bssid);
+	kfree(bssid_hint);
 	kfree(ie);
 	kfree(key);
 
