@@ -556,9 +556,14 @@ void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
 	bool connected;
 
 	mutex_lock(&wl->cfg_mutex);
-	connected = wl->conn_state == MT6628_CONN_CONNECTED;
-	if (connected)
+	connected = wl->conn_state == MT6628_CONN_CONNECTED &&
+		    !wl->conn_cleanup_pending;
+	if (connected) {
+		/* Keep new connections out until notification and state freeing finish. */
+		wl->conn_cleanup_pending++;
 		mt6628_conn_set_disconnected(wl);
+		mt6628_conn_fw_cleanup_locked(wl);
+	}
 	mutex_unlock(&wl->cfg_mutex);
 
 	if (!connected)
@@ -569,13 +574,13 @@ void mt6628_cfg80211_fw_beacon_timeout(struct mt6628_wlan *wl)
 	 * a deauthentication frame here: the firmware event is precisely
 	 * the indication that the AP is no longer reachable.
 	 */
-	mt6628_conn_fw_cleanup(wl);
 	cfg80211_disconnected(wl->netdev, WLAN_REASON_UNSPECIFIED,
 			      NULL, 0, false, GFP_KERNEL);
 
 	mutex_lock(&wl->cfg_mutex);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
+	wl->conn_cleanup_pending--;
 	mutex_unlock(&wl->cfg_mutex);
 
 	/*
@@ -1037,29 +1042,42 @@ static void mt6628_connect_timeout_work(struct work_struct *work)
 					     struct mt6628_wlan,
 					     conn_timeout_work);
 	u8 bssid[ETH_ALEN];
-	const u8 *req_ie;
+	u8 *req_ie;
 	size_t req_ie_len;
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->conn_state == MT6628_CONN_DISCONNECTED ||
-	    wl->conn_state == MT6628_CONN_CONNECTED) {
+	    wl->conn_state == MT6628_CONN_CONNECTED ||
+	    wl->conn_cleanup_pending ||
+	    READ_ONCE(wl->runtime_stopping)) {
 		mutex_unlock(&wl->cfg_mutex);
 		return;
 	}
 
 	ether_addr_copy(bssid, wl->conn_bssid);
-	req_ie = wl->conn_req_ie;
 	req_ie_len = wl->conn_req_ie_len;
+	req_ie = req_ie_len ? kmemdup(wl->conn_req_ie, req_ie_len,
+				      GFP_KERNEL) : NULL;
+	if (req_ie_len && !req_ie) {
+		dev_warn(&wl->func->dev,
+			 "could not copy request IE for connection timeout\n");
+		req_ie_len = 0;
+	}
+
+	/* Keep both connect() and RX state handling out through the callback. */
+	wl->conn_cleanup_pending++;
+	mt6628_conn_fw_cleanup_locked(wl);
 	mutex_unlock(&wl->cfg_mutex);
 
-	mt6628_conn_fw_cleanup(wl);
 	cfg80211_connect_timeout(wl->netdev, bssid, req_ie, req_ie_len,
 					 GFP_KERNEL, NL80211_TIMEOUT_UNSPECIFIED);
+	kfree(req_ie);
 
 	mutex_lock(&wl->cfg_mutex);
 	mt6628_conn_set_disconnected(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
+	wl->conn_cleanup_pending--;
 	mutex_unlock(&wl->cfg_mutex);
 }
 
@@ -1088,10 +1106,13 @@ void mt6628_cfg80211_connect_deinit(struct mt6628_wlan *wl)
 	cancel_delayed_work_sync(&wl->conn_timeout_work);
 	cancel_delayed_work_sync(&wl->conn_retry_work);
 	mt6628_conn_clear_retry(wl);
-	mt6628_conn_fw_cleanup(wl);
+
+	mutex_lock(&wl->cfg_mutex);
+	mt6628_conn_set_disconnected(wl);
+	mt6628_conn_fw_cleanup_locked(wl);
 	mt6628_conn_put_bss(wl);
 	mt6628_conn_free_ies(wl);
-	mt6628_conn_set_disconnected(wl);
+	mutex_unlock(&wl->cfg_mutex);
 }
 
 
@@ -1822,6 +1843,10 @@ bool mt6628_cfg80211_connection_mgmt(struct mt6628_wlan *wl,
 		return false;
 
 	mutex_lock(&wl->cfg_mutex);
+	if (wl->conn_cleanup_pending) {
+		mutex_unlock(&wl->cfg_mutex);
+		goto drop;
+	}
 	if (wl->conn_state == MT6628_CONN_DISCONNECTED) {
 		mutex_unlock(&wl->cfg_mutex);
 		return false;
@@ -1908,11 +1933,18 @@ auth_done:
 			le16_to_cpu(mgmt->u.disassoc.reason_code);
 		relevant = true;
 		if (connected) {
+			/* Keep the state reserved until cfg80211 has been notified. */
+			wl->conn_cleanup_pending++;
 			mt6628_conn_set_disconnected(wl);
 			mt6628_conn_fw_cleanup_locked(wl);
 			mutex_unlock(&wl->cfg_mutex);
 			cfg80211_disconnected(wl->netdev, reason, NULL, 0, false,
 				      GFP_KERNEL);
+			mutex_lock(&wl->cfg_mutex);
+			mt6628_conn_put_bss(wl);
+			mt6628_conn_free_ies(wl);
+			wl->conn_cleanup_pending--;
+			mutex_unlock(&wl->cfg_mutex);
 		} else {
 			cfg80211_connect_bss(wl->netdev, wl->conn_bssid,
 				     mt6628_conn_detach_bss(wl),
