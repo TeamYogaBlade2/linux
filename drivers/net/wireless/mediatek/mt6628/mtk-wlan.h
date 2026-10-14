@@ -122,6 +122,7 @@ struct mt6628_wlan {
 	struct wiphy *wiphy;
 	struct wireless_dev wdev;
 	bool runtime_initialized;
+	bool runtime_locks_initialized;
 	bool runtime_started;
 	/* Prevent new PM handoffs while stopping or suspending. */
 	bool runtime_stopping;

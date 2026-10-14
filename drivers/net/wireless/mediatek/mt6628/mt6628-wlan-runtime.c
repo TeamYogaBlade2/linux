@@ -1316,17 +1316,29 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		  mt6628_runtime_event_dispatch_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
 	INIT_DELAYED_WORK(&wl->pm_work, mt6628_runtime_pm_work);
-	spin_lock_init(&wl->tx_lock);
-	init_waitqueue_head(&wl->tx_wait);
+	if (!wl->runtime_locks_initialized) {
+		spin_lock_init(&wl->tx_lock);
+		spin_lock_init(&wl->mgmt_tx_lock);
+		spin_lock_init(&wl->cmd_lock);
+		mutex_init(&wl->cmd_mutex);
+		mutex_init(&wl->channel_mutex);
+		mutex_init(&wl->scan_mutex);
+		mutex_init(&wl->cfg_mutex);
+		mutex_init(&wl->conn_cleanup_mutex);
+		mutex_init(&wl->key_mutex);
+		init_waitqueue_head(&wl->tx_wait);
+		init_waitqueue_head(&wl->event_wait);
+		init_completion(&wl->cmd_done);
+		init_completion(&wl->mgmt_tx_done);
+		wl->runtime_locks_initialized = true;
+	}
+
 	skb_queue_head_init(&wl->tx_queue);
 	skb_queue_head_init(&wl->rx_queue);
 	skb_queue_head_init(&wl->event_queue);
 	skb_queue_head_init(&wl->async_event_queue);
 	skb_queue_head_init(&wl->mgmt_queue);
-	init_waitqueue_head(&wl->event_wait);
 	atomic_set(&wl->mgmt_pending, 0);
-	spin_lock_init(&wl->mgmt_tx_lock);
-	init_completion(&wl->mgmt_tx_done);
 	wl->mgmt_tx_pending = false;
 	wl->mgmt_tx_seq = 0;
 	wl->mgmt_tx_packet_seq = 0;
@@ -1343,15 +1355,7 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->roc_chans[1] = NULL;
 	wl->roc_n_chans = 0;
 	wl->roc_duration = 0;
-	mutex_init(&wl->cmd_mutex);
-	mutex_init(&wl->channel_mutex);
-	mutex_init(&wl->scan_mutex);
-	spin_lock_init(&wl->cmd_lock);
-	mutex_init(&wl->cfg_mutex);
-	mutex_init(&wl->conn_cleanup_mutex);
-	mutex_init(&wl->key_mutex);
 	wl->conn_cleanup_pending = 0;
-	init_completion(&wl->cmd_done);
 	atomic_set(&wl->recovery_pending, 0);
 	wl->runtime_initialized = true;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
