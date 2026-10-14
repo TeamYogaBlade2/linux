@@ -188,7 +188,10 @@ static void mt6628_conn_fw_cleanup(struct mt6628_wlan *wl)
 
 	/* Keys are indexed by peer, so drop them before the STA-REC goes. */
 	mt6628_wlan_flush_keys(wl);
+
+	mutex_lock(&wl->cfg_mutex);
 	mt6628_conn_fw_teardown_locked(wl);
+	mutex_unlock(&wl->cfg_mutex);
 }
 
 /*
