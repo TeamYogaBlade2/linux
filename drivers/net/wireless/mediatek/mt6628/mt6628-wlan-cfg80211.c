@@ -606,7 +606,7 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	*cookie = tx_cookie;
 
 	ret = mt6628_wlan_mgmt_tx_status(wl, params->buf, params->len,
-					 !params->dont_wait_for_ack,
+					 true,
 					 !params->dont_wait_for_ack,
 					 &submitted);
 	if (!submitted)
@@ -617,9 +617,8 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	 * callback even when TX_DONE reports no ACK or the status wait times
 	 * out.  A pre-submit error is returned synchronously above instead.
 	 */
-	if (!params->dont_wait_for_ack)
-		cfg80211_mgmt_tx_status(wdev, tx_cookie, params->buf,
-					params->len, ret == 0, GFP_KERNEL);
+	cfg80211_mgmt_tx_status(wdev, tx_cookie, params->buf,
+				params->len, ret == 0, GFP_KERNEL);
 
 	return 0;
 }
