@@ -15,6 +15,7 @@
 #include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/initrd.h>
 #include <linux/kfifo.h>
 #include <linux/mfd/core.h>
 #include <linux/module.h>
@@ -1606,7 +1607,27 @@ static struct serdev_device_driver mt6628_stp_uart_driver = {
 		.of_match_table = mt6628_stp_uart_of_match,
 	},
 };
-module_serdev_device_driver(mt6628_stp_uart_driver);
+static int __init mt6628_stp_uart_init(void)
+{
+#ifndef MODULE
+	/*
+	 * The initramfs is unpacked asynchronously by default. A built-in
+	 * UART driver can probe before the firmware files become visible,
+	 * causing request_firmware() to enter the userspace fallback path
+	 * even though the files are present in the initramfs archive.
+	 */
+	wait_for_initramfs();
+#endif
+
+	return serdev_device_driver_register(&mt6628_stp_uart_driver);
+}
+module_init(mt6628_stp_uart_init);
+
+static void __exit mt6628_stp_uart_exit(void)
+{
+	serdev_device_driver_unregister(&mt6628_stp_uart_driver);
+}
+module_exit(mt6628_stp_uart_exit);
 
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
 MODULE_DESCRIPTION("MediaTek MT6628 shared WMT/STP UART transport");
