@@ -1590,9 +1590,13 @@ static int __ref kernel_init(void *unused)
 	 */
 	wait_for_completion(&kthreadd_done);
 
+	pr_err("boottrace: entering kernel_init_freeable()\n");
 	kernel_init_freeable();
+	pr_err("boottrace: kernel_init_freeable() returned\n");
 	/* need to finish all async __init code before freeing the memory */
+	pr_err("boottrace: async_synchronize_full() begin\n");
 	async_synchronize_full();
+	pr_err("boottrace: async_synchronize_full() returned\n");
 
 	system_state = SYSTEM_FREEING_INITMEM;
 	kprobe_free_init_mem();
@@ -1616,6 +1620,7 @@ static int __ref kernel_init(void *unused)
 	do_sysctl_args();
 
 	if (ramdisk_execute_command) {
+		pr_err("boottrace: executing init candidate %s\n", ramdisk_execute_command);
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
 			return 0;
@@ -1701,11 +1706,16 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 
 	do_basic_setup();
+	pr_err("boottrace: do_basic_setup() returned\n");
 
 	kunit_run_all_tests();
+	pr_err("boottrace: kunit_run_all_tests() returned\n");
 
+	pr_err("boottrace: wait_for_initramfs() begin\n");
 	wait_for_initramfs();
+	pr_err("boottrace: wait_for_initramfs() returned\n");
 	console_on_rootfs();
+	pr_err("boottrace: console_on_rootfs() returned\n");
 
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all
@@ -1713,12 +1723,17 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 	int ramdisk_command_access;
 	ramdisk_command_access = init_eaccess(ramdisk_execute_command);
+	pr_err("boottrace: init_eaccess(%s) = %d\n",
+		ramdisk_execute_command ? ramdisk_execute_command : "<none>",
+		ramdisk_command_access);
 	if (ramdisk_command_access != 0) {
 		if (ramdisk_execute_command_set)
 			pr_warn("check access for rdinit=%s failed: %i, ignoring\n",
 				ramdisk_execute_command, ramdisk_command_access);
 		ramdisk_execute_command = NULL;
+		pr_err("boottrace: /init unavailable; prepare_namespace() begin\n");
 		prepare_namespace();
+		pr_err("boottrace: prepare_namespace() returned\n");
 	}
 
 	/*
@@ -1730,5 +1745,7 @@ static noinline void __init kernel_init_freeable(void)
 	 * and default modules
 	 */
 
+	pr_err("boottrace: integrity_load_keys() begin\n");
 	integrity_load_keys();
+	pr_err("boottrace: kernel_init_freeable() end\n");
 }
