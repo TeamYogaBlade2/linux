@@ -89,7 +89,7 @@
 	 */
 	mt6628_pwrseq: mt6628-pwrseq {
 		compatible = "mediatek,mt6628-pwrseq";
-		status = "okay";
+		status = "disabled";
 		mediatek,rtc = <&mt6320_rtc>;
 		vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
@@ -326,7 +326,7 @@
 };
 
 &i2c0 {
-	status = "okay";
+	status = "disabaled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0_pins>;
 	// clock-frequency = <400000>;
@@ -383,7 +383,7 @@
 };
 
 &i2c3 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c3_pins>;
 	clock-frequency = <100000>;
@@ -421,7 +421,7 @@
 };
 
 &i2c4 {
-	status = "okay";
+	status = "disabled";
 	clocks = <&pericfg CLK_PERI0_I2C4>,
 		 <&mt6320clock MT6320_WRPCKPDN_I2C0>,
 		 <&pericfg CLK_PERI0_APDMA>;
@@ -477,7 +477,7 @@
 /* MT6628 shared Bluetooth/FM/GNSS transport selected by UART_RTS strap. */
 /* UART0 = UTXD3/URXD3 */
 &uart2 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mt6628_uart_pins>;
 	/* Temporary diagnostic: test UART in PIO mode. */
@@ -569,7 +569,7 @@
 
 /* Internal storage */
 &mmc0 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc0_pins_default>;
 	pinctrl-1 = <&mmc0_pins_uhs>;
@@ -732,7 +732,7 @@
 
 /* SDIO */
 &mmc3 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default", "state_uhs", "state_eint";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
