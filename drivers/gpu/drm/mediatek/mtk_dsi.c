@@ -1191,8 +1191,9 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 	/*
 	 * MT6589 defers the complete DDP start until this point, after the panel
 	 * bridge's atomic_pre_enable has enabled its supply/GPIO and the DSI PHY
-	 * is configured. The CRTC starts the DDP components in graph order, so
-	 * the source path is enabled before the DSI component pulses START.
+	 * is configured. The CRTC starts in reverse graph order: DSI first, then
+	 * RDMA0, and OVL last. This prevents OVL from fetching before its sink
+	 * path is ready.
 	 */
 	mtk_crtc_ddp_start_pending(dsi->encoder.crtc);
 	mtk_output_dsi_enable(dsi);
