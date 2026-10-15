@@ -1604,6 +1604,7 @@ static struct serdev_device_driver mt6628_stp_uart_driver = {
 	.driver = {
 		.name = "mt6628-stp-uart",
 		.of_match_table = mt6628_stp_uart_of_match,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
 module_serdev_device_driver(mt6628_stp_uart_driver);
