@@ -6,6 +6,8 @@
  *
  */
 
+#include <dt-bindings/iio/adc/mediatek,mt6323-auxadc.h>
+
 &pwrap {
 	pmic: mt6323 {
 		compatible = "mediatek,mt6323";
@@ -16,6 +18,7 @@
 
 		mt6323_accdet: accdet {
 			compatible = "mediatek,mt6323-accdet";
+			io-channels = <&mt6323_adc MT6323_AUXADC_ACCDET>;
 			status = "disabled";
 		};
 
