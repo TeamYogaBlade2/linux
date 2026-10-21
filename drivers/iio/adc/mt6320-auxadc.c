@@ -11,6 +11,7 @@
 #include <linux/array_size.h>
 #include <linux/bitfield.h>
 #include <linux/bits.h>
+#include <linux/clk.h>
 #include <linux/cleanup.h>
 #include <linux/delay.h>
 #include <linux/iio/iio.h>
@@ -86,6 +87,11 @@ static const struct iio_chan_spec mt6320_auxadc_channels[] = {
 struct mt6320_auxadc {
 	struct regmap *regmap;
 	struct mutex lock;
+	/*
+	 * AUXADC clock gate.  See mt6320_auxadc_probe(): without it the
+	 * conversion never completes and every read times out.
+	 */
+	struct clk *clk;
 };
 
 /*
@@ -419,6 +425,28 @@ static int mt6320_auxadc_probe(struct platform_device *pdev)
 	auxadc = iio_priv(iio);
 	auxadc->regmap = regmap;
 	mutex_init(&auxadc->lock);
+
+	/*
+	 * The converter runs off the PMIC's own AUXADC clock, gated by
+	 * TOP_CKPDN[13].  Nothing else in the kernel claims it - the gate is
+	 * exposed by clk-mt6320.c as "top-auxadc" and no consumer asks for it -
+	 * so it is left at whatever the bootloader programmed.  When it is off,
+	 * START asserts, the ready bit in AUXADC_ADCn.bit15 never rises, and
+	 * every read burns its full poll budget and returns -ETIMEDOUT.
+	 *
+	 * That is what made a temperature read look like a hang: the iio-hwmon
+	 * bridge polls the PMIC junction-temperature channel from the thermal
+	 * core's workqueue, and each sample spent the whole timeout.
+	 *
+	 * Take the gate here and leave it enabled for the life of the device
+	 * rather than around each conversion: the PMIC AUXADC is also read by
+	 * the fuel gauge and the headset-key path, a conversion is only tens of
+	 * microseconds, and the gate is a clock-enable bit, not a power domain.
+	 */
+	auxadc->clk = devm_clk_get_optional_enabled(dev, "auxadc");
+	if (IS_ERR(auxadc->clk))
+		return dev_err_probe(dev, PTR_ERR(auxadc->clk),
+				     "failed to enable AUXADC clock\n");
 
 	iio->name = "mt6320-auxadc";
 	iio->info = &mt6320_auxadc_iio_info;

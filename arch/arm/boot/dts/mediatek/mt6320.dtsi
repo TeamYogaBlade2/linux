@@ -68,6 +68,8 @@
 		mt6320_adc: adc {
 			compatible = "mediatek,mt6320-auxadc";
 			#io-channel-cells = <1>;
+			clocks = <&mt6320clock MT6320_TOPCKPDN_AUXADC_CK>;
+			clock-names = "auxadc";
 		};
 
 		/*
