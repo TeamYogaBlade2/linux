@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2026 Akari Tsuyukusa
  *
@@ -899,17 +900,17 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	 * be neither released twice, which would underflow the runtime-PM count and
 	 * power the clocks off underneath a live frame, nor leaked: every frame
 	 * that is started ends in exactly one of the three retiring events above.
-	* The bookkeeping that used to live here -- clearing frame_pending, enc_pm_held
-	* and the bs_* fields -- is now mtk_venc_complete_job()'s, so that the watchdog
-	* and the interrupt share one claim on the job and the runtime-PM reference can
-	* be released exactly once.  All this function does now is decide *whether* a frame
-	* ended and hand that to the completion path.
-	*
-	* The fourth retiring event -- the hardware never signalling completion at all, a
-	* wedged encoder or a lost interrupt -- is mtk_venc_timeout(), so the reference can
-	* no longer be stranded either.  That is the gap the file header used to record as
-	* deliberate.
-	*/
+	 * The bookkeeping that used to live here -- clearing frame_pending, enc_pm_held
+	 * and the bs_* fields -- is now mtk_venc_complete_job()'s, so that the watchdog
+	 * and the interrupt share one claim on the job and the runtime-PM reference can
+	 * be released exactly once.  All this function does now is decide *whether* a frame
+	 * ended and hand that to the completion path.
+	 *
+	 * The fourth retiring event -- the hardware never signalling completion at all, a
+	 * wedged encoder or a lost interrupt -- is mtk_venc_timeout(), so the reference can
+	 * no longer be stranded either.  That is the gap the file header used to record as
+	 * deliberate.
+	 */
 	frame_failed = overflow && !frm_done && !mp4_done;
 
 	if (frm_done)
