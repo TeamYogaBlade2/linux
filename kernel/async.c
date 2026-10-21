@@ -48,7 +48,6 @@ asynchronous and synchronous parts of the kernel.
 #include <linux/atomic.h>
 #include <linux/export.h>
 #include <linux/ktime.h>
-#include <linux/jiffies.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -110,52 +109,6 @@ static async_cookie_t lowest_in_progress(struct async_domain *domain)
 
 	spin_unlock_irqrestore(&async_lock, flags);
 	return ret;
-}
-
-struct async_pending_info {
-	async_cookie_t cookie;
-	async_func_t func;
-	void *data;
-};
-
-static void async_dump_pending(struct async_domain *domain)
-{
-	struct async_pending_info pending[4];
-	struct async_entry *entry;
-	unsigned long flags;
-	unsigned int n = 0, i;
-
-	spin_lock_irqsave(&async_lock, flags);
-	if (domain) {
-		list_for_each_entry(entry, &domain->pending, domain_list) {
-			if (n == 4)
-				break;
-			pending[n].cookie = entry->cookie;
-			pending[n].func = entry->func;
-			pending[n].data = entry->data;
-			n++;
-		}
-	} else {
-		list_for_each_entry(entry, &async_global_pending, global_list) {
-			if (n == 4)
-				break;
-			pending[n].cookie = entry->cookie;
-			pending[n].func = entry->func;
-			pending[n].data = entry->data;
-			n++;
-		}
-	}
-	spin_unlock_irqrestore(&async_lock, flags);
-
-	if (!n) {
-		pr_err("boottrace: async wait timed out but no pending callback was found\n");
-		return;
-	}
-
-	for (i = 0; i < n; i++)
-		pr_err("boottrace: async pending cookie=%lli func=%ps data=%p domain=%p\n",
-		       (long long)pending[i].cookie, pending[i].func,
-		       pending[i].data, domain);
 }
 
 /*
@@ -357,18 +310,11 @@ EXPORT_SYMBOL_GPL(async_synchronize_full_domain);
 void async_synchronize_cookie_domain(async_cookie_t cookie, struct async_domain *domain)
 {
 	ktime_t starttime;
-	long waited;
 
 	pr_debug("async_waiting @ %i\n", task_pid_nr(current));
 	starttime = ktime_get();
 
-	while (lowest_in_progress(domain) < cookie) {
-		waited = wait_event_timeout(async_done,
-					    lowest_in_progress(domain) >= cookie,
-					    5 * HZ);
-		if (!waited && lowest_in_progress(domain) < cookie)
-			async_dump_pending(domain);
-	}
+	wait_event(async_done, lowest_in_progress(domain) >= cookie);
 
 	pr_debug("async_continuing @ %i after %lli usec\n", task_pid_nr(current),
 		 microseconds_since(starttime));
