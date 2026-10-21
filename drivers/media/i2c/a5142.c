@@ -18,9 +18,10 @@
  *	8-bit:	u8 buf[3] = { addr >> 8, addr, value }
  *	16-bit:	u8 buf[4] = { addr >> 8, addr, value >> 8, value }
  *
- * Both are stated by the vendor I/O primitives
- * (a5142mipi_Sensor.c:115-117 for the 8-bit pair and :127-129 for the
- * 16-bit pair).  The 16-bit form is big-endian on the wire.
+ * Both are stated by the vendor I/O primitives: the 16-bit form is
+ * A5142MIPI_write_cmos_sensor() at a5142mipi_Sensor.c:118-122 and the 8-bit
+ * form is A5142MIPI_write_cmos_sensor_8() at :133-137.  The 16-bit form is
+ * big-endian on the wire.
  */
 
 #include <linux/clk.h>
@@ -75,10 +76,11 @@
  * write_A5142MIPI_gain() a single 16-bit 0x0204 (:302), both bracketed by the
  * grouped-parameter latch.  The 0x0206/0x0208/0x020A/0x020C registers that
  * appear in A5142MIPI_sensor_gain_array[] are only touched by the *disabled*
- * per-channel CCT/gain code (A5142gain2reg() is dead in the build - it sits
- * behind #if 0 at :262-283 and :304-318), so they are deliberately not
- * driven here; doing so would invent a white-balance model the vendor
- * silicon path does not use.
+ * per-channel CCT/gain code, and that code is compiled out: the only calls
+ * are commented away inside /* *\/ blocks spanning :255-265 in
+ * read_A5142MIPI_gain() and :308-328 in write_A5142MIPI_gain().  They are
+ * therefore not driven here; doing so would invent a white-balance model the
+ * vendor silicon path does not use.
  */
 
 /* Orientation and test pattern. */

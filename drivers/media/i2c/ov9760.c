@@ -73,13 +73,13 @@
 #define OV9760_REG_GAIN_H		0x350A
 #define OV9760_REG_GAIN_L		0x350B
 /*
- * OV9760MIPI_Gain2reg() computes reg = gain / (BASEGAIN / 16), i.e.
- * gain / 4, and OV9760_Set_Gain() clamps the result to 0x3d0
- * (ov9760mipiraw_Sensor.c:920-941).  So the register is 16.4 fixed point in
- * units of 1/16x and the ceiling corresponds to 61x.
+ * OV9760MIPI_Gain2reg() computes reg = gain / (BASEGAIN / 16) and
+ * OV9760_Set_Gain() clamps the result to 0x3d0 (ov9760mipiraw_Sensor.c:920-941).
+ * BASEGAIN is 0x40 = 64 (kd_imgsensor_define.h:32), so the divisor is 4 and
+ * the register is 16.4 fixed point in units of 1/16x: 0x3d0 = 976 = 61x.
  */
 #define OV9760_GAIN_REG_MAX		0x3d0
-#define OV9760_GAIN_MIN			0x000	/* 0x -> 0x3d0 == 0x..61x */
+#define OV9760_GAIN_MIN			0x000	/* 1/16x */
 #define OV9760_GAIN_MAX			OV9760_GAIN_REG_MAX
 #define OV9760_GAIN_DEFAULT		0x010
 
@@ -91,7 +91,8 @@
  * Only the full-resolution table is carried.  OV9760MIPI_Set720P() is
  * misnamed: despite the name it programs 1472x1104, which is what the vendor
  * HAL lists as the maximum picture size for this part
- * (config.ftbl.ov9760_mipi_raw.h: ITEM_AS_DEFAULT_("1472x1104")).
+ * (custom/mt6592/hal/imgsensor/ov9760_mipi_raw/config.ftbl.ov9760_mipi_raw.h:66,
+ * ITEM_AS_DEFAULT_("1472x1104") under KEY_PICTURE_SIZE).
  */
 #define OV9760_FULL_WIDTH		1472u
 #define OV9760_FULL_HEIGHT		1104u

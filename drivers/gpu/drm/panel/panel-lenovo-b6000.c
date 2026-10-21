@@ -45,7 +45,7 @@
  * carlitros900/CUBE-kernel-U1005 (c805_hx_s6d7aa0x04_cpt_wxga_ips_8), which
  * carries the same dsi_set_cmdq word stream.
  *
- * That CUBe/CUBE driver is a *different* 800x1280 s6d7aa0x04 variant with
+ * That CUBE driver is a *different* 800x1280 s6d7aa0x04 variant with
  * different timings (four lanes, PLL 200, vsync 5/back 3/front 8), so only
  * its register payloads were used; the timings below come from this board's
  * own lcm_get_params_2()/lcm_get_params_3().
@@ -121,22 +121,31 @@ static const struct drm_display_mode b6000_cmi_mode = {
 };
 
 /*
- * The CPT panel's own params (lcm_get_params_3) were not recovered when this
- * driver was written, so it reuses the board's 800x1280 timing.  The two
- * panels are fitted to the same board and the same DSI configuration, so the
- * timing is expected to be identical, but this is an assumption - flagged
- * rather than presented as verified.
+ * The CPT panel is NOT the same part as the CMI one and does not share its
+ * timing.  From lcm_get_params_3() @ c03a2ddc in
+ * kernel_blade8_row_3gdata-jb.elf:
+ *
+ *	LANE_NUM           LCM_FOUR_LANE      (CMI is three!)
+ *	mode               BURST_VDO_MODE
+ *	width/height       800 / 1280
+ *	hsync/back/front   5 / 59 / 16
+ *	vsync/back/front   5 / 3 / 8
+ *	PLL_CLOCK          LCM_DSI_6589_PLL_CLOCK_227_5
+ *
+ * so 880 x 1296 at 60 Hz gives 68.4 MHz.  Running it with the CMI timings,
+ * as an earlier revision of this driver did, would drive four lanes with a
+ * three-lane pixel clock.
  */
 static const struct drm_display_mode b6000_cpt_mode = {
-	.clock		= 86509,
+	.clock		= 68429, /* 880 * 1296 * 60 / 1000 kHz */
 	.hdisplay	= 800,
-	.hsync_start	= 800 + 150,
-	.hsync_end	= 800 + 150 + 4,
-	.htotal		= 800 + 150 + 4 + 150,
+	.hsync_start	= 800 + 16, /* + HFP */
+	.hsync_end	= 800 + 16 + 5, /* + HSW */
+	.htotal		= 800 + 16 + 5 + 59, /* + HBP */
 	.vdisplay	= 1280,
-	.vsync_start	= 1280 + 10,
-	.vsync_end	= 1280 + 10 + 4,
-	.vtotal		= 1280 + 10 + 4 + 12,
+	.vsync_start	= 1280 + 8, /* + VFP */
+	.vsync_end	= 1280 + 8 + 5, /* + VSW */
+	.vtotal		= 1280 + 8 + 5 + 3, /* + VBP */
 };
 
 static const struct b6000_panel_desc b6000_cmi_desc = {
@@ -153,7 +162,7 @@ static const struct b6000_panel_desc b6000_cpt_desc = {
 	.init		= b6000_cpt_init,
 	.init_len	= ARRAY_SIZE(b6000_cpt_init),
 	.mode		= b6000_cpt_mode,
-	.lanes		= 3,
+	.lanes		= 4,	/* LCM_FOUR_LANE, unlike the three-lane CMI part */
 	.mode_flags	= MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST,
 };
 
