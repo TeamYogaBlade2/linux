@@ -926,6 +926,18 @@ config VIDEO_DW9807_VCM
 	  capability. This is designed for linear control of
 	  voice coil motors, controlled via I2C serial interface.
 
+config VIDEO_FM50AF
+	tristate "FM50AF lens voice coil support"
+	depends on I2C && VIDEO_DEV
+	help
+	  This is a driver for the FM50AF camera lens voice coil, the
+	  autofocus actuator on the Lenovo B8000 (MT6589) main camera.
+	  It is a 10 bit DAC controlled over I2C with no register address:
+	  the transfer carries the position directly.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called fm50af.
+
 endif
 
 menu "Flash devices"

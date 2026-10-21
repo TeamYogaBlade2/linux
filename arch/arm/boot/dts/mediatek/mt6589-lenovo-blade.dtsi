@@ -429,6 +429,17 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_pins>;
+
+	/*
+	 * Main camera autofocus actuator.  Address and protocol come from the
+	 * vendor driver (mediatek/custom/common/kernel/lens/fm50af/FM50AF.c:
+	 * I2C_BOARD_INFO("FM50AF", 0x18)) and from the stock ROM's live I2C
+	 * bus, where 1-0018 is bound to FM50AF.
+	 */
+	fm50af: lens@18 {
+		compatible = "mediatek,fm50af";
+		reg = <0x18>;
+	};
 };
 
 &i2c2 {
