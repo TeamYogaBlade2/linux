@@ -40,6 +40,11 @@ struct mtk_disp_color *color;
 struct mtk_disp_color_data {
 	unsigned int color_offset;
 	bool enable_main_bit29;		/* set BIT(29) in CFG_MAIN */
+	/*
+	 * Set CFG_MAIN.all_bypass (bit 7) instead of only BIT(29), i.e. leave
+	 * COLOR as a pass-through.  See the MT6589 entry for why.
+	 */
+	bool bypass_all;
 	void (*init)(struct mtk_disp_color *color);	/* extra init sequence */
 	bool has_reset;
 };
@@ -136,11 +141,26 @@ void mtk_color_start(struct device *dev)
 	u32 cfg_main = COLOR_BYPASS_ALL | COLOR_SEQ_SEL;
 
 	/*
-	 * MT6589 downstream uses CFG_MAIN = BIT(29) for normal operation.
-	 * In particular, BIT(7) would bypass the whole COLOR block and BIT(13)
-	 * is not part of the downstream initialization value.
+	 * BIT(29) is color_dbuf_en ("Enables vs update"), which every path
+	 * wants.  BIT(7) is all_bypass, "All engine bypass".
+	 *
+	 * Which one MT6589 should use is settled by the one configuration
+	 * known to light this panel: the bootloader's (LK) display path, whose
+	 * live CFG_MAIN reads 0x20002080 - BIT(29) | BIT(7), i.e. COLOR
+	 * bypassed and not even in the data path (LK routes OVL -> BLS with
+	 * DISP_OVL_MOUT_EN = 0x2 and BLS_SEL = 0).
+	 *
+	 * The Android kernel driver does enable COLOR (DpEngine_COLORonInit()
+	 * writes BIT(29) alone unless pq_debug_flag == 1), so both are used
+	 * somewhere.  But with COLOR enabled on this board we have a full,
+	 * self-consistent pipe - OVL run=1, RDMA0 frame-end interrupts
+	 * arriving, DSI transmitting - and no picture, so the additional
+	 * R2Y colour-space conversion that COLOR performs on an RGB888 stream
+	 * is worth ruling out before trusting it.  Follow LK.
 	 */
-	if (color->data->enable_main_bit29)
+	if (color->data->bypass_all)
+		cfg_main = COLOR_MAIN_EN | COLOR_BYPASS_ALL;
+	else if (color->data->enable_main_bit29)
 		cfg_main = COLOR_MAIN_EN;
 
 	writel(cfg_main, color->regs + DISP_COLOR_CFG_MAIN);
@@ -259,6 +279,11 @@ static const struct mtk_disp_color_data mt8173_color_driver_data = {
 static const struct mtk_disp_color_data mt6589_color_driver_data = {
 	.color_offset = DISP_COLOR_START_MT2701,	/* same as MT2701: 0x0f00 */
 	.enable_main_bit29 = true,
+	/*
+	 * Match the bootloader, which is the only configuration observed to
+	 * light this panel: CFG_MAIN = BIT(29) | BIT(7).  See mtk_color_start().
+	 */
+	.bypass_all = true,
 	.init = mt6589_color_init,
 	.has_reset = true,
 };
