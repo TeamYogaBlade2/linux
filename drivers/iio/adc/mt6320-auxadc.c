@@ -42,7 +42,17 @@
 #define MT6320_AUXADC_AVG_NUM_VALUE	0x3
 #define MT6320_AUXADC_SPL_NUM_TEMP	0x1e
 
-#define MT6320_ACCDET_AUXADC_ENABLE	0x10b0
+/*
+ * Headset-key ADC switch.  This board is wired for the stock driver's
+ * ACCDET_28V_MODE, where the switch is a plain enable bit in
+ * AUDENCSPARE_CON0 and the word to write is 0x01; the 0x10b0/0x1090 pair
+ * belongs to the 1.9 V encoding of ACCDET_RSV (ACCDET_CON0), which that
+ * build does not use.  Both come from downstream accdet_auxadc_switch(),
+ * whose ACCDET_28V_MODE branch writes 0x01 to that address; the vendor
+ * accdet_custom_def.h for this board is the file that selects that mode.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_28V_SWITCH_ON	0x0001
 
 #define MT6320_AUXADC_FULL_SCALE_MV	1200
 #define MT6320_AUXADC_RESOLUTION	1024
@@ -267,12 +277,12 @@ static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 		break;
 
 	case MT6320_AUXADC_ACCDET:
-		ret = mt6320_auxadc_save(saved, map, MT6320_ACCDET_CON0);
+		ret = mt6320_auxadc_save(saved, map, MT6320_AUDENCSPARE_CON0);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(map, MT6320_ACCDET_CON0,
-				   MT6320_ACCDET_AUXADC_ENABLE);
+		ret = regmap_write(map, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_28V_SWITCH_ON);
 		if (ret)
 			return ret;
 		break;
