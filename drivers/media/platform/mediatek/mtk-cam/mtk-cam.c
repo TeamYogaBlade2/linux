@@ -399,10 +399,6 @@ static int mtk_cam_get_fmt(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_state *state,
 			   struct v4l2_subdev_format *format)
 {
-	struct mtk_cam *cam = to_mtk_cam(sd);
-
-	lockdep_assert_held(&cam->lock);
-
 	if (format->pad > CAM_PAD_SRC)
 		return -EINVAL;
 
@@ -428,11 +424,8 @@ static int mtk_cam_set_fmt(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_state *state,
 			   struct v4l2_subdev_format *format)
 {
-	struct mtk_cam *cam = to_mtk_cam(sd);
 	struct v4l2_mbus_framefmt *fmt = &format->format;
 	struct v4l2_mbus_framefmt *cached;
-
-	lockdep_assert_held(&cam->lock);
 
 	if (format->pad > CAM_PAD_SRC)
 		return -EINVAL;
