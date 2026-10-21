@@ -2,39 +2,22 @@
 /*
  * Copyright (c) 2026 Akari Tsuyukusa
  *
- * MediaTek MT6589 hardware video codec registers.
+ * MediaTek MT6589 hardware video codec registers, from data sheet chapters 60
+ * (H.264/VP8 encoder) and 61 (MPEG-4 encoder), both at 0x17002000.
  *
- * Every offset below was derived from the MT6589 data sheet register tables
- * (chapter 60 "H.264/VP8 Video Encoder" and chapter 61 "MPEG-4 Video Encoder",
- * both base +0x17002000) cross-checked against the vendor kernel driver's
- * named offsets.  Where the two agree it is noted, because the agreement is the
- * evidence that the data sheet text extraction is being read correctly: the
- * vendor driver uses VENC_IRQ_STATUS at +0x05C and VENC_IRQ_ACK at +0x060
- * (videocodec_kernel_driver.c:118-119), and so does the data sheet.
+ * Two unit conventions apply across several register families:
  *
- * Unit conventions, stated once here because several register families use
- * them and they are easy to get wrong:
+ *   DIV16   the field holds the byte address >> 4; buffers must be 16-byte
+ *           aligned.  Every frame, bitstream, RC and colocated-info address
+ *           register of the H.264/VP8 front end.
+ *   DIV128  the field holds the byte size >> 7.  VENC_BITSTREAM_BUF_SIZE only.
  *
- *   DIV16   the register field holds the byte address >> 4, and the buffer
- *           must be 16-byte aligned.  Applies to every frame, bitstream, RC
- *           and colocated-info address register of the H.264/VP8 front end.
- *   DIV128  the register field holds the byte size >> 7.  Applies to
- *           VENC_BITSTREAM_BUF_SIZE.
+ * The MPEG-4 encoder uses neither: its addresses are plain bytes with 8-byte
+ * alignment, and its BASE_ADDR is 32 bits rather than 28.  Do not carry DIV16
+ * across to it.
  *
- * The MPEG-4 encoder is the exception to both: its address registers hold plain
- * byte addresses with an 8-byte alignment requirement, and its BASE_ADDR field
- * is 32 bits wide rather than 28.  Do not carry the DIV16 convention across.
- *
- * Resulting addressable span.  A 28-bit DIV16 field encodes
- * 2^28 * 16 == 2^32 bytes, i.e. the whole 4 GiB 32-bit address space -- which is
- * to say a 28-bit DIV16 field is exactly as wide as a 32-bit byte address and
- * nothing is actually lost.  (An earlier revision of the .c file's header claimed
- * 2^28 bytes / "256 MiB" for this field, which contradicts the arithmetic the
- * same file performs; the code's arithmetic was right and the comment was
- * wrong.)  The MPEG-4 datapath's 32-bit plain byte address also spans 4 GiB, so
- * both encoders cover the full 32-bit IOVA space.
- *
- * VENC (base 0x17002000, 4 KiB)
+ * A 28-bit DIV16 field spans 2^28 * 16 == 4 GiB, so both encoders cover the
+ * full 32-bit IOVA space.
  */
 #ifndef _MTK_VCODEC_MT6589_REG_H
 #define _MTK_VCODEC_MT6589_REG_H
@@ -71,30 +54,12 @@
 #define VENC_CODEC_CTRL_ENC_SPS		BIT(0)	/* start SPS */
 
 /*
- * VENC_CE, the video encoder "codec enable" at 0x0EC.
- *
- * SOURCING IS WEAK AND DELIBERATELY LABELLED AS SUCH: this register has no
- * bit-field section anywhere in the data sheet.  It appears exactly once, as a
- * bare name "VENC_CE / VIDEO_CE" in the ch.60 summary register table
- * (draft/ds/venc.txt:2176).  Its field width, its bit position and therefore
- * the exact value that means "enabled" are NOT documented; 1 below is inferred
- * from the vendor driver, not read out of a table.
- *
- * The behavioural evidence, however, is real and consistent.  The vendor clock
- * management code writes VENC_CE = 0x1 as a hard prerequisite before touching
- * any other VENC internal register -- in both the DCM-enable path
- * (kernel/core/mt_dcm.c:299) and the DCM-disable path (mt_dcm.c:396) it is the
- * very first VENC write, immediately before VENC_CLK_DCM_CTRL,
- * VENC_CLK_CG_CTRL and VENC_MP4_DCM_CTRL, and the DCM register-dump path
- * (mt_dcm.c:186) writes it for the same reason before reading those registers.
- * The offset agrees with the data sheet exactly: mt_dcm.h:102 defines it as
- * 0xF70020EC, which is 0x170020EC after the +0xE0000000 remap.  It is never
- * written 0 anywhere in the vendor tree.
- *
- * So: the offset is solid, the "write 1 to enable" semantics is solid, and only
- * the field's width and bit position are unknown.  This driver writes the
- * whole word as 1, which enables whatever bit(s) exist without depending on a
- * position that is not documented.
+ * VENC_CE, "codec enable", 0x0EC.  The offset is certain (the vendor's
+ * mt_dcm.h:102 defines it as 0xF70020EC, i.e. 0x170020EC after the remap) and
+ * so is the "write 1 to enable" reading: the vendor writes it as the first
+ * VENC register access on every path and never writes 0.  The data sheet gives
+ * only the bare name and no bit table, so the whole word is written as 1
+ * rather than depending on an undocumented bit position.
  */
 #define VENC_CE				0x0ec
 
@@ -394,49 +359,26 @@
 #define VENC_MP4_MBX_LMT_MAX		254
 #define VENC_MP4_MBY_LMT_MAX		254
 
-/* ---- VDEC (base 0x16020000, 0x29000) ----
+/* ---- VDEC (base 0x16020000) ----
  *
- * The data sheet has NO register-definition section for the decoder (chapter 59
- * stops at the block diagram, and "16000000" does not appear anywhere in it).
- * The base is mt_reg_base.h VDEC_BASE 0xF6020000 (drivers/met/platform/mt6589/
- * mt_reg_base.h:158), which is 0x16020000 after the +0xE0000000 remap -- note this
- * is NOT 0x16000000, which is the vdecsys clock controller.
+ * The data sheet has no register-definition section for the decoder: chapter 59
+ * stops at the block diagram.  The base is the vendor's VDEC_BASE 0xF6020000
+ * (mt_reg_base.h:158), i.e. 0x16020000 after the remap - not 0x16000000, which
+ * is the vdecsys clock controller.
  *
- * THE OFFSETS BELOW ARE NOT FROM A PRODUCTION DRIVER.  Read this before using any of
- * them.  They are transcribed from the vendor LDVT register-level TEST harness
- * (kernel/drivers/ldvt/vdec/hal/vdec_hw_common.h), and two properties of that harness
- * make it a source for offsets and nothing else:
+ * These offsets come from the vendor's LDVT test harness
+ * (ldvt/vdec/hal/vdec_hw_common.h), not from a production driver, and that
+ * limits what they can be trusted for:
  *
- *   1. It is not the path the product takes.  The vendor *driver*
- *      (drivers/videocodec/videocodec_kernel_driver.c) never programs the VDEC
- *      datapath at all: its only VDEC register writes in 2391 lines are power-up and
- *      the frame-end interrupt ack (:300-301).  The datapath is programmed by CLOSED
- *      USERSPACE, which builds a queue of WRITE_REG_CMD records
- *      (include/linux/vcodec/hal_api.h:33-41 ADD_QUEUE, :107-124 the enum) and ships
- *      it to the kernel over the MFV_SET_CMD_CMD ioctl, where the driver does nothing
- *      but walk it:
+ *   - The product does not program the datapath from the kernel.  The vendor
+ *     driver only does power-up and the frame-end ack; the register sequence
+ *     for a frame is built by closed userspace and shipped over an ioctl that
+ *     the kernel merely walks (videocodec_kernel_driver.c:1758).
+ *   - The harness is configured for MT8580, not MT6589
+ *     (vdec_info_common.h:125 sets CONFIG_CHIP_VER_CURR 80), so the paths behind
+ *     its chip-version guards describe different silicon.
  *
- *          case WRITE_REG_CMD:
- *              VDO_HW_WRITE(cmd_queue->address + cmd_queue->offset,
- *                           cmd_queue->value);   (videocodec_kernel_driver.c:1758)
- *
- *      So the register SEQUENCE for decoding a frame lives in a stripped, partly
- *      encrypted ARM blob, not in any C source available.  What the kernel
- *      legitimately owns is the resource layer -- clocks, reset, the interrupt --
- *      plus the V4L2 node.
- *
- *   2. The harness is configured for the WRONG CHIP.  Its
- *      include/vdec_info_common.h:125 sets CONFIG_CHIP_VER_CURR 80, and that same
- *      header defines 80 as CONFIG_CHIP_VER_MT8580 (:130) -- a different SoC.  Much of
- *      vdec_hw_common.h and all of vdec_hal_if_*.c is gated behind
- *      `#if (CONFIG_CHIP_VER_CURR >= CONFIG_CHIP_VER_MT8580)`, so those paths describe
- *      MT8580 silicon, not this one.  The only MT6589-specific switch in that header is
- *      VDEC_6589_SUPPORT 1 (:136).
- *
- * Consequence, which is why this driver programs almost none of it: an offset read
- * out of the harness is unverified against MT6589, and in any case a frame cannot be
- * decoded by writing registers alone -- see the VP8 note at the end of this file.
- * Everything below is recorded with its source; only the interrupt ack is written.
+ * So these are offsets and nothing else; only the interrupt ack is written.
  */
 
 /* Sub-block bases, relative to the decoder base. */
