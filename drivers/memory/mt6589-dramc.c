@@ -187,6 +187,7 @@ int mt6589_dramc_get_info(struct mt6589_dramc *dc,
 			  struct mt6589_dramc_info *info)
 {
 	u32 cona, conf1, conf2, actim0, lpddr2;
+	u64 per_rank_bytes;
 
 	memset(info, 0, sizeof(*info));
 
@@ -244,11 +245,29 @@ int mt6589_dramc_get_info(struct mt6589_dramc *dc,
 
 	/*
 	 * Capacity of one rank = 2^row * 2^bank * 2^col addresses, each
-	 * carrying one bus word of (bus_width / 8) bytes.  Checked against
-	 * the datasheet's own worked example: downstream mt_emi.c annotates
-	 * 0x00002128 as "dw32_en=0, row 14bit, bank 3bit, column 10bit :
-	 * 2Gb x16", and with DW32_EN=0 (16-bit bus) this gives
-	 * 2^27 * 2 = 256 MiB = 2Gb, which is the part size it names.
+	 * carrying one word of the RANK's own width, which is EMI_CONA's
+	 * DW32_EN (32 bits when set, 16 when clear) - not the DRAMC-side
+	 * bus width.
+	 *
+	 * That the rank width is the right multiplier, and bus_width is the
+	 * aggregate across ranks rather than a per-rank figure, is settled
+	 * by the bootloader on this exact board: da-boot.c drives it with
+	 * --dram-size-per-rank 0x20000000 --dram-ranks 2, i.e. 512 MiB per
+	 * rank and 1 GiB total.  With row 14 / bank 3 / column 10 the rank
+	 * holds 2^27 addresses, and 512 MiB / 2^27 = 4 bytes per address =
+	 * a 32-bit rank, which is DW32_EN set.  Using bus_width (64 here,
+	 * the sum of two 32-bit ranks) per rank double-counts and reports
+	 * 2048 MiB for this 1 GiB board.
+	 *
+	 * The downstream annotations are consistent once read as per-rank
+	 * part widths: "dw32_en=0 ... 2Gb x16" is a 256 MiB rank at 2 bytes
+	 * per address, and "dw32_en=1 ... 2Gb x16 + 2Gb x16" is two such
+	 * ranks behind one 32-bit bus, which is the same relationship this
+	 * board has at row 15.
+	 *
+	 * A rank narrower than 8 bits cannot be expressed in whole bytes,
+	 * so treat that as a decode failure rather than computing a
+	 * fractional size.
 	 *
 	 * The second rank is NOT assumed to mirror the first: EMI_CONA
 	 * carries ROW2ND, BAN2ND and COL2ND for it precisely because it can
@@ -257,16 +276,23 @@ int mt6589_dramc_get_info(struct mt6589_dramc *dc,
 	 * the AXI address the channel bit sits, which does not change the
 	 * total.)
 	 */
+	if (info->ram_width < 8) {
+		info->size_bytes = 0;
+		return -EINVAL;
+	}
+
+	per_rank_bytes = info->ram_width / 8;
+
 	info->size_bytes = (1ULL << info->row_bits) *
 			   (1ULL << info->bank_bits) *
 			   (1ULL << info->column_bits) *
-			   (info->bus_width / 8);
+			   per_rank_bytes;
 
 	if (info->dual_rank)
 		info->size_bytes += (1ULL << info->row2nd_bits) *
 				    (1ULL << info->bank2nd_bits) *
 				    (1ULL << info->emi_col2nd_bits) *
-				    (info->bus_width / 8);
+				    per_rank_bytes;
 
 	return 0;
 }
@@ -323,23 +349,14 @@ static int mt6589_dramc_show(struct seq_file *s, void *unused)
 		seq_printf(s, "bank bits   : %u\n", info.bank_bits);
 		seq_printf(s, "column bits : %u (CONF1 MATYPE), %u (EMI_CONA)\n",
 			   info.column_bits, info.emi_col_bits);
+		/*
+		 * The size above is built from this: DW32_EN is the width of
+		 * one rank, and the "bus width" line at the top is the DRAMC
+		 * side aggregate, so the two legitimately differ on a
+		 * dual-rank board.  See mt6589_dramc_get_info().
+		 */
 		seq_printf(s, "rank width  : %u bits (EMI_CONA DW32_EN)\n",
 			   info.ram_width);
-		/*
-		 * The size above is computed from the DRAMC-side bus width,
-		 * not from DW32_EN, and the two disagree on this board
-		 * (64 vs 32).  Which one is the per-rank width could not be
-		 * settled from the sources available: downstream mt_emi.c
-		 * annotates "one rank: 0x0000A3AE. dual rank = 0x0002A3AE"
-		 * (so dual is 2x single), while its other annotation
-		 * "dw32_en=1 ... 2Gb x16 + 2Gb x16" reads as two 16-bit
-		 * ranks in one 32-bit bus - the first implies DW32_EN is a
-		 * per-rank width, the second that it is the aggregate.
-		 * Flagging the disagreement rather than silently picking one.
-		 */
-		if (info.ram_width != info.bus_width)
-			seq_printf(s, "WARNING: size uses bus width %u, not rank width %u\n",
-				   info.bus_width, info.ram_width);
 		/*
 		 * A mismatch here is not cosmetic: EMI decodes the address and
 		 * DRAMC drives the pins, so if they disagree the controller

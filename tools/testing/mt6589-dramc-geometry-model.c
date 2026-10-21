@@ -81,12 +81,22 @@ int main(void)
 	 * reg = <0x80000000 0x40000000>).  Two 512 MiB ranks of 4Gb x32 on a
 	 * 32-bit bus: row 14, bank 3, col 10, DW32_EN=1, DUAL_RANK_EN=1, with
 	 * rank 2 given the same geometry.
+	 *
+	 * This is also what the board's bootloader is driven with:
+	 * da-boot.c runs it as --dram-size-per-rank 0x20000000 --dram-ranks 2,
+	 * i.e. 512 MiB per rank.  2^27 addresses per rank therefore has to be
+	 * 4 bytes each, which is DW32_EN set - not the DRAMC bus width, which
+	 * is 64 here because it sums both 32-bit ranks.  Sizing each rank from
+	 * the bus width instead reports 2 GiB for this 1 GiB board.
 	 */
 	{
 		uint32_t c = (2u << 12) | (1u << 8) | (2u << 4) | (1u << 1) |
 			     (1u << 17) | (2u << 14) | (1u << 9) | (2u << 6);
 		printf("row14 x32 dual rank -> %llu MiB\n", size_of(c) >> 20);
 		CHECK(size_of(c) == 1ULL << 30, "row14 x32 dual rank = 1 GiB (board)");
+		/* Per rank must equal the bootloader's --dram-size-per-rank. */
+		CHECK(size_of(c) / 2 == 0x20000000ULL,
+		      "each rank = 0x20000000 (da-boot --dram-size-per-rank)");
 	}
 
 	if (!fails)
