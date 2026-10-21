@@ -176,6 +176,15 @@
 #define LC_WAKEUP_EN			BIT(2)
 
 #define DSI_PHY_LD0CON		0x108
+/*
+ * Bit 0: the vendor header calls this L0_HS_TX_EN (dsi_reg.h:426) while the
+ * data sheet's field table calls bit 0 of 0x108 L0_RM_TRIG_EN, "Sends
+ * application trigger to slave side".  Either way it is not what puts the
+ * lane into high speed: downstream's DSI_lane0_ULP_mode() only ever *clears*
+ * it, and never sets it on the resume path, so a healthy link reads
+ * LD0CON == 0.  The actual HS state is
+ * DSI_STATE_DBG0.DPHY_HS_TX_STATE_C.  Do not "fix" a zero here.
+ */
 #define LD0_HS_TX_EN			BIT(0)
 #define LD0_ULPM_EN			BIT(1)
 #define LD0_WAKEUP_EN			BIT(2)
