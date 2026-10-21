@@ -323,7 +323,23 @@ static int mt6589_dramc_show(struct seq_file *s, void *unused)
 		seq_printf(s, "bank bits   : %u\n", info.bank_bits);
 		seq_printf(s, "column bits : %u (CONF1 MATYPE), %u (EMI_CONA)\n",
 			   info.column_bits, info.emi_col_bits);
-		seq_printf(s, "rank width  : %u bits\n", info.ram_width);
+		seq_printf(s, "rank width  : %u bits (EMI_CONA DW32_EN)\n",
+			   info.ram_width);
+		/*
+		 * The size above is computed from the DRAMC-side bus width,
+		 * not from DW32_EN, and the two disagree on this board
+		 * (64 vs 32).  Which one is the per-rank width could not be
+		 * settled from the sources available: downstream mt_emi.c
+		 * annotates "one rank: 0x0000A3AE. dual rank = 0x0002A3AE"
+		 * (so dual is 2x single), while its other annotation
+		 * "dw32_en=1 ... 2Gb x16 + 2Gb x16" reads as two 16-bit
+		 * ranks in one 32-bit bus - the first implies DW32_EN is a
+		 * per-rank width, the second that it is the aggregate.
+		 * Flagging the disagreement rather than silently picking one.
+		 */
+		if (info.ram_width != info.bus_width)
+			seq_printf(s, "WARNING: size uses bus width %u, not rank width %u\n",
+				   info.bus_width, info.ram_width);
 		/*
 		 * A mismatch here is not cosmetic: EMI decodes the address and
 		 * DRAMC drives the pins, so if they disagree the controller
