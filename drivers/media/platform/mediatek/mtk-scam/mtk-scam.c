@@ -28,10 +28,12 @@
  *
  *   1. There is no vendor SCAM driver for the MIPI camera path in the
  *      reference tree and no way to test, so the data-type and pixel-format
- *      handling is not written: CFG.WARN_MASK, CFG.CSD_NUM, CFG.DBG_MD and
- *      all of CFG2 have documented bit positions but no known-good
- *      programming sequence.  (CFG and CON *are* fully documented and are
- *      used below; see the comments on those defines.)
+ *      handling is not written: CFG.WARN_MASK, CFG.DBG_MD and all of CFG2
+ *      have documented bit positions but no known-good programming sequence.
+ *      CFG.CSD_NUM is the exception and *is* programmed: the data sheet gives
+ *      its encoding explicitly (0: 1 data channel, 1: 2, 2: 4), and it is
+ *      derived from the sensor's lane count rather than guessed.  (CFG and
+ *      CON are fully documented and are used below; see those defines.)
  *   2. The media graph is wired as far as the blocks that exist: this
  *      subdev has a real sink and source pad (see SCAM_PAD_* in mtk-scam.h)
  *      and initialises them in probe, so the receiver -> SCAM -> CAM links
@@ -172,15 +174,11 @@
  *	           warnings.  That is the documented reset behaviour and this
  *	           driver has no evidence to change it.
  *   CYC=4     - likewise inherited; see the reset decomposition above.
- *   INTEN0..6 - enabled here.  Out of reset they are all 0, which would
- *	           leave SCAM_INT raising no interrupt at all, while this
- *	           driver clears SCAM_INT on every stream start as if the
- *	           interrupts were live.  Enabling the whole documented set
- *	           (frame end, CRC error, wrong sync header / packet ID /
- *	           line ID / data ID / size) is what makes that clearing
- *	           meaningful and gives the ISP-visible block its diagnostics.
- *	           Per-interrupt routing to a real ISP IRQ is not written
- *	           yet, so there is nothing finer-grained to select here.
+ *   INTEN0..6 - left at their reset value of 0.  There is no IRQ handler
+ *	           and the DT node declares no interrupt, so enabling them
+ *	           could not produce a serviced event; see the note on
+ *	           SCAM_CFG_INTEN_NONE.  SCAM_INT is still cleared on stream
+ *	           start, to drop a latch left by a previous run.
  *   CONT=1    - continuous mode.  SCAM's job here is to run for as long as
  *	           streaming is on, and there is no stop-frame mechanism in
  *	           this driver, so single-run mode would capture one frame and
@@ -193,13 +191,26 @@
  *	           carries that information, so the reset value stands and a
  *	           sensor needing the other polarity needs a DT property.
  *
- * Result: 0x10000400 | 0x0000007f | 0x00020000 == 0x1002047f.  Note that
- * INTEN is GENMASK(6, 0), i.e. bits 6..0 only: it contributes 0x7f and does
- * not reach bit 8, which is the low bit of CYC.  OR-ing in the interrupt
- * enables therefore cannot disturb CYC, which is checked below rather than
- * assumed.
+ * Result: 0x10000400 | 0x00020000 == 0x10020400.
  */
-#define SCAM_CFG_INTEN_ALL			SCAM_CFG_INTEN
+/*
+ * Interrupt enables: NONE.
+ *
+ * SCAM_CFG.INTEN0..6 enable frame-end plus six fault sources (wrong sync
+ * header, CRC error, wrong packet/line/data ID, wrong size; data sheet page
+ * 2268-2269).  This driver has no IRQ handler and its DT node declares no
+ * interrupt, so enabling them cannot produce a serviced event - it only arms
+ * the block's own interrupt output, which stays asserted until SCAM_INT is
+ * cleared, and leaves the fault diagnostics unread.
+ *
+ * The comment here used to justify the whole set on the grounds that
+ * "this driver clears SCAM_INT on every stream start as if the interrupts
+ * were live", which is circular: a clear that exists to make an enable
+ * meaningful is not a reason to enable them.  They are cleared at start
+ * regardless (a stale latch from a previous run has to go), and the enables
+ * stay off until something actually services them.
+ */
+#define SCAM_CFG_INTEN_NONE			0
 
 /*
  * CYC = 4 as a plain constant.  FIELD_PREP() would say it more obviously, but
@@ -210,7 +221,6 @@
 #define SCAM_CFG_CYC_4				(4 << 8)
 
 #define SCAM_CFG_START				(SCAM_CFG_RESET |		\
-						 SCAM_CFG_INTEN_ALL |	\
 						 SCAM_CFG_CONT)
 
 /*
@@ -244,7 +254,7 @@ static_assert((SCAM_CFG_RESET &
 static_assert((SCAM_CFG_START & SCAM_CFG_RESET) == SCAM_CFG_RESET);
 static_assert((SCAM_CFG_START & (SCAM_CFG_WARN_MASK | SCAM_CFG_CYC)) ==
 	      (SCAM_CFG_WARN_MASK | SCAM_CFG_CYC_4));
-static_assert(SCAM_CFG_START == 0x1002047f);
+static_assert(SCAM_CFG_START == 0x10020400);
 
 /*
  * SCAM_CON is documented as "reset and enable" (MT6589 data sheet page 2269,
