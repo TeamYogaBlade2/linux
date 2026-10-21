@@ -19,6 +19,8 @@ struct mt6628_pwrseq;
 #if IS_REACHABLE(CONFIG_PWRSEQ_MT6628)
 struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev);
 int mt6628_pwrseq_recover(struct mt6628_pwrseq *pwrseq);
+int mt6628_pwrseq_wait_powered(struct mt6628_pwrseq *pwrseq,
+			       unsigned int timeout_ms);
 void mt6628_pwrseq_set_stp_ready(struct mt6628_pwrseq *pwrseq, bool ready);
 bool mt6628_pwrseq_is_stp_ready(struct mt6628_pwrseq *pwrseq);
 #else
@@ -35,6 +37,12 @@ devm_mt6628_pwrseq_get(struct device *dev)
 static inline int mt6628_pwrseq_recover(struct mt6628_pwrseq *pwrseq)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline int mt6628_pwrseq_wait_powered(struct mt6628_pwrseq *pwrseq,
+					     unsigned int timeout_ms)
+{
+	return 0;
 }
 
 static inline void

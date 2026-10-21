@@ -1492,6 +1492,21 @@ static int mt6628_stp_uart_probe(struct serdev_device *serdev)
 
 	serdev_device_set_drvdata(serdev, wmt);
 	serdev_device_set_client_ops(serdev, &mt6628_uart_serdev_ops);
+
+	/*
+	 * Wait for the MMC host to finish the combo power sequence here, at the
+	 * point the UART actually starts touching the chip, rather than in
+	 * probe.  The MMC host needs this driver bound before it can power up,
+	 * so waiting at probe time was a probe-order cycle: every retry re-ran
+	 * the whole serdev setup and looked like a boot hang.  At use time the
+	 * host has had its chance, and a timeout is a real diagnostic instead
+	 * of a defer loop.
+	 */
+	ret = mt6628_pwrseq_wait_powered(wmt->pwrseq, 10000);
+	if (ret)
+		return dev_err_probe(&serdev->dev, ret,
+				     "MT6628 power sequence did not complete\n");
+
 	ret = serdev_device_open(serdev);
 	if (ret)
 		return dev_err_probe(&serdev->dev, ret, "failed to open UART\n");

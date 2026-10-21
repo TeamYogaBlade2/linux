@@ -304,17 +304,23 @@ struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 	}
 
 	/*
-	 * Do not wait for MMC power-up from a consumer's probe. The MMC host
-	 * may need to finish probing before it can run the power sequence;
-	 * blocking here can stall boot-time probe synchronization. Let the
-	 * driver core retry this consumer after deferred probing is triggered.
+	 * Do NOT gate this on power_ready_state.
+	 *
+	 * power_ready_state is set only by mmc_pwrseq_mt6628_post_power_on(),
+	 * i.e. when the MMC host powers the combo chip up.  Three drivers call
+	 * this function from their probe (mtk-stp-uart, mtk-stp, mtk-wlan), so
+	 * refusing them until the host has powered up makes their binding
+	 * depend on the host and the host's power-up depend on them having
+	 * bound - a probe-order cycle.  Every retry re-runs the full consumer
+	 * probe (including the serdev 4 Mbaud setup and the pwrseq's RTC 32 kHz
+	 * enable), which on a single core looks exactly like a boot hang.
+	 *
+	 * Returning the handle unconditionally breaks the cycle.  Consumers
+	 * that need the chip powered wait at *use* time instead, on the
+	 * power_ready completion via mt6628_pwrseq_wait_powered(), which is
+	 * the point at which the MMC host has actually finished the sequence.
 	 */
 	mutex_lock(&pwrseq->lock);
-	if (!pwrseq->power_ready_state || pwrseq->power_transition) {
-		mutex_unlock(&pwrseq->lock);
-		ret = -EPROBE_DEFER;
-		goto err_put;
-	}
 
 	/*
 	 * Hold a second reference to the actual VMMC supply. The MMC host
@@ -413,6 +419,49 @@ bool mt6628_pwrseq_is_stp_ready(struct mt6628_pwrseq *pwrseq)
 	return ready;
 }
 EXPORT_SYMBOL_GPL(mt6628_pwrseq_is_stp_ready);
+
+/**
+ * mt6628_pwrseq_wait_powered() - wait until the MMC host has powered the chip
+ * @pwrseq: handle from devm_mt6628_pwrseq_get()
+ * @timeout_ms: how long to wait
+ *
+ * Consumers bind before the MMC host runs its power sequence, so they cannot
+ * check the state at probe time - doing so is what made their probe depend on
+ * the host and the host depend on them.  Call this at the point where the chip
+ * is actually needed (first WMT transaction, first SDIO access) instead.
+ *
+ * Returns 0 once powered, -ETIMEDOUT otherwise.
+ */
+int mt6628_pwrseq_wait_powered(struct mt6628_pwrseq *pwrseq,
+			       unsigned int timeout_ms)
+{
+	unsigned long remaining;
+	int ret = 0;
+
+	if (!pwrseq)
+		return 0;
+
+	mutex_lock(&pwrseq->lock);
+	if (pwrseq->power_ready_state && !pwrseq->power_transition) {
+		mutex_unlock(&pwrseq->lock);
+		return 0;
+	}
+	mutex_unlock(&pwrseq->lock);
+
+	remaining = wait_for_completion_timeout(&pwrseq->power_ready,
+						msecs_to_jiffies(timeout_ms));
+	if (!remaining)
+		return -ETIMEDOUT;
+
+	/* Re-check: the completion may have fired for a later power cycle. */
+	mutex_lock(&pwrseq->lock);
+	if (!pwrseq->power_ready_state || pwrseq->power_transition)
+		ret = -ETIMEDOUT;
+	mutex_unlock(&pwrseq->lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_wait_powered);
 
 static const struct mmc_pwrseq_ops mmc_pwrseq_mt6628_ops = {
 	.pre_power_on = mmc_pwrseq_mt6628_pre_power_on,

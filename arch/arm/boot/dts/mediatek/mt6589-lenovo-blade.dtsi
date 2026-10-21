@@ -89,7 +89,7 @@
 	 */
 	mt6628_pwrseq: mt6628-pwrseq {
 		compatible = "mediatek,mt6628-pwrseq";
-		status = "disabled";
+		status = "okay";
 		mediatek,rtc = <&mt6320_rtc>;
 		vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
@@ -449,7 +449,7 @@
 };
 
 &i2c3 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c3_pins>;
 	clock-frequency = <100000>;
@@ -543,7 +543,7 @@
 /* MT6628 shared Bluetooth/FM/GNSS transport selected by UART_RTS strap. */
 /* UART0 = UTXD3/URXD3 */
 &uart2 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mt6628_uart_pins>;
 	/* Temporary diagnostic: test UART in PIO mode. */
@@ -798,7 +798,7 @@
 
 /* SDIO */
 &mmc3 {
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default", "state_uhs", "state_eint";
 	pinctrl-0 = <&mmc3_pins_default>;
 	pinctrl-1 = <&mmc3_pins_uhs>;
@@ -809,7 +809,13 @@
 	/* FIXME: always 1.8V? */
 	//vmmc-supply = <&mt6320_ldo_vemc_3v3>;
 	vmmc-supply = <&mt6320_ldo_vemc_1v8>;
-	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
+	/*
+	 * No vqmmc-supply: the combo chip is fixed at 1.8 V I/O and vmmc
+	 * already names that rail.  Declaring the same regulator for both
+	 * makes the MMC core enable it twice, so the pwrseq's own reference
+	 * is one of three on a single rail, and the disable ordering between
+	 * them is what lets it be dropped under a live SDIO transfer.
+	 */
 
 	/* Temporary MT6628 diagnostic: isolate initial SDIO communication. */
 	bus-width = <1>;
