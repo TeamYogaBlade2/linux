@@ -810,12 +810,14 @@
 	//vmmc-supply = <&mt6320_ldo_vemc_3v3>;
 	vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 	/*
-	 * No vqmmc-supply: the combo chip is fixed at 1.8 V I/O and vmmc
-	 * already names that rail.  Declaring the same regulator for both
-	 * makes the MMC core enable it twice, so the pwrseq's own reference
-	 * is one of three on a single rail, and the disable ordering between
-	 * them is what lets it be dropped under a live SDIO transfer.
+	 * vqmmc names the same rail as vmmc, and must stay: mtk-sd's
+	 * msdc_ops_switch_volt() only runs at all when vqmmc is present, and it
+	 * is the only place that selects the "state_uhs" pin configuration and
+	 * re-selects pins_uhs after an SDIO EINT wake.  Dropping vqmmc to avoid
+	 * the double enable would silently disable both.  The double
+	 * regulator_enable() is the lesser problem of the two.
 	 */
+	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
 	/* Temporary MT6628 diagnostic: isolate initial SDIO communication. */
 	bus-width = <1>;
