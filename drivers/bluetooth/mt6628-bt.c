@@ -329,7 +329,7 @@ static int mt6628_bt_probe(struct platform_device *pdev)
 		goto err_free_hdev;
 
 	ret = hci_register_dev(hdev);
-	if (ret)
+	if (ret < 0)
 		goto err_unregister_rx;
 
 	platform_set_drvdata(pdev, bt);
