@@ -650,15 +650,26 @@ static void mtk_dsi_config_vdo_timing_per_line_lp(struct mtk_dsi *dsi)
 
 	if (dsi->driver_data->use_downstream_vdo_porch_timing) {
 		/*
-		 * The MT6589 downstream DSI_Config_VDO_Timing() keeps the
-		 * complete HBP/HFP intervals and aligns the resulting byte
-		 * counts to four bytes. Do not subtract the generic per-line
-		 * D-PHY transition budget on this controller: on the B8000
-		 * panel it changes the known-good LK values HBP=0x64/HFP=0x120
-		 * into HBP=0x44/HFP=0xd1, while the DSI path never asserts the
-		 * expected READY chain. Keep this MT6589-specific so other
-		 * MediaTek DSI variants retain the existing LP calculation.
+		 * Match downstream DSI_Config_VDO_Timing()
+		 * (dsi_drv.c:1360-1381) exactly. Three things differ from the
+		 * generic path above, and all three are load-bearing:
+		 *
+		 *  - HSA_WC is ZERO in sync-event mode.  Downstream declares
+		 *    horizontal_sync_active_byte = 0 and assigns it only in the
+		 *    sync-pulse/else branch, so for SYNC_EVENT (which this panel
+		 *    is) it writes ALIGN_TO(0, 4) == 0.  The generic formula
+		 *    above yields (hsync_len * bpp - 10), which is 2 for this
+		 *    panel, and a non-zero HSA on a sync-event link puts a sync
+		 *    active packet where the panel expects none.
+		 *  - HFP subtracts 12 before aligning, not the per-line D-PHY
+		 *    transition budget.  Without it HBP/HFP come out as
+		 *    0x44/0xd1 instead of the known-good 0x64/0x120.
+		 *  - All three word counts are aligned to 4 bytes.
+		 *
+		 * Keep this MT6589-specific: no other SoC here shares the
+		 * vendor sequence this is transcribed from.
 		 */
+		horizontal_sync_active_byte = 0;
 		horizontal_backporch_byte = roundup(horizontal_backporch_byte, 4);
 		horizontal_frontporch_byte = roundup(horizontal_frontporch_byte - 12, 4);
 	} else if (horizontal_front_back_byte > data_phy_cycles_byte) {
