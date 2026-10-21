@@ -190,6 +190,18 @@ properties:
       "#size-cells":
         const: 0
 
+  interrupts:
+    description: |
+      The receiver's interrupt line.  Optional, because on MT6589 the SENINF
+      interrupt is shared with the ISP block and a board may route it through
+      the ISP driver instead.
+
+      When present the driver enables the CSI2 CRC/ECC fault reports and
+      acknowledges them through this line.  When absent it leaves them
+      disabled: an enabled report with nobody to acknowledge it only asserts
+      the block's interrupt output, since the status bits are latched.
+    maxItems: 1
+
 required:
   - compatible
   - reg

@@ -21,6 +21,7 @@
 #include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -103,6 +104,14 @@ struct mtk_csi2_rx {
 	 */
 	u32 hs_settle;
 	u32 hs_term;
+
+	/*
+	 * The receiver's own interrupt line, or 0 when the node does not
+	 * declare one.  Only then are the CSI2 fault reports enabled: an
+	 * enabled report with nobody to acknowledge it asserts the block's
+	 * interrupt output for good.
+	 */
+	int irq;
 };
 
 static inline struct mtk_csi2_rx *sd_to_csi2rx(struct v4l2_subdev *sd)
@@ -739,10 +748,31 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 	 * because that is what the vendor does: a corrected error is the only
 	 * early warning that the settle window is marginal.
 	 */
-	csi2_write(priv, CSI2_INTEN,
-		   CSI2_CRC_ERR_IRQ_EN | CSI2_ECC_ERR_IRQ_EN |
-		   CSI2_ECC_CORRECT_IRQ_EN);
+	/*
+	 * Make the status register write-1-to-clear and enable the fault
+	 * reports.
+	 *
+	 * The clear-select bit is unconditionally right: without it the status
+	 * bits are read-only latches, so the clearing write in start_stream()
+	 * and at the end of this function would have no effect and an error
+	 * raised once would stay visible for the rest of the boot.
+	 *
+	 * The enables are conditional, and this is where the vendor's sequence
+	 * does NOT transfer as-is.  seninf_drv.cpp:1286-1289 enables CRC, ECC
+	 * and ECC-corrected reporting unconditionally, but downstream also has
+	 * a consumer for them: the ISP driver reads every status register in
+	 * its ISR.  This node requests no IRQ and its DT declares no
+	 * interrupt, so enabling a fault report here would only assert the
+	 * block's interrupt output, with nothing to acknowledge it - the same
+	 * mistake as arming SCAM's enables.  So they are enabled only when the
+	 * node actually has an IRQ.
+	 */
 	csi2_update_bits(priv, CSI2_INTSTA, CSI2_IRQ_CLR_SEL, CSI2_IRQ_CLR_SEL);
+
+	if (priv->irq > 0)
+		csi2_write(priv, CSI2_INTEN,
+			   CSI2_CRC_ERR_IRQ_EN | CSI2_ECC_ERR_IRQ_EN |
+			   CSI2_ECC_CORRECT_IRQ_EN);
 
 	csi2_update_bits(priv, CSI2_CTRL, CSI2_LANE_MASK, priv->dlane_bits);
 
@@ -910,6 +940,37 @@ static int mtk_csi2_rx_s_stream(struct v4l2_subdev *sd, int enable)
 	return ret;
 }
 
+/*
+ * CSI2 interrupt: acknowledge by reading, then report what was found.
+ *
+ * CSI2_INTSTA is read-clear once CSI2_IRQ_CLR_SEL is set (see power_on()),
+ * so the read below is the acknowledgement and there is no separate write.
+ * The line is level triggered, so a status bit that is enabled but never
+ * read keeps the handler re-entering for the rest of the stream - which is
+ * why the enables are conditional on this handler existing at all.
+ *
+ * Nothing here can repair a corrupt packet; the useful output is the
+ * distinction between "the link is marginal" (ECC-correctable) and "the link
+ * is broken" (CRC/ECC errors), which is what tells an integrator to revisit
+ * the settle window programmed from mediatek,hs-settle.
+ */
+static irqreturn_t mtk_csi2_rx_irq(int irq, void *data)
+{
+	struct mtk_csi2_rx *priv = data;
+	u32 status;
+
+	status = csi2_read(priv, CSI2_INTSTA);
+
+	if (status & CSI2_CRC_ERR_IRQ)
+		dev_warn_ratelimited(priv->dev, "CSI-2 CRC error\n");
+	if (status & CSI2_ECC_ERR_IRQ)
+		dev_warn_ratelimited(priv->dev, "CSI-2 ECC error\n");
+	if (status & CSI2_ECC_CORRECT_IRQ)
+		dev_dbg_ratelimited(priv->dev, "CSI-2 ECC corrected\n");
+
+	return status ? IRQ_HANDLED : IRQ_NONE;
+}
+
 static const struct v4l2_subdev_video_ops mtk_csi2_rx_video_ops = {
 	.s_stream = mtk_csi2_rx_s_stream,
 };
@@ -971,6 +1032,20 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 	if (ret && ret != -EINVAL)
 		return dev_err_probe(dev, ret,
 				     "invalid mediatek,hs-term\n");
+
+	/*
+	 * The interrupt line, when the node declares one.  Optional on
+	 * purpose: the MT6589 SENINF interrupt is shared with the ISP block,
+	 * so a board that routes it through the ISP driver legitimately omits
+	 * it here, and only an owned line is used to gate the fault-report
+	 * enables in power_on().
+	 */
+	priv->irq = platform_get_irq_optional(pdev, 0);
+	if (priv->irq == -ENXIO)
+		priv->irq = 0;
+	else if (priv->irq < 0)
+		return dev_err_probe(dev, priv->irq,
+				     "failed to get irq\n");
 
 	/*
 	 * Resolve the data-lane count and its CSI2_CTRL[3:1] enable word now,
@@ -1207,6 +1282,28 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 		goto err_subdev_cleanup;
 
 	pm_runtime_set_active(dev);
+
+	/*
+	 * The receiver's interrupt line, when the node declares one.  Optional:
+	 * the MT6589 SENINF interrupt is shared with the ISP block, so a board
+	 * that routes it through the ISP driver is expected to omit it here,
+	 * and the fault-report enables in power_on() key off whether it was
+	 * taken.
+	 *
+	 * The handler does one thing - read the status, which is the
+	 * acknowledgement, and report the fault bits - because that register is
+	 * read-clear while CSI2_IRQ_CLR_SEL is set, so a status bit left
+	 * unread stays asserted on a level-triggered line.
+	 */
+	if (priv->irq > 0) {
+		ret = devm_request_threaded_irq(dev, priv->irq, NULL,
+						mtk_csi2_rx_irq, IRQF_ONESHOT,
+						dev_name(dev), priv);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to request irq %d\n",
+					     priv->irq);
+	}
 
 	/*
 	 * Start the runtime-PM framework.  This is mandatory, not cosmetic:
