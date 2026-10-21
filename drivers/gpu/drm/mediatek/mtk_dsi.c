@@ -284,6 +284,11 @@ struct mtk_dsi_driver_data {
 	bool support_per_frame_lp;
 	bool use_downstream_vdo_porch_timing;
 	/*
+	 * Use the bootloader's D-PHY timing words instead of the generic
+	 * formulas; see mtk_dsi_phy_timconfig().
+	 */
+	bool use_downstream_phy_timing;
+	/*
 	 * On this SoC DSI_PHY_TIMCON2[15:8] is reserved, not DA_HS_SYNC.
 	 * The real CONT_DET field is at [7:0].
 	 */
@@ -356,6 +361,55 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	u32 data_rate_mhz = DIV_ROUND_UP(dsi->data_rate, HZ_PER_MHZ);
 	struct mtk_phy_timing *timing = &dsi->phy_timing;
 
+	/*
+	 * MT6589: use the D-PHY timing words the bootloader runs this panel
+	 * with, rather than the generic formulas below.
+	 *
+	 * The generic formulas produce a set that differs from the
+	 * bootloader's on 9 of the 13 fields, and not by one or two counts:
+	 * HS_TRAIL comes out 5 against 16, CLK_TRAIL 3 against 16, CLK_ZERO
+	 * 12 against 18.  HS_TRAIL and CLK_TRAIL are the high-speed trailer
+	 * periods - how long a lane stays in HS after the last bit before
+	 * returning to low power - and a link programmed with them wrong
+	 * reports itself as transmitting (START set, BUSY high, state machine
+	 * advancing) while what arrives at the panel is not decodable.  That
+	 * is this board's symptom exactly.
+	 *
+	 * The values below are not guessed: they are the live contents of the
+	 * bootloader's DSI_PHY_TIMCON0..3 on this board with a working panel,
+	 *
+	 *	TIMCON0 = 0x10090404   LPX 4  HS_PRPR 4  HS_ZERO 9  HS_TRAIL 16
+	 *	TIMCON1 = 0x08140610   TA_GO 16 TA_SURE 6 TA_GET 20 DA_HS_EXIT 8
+	 *	TIMCON2 = 0x10120000   CLK_ZERO 18 CLK_TRAIL 16
+	 *	TIMCON3 = 0x00080d04   CLK_HS_PRPR 4 CLK_HS_POST 13 CLK_HS_EXIT 8
+	 *
+	 * and they are reproduced by the vendor's DSI_PHY_TIMCONFIG()
+	 * (dsi_drv.c:1453-1495) for this panel's PLL entry, which is
+	 * independent corroboration rather than the same source twice.
+	 *
+	 * These are used verbatim only at the data rate they were measured
+	 * at; any other rate falls through to the generic computation, because
+	 * the vendor formulas need the PLL dividers (TXDIV0/1, FBK_SEL,
+	 * FBK_DIV, PRE_DIV) and this driver does not carry them - the MIPI TX
+	 * PLL driver owns that table.  Guessing a scale factor from the data
+	 * rate would be worse than the generic path.
+	 */
+	if (dsi->driver_data->use_downstream_phy_timing &&
+	    data_rate_mhz == 420) {
+		timing->lpx		= 4;
+		timing->da_hs_prepare	= 4;
+		timing->da_hs_zero	= 9;
+		timing->da_hs_trail	= 16;
+		timing->ta_go		= 16;
+		timing->ta_sure		= 6;
+		timing->ta_get		= 20;
+		timing->da_hs_exit	= 8;
+		timing->clk_hs_zero	= 18;
+		timing->clk_hs_trail	= 16;
+		timing->clk_hs_prepare	= 4;
+		timing->clk_hs_post	= 13;
+		timing->clk_hs_exit	= 8;
+	} else {
 	timing->lpx = (60 * data_rate_mhz / (8 * 1000)) + 1;
 	timing->da_hs_prepare = (80 * data_rate_mhz + 4 * 1000) / 8000;
 	timing->da_hs_zero = (170 * data_rate_mhz + 10 * 1000) / 8000 + 1 -
@@ -372,6 +426,7 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	timing->clk_hs_trail = timing->clk_hs_prepare;
 	timing->clk_hs_zero = timing->clk_hs_trail * 4;
 	timing->clk_hs_exit = 2 * timing->clk_hs_trail;
+	}
 
 	timcon0 = FIELD_PREP(LPX, timing->lpx) |
 		  FIELD_PREP(HS_PREP, timing->da_hs_prepare) |
@@ -1753,6 +1808,7 @@ static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
 	.has_lane_clk = true,
 	.has_reset = true,
 	.use_downstream_vdo_porch_timing = true,
+	.use_downstream_phy_timing = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
