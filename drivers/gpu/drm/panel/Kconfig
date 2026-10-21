@@ -1269,6 +1269,18 @@ config DRM_PANEL_VISIONOX_RM692E5
 	  display panels, such as the one found in the Nothing Phone (1)
 	  smartphone.
 
+config DRM_PANEL_LENOVO_B6000
+	tristate "Lenovo YOGA Tablet 8 (B6000) panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Say Y here to enable support for the 800x1280 DSI panels fitted to
+	  the Lenovo YOGA Tablet 8 (B6000): the Novatek NT35521
+	  (nt35521_cmi_080) and the Samsung S6D7AA0 (s6d7aa0x04_cpt_080).
+	  Both need a manufacturer init sequence, so they are not handled by
+	  panel-simple.
+
 config DRM_PANEL_VISIONOX_VTDR6130
 	tristate "Visionox VTDR6130"
 	depends on OF
