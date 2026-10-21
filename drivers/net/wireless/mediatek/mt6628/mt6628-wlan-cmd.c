@@ -322,10 +322,26 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 			 * RX-buffer path, not this response-polling path.
 			 *
 			 * Do not infer packet type from the reported length.
+			 *
+			 * WRPLR reports two independent port lengths: RX1 in
+			 * [31:16], which is the one the poll above waits on,
+			 * and RX0 in [15:0].  The downstream response path
+			 * reads a port only when that port reports a length,
+			 * so this diagnostic must not do otherwise either -
+			 * reading WRDR0 off a zero length would take a packet
+			 * away from the runtime RX path, which would then never
+			 * see it.
 			 */
 			rx0_len = rx_len_reg & 0xffff;
-			if (rx0_len >= sizeof(*event) &&
-			    rx0_len <= MT6628_CMD_DIAG_RX_LEN) {
+			if (!rx0_len) {
+				dev_err(&wl->func->dev,
+					"BASIC_CONFIG timeout: no response on either port\n");
+			} else if (rx0_len < sizeof(*event) ||
+				   rx0_len > MT6628_CMD_DIAG_RX_LEN) {
+				dev_err(&wl->func->dev,
+					"BASIC_CONFIG timeout: RX0 length %u out of range\n",
+					rx0_len);
+			} else {
 				rx0_diag_len = rx0_len;
 				packet_ret = sdio_readsb(wl->func, rx_buf,
 							 MT6628_MCR_WRDR0,
@@ -344,20 +360,20 @@ int mt6628_wlan_query_basic_config(struct mt6628_wlan *wl)
 					       DUMP_PREFIX_OFFSET, 16, 1,
 					       rx_buf, rx0_len, false);
 				}
-
-				wrplr_after = sdio_readl(wl->func,
-							 MT6628_MCR_WRPLR,
-							 &after_ret);
-				if (!after_ret)
-					dev_err(&wl->func->dev,
-						"after RX0 read: WRPLR=%#010x "
-						"(before=%#010x)\n",
-						wrplr_after, rx_len_reg);
-				else
-					dev_err(&wl->func->dev,
-						"failed to reread WRPLR after "
-						"RX0 read: %d\n", after_ret);
 			}
+
+			wrplr_after = sdio_readl(wl->func,
+						 MT6628_MCR_WRPLR,
+						 &after_ret);
+			if (!after_ret)
+				dev_err(&wl->func->dev,
+					"after RX0 read: WRPLR=%#010x "
+					"(before=%#010x)\n",
+					wrplr_after, rx_len_reg);
+			else
+				dev_err(&wl->func->dev,
+					"failed to reread WRPLR after "
+					"RX0 read: %d\n", after_ret);
 
 			ret = -ETIMEDOUT;
 		}
