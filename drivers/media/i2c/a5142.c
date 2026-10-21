@@ -75,12 +75,11 @@
  * A5142MIPI_SetShutter() writes a single 16-bit 0x0202 (:396) and
  * write_A5142MIPI_gain() a single 16-bit 0x0204 (:302), both bracketed by the
  * grouped-parameter latch.  The 0x0206/0x0208/0x020A/0x020C registers that
- * appear in A5142MIPI_sensor_gain_array[] are only touched by the *disabled*
- * per-channel CCT/gain code, and that code is compiled out: the only calls
- * are commented away inside /* *\/ blocks spanning :255-265 in
- * read_A5142MIPI_gain() and :308-328 in write_A5142MIPI_gain().  They are
- * therefore not driven here; doing so would invent a white-balance model the
- * vendor silicon path does not use.
+ * appear in A5142MIPI_sensor_gain_array[] are only touched by the per-channel
+ * CCT/gain code, and that code is compiled out: its only uses sit inside
+ * block comments spanning :255-265 in read_A5142MIPI_gain() and :308-328 in
+ * write_A5142MIPI_gain().  They are therefore not driven here; doing so would
+ * invent a white-balance model the vendor silicon path does not use.
  */
 
 /* Orientation and test pattern. */
