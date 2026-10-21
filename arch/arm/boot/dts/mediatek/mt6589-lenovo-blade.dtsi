@@ -465,7 +465,13 @@
 	};
 
 	magnetometer@13 {
-		compatible = "bosch,bmm150";
+		/*
+		 * The stock ROM binds this address to its "bmm050" driver, and
+		 * bmm050.h gives chip-id 0x40 for the part, against 0x32 for a
+		 * BMM150 on the same register.  Claiming bmm150 here would fail
+		 * probe with -ENODEV once the driver compares the id.
+		 */
+		compatible = "bosch,bmm050";
 		reg = <0x13>;
 
 		// TODO: check
