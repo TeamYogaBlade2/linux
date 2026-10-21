@@ -10,3 +10,4 @@ obj-y += mtk-csi2-rx/
 obj-y += mtk-scam/
 obj-y += mtk-cam/
 obj-$(CONFIG_VIDEO_MTK_CAM_GRAPH) += mtk-cam-graph/
+obj-$(CONFIG_VIDEO_MEDIATEK_G2D) += mtk-g2d.o

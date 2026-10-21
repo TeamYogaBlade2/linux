@@ -23,10 +23,6 @@ obj-$(CONFIG_DRM_MEDIATEK) += mediatek-drm.o
 
 obj-$(CONFIG_DRM_MEDIATEK_WDMA) += mtk_disp_wdma.o
 
-# The engine and its ioctls are one feature: the ioctl object calls into the
-# engine, so it cannot be built without it.  Both come from the same config.
-obj-$(CONFIG_DRM_MEDIATEK_G2D) += mtk-g2d.o mtk-g2d-uapi.o
-
 obj-$(CONFIG_DRM_MEDIATEK_HDMI_COMMON) += mtk_hdmi_common.o
 obj-$(CONFIG_DRM_MEDIATEK_HDMI) += mtk_cec.o
 obj-$(CONFIG_DRM_MEDIATEK_HDMI) += mtk_hdmi.o

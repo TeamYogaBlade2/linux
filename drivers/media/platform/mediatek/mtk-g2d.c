@@ -2,13 +2,23 @@
 /*
  * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
  *
- * G2D - 2D blitter in the MediaTek display subsystem.
+ * G2D - MediaTek MT6589 2D blitter, as a V4L2 memory-to-memory device.
  *
  * Register map, bit fields and the programming sequence all come from the
  * MT6589 data sheet, chapter 53 ("2D Acceleration", p. 1914).  What is
  * implemented here is the part that can be expressed without guessing: a
  * bitblt operation between source and destination surfaces, plus a
  * constant-colour fill.
+ *
+ * The block reads one buffer and writes another, so it is a mem2mem device
+ * and nothing more: the OUTPUT queue is the surface the engine reads, the
+ * CAPTURE queue is the one it writes, and the per-operation rectangle is
+ * carried the way every V4L2 driver carries one - by the selection API
+ * (VIDIOC_S_SELECTION on each queue) - rather than by a driver-private ioctl.
+ * A fill is the same operation with no source rectangle, selected by
+ * V4L2_SEL_TGT_COMPOSE having zero width and height; its colour comes from a
+ * stock V4L2 control.  There is consequently no UAPI header of this driver's
+ * own: everything a caller needs already exists in videodev2.h.
  *
  * Two details from the data sheet are easy to get wrong and are called out
  * where they are used:
@@ -36,7 +46,14 @@
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
 
-#include "mtk-g2d.h"
+#include <media/mtk-g2d.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-event.h>
+#include <media/v4l2-ioctl.h>
+#include <media/v4l2-mem2mem.h>
+#include <media/videobuf2-dma-contig.h>
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-rect.h>
 
 /*
  * Control block - documented 16 bits wide in the data sheet's address map
@@ -180,15 +197,64 @@ struct mtk_g2d {
 	 * before it may release anything.
 	 */
 	struct completion done;
-	/*
-	 * The handle returned by mtk_g2d_register_drm() for this engine, or
-	 * NULL if registration failed and the driver is running without a
-	 * node.  It is an opaque pointer rather than a &drm_device because
-	 * this file deliberately includes no DRM header; mtk-g2d-uapi.c is
-	 * the only object that knows what it points at, and the only one that
-	 * dereferences it.
-	 */
-	void *drm;
+
+	/* V4L2 side: one device, one mem2mem instance, one video node. */
+	struct v4l2_device v4l2_dev;
+	struct video_device *vdev;
+	struct v4l2_m2m_dev *m2m_dev;
+	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_ctrl *ctrl_fill_color;
+};
+
+/**
+ * struct mtk_g2d_ctx - one open file: its two queues and its selection
+ * @fh: V4L2 file handle
+ * @m2m_ctx: mem2mem context owning the two queues
+ * @src_sel: rectangle read from the OUTPUT buffer, in pixels
+ * @dst_sel: rectangle written into the CAPTURE buffer, in pixels
+ * @fill: true when the operation is a constant-colour fill
+ * @fill_color: colour for a fill, already in the CAPTURE queue's format
+ *
+ * The selection is per file, so two processes streaming through the same
+ * device cannot move each other's rectangle.  The defaults are the whole
+ * buffer at origin 0, which needs no VIDIOC_S_SELECTION at all and is what a
+ * plain "copy this frame" wants.
+ */
+struct mtk_g2d_ctx {
+	struct v4l2_fh fh;
+	struct v4l2_m2m_ctx *m2m_ctx;
+	struct v4l2_pix_format_mplane src_fmt;
+	struct v4l2_pix_format_mplane dst_fmt;
+	struct v4l2_rect src_sel;
+	struct v4l2_rect dst_sel;
+	/* True once userspace sets COMPOSE, so S_FMT stops overwriting it. */
+	bool dst_sel_explicit;
+	bool fill;
+};
+
+/*
+ * The fill colour.  No stock control carries a 32-bit colour value - the
+ * V4L2_CID_COLORFX_* family selects an effect and the codec-class controls
+ * belong to CODEC devices - so this is a driver-private user-class integer
+ * control, which is where v4l2-controls.h tells drivers to put one.  A plain
+ * integer keeps the whole interface expressible with videodev2.h alone: no
+ * compound-control payload and no driver-private ioctl are needed.
+ *
+ * It is device-wide rather than per file because a colour is a property of the
+ * operation userspace is currently submitting, not of the file, and reading it
+ * at run time means the value that applies is the one set before the buffer
+ * was queued.
+ */
+#define MTK_G2D_CID_FILL_COLOR		(V4L2_CID_USER_BASE + 0x1280)
+
+static const struct v4l2_ctrl_config mtk_g2d_fill_color_ctrl = {
+	.id		= MTK_G2D_CID_FILL_COLOR,
+	.name		= "G2D Fill Colour",
+	.type		= V4L2_CTRL_TYPE_INTEGER,
+	.min		= 0,
+	.max		= 0xffffffff,
+	.step		= 1,
+	.def		= 0,
 };
 
 /* Formats the CLRFMT field encodes. */
@@ -1032,6 +1098,557 @@ bool mtk_g2d_wedged(struct mtk_g2d *g2d)
 	return wedged;
 }
 
+/* ----------------------------------------------------------------------------
+ * V4L2 memory-to-memory front end
+ *
+ * The engine above is synchronous: one call programs the block and returns
+ * when it is idle.  Everything below turns a queued pair of buffers into one
+ * such call and nothing more - there is no internal queue, because V4L2
+ * already has two and the hardware has no command FIFO to fill.
+ *
+ * Geometry uses the selection API rather than an ioctl of this driver's own:
+ *   OUTPUT/SELECTION/CROP       - rectangle read from the source buffer
+ *   CAPTURE/SELECTION/COMPOSE   - rectangle written to the destination buffer
+ * Both are (0,0,width,height) until userspace changes them.  Zero width and
+ * height on the COMPOSE target select a constant-colour fill, which reads no
+ * source at all; the colour is the MTK_G2D_CID_FILL_COLOR control.  Selection
+ * is the documented V4L2 way to describe a sub-rectangle of a buffer, so a
+ * caller needs no knowledge of this driver beyond videodev2.h.
+ * ------------------------------------------------------------------------- */
+
+/* Pixel formats the engine can encode, on either queue. */
+static const struct mtk_g2d_fmt {
+	u32 fourcc;
+	enum g2d_format clrfmt;
+} mtk_g2d_formats[] = {
+	{ V4L2_PIX_FMT_RGB565,	g2d_clrfmt_rgb565 },
+	{ V4L2_PIX_FMT_RGB24,	g2d_clrfmt_rgb888 },
+	{ V4L2_PIX_FMT_ARGB32,	g2d_clrfmt_argb8888 },
+	{ V4L2_PIX_FMT_XRGB32,	g2d_clrfmt_xrgb8888 },
+};
+
+static const struct mtk_g2d_fmt *mtk_g2d_find_fmt(u32 fourcc)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(mtk_g2d_formats); i++)
+		if (mtk_g2d_formats[i].fourcc == fourcc)
+			return &mtk_g2d_formats[i];
+
+	return NULL;
+}
+
+static unsigned int mtk_g2d_bpp(u32 fourcc)
+{
+	switch (fourcc) {
+	case V4L2_PIX_FMT_RGB565:
+		return 2;
+	case V4L2_PIX_FMT_RGB24:
+		return 3;
+	default:
+		return 4;
+	}
+}
+
+/*
+ * Size a queue.  The bytes-per-line is aligned to 32 bytes: the engine itself
+ * accepts any whole-pixel pitch up to 0x2000, but a V4L2 buffer's layout has to
+ * be predictable for userspace that maps it, and the engine is happy with the
+ * padded stride.
+ */
+static void mtk_g2d_fill_pixfmt(struct v4l2_pix_format_mplane *pix_mp,
+				u32 fourcc)
+{
+	unsigned int bpp = mtk_g2d_bpp(fourcc);
+
+	pix_mp->width = clamp_t(u32, pix_mp->width, 1, mtk_g2d_max_width());
+	pix_mp->height = clamp_t(u32, pix_mp->height, 1, mtk_g2d_max_height());
+	pix_mp->field = V4L2_FIELD_NONE;
+	pix_mp->colorspace = V4L2_COLORSPACE_SRGB;
+	pix_mp->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+	pix_mp->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
+	pix_mp->quantization = V4L2_QUANTIZATION_DEFAULT;
+	pix_mp->num_planes = 1;
+
+	pix_mp->plane_fmt[0].bytesperline = ALIGN(pix_mp->width * bpp, 32);
+	pix_mp->plane_fmt[0].sizeimage =
+		pix_mp->plane_fmt[0].bytesperline * pix_mp->height;
+}
+
+
+
+static struct v4l2_pix_format_mplane *mtk_g2d_q_fmt(struct mtk_g2d_ctx *ctx,
+						   unsigned int type)
+{
+	return V4L2_TYPE_IS_OUTPUT(type) ? &ctx->src_fmt : &ctx->dst_fmt;
+}
+
+static int mtk_g2d_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
+			       unsigned int *nplanes, unsigned int sizes[],
+			       struct device *alloc_devs[])
+{
+	struct mtk_g2d_ctx *ctx = vb2_get_drv_priv(vq);
+	unsigned int size;
+
+	size = mtk_g2d_q_fmt(ctx, vq->type)->plane_fmt[0].sizeimage;
+
+	if (*nplanes) {
+		if (sizes[0] < size)
+			return -EINVAL;
+		return 0;
+	}
+
+	*nplanes = 1;
+	sizes[0] = size;
+
+	return 0;
+}
+
+static int mtk_g2d_buf_prepare(struct vb2_buffer *vb)
+{
+	struct mtk_g2d_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+	unsigned int size = mtk_g2d_q_fmt(ctx, vb->vb2_queue->type)->plane_fmt[0].sizeimage;
+	if (vb2_plane_size(vb, 0) < size)
+		return -EINVAL;
+
+	vb2_set_plane_payload(vb, 0, size);
+
+	return 0;
+}
+
+static void mtk_g2d_buf_queue(struct vb2_buffer *vb)
+{
+	struct mtk_g2d_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+
+	v4l2_m2m_buf_queue(ctx->m2m_ctx, to_vb2_v4l2_buffer(vb));
+}
+
+static void mtk_g2d_stop_streaming(struct vb2_queue *vq)
+{
+	struct mtk_g2d_ctx *ctx = vb2_get_drv_priv(vq);
+	struct vb2_v4l2_buffer *buf;
+
+	/*
+	 * Return everything still queued on this queue.  mem2mem normally
+	 * does this itself in v4l2_m2m_streamoff(), but a queue that is torn
+	 * down without a streamoff - a file closing mid-stream - reaches the
+	 * driver's stop_streaming() directly, and leaving buffers queued there
+	 * would leak them.
+	 */
+	for (;;) {
+		if (V4L2_TYPE_IS_OUTPUT(vq->type))
+			buf = v4l2_m2m_src_buf_remove(ctx->m2m_ctx);
+		else
+			buf = v4l2_m2m_dst_buf_remove(ctx->m2m_ctx);
+		if (!buf)
+			break;
+		v4l2_m2m_buf_done(buf, VB2_BUF_STATE_ERROR);
+	}
+}
+
+static const struct vb2_ops mtk_g2d_qops = {
+	.queue_setup	= mtk_g2d_queue_setup,
+	.buf_prepare	= mtk_g2d_buf_prepare,
+	.buf_queue	= mtk_g2d_buf_queue,
+	.stop_streaming	= mtk_g2d_stop_streaming,
+
+};
+
+/**
+ * mtk_g2d_device_run - perform one queued operation
+ * @priv: the &struct mtk_g2d_ctx that was queued
+ *
+ * Runs one blit or fill per pair of buffers and marks both ends done.  A pair
+ * is only taken when both queues have one, which is what job_ready() below
+ * enforces before mem2mem schedules this at all.
+ */
+static void mtk_g2d_device_run(void *priv)
+{
+	struct mtk_g2d_ctx *ctx = priv;
+	struct mtk_g2d *g2d = video_get_drvdata(ctx->fh.vdev);
+	struct vb2_v4l2_buffer *src, *dst;
+	const struct mtk_g2d_fmt *sfmt, *dfmt;
+	dma_addr_t saddr, daddr;
+	u32 spitch, dpitch;
+	int ret;
+
+	src = v4l2_m2m_src_buf_remove(ctx->m2m_ctx);
+	dst = v4l2_m2m_dst_buf_remove(ctx->m2m_ctx);
+	if (!src || !dst)
+		return;
+
+	dfmt = mtk_g2d_find_fmt(ctx->dst_fmt.pixelformat);
+	daddr = vb2_dma_contig_plane_dma_addr(&dst->vb2_buf, 0);
+	dpitch = ctx->dst_fmt.plane_fmt[0].bytesperline;
+	if (!dfmt)
+		ret = -EINVAL;
+	else if (ctx->fill)
+		ret = mtk_g2d_fill(g2d, daddr, dpitch, dfmt->clrfmt,
+				   ctx->dst_sel.left, ctx->dst_sel.top,
+				   ctx->dst_sel.width, ctx->dst_sel.height,
+				   v4l2_ctrl_g_ctrl(g2d->ctrl_fill_color));
+	else {
+		sfmt = mtk_g2d_find_fmt(ctx->src_fmt.pixelformat);
+		saddr = vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0);
+		spitch = ctx->src_fmt.plane_fmt[0].bytesperline;
+
+		if (!sfmt)
+			ret = -EINVAL;
+		else
+			ret = mtk_g2d_blt_rect(g2d, saddr, spitch, sfmt->clrfmt,
+					       ctx->src_sel.left, ctx->src_sel.top,
+					       daddr, dpitch, dfmt->clrfmt,
+					       ctx->dst_sel.left, ctx->dst_sel.top,
+					       ctx->src_sel.width,
+					       ctx->src_sel.height);
+	}
+
+	v4l2_m2m_buf_copy_metadata(src, dst);
+
+	/*
+	 * The source was consumed either way; the destination carries the
+	 * verdict, so a caller polling only the CAPTURE queue still learns that
+	 * the copy did not happen.  A fill never reads the source, but it is
+	 * still consumed, because that is how mem2mem sequencing works.
+	 */
+	v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+	v4l2_m2m_buf_done(dst, ret ? VB2_BUF_STATE_ERROR : VB2_BUF_STATE_DONE);
+
+	v4l2_m2m_job_finish(g2d->m2m_dev, ctx->m2m_ctx);
+}
+
+static int mtk_g2d_job_ready(void *priv)
+{
+	struct mtk_g2d_ctx *ctx = priv;
+
+	/* A fill needs no source pixels, so its OUTPUT buffer only sequences. */
+	return v4l2_m2m_num_src_bufs_ready(ctx->m2m_ctx) > 0 &&
+	       v4l2_m2m_num_dst_bufs_ready(ctx->m2m_ctx) > 0;
+}
+
+static const struct v4l2_m2m_ops mtk_g2d_m2m_ops = {
+	.device_run	= mtk_g2d_device_run,
+	.job_ready	= mtk_g2d_job_ready,
+};
+
+static int mtk_g2d_queue_init(void *priv, struct vb2_queue *src_vq,
+			      struct vb2_queue *dst_vq)
+{
+	struct mtk_g2d_ctx *ctx = priv;
+	int ret;
+
+	src_vq->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	src_vq->io_modes = VB2_MMAP | VB2_DMABUF;
+	src_vq->drv_priv = ctx;
+	src_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
+	src_vq->ops = &mtk_g2d_qops;
+	src_vq->mem_ops = &vb2_dma_contig_memops;
+	src_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
+	src_vq->lock = ctx->fh.vdev->lock;
+	src_vq->dev = ctx->fh.vdev->v4l2_dev->dev;
+	src_vq->allow_zero_bytesused = 1;
+
+	ret = vb2_queue_init(src_vq);
+	if (ret)
+		return ret;
+
+	dst_vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	dst_vq->io_modes = VB2_MMAP | VB2_DMABUF;
+	dst_vq->drv_priv = ctx;
+	dst_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
+	dst_vq->ops = &mtk_g2d_qops;
+	dst_vq->mem_ops = &vb2_dma_contig_memops;
+	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
+	dst_vq->lock = ctx->fh.vdev->lock;
+	dst_vq->dev = ctx->fh.vdev->v4l2_dev->dev;
+
+	return vb2_queue_init(dst_vq);
+}
+
+
+static int mtk_g2d_open(struct file *file)
+{
+	struct mtk_g2d *g2d = video_drvdata(file);
+	struct mtk_g2d_ctx *ctx;
+	int ret;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+
+	v4l2_fh_init(&ctx->fh, g2d->vdev);
+	file->private_data = &ctx->fh;
+
+	ctx->m2m_ctx = v4l2_m2m_ctx_init(g2d->m2m_dev, ctx,
+					 mtk_g2d_queue_init);
+	if (IS_ERR(ctx->m2m_ctx)) {
+		ret = PTR_ERR(ctx->m2m_ctx);
+		goto err_fh;
+	}
+
+	ctx->fh.m2m_ctx = ctx->m2m_ctx;
+	v4l2_fh_add(&ctx->fh, file);
+
+	/* Geometry starts out as "the whole buffer, at the origin". */
+	ctx->src_sel.width = MTK_G2D_DEFAULT_WIDTH;
+	ctx->src_sel.height = MTK_G2D_DEFAULT_HEIGHT;
+	ctx->dst_sel.width = MTK_G2D_DEFAULT_WIDTH;
+	ctx->dst_sel.height = MTK_G2D_DEFAULT_HEIGHT;
+
+	return 0;
+
+err_fh:
+	v4l2_fh_exit(&ctx->fh);
+	kfree(ctx);
+	return ret;
+}
+
+static int mtk_g2d_close(struct file *file)
+{
+	struct mtk_g2d_ctx *ctx = container_of(file->private_data,
+					       struct mtk_g2d_ctx, fh);
+
+	v4l2_m2m_ctx_release(ctx->m2m_ctx);
+	v4l2_fh_del(&ctx->fh, file);
+	v4l2_fh_exit(&ctx->fh);
+	kfree(ctx);
+
+	return 0;
+}
+
+static const struct v4l2_file_operations mtk_g2d_fops = {
+	.owner		= THIS_MODULE,
+	.open		= mtk_g2d_open,
+	.release	= mtk_g2d_close,
+	.poll		= v4l2_m2m_fop_poll,
+	.unlocked_ioctl	= video_ioctl2,
+	.mmap		= v4l2_m2m_fop_mmap,
+};
+
+static int mtk_g2d_querycap(struct file *file, void *priv,
+			    struct v4l2_capability *cap)
+{
+	strscpy(cap->driver, "mtk-g2d", sizeof(cap->driver));
+	strscpy(cap->card, "MediaTek MT6589 G2D", sizeof(cap->card));
+
+	return 0;
+}
+
+static int mtk_g2d_enum_fmt(struct file *file, void *priv,
+			    struct v4l2_fmtdesc *f)
+{
+	if (f->index >= ARRAY_SIZE(mtk_g2d_formats))
+		return -EINVAL;
+
+	f->pixelformat = mtk_g2d_formats[f->index].fourcc;
+	f->flags = 0;
+
+	return 0;
+}
+
+static int mtk_g2d_g_fmt(struct file *file, void *priv,
+			 struct v4l2_format *f)
+{
+	struct mtk_g2d_ctx *ctx = container_of(priv, struct mtk_g2d_ctx, fh);
+	struct v4l2_pix_format_mplane *pix_mp = &f->fmt.pix_mp;
+
+	if (V4L2_TYPE_IS_OUTPUT(f->type))
+		*pix_mp = *mtk_g2d_q_fmt(ctx, f->type);
+	else
+		*pix_mp = *mtk_g2d_q_fmt(ctx, f->type);
+
+	return 0;
+}
+
+static int mtk_g2d_try_fmt(struct file *file, void *priv,
+			   struct v4l2_format *f)
+{
+	struct v4l2_pix_format_mplane *pix_mp = &f->fmt.pix_mp;
+
+	if (!mtk_g2d_find_fmt(pix_mp->pixelformat))
+		pix_mp->pixelformat = V4L2_PIX_FMT_XRGB32;
+
+	mtk_g2d_fill_pixfmt(pix_mp, pix_mp->pixelformat);
+
+	return 0;
+}
+
+static int mtk_g2d_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
+{
+	struct mtk_g2d_ctx *ctx = container_of(priv, struct mtk_g2d_ctx, fh);
+	struct vb2_queue *vq;
+
+	/*
+	 * A format cannot change while a queue is streaming: the buffers that
+	 * were allocated for it would no longer describe the data the engine
+	 * reads or writes.
+	 */
+	vq = v4l2_m2m_get_vq(ctx->m2m_ctx, f->type);
+	if (vb2_is_busy(vq))
+		return -EBUSY;
+
+	mtk_g2d_try_fmt(file, priv, f);
+
+	*mtk_g2d_q_fmt(ctx, f->type) = f->fmt.pix_mp;
+
+	/*
+	 * Keep the default geometry in step with the buffer size until
+	 * userspace overrides it: a caller that never touches the selection
+	 * API still gets "copy the whole frame".
+	 */
+	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
+		ctx->src_sel.width = f->fmt.pix_mp.width;
+		ctx->src_sel.height = f->fmt.pix_mp.height;
+	} else if (!ctx->dst_sel_explicit) {
+		ctx->dst_sel.width = f->fmt.pix_mp.width;
+		ctx->dst_sel.height = f->fmt.pix_mp.height;
+	}
+
+	return 0;
+}
+
+static int mtk_g2d_g_selection(struct file *file, void *priv,
+			       struct v4l2_selection *s)
+{
+	struct mtk_g2d_ctx *ctx = container_of(priv, struct mtk_g2d_ctx, fh);
+
+	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
+		switch (s->target) {
+		case V4L2_SEL_TGT_CROP:
+		case V4L2_SEL_TGT_CROP_DEFAULT:
+			s->r = ctx->src_sel;
+			return 0;
+		case V4L2_SEL_TGT_CROP_BOUNDS:
+			s->r.left = 0;
+			s->r.top = 0;
+			s->r.width = ctx->src_fmt.width;
+			s->r.height = ctx->src_fmt.height;
+			return 0;
+		}
+		return -EINVAL;
+	}
+
+	switch (s->target) {
+	case V4L2_SEL_TGT_COMPOSE:
+		s->r = ctx->dst_sel;
+		return 0;
+	case V4L2_SEL_TGT_COMPOSE_BOUNDS:
+	case V4L2_SEL_TGT_COMPOSE_DEFAULT:
+		/*
+		 * The bounds are the destination buffer.  COMPOSE_DEFAULT is the
+		 * whole of it, which is also what a fill produces, hence it is
+		 * reported as the buffer rather than as the current (possibly
+		 * zero-sized) compose rectangle.
+		 */
+		s->r.left = 0;
+		s->r.top = 0;
+		s->r.width = ctx->dst_fmt.width;
+		s->r.height = ctx->dst_fmt.height;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int mtk_g2d_s_selection(struct file *file, void *priv,
+			       struct v4l2_selection *s)
+{
+	struct mtk_g2d_ctx *ctx = container_of(priv, struct mtk_g2d_ctx, fh);
+	struct v4l2_rect *sel, bounds;
+	u32 max_w, max_h;
+
+	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
+		if (s->target != V4L2_SEL_TGT_CROP)
+			return -EINVAL;
+		sel = &ctx->src_sel;
+		bounds.width = ctx->src_fmt.width;
+		bounds.height = ctx->src_fmt.height;
+		bounds.left = 0;
+		bounds.top = 0;
+	} else {
+		if (s->target != V4L2_SEL_TGT_COMPOSE)
+			return -EINVAL;
+		sel = &ctx->dst_sel;
+		bounds.width = ctx->dst_fmt.width;
+		bounds.height = ctx->dst_fmt.height;
+		bounds.left = 0;
+		bounds.top = 0;
+		ctx->dst_sel_explicit = true;
+	}
+
+	/*
+	 * Apply V4L2_SEL_FLAG_KEEP_CONFIG semantics the way the selection API
+	 * defines them: grow the rectangle to the request, then clamp it into
+	 * the buffer.  Zero width and height are legal and meaningful on the
+	 * COMPOSE target - that is how a fill is requested - so they are not
+	 * "corrected" to the buffer size here.
+	 */
+	v4l2_rect_intersect(&s->r, &s->r, &bounds);
+
+	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
+		/* A blit must read something. */
+		if (!s->r.width || !s->r.height)
+			return -EINVAL;
+	} else if (s->r.width || s->r.height) {
+		max_w = mtk_g2d_max_width();
+		max_h = mtk_g2d_max_height();
+		if (s->r.width > max_w || s->r.height > max_h)
+			return -EINVAL;
+
+		/* A blit copies the source rectangle, so the sizes must match. */
+		if (!ctx->fill &&
+		    (s->r.width != ctx->src_sel.width ||
+		     s->r.height != ctx->src_sel.height))
+			return -EINVAL;
+	}
+
+	*sel = s->r;
+	ctx->fill = !ctx->dst_sel.width && !ctx->dst_sel.height;
+
+	return 0;
+}
+
+static const struct v4l2_ioctl_ops mtk_g2d_ioctl_ops = {
+	.vidioc_querycap		= mtk_g2d_querycap,
+
+	.vidioc_enum_fmt_vid_cap	= mtk_g2d_enum_fmt,
+	.vidioc_enum_fmt_vid_out	= mtk_g2d_enum_fmt,
+	.vidioc_g_fmt_vid_cap_mplane	= mtk_g2d_g_fmt,
+	.vidioc_g_fmt_vid_out_mplane	= mtk_g2d_g_fmt,
+	.vidioc_try_fmt_vid_cap_mplane	= mtk_g2d_try_fmt,
+	.vidioc_try_fmt_vid_out_mplane	= mtk_g2d_try_fmt,
+	.vidioc_s_fmt_vid_cap_mplane	= mtk_g2d_s_fmt,
+	.vidioc_s_fmt_vid_out_mplane	= mtk_g2d_s_fmt,
+
+	.vidioc_g_selection		= mtk_g2d_g_selection,
+	.vidioc_s_selection		= mtk_g2d_s_selection,
+
+	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
+	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
+	.vidioc_qbuf			= v4l2_m2m_ioctl_qbuf,
+	.vidioc_dqbuf			= v4l2_m2m_ioctl_dqbuf,
+	.vidioc_prepare_buf		= v4l2_m2m_ioctl_prepare_buf,
+	.vidioc_create_bufs		= v4l2_m2m_ioctl_create_bufs,
+	.vidioc_expbuf			= v4l2_m2m_ioctl_expbuf,
+	.vidioc_streamon		= v4l2_m2m_ioctl_streamon,
+	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
+};
+
+static const struct video_device mtk_g2d_videodev_template = {
+	.name		= "mtk-g2d",
+	.vfl_dir	= VFL_DIR_M2M,
+	.fops		= &mtk_g2d_fops,
+	.ioctl_ops	= &mtk_g2d_ioctl_ops,
+	.release	= video_device_release,
+	.device_caps	= V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING,
+};
+
+static const struct of_device_id mtk_g2d_of_match[] = {
+	{ .compatible = "mediatek,mt6589-g2d" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
+
 static int mtk_g2d_probe(struct platform_device *pdev)
 {
 	struct mtk_g2d *g2d;
@@ -1047,27 +1664,6 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	if (IS_ERR(g2d->regs))
 		return PTR_ERR(g2d->regs);
 
-	/*
-	 * This engine does DMA of its own now, and the window is a real 32-bit
-	 * one.  The data sheet defines G2D_W2M_ADDR, G2D_SRC_ADDR and
-	 * G2D_DST_ADDR as full [31:0] registers (ch. 53, p. 1914), so the
-	 * (u32) casts in g2d_program_blt() are not narrowing anything, and
-	 * anything wider than 32 bits could not be programmed at all.  What is
-	 * narrow besides that is the pitch - [13:0], maximum 0x2000 - and the
-	 * scan window, 12 bits, maximum 2,048x2,048.
-	 *
-	 * dma_set_mask_and_coherent() states that to the DMA API, so a
-	 * mapping allocated for this device cannot be handed back an address
-	 * the register cannot hold.  With the M4U attached (iommus in the node
-	 * comment), the binding constraint is the same 32 bits: the mapping
-	 * this driver creates is 1ULL << 32 of IOVA, so an IOVA above 4G is not
-	 * reachable by this engine whatever the physical address behind it is.
-	 *
-	 * Failure is fatal for the probe rather than warned about.  A device
-	 * whose DMA mask is 64-bit here is a configuration in which this
-	 * driver's addressing is wrong, and continuing would mean accepting
-	 * buffers whose addresses get silently truncated by the (u32) casts.
-	 */
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
 		return dev_err_probe(dev, ret,
@@ -1097,14 +1693,14 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		ret = dev_err_probe(dev, irq, "failed to get irq\n");
-		goto disable_clocks;
+		goto err_clocks;
 	}
 
 	ret = devm_request_threaded_irq(dev, irq, NULL, g2d_irq_handler,
 					IRQF_ONESHOT, dev_name(dev), g2d);
 	if (ret) {
 		ret = dev_err_probe(dev, ret, "failed to request irq\n");
-		goto disable_clocks;
+		goto err_clocks;
 	}
 	g2d->irq = irq;
 
@@ -1116,135 +1712,93 @@ static int mtk_g2d_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, g2d);
 
-	/*
-	 * Published last, once the hardware is usable.  The DRM device must
-	 * never exist while the engine could still be programmed by someone
-	 * who cannot see that it is not ready: mtk_g2d_register_drm() makes
-	 * the render node openable, and from that point a BLT or FILL can
-	 * arrive.  Registering before the clocks, the interrupt and the
-	 * wedge flag are all in place would open a window where a request is
-	 * accepted and programmed into an engine that is not running.
-	 *
-	 * On failure the DRM device is dropped again (drm_dev_put() inside the
-	 * callee) and the driver keeps probing as a bare engine, which is
-	 * strictly better than a node that exists and fails every ioctl.
-	 */
-	g2d->drm = mtk_g2d_register_drm(dev, g2d);
-	ret = IS_ERR(g2d->drm) ? PTR_ERR(g2d->drm) : 0;
+	ret = v4l2_device_register(dev, &g2d->v4l2_dev);
 	if (ret) {
-		g2d->drm = NULL;
-		ret = dev_err_probe(dev, ret, "failed to register DRM device\n");
-		goto disable_clocks;
+		dev_err_probe(dev, ret, "failed to register v4l2 device\n");
+		goto err_clocks;
 	}
+
+	/*
+	 * The fill colour is the only control, and v4l2_ctrl_g_ctrl() ignores a
+	 * failed add, so a handler that could not be built has to be caught
+	 * here or every blt would look like a fill with colour 0.
+	 */
+	v4l2_ctrl_handler_init(&g2d->ctrl_handler, 1);
+	g2d->ctrl_fill_color = v4l2_ctrl_new_custom(&g2d->ctrl_handler,
+						    &mtk_g2d_fill_color_ctrl,
+						    NULL);
+	if (g2d->ctrl_handler.error) {
+		ret = g2d->ctrl_handler.error;
+		dev_err_probe(dev, ret, "failed to add controls\n");
+		goto err_v4l2;
+	}
+	g2d->v4l2_dev.ctrl_handler = &g2d->ctrl_handler;
+
+	g2d->m2m_dev = v4l2_m2m_init(&mtk_g2d_m2m_ops);
+	if (IS_ERR(g2d->m2m_dev)) {
+		ret = dev_err_probe(dev, PTR_ERR(g2d->m2m_dev),
+				    "failed to init mem2mem\n");
+		goto err_clocks;
+	}
+
+	g2d->vdev = video_device_alloc();
+	if (!g2d->vdev) {
+		ret = dev_err_probe(dev, -ENOMEM, "failed to allocate video device\n");
+		goto err_m2m;
+	}
+
+	*g2d->vdev = mtk_g2d_videodev_template;
+	g2d->vdev->v4l2_dev = &g2d->v4l2_dev;
+	g2d->vdev->lock = &g2d->lock;
+	g2d->vdev->ctrl_handler = &g2d->ctrl_handler;
+	video_set_drvdata(g2d->vdev, g2d);
+
+	ret = video_register_device(g2d->vdev, VFL_TYPE_VIDEO, -1);
+	if (ret) {
+		ret = dev_err_probe(dev, ret, "failed to register video device\n");
+		goto err_vdev;
+	}
+
+	/*
+	 * The node is published last: from here a BLT or FILL can arrive, so
+	 * the clocks, the interrupt and the wedge flag all have to be in place
+	 * already.
+	 */
+	dev_info(dev, "registered as /dev/video%d\n", g2d->vdev->num);
 
 	return 0;
 
-disable_clocks:
-	/* The clocks were taken with clk_prepare_enable() above, not with
-	 * devm_clk_*_enable(), so unwinding is explicit: reverse of
-	 * acquisition order - smi first, then engine.
-	 */
+err_vdev:
+	video_device_release(g2d->vdev);
+err_m2m:
+	v4l2_m2m_release(g2d->m2m_dev);
+err_v4l2:
+	v4l2_ctrl_handler_free(&g2d->ctrl_handler);
+	v4l2_device_unregister(&g2d->v4l2_dev);
+err_clocks:
 	clk_disable_unprepare(g2d->clk_smi);
 	clk_disable_unprepare(g2d->clk_engine);
-
 	return ret;
 }
 
-/**
- * mtk_g2d_remove - give back what probe took.
- *
- * The clocks were enabled with clk_prepare_enable(), which devm does not
- * undo, so without this the engine and SMI clock gates stay enabled for the
- * rest of the boot after the device is unbound, so they must go before the
- * devm cleanup.  Mutex destruction is not needed.
- */
 static void mtk_g2d_remove(struct platform_device *pdev)
 {
-	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
+	struct mtk_g2d *g2d = platform_get_drvdata(pdev);
 
 	/*
-	 * Before the clocks go, and this is why the order matters.
-	 *
-	 * mtk_g2d_unregister_drm() calls drm_dev_unplug(), which sets
-	 * ->unplugged and synchronize_srcu()s the read section every ioctl here
-	 * runs inside.  So once it returns, no BLT or FILL is executing and none
-	 * can start: one that arrives later is refused with -ENODEV before it
-	 * reaches the engine.  That is what makes gating the clocks off
-	 * immediately afterwards safe, rather than leaving a programmed address
-	 * behind on a block whose clock has gone.
-	 *
-	 * drm_dev_unregister() would not have given that: it does not set
-	 * ->unplugged and does not wait for open files, so an ioctl already
-	 * inside a handler could still be writing G2D_SRC_ADDR and
-	 * G2D_W2M_ADDR with no clock behind it.
-	 *
-	 * Note that the clocks themselves are *not* freed here.  They came from
-	 * devm_clk_get() and the &mtk_g2d with devm_kzalloc(), and devres is
-	 * released by device_unbind_cleanup() right after this function returns
-	 * - before any file holding the node has necessarily closed.  So the
-	 * engine's own storage, its ioremap and its clocks all go away while an
-	 * ioctl could still hold a pointer to them; the unplug above is what
-	 * guarantees none can, and the ioctls' drm_dev_enter() /
-	 * drm_dev_exit() pair is what enforces it.  dev_private is the one
-	 * resource deliberately *not* devres, because it is read by those
-	 * handlers; see mtk_g2d_register_drm().
+	 * Unregister first: video_unregister_device() waits for the last file
+	 * to close, which is what makes it safe to gate the clocks immediately
+	 * afterwards.  An operation in flight at that point can only be inside
+	 * mtk_g2d_device_run() on behalf of an open file, and the file is gone
+	 * by the time this returns.
 	 */
-	mtk_g2d_unregister_drm(g2d->drm);
+	video_unregister_device(g2d->vdev);
+	v4l2_m2m_release(g2d->m2m_dev);
+	v4l2_ctrl_handler_free(&g2d->ctrl_handler);
+	v4l2_device_unregister(&g2d->v4l2_dev);
 
 	clk_disable_unprepare(g2d->clk_smi);
 	clk_disable_unprepare(g2d->clk_engine);
-}
-
-#ifdef CONFIG_PM_SLEEP
-static int mtk_g2d_suspend(struct platform_device *pdev,
-			   pm_message_t state)
-{
-	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
-
-	/*
-	 * The line is negative level sensitive, so leaving the IRQ enabled
-	 * across a suspend means a completion that lands while the clocks are
-	 * off calls the handler against register reads that no longer have a
-	 * clock behind them.
-	 */
-	disable_irq(g2d->irq);
-
-	clk_disable_unprepare(g2d->clk_smi);
-	clk_disable_unprepare(g2d->clk_engine);
-
-	return 0;
-}
-
-static int mtk_g2d_resume(struct platform_device *pdev)
-{
-	struct mtk_g2d *g2d = dev_get_drvdata(&pdev->dev);
-	int ret;
-
-	ret = clk_prepare_enable(g2d->clk_engine);
-	if (ret)
-		return ret;
-
-	ret = clk_prepare_enable(g2d->clk_smi);
-	if (ret) {
-		clk_disable_unprepare(g2d->clk_engine);
-		return ret;
-	}
-
-	enable_irq(g2d->irq);
-
-	return 0;
-}
-#endif
-
-static const struct of_device_id mtk_g2d_of_match[] = {
-	{ .compatible = "mediatek,mt6589-g2d" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, mtk_g2d_of_match);
-
-struct device *mtk_g2d_device(struct mtk_g2d *g2d)
-{
-	return g2d ? g2d->dev : NULL;
 }
 
 static struct platform_driver mtk_g2d_driver = {
@@ -1254,13 +1808,9 @@ static struct platform_driver mtk_g2d_driver = {
 		.name		= "mtk-g2d",
 		.of_match_table	= mtk_g2d_of_match,
 	},
-#ifdef CONFIG_PM_SLEEP
-	.suspend	= mtk_g2d_suspend,
-	.resume		= mtk_g2d_resume,
-#endif
 };
 module_platform_driver(mtk_g2d_driver);
 
 MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
-MODULE_DESCRIPTION("MediaTek MT6589 G2D driver");
+MODULE_DESCRIPTION("MediaTek MT6589 G2D 2D blitter (V4L2 mem2mem)");
 MODULE_LICENSE("GPL");

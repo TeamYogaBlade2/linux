@@ -88,3 +88,30 @@ source "drivers/media/platform/mediatek/mtk-csi2-rx/Kconfig"
 source "drivers/media/platform/mediatek/mtk-scam/Kconfig"
 
 source "drivers/media/platform/mediatek/mtk-cam/Kconfig"
+
+config VIDEO_MEDIATEK_G2D
+	tristate "MediaTek MT6589 G2D 2D blitter"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on COMMON_CLK
+	depends on HAS_IOMEM
+	depends on VIDEO_DEV
+	depends on MTK_SMI || (COMPILE_TEST && MTK_SMI=n)
+	select V4L2_MEM2MEM_DEV
+	select VIDEOBUF2_DMA_CONTIG
+	help
+	  Say Y here to drive the MediaTek MT6589 G2D 2D blitter.
+
+	  G2D copies or fills rectangles between memory buffers the caller
+	  supplies, so it is exposed as a V4L2 memory-to-memory device: the
+	  OUTPUT queue is the surface the engine reads, the CAPTURE queue is
+	  the one it writes, buffers are imported per queue as dma-buf, and
+	  the rectangle is described with the standard selection API.  A
+	  constant-colour fill is the same queue pair with a zero-sized
+	  COMPOSE selection.
+
+	  The engine reads one buffer and writes another and is not part of
+	  the display pipeline, which is why it is a /dev/videoN node and not
+	  a DRM device of its own.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called mtk-g2d.
