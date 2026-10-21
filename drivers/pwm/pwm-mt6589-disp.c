@@ -104,16 +104,37 @@
 #define BLS_EN_BLS			BIT(0)
 
 /* BLS_PWM_DUTY format */
-#define PWM_DUTY_MIN_LEVEL		BIT(19)			/* LOW_LIMIT = 1; 8 duty units */
+/*
+ * PWM_DUTY_LOW_LIMIT is left at 0.  Setting it would clamp the output to
+ * LOW_LIMIT*8 duty units, and the bootloader's working configuration leaves it
+ * at 0 while running PWM_DUTY_IN = 116.
+ */
+#define PWM_DUTY_LOW_LIMIT_MASK		GENMASK(23, 19)
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
 
 /* Default PWM divider value (ddp_bls.c:19, PWM_DEFAULT_DIV_VALUE). */
 #define PWM_DEFAULT_DIV			0x24
 
+/*
+ * There is exactly one BLS block, and its state hangs off the pwm_chip -
+ * never off device drvdata, unlike the OVL/RDMA/COLOR/DSI drivers which call
+ * platform_set_drvdata() in their own probe.  dev_get_drvdata() on the DDP
+ * component device is therefore always NULL, which is what silently turned
+ * every ddp_bls hook into a no-op.
+ *
+ * bls_ddp_clk is the single clock handle shared by the PWM and the DDP hooks:
+ * the BLS gate is one clock, and taking it twice would give two handles over
+ * one clk whose prepare_count is shared, so the PWM disabling it would gate
+ * the block out from under the display path.
+ */
+static struct mt6589_bls_pwm *bls_ddp;
+static struct clk *bls_ddp_clk;
+
 struct mt6589_bls_pwm {
 	void __iomem *base;
-	struct clk *clk_main;
 	unsigned int max_level;
+	/* Last applied state, so .get_state() can report something truthful. */
+	struct pwm_state state;
 	struct reset_control *rstc;
 	spinlock_t en_lock;
 	bool clk_enabled;
@@ -206,9 +227,12 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	if (state->polarity != PWM_POLARITY_NORMAL)
 		return -EINVAL;
 
+	if (!bls_ddp_clk)
+		return -ENODEV;
+
 	if (state->enabled) {
 		if (!bls->clk_enabled) {
-			ret = clk_prepare_enable(bls->clk_main);
+			ret = clk_prepare_enable(bls_ddp_clk);
 			if (ret)
 				return ret;
 
@@ -220,10 +244,11 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		if (!level)
 			reg = 0;
 		else
-			reg = PWM_DUTY_MIN_LEVEL | (level & 0x3FF);
+			reg = level & 0x1FF;	/* PWM_DUTY_IN is bits 8:0 */
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
 		mt6589_bls_update_en(bls, BLS_EN_PWM, BLS_EN_PWM);
+		bls->state = *state;
 	} else {
 		/*
 		 * Ensure the register is clocked before touching it, even if
@@ -231,7 +256,7 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		 * to this driver; preserve BLS_En and HIS_En.
 		 */
 		if (!bls->clk_enabled) {
-			ret = clk_prepare_enable(bls->clk_main);
+			ret = clk_prepare_enable(bls_ddp_clk);
 			if (ret)
 				return ret;
 
@@ -241,26 +266,40 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		writel(0x0, bls->base + BLS_PWM_DUTY);
 		mt6589_bls_update_en(bls, BLS_EN_PWM, 0);
 
-		clk_disable_unprepare(bls->clk_main);
+		clk_disable_unprepare(bls_ddp_clk);
 		bls->clk_enabled = false;
+		bls->state = *state;
 	}
+
+	return 0;
+}
+
+/*
+ * Report the last state applied.  Without this the PWM core cannot answer
+ * pwm_get_state_hw() - which is what /sys/kernel/debug/pwm prints - and the
+ * readout fails with -EOPNOTSUPP, leaving no way to see what the block was
+ * actually programmed with.
+ *
+ * The state is cached rather than read back because the duty register holds
+ * PWM_DUTY_IN (a 9-bit fraction of a period the block derives from
+ * BLS_PWM_CON) and the divider lives elsewhere; reconstructing a period and
+ * duty cycle from those would report a number this driver never accepted.
+ */
+static int mt6589_bls_pwm_get_state(struct pwm_chip *chip,
+				    struct pwm_device *pwm,
+				    struct pwm_state *state)
+{
+	struct mt6589_bls_pwm *bls = to_mt6589_bls_pwm(chip);
+
+	*state = bls->state;
 
 	return 0;
 }
 
 static const struct pwm_ops mt6589_bls_pwm_ops = {
 	.apply = mt6589_bls_pwm_apply,
+	.get_state = mt6589_bls_pwm_get_state,
 };
-
-/*
- * There is exactly one BLS block, and its state hangs off the pwm_chip -
- * never off device drvdata, unlike the OVL/RDMA/COLOR/DSI drivers which call
- * platform_set_drvdata() in their own probe.  dev_get_drvdata() on the DDP
- * component device is therefore always NULL, which is what silently turned
- * every ddp_bls hook into a no-op.  Keep the instance here instead.
- */
-static struct mt6589_bls_pwm *bls_ddp;
-static struct clk *bls_ddp_clk;
 
 static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 {
@@ -269,9 +308,7 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	struct mt6589_bls_pwm *bls;
 	int ret;
 
-	/* The backlight node is a child of this one and fails silently if
-	 * the chip never appears, so say where this gets to.
-	 */
+
 	dev_info(dev, "bls pwm: probe\n");
 
 	chip = devm_pwmchip_alloc(dev, 1, sizeof(*bls));
@@ -285,15 +322,22 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(bls->base),
 				     "bls pwm: ioremap failed\n");
 
-	bls->clk_main = devm_clk_get(dev, "main");
-	if (IS_ERR(bls->clk_main))
-		return dev_err_probe(dev, PTR_ERR(bls->clk_main),
-				     "bls pwm: no main clock\n");
-
 	bls->max_level = PWM_MAX_LEVEL;			/* hardcoded, matches downstream default */
 
-	/* Enable clocks for initialization */
-	ret = clk_prepare_enable(bls->clk_main);
+	/*
+	 * One clock handle for both roles.  The BLS gate is a single clock:
+	 * taking it twice - once here as "main" and once for the DDP hooks -
+	 * gives two handles over one clk whose prepare_count is shared, so the
+	 * PWM's disable would gate the block out from under the display path.
+	 * The DDP-side helpers below use the same handle.
+	 */
+	bls_ddp_clk = devm_clk_get(dev, NULL);
+	if (IS_ERR(bls_ddp_clk))
+		return dev_err_probe(dev, PTR_ERR(bls_ddp_clk),
+				     "failed to get the BLS clock\n");
+
+	/* Enable the clock for initialization */
+	ret = clk_prepare_enable(bls_ddp_clk);
 	if (ret)
 		return ret;
 
@@ -357,7 +401,7 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	/* Match disp_bls_init(): enable PWM without BLS/HIS processing. */
 	writel(BLS_EN_PWM, bls->base + BLS_EN);
 
-	clk_disable_unprepare(bls->clk_main);
+	clk_disable_unprepare(bls_ddp_clk);
 
 	chip->ops = &mt6589_bls_pwm_ops;
 
@@ -370,14 +414,6 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 
 	/* The DDP hooks reach the block through this pointer; see above. */
 	bls_ddp = bls;
-
-	/* DDP-side clock handle; the component hooks cannot get one
-	 * themselves, since dev_get_drvdata() there is NULL.
-	 */
-	bls_ddp_clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(bls_ddp_clk))
-		return dev_err_probe(dev, PTR_ERR(bls_ddp_clk),
-				     "failed to get the BLS clock\n");
 
 	return 0;
 }
