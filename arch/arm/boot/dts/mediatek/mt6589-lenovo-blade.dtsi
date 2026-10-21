@@ -440,12 +440,99 @@
 		compatible = "mediatek,fm50af";
 		reg = <0x18>;
 	};
+
+	/*
+	 * Main camera sensor.
+	 *
+	 * Address: the vendor probe adopts the first of two write ids that
+	 * answers, 0x6c then 0x6e
+	 * (a5142mipi_Sensor.c:1047 and a5142mipi_Sensor.h:84-86), and 0x6c is
+	 * the one this board uses.  It does not collide with the FM50AF at
+	 * 0x18 above.
+	 *
+	 * Bus: this is bus 1 because the A5142 sits on the same physical
+	 * camera module as that FM50AF, and the vendor registers the lens on
+	 * bus 1 (FM50AF.c:17 "#define LENS_I2C_BUSNUM 1", :504
+	 * i2c_register_board_info()).  Note that the vendor's *sensor* bus
+	 * numbering is not usable as evidence here: in the mt6589 override
+	 * kd_sensorlist.c:27-28 it is 1 and 2, in the common one :26-27 it is
+	 * 0 and only 0, and the A5142 branch (kd_camera_hw.c:932) never sets
+	 * the bus at all, so the two trees contradict each other for the same
+	 * sensor.
+	 *
+	 * Deliberately absent, because none of it can be derived yet:
+	 *
+	 *   - clocks/clock-names.  The vendor PLL tables are built for a
+	 *     26 MHz MCLK (a5142mipi_Sensor.c:996) but no source states that
+	 *     the board's CAMTG actually produces 26 MHz; CLK_TOP_MUX_CAMTG
+	 *     (clk-mt6589-topckgen.c:377, parents at :238-245) can select
+	 *     26 MHz, 208 MHz and three divided PLL rates, so the rate is a
+	 *     real choice and not a fixed property.  Guessing it would set a
+	 *     wrong pixel clock.  The driver refuses to probe without it.
+	 *   - vdd-supply / vddio-supply.  The vendor camera power helper
+	 *     enables VCAMA (2.8 V), VGP2 as VCAMIO (1.8 V), VGP1 as VCAMD
+	 *     and VGP3 as VCAMAF (kd_camera_hw.h:13-16) but does not say
+	 *     which of them a5142_mipi_raw consumes; that mapping is per
+	 *     module.  The driver requires both rails.
+	 *   - port/endpoint.  mt6589-lenovo-blade-camera.dtsi has no MIPI
+	 *     CSI-2 D-PHY node (see the long note on &seninf), so there is no
+	 *     remote endpoint to point at yet.
+	 *
+	 * Reset and power-down are GPIO211 and GPIO212 per the board's DCT
+	 * output (blade10 cust_gpio_usage.h:184-190), active low and active
+	 * low respectively; the driver does not model them yet, so they are
+	 * not listed here either rather than being listed and ignored.
+	 */
+	a5142: camera@6c {
+		compatible = "onnn,a5142";
+		reg = <0x6c>;
+		status = "disabled";
+	};
 };
 
 &i2c2 {
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c2_pins>;
+
+	/*
+	 * Sub camera sensor: NOT ENABLED, because its bus cannot be
+	 * determined from the sources available here.
+	 *
+	 * What is known:
+	 *
+	 *   - The OV9760 driver is the one the blade10 config selects:
+	 *     CUSTOM_KERNEL_SUB_IMGSENSOR = ov9760_mipi_raw
+	 *     (mediatek/config/blade10/ProjectConfig-jb2.mk:95), lens
+	 *     dummy_lens (:96), MTK_PLATFORM = MT6589 (:408).
+	 *   - The vendor driver tries write id 0x6c and then 0x20
+	 *     (ov9760mipiraw_Sensor.c:199-206, ov9760mipiraw_Sensor.h:167-168)
+	 *     and uses whichever answers with id 0x9760.
+	 *   - The address collides with the A5142 at 0x6c, so the two cannot
+	 *     both be 0x6c on one segment.
+	 *
+	 * Why that is not enough to place the node:
+	 *
+	 *   - The vendor's bus selection only ever switches to bus 2 for
+	 *     DUAL_CAMERA_MAIN_2_SENSOR, never for the sub sensor
+	 *     (kd_sensorlist.c:606/725/766/819/908 all test MAIN_2 only), so
+	 *     under this board's build main and sub are addressed on the same
+	 *     bus - which contradicts the 0x6c collision.
+	 *   - kd_camera_hw.c, the DCT GPIO/power tables and the lens list name
+	 *     no bus per socket.
+	 *   - The two kd_sensorlist.c variants in the tree disagree with each
+	 *     other (bus 1+2 vs bus 0 only), so neither can settle it.
+	 *
+	 * The plausible answers - 0x20 on i2c1, or 0x6c on i2c2 - are both
+	 * guesses.  Uncomment and fill in once the bus is known, e.g. from
+	 * "/sys/bus/i2c/devices" on the stock firmware.
+	 *
+	 *	camera@6c {
+	 *		compatible = "ovti,ov9760";
+	 *		reg = <0x6c>;
+	 *		status = "disabled";
+	 *	};
+	 */
 };
 
 &i2c3 {

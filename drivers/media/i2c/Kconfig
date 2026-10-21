@@ -60,6 +60,20 @@ config VIDEO_AR0521
 	  To compile this driver as a module, choose M here: the
 	  module will be called ar0521.
 
+config VIDEO_A5142
+	tristate "ON Semiconductor A5142 sensor support"
+	depends on I2C && VIDEO_DEV
+	select MEDIA_CONTROLLER
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_FWNODE
+	help
+	  This is a Video4Linux2 sensor driver for the ON Semiconductor
+	  (Aptina) A5142 5 megapixel camera, the main camera on the Lenovo
+	  YOGA Tablet 8/10 (MT6589).
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called a5142.
+
 config VIDEO_GC0308
 	tristate "GalaxyCore GC0308 sensor support"
 	select V4L2_CCI_I2C
@@ -671,6 +685,20 @@ config VIDEO_OV7740
 	help
 	  This is a Video4Linux2 sensor driver for the OmniVision
 	  OV7740 VGA camera sensor.
+
+config VIDEO_OV9760
+	tristate "OmniVision OV9760 sensor support"
+	depends on I2C && VIDEO_DEV
+	select MEDIA_CONTROLLER
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_FWNODE
+	help
+	  This is a Video4Linux2 sensor driver for the OmniVision OV9760
+	  1.2 megapixel camera, the sub camera on the Lenovo YOGA Tablet
+	  8/10 (MT6589).
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called ov9760.
 
 config VIDEO_OV8856
 	tristate "OmniVision OV8856 sensor support"
