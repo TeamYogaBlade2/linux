@@ -1964,8 +1964,18 @@ static int mtk_fm_read_cqi(struct mtk_fm *fm, u32 freq, struct mtk_fm_cqi *cqi)
 		if ((s32)(raw_ch * 10 / 2 + 6400) != (s32)freq)
 			continue;
 
-		/* Sign extend, then convert to 1/16 dB as the vendor does. */
-		rssi_16 = (raw_rssi_s * FM_RSSI_ONE_LSB_NUM) >> 4;
+		/*
+		 * The record field is already a signed dB value, not a 1/16 dB
+		 * one.  Downstream applies exactly one conversion - a 6/16
+		 * scale - and prints the result as dBm
+		 * (mt6628_fm_lib.c:933 "--> %d(dbm)"), so it is in dB.  The
+		 * rest of this driver works in 1/16 dB units, which is what
+		 * mtk_fm_cqi_to_signal() expects, so the single dB has to be
+		 * multiplied back by 16.  Without that the CQI path reported a
+		 * signal 16x smaller than the RSSI_IND path for the same field
+		 * strength.
+		 */
+		rssi_16 = ((raw_rssi_s * FM_RSSI_ONE_LSB_NUM) >> 4) * 16;
 
 		cqi->freq = freq;
 		cqi->rssi = rssi_16;
