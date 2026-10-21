@@ -115,3 +115,18 @@ config MTK_SOCINFO
 	  manufacturer name, marketing name and soc name.
 
 endmenu
+
+config MTK_MT6589_EMI
+	bool "MediaTek MT6589 EMI bandwidth monitor and MPU"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on COMMON_CLK_MT6589_MEMPLL
+	help
+	  Say yes here to add support for the MT6589 EMI (External Memory
+	  Interface) block: its bus monitor, which samples DRAM bandwidth
+	  per master, and its memory protection unit, which reports
+	  out-of-range accesses.
+
+	  Both are exposed through debugfs under /sys/kernel/debug/mt6589-emi.
+	  No MPU region is programmed unless the board describes one, because
+	  setting the wrong permissions on this block stops the CPU reading
+	  its own memory.

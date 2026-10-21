@@ -182,6 +182,24 @@ config COMMON_CLK_MT6589_VENCSYS
 	  This enables a driver for clocks provided by vencsys
 	  on the MediaTek MT6589 SoC.
 
+config COMMON_CLK_MT6589_MEMPLL
+	bool "MediaTek MT6589 MEMPLL clock"
+	depends on COMMON_CLK_MT6589
+	help
+	  Say yes here to expose the MT6589 MEMPLL (the DRAM PLL) as a
+	  clock, so that the topckgen "clkph_mck" and the "mempll_mck_d4"
+	  divider derived from it report a real rate instead of the 0 Hz
+	  of the clk_null placeholder they are currently parented to.
+
+	  The MEMPLL registers live in the ddrphy_conf block at
+	  0x1001_1600, not in apmixedsys, so this is a separate driver
+	  from clk-mt6589-apmixedsys.c.  It is read-only: it reports the
+	  rate the board declares with "clock-frequency" (266.5 MHz
+	  by default, which is the datasheet's figure for this clock) and
+	  the enable state, and never reprograms the PLL, because the DRAM
+	  timing the bootloader calibrated was derived from the value the
+	  bootloader programmed.
+
 config COMMON_CLK_MT6735
 	tristate "Main clock drivers for MediaTek MT6735"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

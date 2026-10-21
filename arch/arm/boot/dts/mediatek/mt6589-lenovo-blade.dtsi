@@ -833,3 +833,20 @@
 &bls {
 	status = "okay";
 };
+
+/*
+ * EMI bus monitor and DRAM controller diagnostics.
+ *
+ * Both are read-only apart from the EMI bus monitor's own enable bit, so
+ * turning them on cannot change the DRAM timing the bootloader calibrated.
+ * The EMI MPU is left unprogrammed: this node carries no
+ * mediatek,mpu-region property, so no protection region is written and the
+ * hardware keeps the bootloader's settings.
+ */
+&emi {
+	status = "okay";
+};
+
+&dramc {
+	status = "okay";
+};

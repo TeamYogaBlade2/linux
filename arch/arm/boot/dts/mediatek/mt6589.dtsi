@@ -347,6 +347,99 @@
 			#clock-cells = <1>;
 		};
 
+		/*
+		 * MEMPLL, the DRAM PLL.  Its registers are in the ddrphy_conf
+		 * block at 0x1001_1600..0x1001_1630 (MEMPLL0..MEMPLL12) with
+		 * MEMPLL_DIVIDER at 0x1001_1640 and MPLLPON0..3 at
+		 * 0x1001_15C0, per datasheet 13.4.3 "DDRPHY Registers"
+		 * (register list p. 708).  It is NOT in apmixedsys, which is
+		 * why the apmixedsys clock driver cannot provide it, and why
+		 * this node is a separate clock provider rather than a
+		 * child of &apmixedsys.
+		 *
+		 * Clocked from the 26 MHz crystal: MEMPLL1[12:11]
+		 * RG_MEMPLL_REFCK_SEL = 00 selects "Xtal clock" (p. 730).
+		 * No second reg entry for the DRAMC AO window is taken here
+		 * because nothing in the MEMPLL register range needs it.
+		 *
+		 * Always enabled rather than status = "disabled", because
+		 * topckgen's "clkph_mck" is parented to the "mempll" clock
+		 * this node provides, and that clock must exist for the
+		 * "mempll_mck_d4" divider below it to report a real rate.
+		 * The driver is read-only, so enabling it cannot disturb the
+		 * DRAM timing the bootloader calibrated.
+		 */
+		mempll: clock-controller@10011000 {
+			compatible = "mediatek,mt6589-mempll";
+			reg = <0x10011000 0x1000>;
+			#clock-cells = <0>;
+			/*
+			 * MEMPLL_MCK, the DRAM PLL output.  The
+			 * datasheet's own figure (p. 402: "MEMPLL_MCK_D4
+			 * (266.5/4)") and the reason the driver does not
+			 * decode it from MEMPLL0 are in
+			 * drivers/clk/mediatek/clk-mt6589-mempll.c.
+			 */
+			clock-frequency = <266500000>;
+		};
+
+		/*
+		 * DRAM controller.  Three windows, as the datasheet's DRAMC
+		 * chapter lists them: DRAMC AO at 0x1000_4000 (timings, config,
+		 * MRS), DRAMC NAO at 0x1020_F000 (always-on bank counters) and
+		 * DDRPHY at 0x1001_1000 (pad and DLL controls).  Downstream's
+		 * mt_reg_base.h has the same three as DRAMC0_BASE, DRAMC_NAO_BASE
+		 * and DDRPHY_BASE; its accessor ORs all three at one offset,
+		 * which this driver does not do because it would report an
+		 * unimplemented alias as a real value.
+		 *
+		 * The DDRPHY entry maps the same page as &mempll above but a
+		 * different reg entry, so each driver owns its own mapping and
+		 * neither claims the other's registers: this node reads the pad
+		 * and DLL block below 0x600, &mempll reads 0x600..0x640.
+		 *
+		 * Read-only.  There is no rate-change path, so no "operating
+		 * points" are described here.
+		 */
+		dramc: memory-controller@10004000 {
+			compatible = "mediatek,mt6589-dramc";
+			reg = <0x10004000 0x1000>,
+			      <0x1020f000 0x1000>,
+			      <0x10011000 0x1000>;
+			reg-names = "ao", "nao", "ddrphy";
+			clocks = <&topckgen CLK_TOP_MEMPLL_MCK_D4>;
+			clock-names = "ddr";
+			mediatek,emi = <&emi>;
+			status = "disabled";
+		};
+
+		/*
+		 * EMI: bus monitor, MPU and bandwidth limiter at 0x1020_3000.
+		 *
+		 * The violation interrupt is GIC SPI 94, the same line the
+		 * &devapc node above uses.  That is not a mistake and not a
+		 * conflict: on MT6589 the device APC raises the bus-protection
+		 * interrupt on behalf of the blocks that do not have their own,
+		 * so DEVAPC, the SMI and the EMI MPU all report through it.
+		 * Downstream requests it with IRQF_SHARED for exactly this
+		 * reason (emi_mpu.c: "Interrupts of violation (including SPC in
+		 * SMI, or EMI MPU) are triggered by the device APC"), and this
+		 * driver does the same and returns IRQ_NONE when EMI_MPUS shows
+		 * no MPU evidence.
+		 *
+		 * No mediatek,mpu-region property: the MPU is left exactly as
+		 * the bootloader set it.  Programming a region wrongly here
+		 * stops the CPU reading its own memory, and the downstream
+		 * region table needs the modem image memory map, which this
+		 * board does not have.
+		 */
+		emi: memory-controller@10203000 {
+			compatible = "mediatek,mt6589-emi";
+			reg = <0x10203000 0x1000>;
+			interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
+			status = "disabled";
+		};
+
 		infracfg: syscon@10001000 {
 			compatible = "mediatek,mt6589-infracfg", "syscon";
 			reg = <0x10001000 0x1000>;
