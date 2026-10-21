@@ -137,6 +137,22 @@ static inline u32 cam_read(struct mtk_cam *cam, u32 reg)
 }
 
 /*
+ * Read-modify-write helpers for the registers this block shares between
+ * channels (CAM_CTL_INT_EN, CAM_CTL_DMA_INT, CAM_CTL_EN*).  A whole-word
+ * write to any of those silently disarms whatever another channel - or another
+ * stage of this driver - had enabled.
+ */
+static inline void cam_set_bits(struct mtk_cam *cam, u32 reg, u32 bits)
+{
+	writel(cam_read(cam, reg) | bits, cam->regs + reg);
+}
+
+static inline void cam_clear_bits(struct mtk_cam *cam, u32 reg, u32 bits)
+{
+	writel(cam_read(cam, reg) & ~bits, cam->regs + reg);
+}
+
+/*
  * Bounded wait for the software-reset status flag.
  *
  * SW_RST_ST is documented as "0: DMA is busy, 1: DMA is idle.  HW reset can
@@ -532,12 +548,21 @@ static void mtk_cam_config_imgo(struct mtk_cam *cam, dma_addr_t addr,
 	 */
 	cam_write(cam, CAM_CTL_DMA_EN_SET, CAM_CTL_DMA_EN_IMGO_EN);
 
-	/* Interrupts: the block-wide DMA error plus this channel's overrun. */
-	cam_write(cam, CAM_CTL_INT_EN, CAM_CTL_INT_EN_DMA_ERR_EN |
-					  CAM_CTL_INT_EN_IMGO_ERR_EN);
+	/*
+	 * Interrupts: the block-wide DMA error plus this channel's overrun.
+	 *
+	 * Read-modify-write, not a whole-word write: CAM_CTL_INT_EN and
+	 * CAM_CTL_DMA_INT are both shared with every other DMA channel in the
+	 * block, and the disable path below already refuses to zero INT_EN for
+	 * exactly that reason.  Writing the whole word here contradicted that
+	 * - one channel's STREAMON would have disarmed the enables another
+	 * channel had set.
+	 */
+	cam_set_bits(cam, CAM_CTL_INT_EN, CAM_CTL_INT_EN_DMA_ERR_EN |
+					   CAM_CTL_INT_EN_IMGO_ERR_EN);
 
 	/* And the per-channel done interrupt, whose status bit is bit 0. */
-	cam_write(cam, CAM_CTL_DMA_INT, CAM_CTL_DMA_INT_IMGO_DONE_EN);
+	cam_set_bits(cam, CAM_CTL_DMA_INT, CAM_CTL_DMA_INT_IMGO_DONE_EN);
 
 	/*
 	 * The buffer address.  See the long note in the file header: the data
@@ -622,16 +647,17 @@ static void mtk_cam_config_imgo(struct mtk_cam *cam, dma_addr_t addr,
 /*
  * Disable IMGO.
  *
- * The enable is cleared with the write-one-to-clear companion, and the done
- * interrupt enable with a plain zero write (CAM_CTL_DMA_INT is a normal RW
- * register, not a shadow, so zero really does mean "no interrupts").
+ * The enable is cleared with the write-one-to-clear companion, and this
+ * channel's done-interrupt enable is cleared bit-wise rather than by zeroing
+ * the register: CAM_CTL_DMA_INT carries one enable per DMA channel, so a
+ * whole-word write would disarm every other channel's done interrupt too.
  */
 static void mtk_cam_disable_imgo(struct mtk_cam *cam)
 {
 	lockdep_assert_held(&cam->lock);
 
 	cam_write(cam, CAM_CTL_DMA_EN_CLR, CAM_CTL_DMA_EN_IMGO_EN);
-	cam_write(cam, CAM_CTL_DMA_INT, 0);
+	cam_clear_bits(cam, CAM_CTL_DMA_INT, CAM_CTL_DMA_INT_IMGO_DONE_EN);
 
 	/*
 	 * CAM_CTL_INT_EN is shared with every other channel, so it is not zeroed
@@ -1427,7 +1453,7 @@ static const struct v4l2_file_operations mtk_cam_v4l2_fops = {
 static bool mtk_cam_irq(struct mtk_cam *cam)
 {
 	unsigned long flags;
-	u32 status;
+	u32 status, int_status;
 	struct vb2_buffer *vb;
 	dma_addr_t dma_addr;
 
@@ -1436,12 +1462,30 @@ static bool mtk_cam_irq(struct mtk_cam *cam)
 	/*
 	 * A plain read.  CAM_CTL_INT_EN bit 31 (INT_WCLR_EN) is left at its reset
 	 * value of 0, which the data sheet documents as "0: Read clear"
-	 * (data sheet page 1958), so reading CAM_CTL_DMA_INT is what clears the
-	 * status bits.  Reading into a local and testing that local is what makes
-	 * the clearing happen exactly once, and it has to happen before anything
-	 * else so an interrupt for another channel is still cleared.
+	 * (data sheet page 1958), so reading CAM_CTL_INT_STATUS and
+	 * CAM_CTL_DMA_INT is what clears their status bits.  Reading into a
+	 * local and testing that local is what makes the clearing happen
+	 * exactly once, and it has to happen before anything else so an
+	 * interrupt for another channel is still cleared.
+	 *
+	 * CAM_CTL_INT_STATUS has to be read and not merely left alone: this
+	 * driver enables DMA_ERR and IMGO_ERR in CAM_CTL_INT_EN, and both
+	 * report in INT_STATUS, not DMA_INT.  The line is level triggered, so
+	 * an error raised once and never acknowledged would leave the handler
+	 * re-entering for the rest of the stream - and, with the status never
+	 * inspected, the one diagnostic that says why frames stopped would
+	 * never be printed.  The vendor's ISR reads every status register and
+	 * masks it against both the enable and the error sets
+	 * (camera_isp.c:3197-3205); this is the same idea for the two
+	 * registers that can be non-zero here.
 	 */
+	int_status = cam_read(cam, CAM_CTL_INT_STATUS);
 	status = cam_read(cam, CAM_CTL_DMA_INT);
+
+	if (int_status & (CAM_CTL_INT_STATUS_DMA_ERR | CAM_CTL_INT_STATUS_IMGO_ERR))
+		dev_warn_ratelimited(cam->dev,
+				     "ISP error: int_status=%#x dma_int=%#x\n",
+				     int_status, status);
 
 	if (!(status & CAM_CTL_DMA_INT_IMGO_DONE_ST) || !cam->active_buf) {
 		spin_unlock_irqrestore(&cam->irq_lock, flags);

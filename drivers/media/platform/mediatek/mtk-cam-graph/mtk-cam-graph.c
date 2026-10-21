@@ -251,23 +251,21 @@ static int mtk_cam_graph_create_links(struct mtk_cam_graph *cam)
 	 * may have reached us through an endpoint, or we may have reached it,
 	 * and only bound subdevs are on this list.  sd->v4l2_dev is our
 	 * v4l2_dev for every subdev on it.
+	 *
+	 * The inner loop is v4l2_create_fwnode_links(), which is precisely
+	 * "for every sink pad of sink_sd, create the links the DT describes"
+	 * - including the MEDIA_PAD_FL_SINK test and the already-exists skip.
+	 * Doing it by hand here meant a hand-written scan of every pad plus a
+	 * call per pad, which is the same work twice.
 	 */
 	list_for_each_entry(src, &cam->v4l2_dev.subdevs, list) {
 		list_for_each_entry(sink_sd, &cam->v4l2_dev.subdevs, list) {
-			unsigned int i;
+			if (src == sink_sd)
+				continue;
 
-			for (i = 0; i < sink_sd->entity.num_pads; i++) {
-				struct media_pad *sink =
-					&sink_sd->entity.pads[i];
-
-				if (!(sink->flags & MEDIA_PAD_FL_SINK))
-					continue;
-
-				ret = v4l2_create_fwnode_links_to_pad(src,
-								      sink, 0);
-				if (ret)
-					return ret;
-			}
+			ret = v4l2_create_fwnode_links(src, sink_sd);
+			if (ret)
+				return ret;
 		}
 	}
 

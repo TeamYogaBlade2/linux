@@ -137,6 +137,19 @@
 #define CAM_CTL_INT_EN_IMGO_ERR_EN		BIT(20)
 
 /*
+ * CAM_CTL_INT_STATUS (0x15004024): the two reports whose enables are set
+ * above.  Same bit positions as the enables, which is what the vendor's
+ * kernel-side map confirms - ISP_IRQ_INT_STATUS_IMGO_ERR_ST is bit 20 and
+ * ISP_IRQ_INT_STATUS_DMA_ERR_ST is bit 30
+ * (aquaris-5 .../kernel/core/include/mach/camera_isp.h:35 and :45).
+ *
+ * The register is read-clear while INT_WCLR_EN is 0, so the read in
+ * mtk_cam_irq() is also the acknowledgement; there is no separate clear.
+ */
+#define CAM_CTL_INT_STATUS_IMGO_ERR		BIT(20)
+#define CAM_CTL_INT_STATUS_DMA_ERR		BIT(30)
+
+/*
  * CAM_CTL_DMA_INT (0x15004028).  Data sheet page 1960 (bit table) and 1961
  * (descriptions):
  *
