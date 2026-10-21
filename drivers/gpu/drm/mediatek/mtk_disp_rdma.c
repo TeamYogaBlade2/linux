@@ -162,8 +162,6 @@ struct mtk_disp_rdma {
 	void				*vblank_cb_data;
 	u32				fifo_size;
 	bool				dbg_done;
-	unsigned int			irq_reports;
-	bool				fault_reported;
 	bool				start_dbg_done;
 };
 
@@ -184,24 +182,15 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 	 */
 	writel(~handled, priv->regs + DISP_REG_RDMA_INT_STATUS);
 
-	if (priv->data->direct_link_no_plane &&
-	    (priv->irq_reports < 4 ||
-	     ((handled & (RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT)) &&
-	      !priv->fault_reported))) {
-		pr_info("MT6589 RDMA0 IRQ: status=%#x global_con=%#x int_enable=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x start=%#x fifo=%#x\n",
-			status,
-			readl(priv->regs + DISP_REG_RDMA_GLOBAL_CON),
-			readl(priv->regs + DISP_REG_RDMA_INT_ENABLE),
-			readl(priv->regs + DISP_REG_RDMA_SIZE_CON_0),
-			readl(priv->regs + DISP_REG_RDMA_SIZE_CON_1),
-			readl(priv->regs + DISP_RDMA_MEM_CON),
-			readl(priv->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
-			readl(priv->regs + priv->data->mem_start_addr_reg),
-			readl(priv->regs + DISP_REG_RDMA_FIFO_CON));
-		priv->irq_reports++;
-		if (handled & (RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT))
-			priv->fault_reported = true;
-	}
+	if (handled & (RDMA_EOF_ABNORMAL_INT | RDMA_FIFO_UNDERFLOW_INT))
+		pr_debug_ratelimited("RDMA0 fault: status=%#x global_con=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x fifo=%#x\n",
+				     status,
+				     readl(priv->regs + DISP_REG_RDMA_GLOBAL_CON),
+				     readl(priv->regs + DISP_REG_RDMA_SIZE_CON_0),
+				     readl(priv->regs + DISP_REG_RDMA_SIZE_CON_1),
+				     readl(priv->regs + DISP_RDMA_MEM_CON),
+				     readl(priv->regs + DISP_REG_RDMA_MEM_SRC_PITCH),
+				     readl(priv->regs + DISP_REG_RDMA_FIFO_CON));
 
 	if (priv->vblank_cb && (status & RDMA_FRAME_END_INT))
 		priv->vblank_cb(priv->vblank_cb_data);
@@ -310,8 +299,8 @@ void mtk_rdma_start(struct device *dev)
 
 	if (rdma->data->direct_link_no_plane && !rdma->start_dbg_done) {
 		rdma->start_dbg_done = true;
-		dev_info(dev,
-			 "RDMA0 post-start: global_con=%#x int_enable=%#x int_status=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x start=%#x gmc1=%#x fifo=%#x\n",
+		dev_dbg(dev,
+			"RDMA0 post-start: global_con=%#x int_enable=%#x int_status=%#x size0=%#x size1=%#x mem_con=%#x pitch=%#x start=%#x gmc1=%#x fifo=%#x\n",
 			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
 			 readl(rdma->regs + DISP_REG_RDMA_INT_ENABLE),
 			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
@@ -465,9 +454,8 @@ void mtk_rdma_config(struct device *dev, unsigned int width,
 	 */
 	if (!cmdq_pkt && !rdma->dbg_done) {
 		rdma->dbg_done = true;
-		dev_info(dev,
-			 "rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x\n"
-			 "rdma0: mem_con=%#x src_pitch=%#x start_addr=%#x gmc1=%#x fifo_con=%#x\n",
+		dev_dbg(dev,
+			"rdma0: global_con=%#x int_status=%#x size_con0=%#x size_con1=%#x mem_con=%#x src_pitch=%#x start_addr=%#x gmc1=%#x fifo_con=%#x\n",
 			 readl(rdma->regs + DISP_REG_RDMA_GLOBAL_CON),
 			 readl(rdma->regs + DISP_REG_RDMA_INT_STATUS),
 			 readl(rdma->regs + DISP_REG_RDMA_SIZE_CON_0),

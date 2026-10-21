@@ -33,17 +33,6 @@
 #include "mtk_crtc.h"
 #include "mtk_drm_drv.h"
 
-/*
- * Total number of mtk_dsi_dump_status() lines for the life of the device.
- * Each enable emits two (pre-start and post-start); 16 leaves the headroom to
- * see every snapshot of the first eight enables, which is where a boot-time
- * black screen is decided.  Beyond that the dump goes silent with one
- * announcement, because pstore survives only a few KiB and an unconditional
- * per-enable print from a hot path has already cost us the previous boot's
- * logs once.
- */
-#define DSI_STATUS_DUMP_MAX	16
-
 #define DSI_START		0x00
 
 /*
@@ -329,8 +318,6 @@ struct mtk_dsi {
 	int refcount;
 	bool enabled;
 	bool lanes_ready;
-	unsigned int status_dumps;
-	bool status_dumps_suppressed;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	const struct mtk_dsi_driver_data *driver_data;
@@ -849,131 +836,30 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 	writel(inten, dsi->regs + DSI_INTEN);
 }
 
-/**
- * mtk_dsi_dump_status - log the DSI link state, for black-screen triage
- * @dsi: DSI master
- * @when: which snapshot this is, "pre-start" or "post-start"
- *
- * One dev_info line per snapshot.  It is called twice per enable - once
- * before and once after mtk_dsi_start() - because a single snapshot taken
- * only in atomic_pre_enable() cannot distinguish "the link came up" from
- * "the engine was never started": DSI_STA reads 0x00 with no error bits in
- * both cases, so a pre-start-only dump makes a dead link look healthy.
- * Comparing the two is the point - ctl frozen at its reset value in BOTH
- * lines means the engine never left reset; ack appearing only in the
- * post-start line means the start is what woke the link up.
- *
- * The next boot is only diagnosable from pstore, which holds only ~16 KiB,
- * so this deliberately replaces any per-register or per-command trace: it
- * packs the whole link state into a single line instead of a dozen.  The
- * total line count is additionally capped (DSI_STATUS_DUMP_MAX) because an
- * unconditional pr_err in the OVL IRQ handler once filled a 16 MB log
- * buffer in seconds and evicted everything from pstore.
- *
- * What to read from it:
- *
- *   - txrx/start: DSI_TXRX_CTRL lane count and DSI_START.  In the
- *     post-start line a non-zero START with a non-zero LANE_NUM is the
- *     cheapest "the engine was actually told to run" fact.
- *   - sta: DSI_STA.  Any of BUF_UNDERRUN/ESC_ENTRY_ERR/LPDT_SYNC_ERR/
- *     CTRL_ERR/CONTENT_ERR set means the engine hit a protocol error and the
- *     transfer is being retried or dropped; all-zero with no DMA traffic is
- *     the interesting "nothing was ever attempted" case.
- *   - trig: DSI_TRIG_STA.TRIG_ACK.  Set means the panel returned an LPRX
- *     acknowledgement, i.e. the panel is physically attached and answering.
- *     Clear with lanes running means nothing is on the other end of the link.
- *   - ctl/hx: DSI_STATE_DBG0 CTL_STATE_C[8:0] / HX_TX_STATE_C[11:9].  These
- *     are the last controller and D-PHY transmit states.  A CTL_STATE_C frozen
- *     at its reset value means the engine was never started.
- *   - rx0: DSI_RX_DATA0, the first LPRX response byte, only meaningful when
- *     trig shows an acknowledgement.
- *
- * Note there is deliberately no DCS command sequence sent to the panel.  The
- * BOE HX8896-A01 runs in pure video mode: the stock driver for this board,
- * TeamYogaBlade2/android_kernel_lenovo_b8000-new
- * mediatek/custom/common/kernel/lcm/cm_hx8896a01_dsi_vdo_boe/cm_hx8896a01_dsi_vdo_boe.c,
- * sets (params->dsi).mode = SYNC_EVENT_VDO_MODE and its lcm_init() is in full
- *
- *	static void lcm_init(void)
- *	{
- *	  lcd_power_en();
- *	  return;
- *	}
- *
- * with not one DCS byte anywhere in the file - no 0x11, no 0x3A, no 0x29,
- * no 0xB0 page programming.  In video mode the host never enters command mode
- * and never issues a command queue, so there is nothing to send; with no page
- * programming the panel self-configures from its internal defaults, which is
- * why upstream panel-simple declares boe_hx8896_a01 with no .init_sequence.
- * That driver's porches also match the stock parameters exactly -
- * 100/4/32 horizontal and 10/2/10 vertical around 1280x800 - so the timing
- * comes from two independent agreeing sources rather than from one of them
- * alone.  If a hardware capture ever shows this part needs a sequence, it
- * belongs in a drm_panel .init_sequence under drivers/gpu/drm/panel/, not
- * here.
+/*
+ * Log the link state at stream on.  Kept because a dark panel is otherwise
+ * indistinguishable between "the engine never started" and "the link came up
+ * and the panel is not showing it", and DSI_STA reads 0 in both cases.  One
+ * line, at debug level: the boot log has no room for more, and the values are
+ * only wanted while something is wrong.
  */
 static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
 {
-	u32 con_ctrl, mode_ctrl, txrx, start, sta, intsta, inten, trig, dbg0;
-	u32 phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6;
-	u32 dbg7, dbg8, dbg9;
-	u32 psctrl, vact, hsa, hbp, hfp;
+	u32 dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
 
-	/*
-	 * Cap the lines for the life of the device, and say so once when the
-	 * cap is hit rather than silently going quiet.  A hard count rather
-	 * than dev_ratelimited() on purpose: a time-based limit would drop the
-	 * post-start line first during a modeset storm, and that is exactly
-	 * the line which says whether the link came up.
-	 */
-	if (dsi->status_dumps >= DSI_STATUS_DUMP_MAX) {
-		if (!dsi->status_dumps_suppressed) {
-			dsi->status_dumps_suppressed = true;
-			dev_info(dsi->host.dev,
-				 "DSI: %u status snapshots logged, further ones suppressed\n",
-				 DSI_STATUS_DUMP_MAX);
-		}
-		return;
-	}
-	dsi->status_dumps++;
-
-	con_ctrl = readl(dsi->regs + DSI_CON_CTRL);
-	mode_ctrl = readl(dsi->regs + DSI_MODE_CTRL);
-	txrx = readl(dsi->regs + DSI_TXRX_CTRL);
-	start = readl(dsi->regs + DSI_START);
-	sta = readl(dsi->regs + DSI_STA);
-	intsta = readl(dsi->regs + DSI_INTSTA);
-	inten = readl(dsi->regs + DSI_INTEN);
-	trig = readl(dsi->regs + DSI_TRIG_STA);
-	dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
-	phy_lccon = readl(dsi->regs + DSI_PHY_LCCON);
-	phy_ld0con = readl(dsi->regs + DSI_PHY_LD0CON);
-	dbg1 = readl(dsi->regs + DSI_STATE_DBG1);
-	dbg2 = readl(dsi->regs + DSI_STATE_DBG2);
-	dbg3 = readl(dsi->regs + DSI_STATE_DBG3);
-	dbg4 = readl(dsi->regs + DSI_STATE_DBG4);
-	dbg6 = readl(dsi->regs + DSI_STATE_DBG6);
-	dbg7 = readl(dsi->regs + DSI_STATE_DBG7);
-	dbg8 = readl(dsi->regs + DSI_STATE_DBG8);
-	dbg9 = readl(dsi->regs + DSI_STATE_DBG9);
-	psctrl = readl(dsi->regs + DSI_PSCTRL);
-	vact = readl(dsi->regs + DSI_VACT_NL);
-	hsa = readl(dsi->regs + DSI_HSA_WC);
-	hbp = readl(dsi->regs + DSI_HBP_WC);
-	hfp = readl(dsi->regs + DSI_HFP_WC);
-	dev_info(dsi->host.dev, "DSI %s detail: phy_lc=%#x phy_ld0=%#x dbg1=%#x dbg2=%#x dbg3=%#x dbg4=%#x dbg6=%#x dbg7=%#x dbg8=%#x dbg9=%#x ps=%#x vact=%#x hsa=%#x hbp=%#x hfp=%#x\n",
-		 when, phy_lccon, phy_ld0con, dbg1, dbg2, dbg3, dbg4, dbg6,
-		 dbg7, dbg8, dbg9, psctrl, vact, hsa, hbp, hfp);
-
-	dev_info(dsi->host.dev,
-		 "DSI %s: con_ctrl=%#x mode_ctrl=%#x txrx=%#x start=%#x "
-		 "sta=%#x intsta=%#x inten=%#x trig=%#x ack=%u dbg0=%#x "
-		 "ctl_state=%#x hx_state=%#x rx0=%#x\n",
-		 when, con_ctrl, mode_ctrl, txrx, start, sta, intsta, inten,
-		 trig, !!(trig & TRIG_ACK), dbg0,
-		 FIELD_GET(CTL_STATE_C, dbg0),
-		 FIELD_GET(HX_TX_STATE_C, dbg0),
-		 readb(dsi->regs + DSI_RX_DATA0));
+	dev_dbg(dsi->host.dev,
+		"DSI %s: mode=%#x txrx=%#x start=%#x sta=%#x intsta=%#x "
+		"dbg0=%#x ctl_state=%#x hx_state=%#x lccon=%#x ld0con=%#x "
+		"ps=%#x hsa=%#x hbp=%#x hfp=%#x\n",
+		when, readl(dsi->regs + DSI_MODE_CTRL),
+		readl(dsi->regs + DSI_TXRX_CTRL), readl(dsi->regs + DSI_START),
+		readl(dsi->regs + DSI_STA), readl(dsi->regs + DSI_INTSTA),
+		dbg0, FIELD_GET(CTL_STATE_C, dbg0),
+		FIELD_GET(HX_TX_STATE_C, dbg0),
+		readl(dsi->regs + DSI_PHY_LCCON),
+		readl(dsi->regs + DSI_PHY_LD0CON),
+		readl(dsi->regs + DSI_PSCTRL), readl(dsi->regs + DSI_HSA_WC),
+		readl(dsi->regs + DSI_HBP_WC), readl(dsi->regs + DSI_HFP_WC));
 }
 
 static void mtk_dsi_irq_data_set(struct mtk_dsi *dsi, u32 irq_bit)

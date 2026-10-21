@@ -406,14 +406,6 @@ struct mtk_disp_ovl {
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
-	/* Rate limiting for a fault that persists indefinitely. */
-	unsigned int			intsta_reported;
-	/* Persistent-fault counters; sampled at powers of two to preserve pstore. */
-	u32				rdma0_eof_abn_count;
-	u32				frame_done_count;
-	u32				vblank_cb_count;
-	bool				layer_dbg_done;
-	bool				rdma_err_dbg_done;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -421,7 +413,6 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	struct mtk_disp_ovl *priv = dev_id;
 	u32 reg = readl(priv->regs + DISP_REG_OVL_INTSTA);
 	u32 handled;
-	u32 src_con, sta;
 
 	/*
 	 * A SoC that owns at least one status bit (int_all_mask non-zero)
@@ -448,171 +439,16 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 	if (priv->data->int_all_mask && !(reg & priv->data->int_all_mask))
 		return IRQ_NONE;
 
-	if (reg & priv->data->fme_cpl_bit)
-		priv->frame_done_count++;
-	if (priv->vblank_cb && (reg & priv->data->fme_cpl_bit))
-		priv->vblank_cb_count++;
+	if (reg & (priv->data->rdma0_eof_abn_bit |
+		   priv->data->rdma1_eof_abn_bit |
+		   priv->data->fme_und_bit |
+		   priv->data->rdma0_fifo_und_bit |
+		   priv->data->rdma1_fifo_und_bit))
+		pr_debug_ratelimited("OVL fault: intsta=%#x sta=%#x flow=%#x src_con=%#x\n",
+				     reg, readl(priv->regs + DISP_REG_OVL_STA),
+				     readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
+				     readl(priv->regs + DISP_REG_OVL_SRC_CON));
 
-	/*
-	 * The normal fault report below is intentionally limited to eight
-	 * messages, and the first full register snapshot is one-shot.  Ramoops
-	 * keeps only the tail of the console, so those early messages can be
-	 * gone by the time DRM's vblank wait times out.  Log a compact snapshot
-	 * at powers of two while OVL's internal RDMA0 EOF fault persists.  This
-	 * stays logarithmic even if the display runs indefinitely, and the
-	 * counters distinguish a missing frame-complete/vblank path from an
-	 * OVL fetch engine that is still faulting.
-	 */
-	if (priv->data->has_dispsys_cfg &&
-	    (reg & priv->data->rdma0_eof_abn_bit)) {
-		priv->rdma0_eof_abn_count++;
-		if (!(priv->rdma0_eof_abn_count &
-		      (priv->rdma0_eof_abn_count - 1))) {
-			src_con = readl(priv->regs + DISP_REG_OVL_SRC_CON);
-			sta = readl(priv->regs + DISP_REG_OVL_STA);
-			pr_err("OVL progress: eof_abn=%u frame_done=%u vblank_cb=%u "
-			       "intsta=%#x sta=%#x flow=%#x addr=%#x pitch=%#x "
-			       "size=%#x con=%#x src_con=%#x rdma_ctrl=%#x "
-			       "gmc=%#x fifo=%#x roi=%#x datapath=%#x\n",
-			       priv->rdma0_eof_abn_count,
-			       priv->frame_done_count, priv->vblank_cb_count,
-			       reg, sta,
-			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
-			       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
-			       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
-			       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
-			       readl(priv->regs + DISP_REG_OVL_CON(0)), src_con,
-			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
-			       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
-			       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
-			       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
-			       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
-		}
-	}
-
-	/*
-	 * Capture the first EOF-abnormal while OVL and RDMA0 are active.
-	 * The interrupt may be serviced after the failed transaction has
-	 * already returned the engine to its idle state. Do not consume the
-	 * one-shot diagnostic on that idle snapshot.
-	 */
-	if ((reg & priv->data->rdma0_eof_abn_bit) &&
-	    !priv->rdma_err_dbg_done) {
-		src_con = readl(priv->regs + DISP_REG_OVL_SRC_CON);
-		sta = readl(priv->regs + DISP_REG_OVL_STA);
-		if ((src_con & BIT(0)) &&
-		    (sta & BIT(0)) &&
-		    !(sta & BIT(1))) {
-			priv->rdma_err_dbg_done = true;
-			pr_err("OVL RDMA0 active snapshot: intsta=%#x sta=%#x flow=%#x outmux=%#x addcon=%#x dbg=%#x ctrl=%#x gmc=%#x fifo=%#x "
-			       "addr=%#x pitch=%#x size=%#x con=%#x src_con=%#x roi=%#x datapath=%#x\n",
-			       reg, sta,
-			       readl(priv->regs + DISP_REG_OVL_FLOW_CTRL_DBG),
-			       readl(priv->regs + DISP_REG_OVL_OUTMUX_DBG),
-			       readl(priv->regs + DISP_REG_OVL_ADDCON_DBG),
-			       readl(priv->regs + DISP_REG_OVL_RDMA0_DBG),
-			       readl(priv->regs + DISP_REG_OVL_RDMA_CTRL(0)),
-			       readl(priv->regs + DISP_REG_OVL_RDMA_GMC(0)),
-			       readl(priv->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(0)),
-			       readl(priv->regs + DISP_REG_OVL_ADDR(priv, 0)),
-			       readl(priv->regs + DISP_REG_OVL_PITCH(0)),
-			       readl(priv->regs + DISP_REG_OVL_SRC_SIZE(0)),
-			       readl(priv->regs + DISP_REG_OVL_CON(0)),
-			       src_con,
-			       readl(priv->regs + DISP_REG_OVL_ROI_SIZE),
-			       readl(priv->regs + DISP_REG_OVL_DATAPATH_CON));
-
-			/*
-			 * Sample the live DISPSYS direct-link handshake while
-			 * OVL RDMA0 is active, not before the first frame starts.
-			 */
-			if (priv->cfg_regs)
-				pr_err("MT6589 path debug: valid0=%#x valid1=%#x ready0=%#x ready1=%#x\n",
-				       readl(priv->cfg_regs +
-					     MT6589_ROUTE_PATH_DEBUG0),
-				       readl(priv->cfg_regs +
-					     MT6589_ROUTE_PATH_DEBUG1),
-				       readl(priv->cfg_regs +
-					     MT6589_ROUTE_PATH_DEBUG2),
-				       readl(priv->cfg_regs +
-					     MT6589_ROUTE_PATH_DEBUG3));
-		}
-	}
-
-	/*
- * Report OVL_STA alongside the interrupt status.  Bit 0 is OVL_RUN
- * and bit 1 is RDMA0_IDLE, so one line separates the possibilities:
- * run=0 with RDMA0 idle means the engine never started, run=1 with
- * RDMA0 not idle means RDMA stalled fetching, both idle means nothing
- * is triggering start-of-frame.
-	 */
-	/*
-	 * Rate limited.  These conditions persist for as long as the engine
-	 * is misconfigured, and the interrupt is level triggered, so an
-	 * unconditional print here fires on every frame: it filled a 16 MB
-	 * log buffer in seconds and pushed the rest of the boot out of
-	 * pstore entirely.  Print the first few reports and then stay
-	 * quiet, saying on the last of them how many were dropped.
-	 *
-	 * Note this counts total reports, not runs of one value: the status
-	 * alternates between two values here, so a per-value counter never
-	 * reached its limit.
-	 */
-	if (priv->intsta_reported < 8) {
-		u32 sta = readl(priv->regs + DISP_REG_OVL_STA);
-		bool last = priv->intsta_reported == 7;
-
-		/*
-		 * Note this counts total reports, not runs of one value: the
-		 * status alternates between two values here, so a per-value
-		 * counter never reached its limit.
-		 */
-		pr_err("OVL: intsta=%#x sta=%#x (run=%d rdma0_idle=%d)%s\n",
-		       reg, sta, !!(sta & 1), !!(sta & 0x2),
-		       last ? " (last of 8 reports; further ones suppressed)"
-			     : "");
-
-		if (reg & priv->data->fme_cpl_bit)
-			pr_err("OVL: frame complete\n");
-		if (reg & priv->data->fme_und_bit)
-			pr_err("OVL: OVL frame underflow\n");
-		if (reg & priv->data->rdma0_eof_abn_bit)
-			pr_err("OVL: RDMA0 didn't complete frame\n");
-		if (reg & priv->data->rdma1_eof_abn_bit)
-			pr_err("OVL: RDMA1 didn't complete frame\n");
-		if (reg & priv->data->rdma0_fifo_und_bit)
-			pr_err("OVL: RDMA0 FIFO underflow\n");
-		if (reg & priv->data->rdma1_fifo_und_bit)
-			pr_err("OVL: RDMA1 FIFO underflow\n");
-
-		priv->intsta_reported++;
-	}
-
-	/*
- * Acknowledge every status bit this block can raise, not merely the
- * faults printed above.
- *
- * OVL_INTSTA is write-0-to-clear: the data sheet says "cleared by
- * writing 0 to it; writing 1 is useless".  OVL_INTEN mirrors that
- * bit map one-for-one, and mtk_ovl_enable_vblank() programs it
- * with vblank_en_mask = 0xf, i.e. REG_CMT (bit 0), FME_CPL (bit
- * 1), FME_UND (bit 2) and FME_SWRST_DONE (bit 3).  The old clear
- * list held only bits 2, 4, 5, 8 and 9, so frame complete stayed
- * latched from the first frame onwards: the line is level
- * triggered (IRQF_TRIGGER_NONE, as wired up in DT) and the handler
- * re-entered forever, printing the identical intsta every frame.
- *
- * Masking with int_all_mask rather than with an ad-hoc list of
- * fault bits is what makes this hold structurally: "we enabled it,
- * so we must acknowledge it" survives any future change to
- * vblank_en_mask or to the individual fault-bit fields, because
- * the acknowledged set is a superset of whatever the enable mask
- * can select.
- *
- * The write is inverted, so every bit we are not acknowledging
- * goes out as 1 and a condition arriving after the readl above is
- * left alone rather than wiped.
-	 */
 	handled = reg & priv->data->int_all_mask;
 	writel(~handled, priv->regs + DISP_REG_OVL_INTSTA);
 
@@ -785,8 +621,8 @@ void mtk_ovl_start(struct device *dev)
 			MT6589_DISPSYS_CONFIG_CG_CON0, &cg))
 		cg = ~0U;
 
-	dev_info(dev,
-		 "ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x fsm=%#x fsm_state=%#x\n",
+	dev_dbg(dev,
+		"ovl: en=%#x trig=%#x roi=%#x src_con=%#x sta=%#x cg_con0=%#x fsm=%#x fsm_state=%#x\n",
 		 en,
 		 readl(ovl->regs + DISP_REG_OVL_TRIG),
 		 readl(ovl->regs + DISP_REG_OVL_ROI_SIZE),
@@ -794,12 +630,7 @@ void mtk_ovl_start(struct device *dev)
 		 readl(ovl->regs + DISP_REG_OVL_STA),
 		 cg, flow, fsm_state);
 
-	/*
-	 * Read the MT6589 crossbar configuration in process context. The OVL
-	 * active snapshot showed OUTMUX READY/VALID both clear while the layer
-	 * was active, so record whether the OVL -> COLOR -> BLS -> RDMA0 route
-	 * was actually selected before guessing at another block's state.
-	 */
+	/* The crossbar select for this path, for the same diagnostic. */
 	if (ovl->cfg_regmap) {
 		u32 ovl_mout = ~0U, color_mout = ~0U, rdma0_sel = ~0U;
 		u32 color_sel = ~0U, bls_sel = ~0U;
@@ -814,8 +645,8 @@ void mtk_ovl_start(struct device *dev)
 			    &color_sel);
 		regmap_read(ovl->cfg_regmap, MT6589_ROUTE_BLS_SEL,
 			    &bls_sel);
-		dev_info(dev,
-			 "MT6589 route: ovl_mout=%#x color_mout=%#x color_sel=%#x bls_sel=%#x rdma0_out=%#x\n",
+		dev_dbg(dev,
+			"MT6589 route: ovl_mout=%#x color_mout=%#x color_sel=%#x bls_sel=%#x rdma0_out=%#x\n",
 			 ovl_mout, color_mout, color_sel, bls_sel, rdma0_sel);
 	}
 
@@ -1323,45 +1154,6 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 	 * overlay's own RDMA does not finish by EOF.  If L0_ADDR is zero or
 	 * the pitch is wrong, that is the reason.
 	 */
-	/*
-	 * Only meaningful when there is no command packet.  With CMDQ - which
-	 * MT6589 uses - mtk_ovl_layer_on() and the rest of this function queue
-	 * their writes into the GCE buffer, so a readl() taken here would show
-	 * the *previous* commit's shadow values rather than what was just
-	 * programmed.  That is not a harmless artefact: RDMA_CTRL reads back
-	 * 0x03ff0001 when the driver actually wrote 0x1, which looks like a
-	 * hardware fault in the log and is not one.
-	 */
-	if (!cmdq_pkt && !ovl->layer_dbg_done) {
-		struct iommu_domain *domain;
-		phys_addr_t phys = 0;
-		u32 hw_addr;
-
-		ovl->layer_dbg_done = true;
-		hw_addr = readl(ovl->regs + DISP_REG_OVL_ADDR(ovl, idx));
-		domain = iommu_get_domain_for_dev(dev);
-		if (domain)
-			phys = iommu_iova_to_phys(domain, hw_addr);
-		dev_info(dev,
-			 "ovl layer%d: addr=%#x pitch=%#x src_size=%#x src_con=%#x con=%#x\n"
-			 "ovl layer%d: rdma_ctrl=%#x rdma_gmc=%#x sta=%#x\n",
-			 idx,
-			 readl(ovl->regs + DISP_REG_OVL_ADDR(ovl, idx)),
-			 readl(ovl->regs + DISP_REG_OVL_PITCH(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_SRC_SIZE(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_SRC_CON),
-			 readl(ovl->regs + DISP_REG_OVL_CON(idx)),
-			 idx,
-			 readl(ovl->regs + DISP_REG_OVL_RDMA_CTRL(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_RDMA_GMC(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_STA));
-		dev_info(dev,
-			 "OVL layer%d fetch: iova=%#x translated_pa=%pa domain=%u offset=%#x pitch_msb=%#x fifo_ctrl=%#x\n",
-			 idx, hw_addr, &phys, !!domain,
-			 readl(ovl->regs + DISP_REG_OVL_OFFSET(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_PITCH_MSB(idx)),
-			 readl(ovl->regs + DISP_REG_OVL_RDMA_FIFO_CTRL(idx)));
-	}
 }
 
 void mtk_ovl_bgclr_in_on(struct device *dev)
