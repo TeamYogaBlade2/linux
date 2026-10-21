@@ -453,25 +453,31 @@ void mt6589_bls_ddp_start(struct device *dev)
 		return;
 
 	/*
-	 * Enable BLS *and* its PWM output: 0x80010001, which is what the
-	 * downstream main-path configuration writes
-	 * (ddp_bls.c:171, DISP_REG_SET(DISP_REG_BLS_EN, 0x80010001) on the
-	 * aal_debug_flag == 0 path - the 0x80000000 variant on the next line
-	 * is the debug/backlight-only mode).
+	 * Enable the PWM output only: 0x80000000, PWM_En with BLS_En clear.
 	 *
-	 * BLS_EN bit 0 is BLS_En, "Enables BLS or not" (data sheet page 1655),
-	 * and BLS is a *stage of the pixel path*, not only a backlight PWM
-	 * generator: the MT6589 main path is OVL -> COLOR -> BLS -> RDMA0 ->
-	 * DSI.  Driving just the PWM bit (0x80000000) therefore leaves the
-	 * data path disabled at the BLS stage: RDMA0 receives nothing, its
-	 * EOF_ABNORMAL fires every frame, and DSI never gets a frame to
-	 * transmit, which shows up as DSI_BUSY stuck high with zero DSI
-	 * interrupts.  The histogram engine stays off; it is optional and
-	 * only feeds AAL.
+	 * BLS_EN bit 31 is PWM_En ("Enables PWM waveform") and bit 0 is
+	 * BLS_En ("Enables BLS"), per the data sheet field table.  BLS_En
+	 * turns on the BLS *scaling engine*, and with it enabled the duty
+	 * register stops behaving as a plain brightness control: writing
+	 * PWM_DUTY_IN is accepted (the register reads back the new value) but
+	 * the panel's average brightness no longer follows it, because the
+	 * scaling engine is driving the output instead of the raw duty cycle.
+	 *
+	 * This is not a theory: the bootloader, whose display and backlight
+	 * both work on this board, leaves BLS_EN at exactly 0x80000000
+	 * (barebox register dump of 0x14008000).  The vendor kernel's
+	 * aal_debug_flag == 1 branch writes the same value, described as
+	 * "only enable PWM" (ddp_bls.c:173).
+	 *
+	 * An earlier revision of this function set BLS_En too, on the theory
+	 * that BLS is a stage of the pixel path (OVL -> COLOR -> BLS ->
+	 * RDMA0) and so had to be enabled for pixels to flow.  It does not:
+	 * the display came up when the D-PHY timing was fixed, with BLS_En
+	 * clear throughout, and setting it only broke backlight control.
 	 */
 	mt6589_bls_update_en(bls,
 			     BLS_EN_PWM | BLS_EN_BLS | BLS_EN_HISTOGRAM,
-			     BLS_EN_PWM | BLS_EN_BLS);
+			     BLS_EN_PWM);
 	dev_info(dev,
 		 "MT6589 BLS start: en=%#x src_size=%#x setting=%#x\n",
 		 readl(bls->base + BLS_EN), readl(bls->base + BLS_SRC_SIZE),
