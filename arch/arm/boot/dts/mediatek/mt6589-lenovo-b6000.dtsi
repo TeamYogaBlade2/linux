@@ -87,7 +87,23 @@
 		vdd-supply = <&mt6320_ldo_vrf28_2>;
 		vddi-supply = <&mt6320_ldo_vrf28_2>;
 		backlight = <&backlight_lcd>;
+		/*
+		 * Two separate panel lines, both recovered from the B6000
+		 * vendor kernel:
+		 *
+		 *   GPIO137  power enable, driven high and left there
+		 *            (lcd_power_en_constprop_2 @ c03a2f08:
+		 *             hwPowerOn(LDO 0x12, 1800mV), then GPIO 0x89 out=1)
+		 *   GPIO131  reset, asserted low then released high
+		 *            (lcd_reset @ c03a2ea4 drives GPIO 0x83)
+		 *
+		 * GPIO131 is also listed as MSDC4_DAT1 in the SoC dtsi, but
+		 * mmc4 is never enabled on this board so that pinmux state is
+		 * not in force; the panel owns the pin here.  If an SD slot is
+		 * ever wired to mmc4 this conflict has to be resolved.
+		 */
 		enable-gpios = <&pio 137 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 131 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&b6000_panel_pins>;
 
