@@ -302,33 +302,6 @@ static void mt6589_prepare_inst(struct mtk_devapc_instance *in,
 	       in->pd_base + MT6589_DEVPAPC_PD_APC_CON);
 }
 
-static void mt6589_prepare_global(struct mtk_devapc_context *ctx)
-{
-	void __iomem *dxs_mask;
-	void __iomem *dxs_sta;
-	u32 val;
-
-	/*
-	 * DXS_VIO_* is physically present in every PD window, but the
-	 * functional summary consumed by the MT6589 interrupt path is the
-	 * DEVAPC0 register.  Vendor code always reads/writes this instance
-	 * for the DEVAPC0..4 summary bits.
-	 *
-	 * This is deliberately handled separately from per-domain VIO_MASK:
-	 * the latter selects slave violations, while DXS selects the
-	 * instance-level interrupt source.
-	 */
-	dxs_mask = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_MASK;
-	dxs_sta = ctx->inst[0].pd_base + MT6589_DEVPAPC_DXS_VIO_STA;
-
-	/* Drop stale summary bits before enabling the interrupt source. */
-	writel(MT6589_DEVPAPC_DXS_INSTANCE_MASK, dxs_sta);
-
-	val = readl(dxs_mask);
-	val &= ~MT6589_DEVPAPC_DXS_INSTANCE_MASK;
-	writel(val, dxs_mask);
-}
-
 struct mtk_devapc_vio_dbg {
 	u32 master_id;
 	u32 domain_id;
@@ -458,7 +431,6 @@ static void mt6589_apply_forbid(struct mtk_devapc_context *ctx)
 {
 	struct device_node *node = ctx->dev->of_node;
 	struct mtk_devapc_forbid f;
-	u32 val;
 	int count, n;
 	unsigned int applied = 0;
 
