@@ -362,53 +362,92 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	struct mtk_phy_timing *timing = &dsi->phy_timing;
 
 	/*
-	 * MT6589: use the D-PHY timing words the bootloader runs this panel
-	 * with, rather than the generic formulas below.
+	 * MT6589: the vendor's D-PHY timing computation, which differs from
+	 * the generic one above in both its constants and its inputs.
 	 *
-	 * The generic formulas produce a set that differs from the
-	 * bootloader's on 9 of the 13 fields, and not by one or two counts:
-	 * HS_TRAIL comes out 5 against 16, CLK_TRAIL 3 against 16, CLK_ZERO
-	 * 12 against 18.  HS_TRAIL and CLK_TRAIL are the high-speed trailer
-	 * periods - how long a lane stays in HS after the last bit before
-	 * returning to low power - and a link programmed with them wrong
-	 * reports itself as transmitting (START set, BUSY high, state machine
-	 * advancing) while what arrives at the panel is not decodable.  That
-	 * is this board's symptom exactly.
+	 * This is not cosmetic.  The generic formulas produce a set that
+	 * differs from the bootloader's on 9 of the 13 fields - HS_TRAIL 5
+	 * against 16, CLK_TRAIL 3 against 16, CLK_ZERO 12 against 18 - and
+	 * HS_TRAIL/CLK_TRAIL are the high-speed trailer periods, i.e. how long
+	 * a lane stays in HS after the last bit before releasing to low power.
+	 * With those wrong the link reports itself as transmitting (START set,
+	 * BUSY high, state machine advancing) while the panel receives
+	 * something it cannot decode.  That was this board's black screen.
 	 *
-	 * The values below are not guessed: they are the live contents of the
-	 * bootloader's DSI_PHY_TIMCON0..3 on this board with a working panel,
+	 * All of it derives from two numbers, per DSI_PHY_TIMCONFIG()
+	 * (dsi_drv.c:1453-1495):
 	 *
-	 *	TIMCON0 = 0x10090404   LPX 4  HS_PRPR 4  HS_ZERO 9  HS_TRAIL 16
-	 *	TIMCON1 = 0x08140610   TA_GO 16 TA_SURE 6 TA_GET 20 DA_HS_EXIT 8
-	 *	TIMCON2 = 0x10120000   CLK_ZERO 18 CLK_TRAIL 16
-	 *	TIMCON3 = 0x00080d04   CLK_HS_PRPR 4 CLK_HS_POST 13 CLK_HS_EXIT 8
+	 *	cycle_time = 8000 / lane_rate_mhz	  [ns per PLL cycle]
+	 *	ui         = 1000 / lane_rate_mhz + 1	  [unit interval]
 	 *
-	 * and they are reproduced by the vendor's DSI_PHY_TIMCONFIG()
-	 * (dsi_drv.c:1453-1495) for this panel's PLL entry, which is
-	 * independent corroboration rather than the same source twice.
-	 *
-	 * These are used verbatim only at the data rate they were measured
-	 * at; any other rate falls through to the generic computation, because
-	 * the vendor formulas need the PLL dividers (TXDIV0/1, FBK_SEL,
-	 * FBK_DIV, PRE_DIV) and this driver does not carry them - the MIPI TX
-	 * PLL driver owns that table.  Guessing a scale factor from the data
-	 * rate would be worse than the generic path.
+	 * lane_rate is the *achieved* rate the MIPI TX PLL produces, not the
+	 * requested one: the PLL table is coarse, and dsi->data_rate is read
+	 * back from the PHY for exactly that reason.  For this panel that is
+	 * 416 MHz, giving cycle_time 19 and ui 3, and the fields below then
+	 * come out at the values the bootloader runs - which is the check
+	 * that this is a derivation and not a table copied from one dump.
 	 */
-	if (dsi->driver_data->use_downstream_phy_timing &&
-	    data_rate_mhz == 420) {
-		timing->lpx		= 4;
-		timing->da_hs_prepare	= 4;
-		timing->da_hs_zero	= 9;
-		timing->da_hs_trail	= 16;
-		timing->ta_go		= 16;
-		timing->ta_sure		= 6;
-		timing->ta_get		= 20;
-		timing->da_hs_exit	= 8;
-		timing->clk_hs_zero	= 18;
-		timing->clk_hs_trail	= 16;
-		timing->clk_hs_prepare	= 4;
-		timing->clk_hs_post	= 13;
-		timing->clk_hs_exit	= 8;
+	if (dsi->driver_data->use_downstream_phy_timing) {
+		unsigned int lane_mhz = data_rate_mhz;
+		unsigned int cycle_time, ui;
+
+		/* NS_TO_CYCLE(): integer division, rounded up. */
+#define MTK_DSI_NS_TO_CYCLE(n, c)	((n) / (c) + (((n) % (c)) ? 1 : 0))
+
+		cycle_time = 8000 / lane_mhz;
+		ui = 1000 / lane_mhz + 1;
+
+		if (!cycle_time)
+			cycle_time = 1;
+
+		/* HS_TRAIL: max(lanes, time for 4 UI per lane + 60 ns) + 0x0a.
+		 * The +0x0a is the vendor's "HW latency" margin.
+		 */
+		timing->da_hs_trail =
+			max((unsigned int)dsi->lanes,
+			    MTK_DSI_NS_TO_CYCLE(dsi->lanes * 4 * ui + 60,
+						cycle_time)) + 0x0a;
+
+		timing->da_hs_prepare = MTK_DSI_NS_TO_CYCLE(60 + 5 * ui,
+							    cycle_time);
+		if (!timing->da_hs_prepare)
+			timing->da_hs_prepare = 1;
+
+		timing->da_hs_zero = MTK_DSI_NS_TO_CYCLE(
+			0xC8 + 0x0a * ui - timing->da_hs_prepare * cycle_time,
+			cycle_time);
+
+		timing->lpx = MTK_DSI_NS_TO_CYCLE(65, cycle_time);
+		if (!timing->lpx)
+			timing->lpx = 1;
+
+		/* Note these are not the generic path's multiples of LPX. */
+		timing->ta_get		= 5 * timing->lpx;
+		timing->ta_sure		= 3 * timing->lpx / 2;
+		timing->ta_go		= 4 * timing->lpx;
+		timing->da_hs_exit	= 2 * timing->lpx;
+
+		/* CLK_TRAIL carries the same +0x0a margin, floor of 2. */
+		timing->clk_hs_trail =
+			MTK_DSI_NS_TO_CYCLE(0x64, cycle_time) + 0x0a;
+		if (timing->clk_hs_trail < 2)
+			timing->clk_hs_trail = 2;
+
+		timing->clk_hs_prepare = MTK_DSI_NS_TO_CYCLE(0x40,
+							     cycle_time);
+		if (!timing->clk_hs_prepare)
+			timing->clk_hs_prepare = 1;
+
+		/* CLK_ZERO comes from 0x190 ns minus the prepare time. */
+		timing->clk_hs_zero = MTK_DSI_NS_TO_CYCLE(
+			0x190 - timing->clk_hs_prepare * cycle_time,
+			cycle_time);
+
+		timing->clk_hs_exit = 2 * timing->lpx;
+		timing->clk_hs_post = MTK_DSI_NS_TO_CYCLE(80 + 52 * ui,
+							  cycle_time);
+
+#undef MTK_DSI_NS_TO_CYCLE
 	} else {
 	timing->lpx = (60 * data_rate_mhz / (8 * 1000)) + 1;
 	timing->da_hs_prepare = (80 * data_rate_mhz + 4 * 1000) / 8000;
@@ -1059,6 +1098,20 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		dev_err(dev, "Failed to set data rate: %d\n", ret);
 		goto err_refcount;
 	}
+
+	/*
+	 * Replace the requested rate with the one the PLL actually produces.
+	 *
+	 * The MIPI TX PLL table is coarse - 50 discrete entries - so a
+	 * requested lane rate is almost never reachable exactly: this panel
+	 * asks for 419.022 Mbps and gets 416.  Everything downstream of here
+	 * that computes a time from the rate must use the achieved value, and
+	 * mtk_dsi_phy_timconfig() is exactly that consumer: its cycle_time is
+	 * 8000/rate, so a 3 Mbps error moves every D-PHY timing field.  The
+	 * PHY's set_rate() stores the achieved rate, so reading it back here
+	 * is what makes the timing match the hardware.
+	 */
+	dsi->data_rate = clk_get_rate(dsi->hs_clk);
 
 	ret = phy_power_on(dsi->phy);
 	if (ret) {
