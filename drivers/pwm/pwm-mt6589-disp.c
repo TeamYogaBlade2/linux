@@ -112,8 +112,19 @@
 #define PWM_DUTY_LOW_LIMIT_MASK		GENMASK(23, 19)
 #define PWM_MAX_LEVEL			255			/* Maximum duty value */
 
-/* Default PWM divider value (ddp_bls.c:19, PWM_DEFAULT_DIV_VALUE). */
-#define PWM_DEFAULT_DIV			0x24
+/*
+ * PWM clock divider.  PWM_CLKDIV is bits 6:0 and the PWM period is
+ * 256 * (CLKDIV + 1) BLS clocks, so this sets the PWM frequency, not the duty
+ * ratio.
+ *
+ * 0x47 is what the bootloader runs this panel with (BLS_PWM_CON = 0x00050047 on
+ * a board whose backlight dims correctly).  The vendor kernel's
+ * PWM_DEFAULT_DIV_VALUE is 0x24, which produces the same ratio at roughly twice
+ * the frequency - both within any backlight driver's range, so the value should
+ * not matter for brightness, but the bootloader's is the one known to work on
+ * this hardware and there is no reason to prefer the other.
+ */
+#define PWM_DEFAULT_DIV			0x47
 
 /*
  * There is exactly one BLS block, and its state hangs off the pwm_chip -
