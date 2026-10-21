@@ -329,6 +329,32 @@
 	io-channel-names = "key";
 };
 
+/*
+ * Speaker amplifier enable.
+ *
+ * This board does not use the MT6320's own Class-D speaker output.  Its
+ * speaker is driven by an external SN2145B amplifier that is switched on by
+ * GPIO73; the vendor kernel sets that pin (and configures it, together with
+ * GPIO142, as an output in Speaker_Init()) and then waits for the amp to warm
+ * up before letting audio through.  Two independent sources agree:
+ *
+ *   - the Blade KitKat kernel image (kernel_blade10_row_wifi-kk.elf):
+ *     Speaker_Init() configures GPIO 0x49 (73) and 0x8e (142),
+ *     Sound_Speaker_Turnon() drives 0x49 high and sleeps, and
+ *     Sound_Speaker_Turnoff() drives it back low;
+ *   - ProjectConfig.mk for this project sets
+ *         CUSTOM_KERNEL_SOUND = amp_sn2145b
+ *     and the working Linux port of the same board
+ *     (kz-creator/lenovo-b8000h-linux, mt6589_audio.c) toggles GPIO73 with a
+ *     40 ms warm-up.
+ *
+ * GPIO142 drives a second, alternative amplifier path and is not needed for
+ * the speaker route, so only GPIO73 is wired here.
+ */
+&mt6320_codec {
+	amp-en-gpios = <&pio 73 GPIO_ACTIVE_HIGH>;
+};
+
 &mt6320_ldo_vgp4 {
 	regulator-min-microvolt = <2800000>;
 	regulator-max-microvolt = <2800000>;

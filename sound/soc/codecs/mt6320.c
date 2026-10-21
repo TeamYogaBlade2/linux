@@ -16,6 +16,7 @@
 #include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/mfd/mt6320/registers.h>
 #include <linux/mfd/mt6397/core.h>
 #include <linux/module.h>
@@ -242,6 +243,13 @@ struct mt6320_codec_priv {
 	unsigned int ul_rate_code;
 	bool analog_output_active;
 	bool capture_active;
+	/*
+	 * Speaker amplifier enable, when the board has one.  The Blade drives
+	 * an external amp from GPIO73 and GPIO142; the PMIC's own Class-D
+	 * output is not connected to the speaker.  Both pins are optional so
+	 * boards with the PMIC speaker path keep working.
+	 */
+	struct gpio_desc *amp_en_gpio;
 };
 
 /*
@@ -1079,13 +1087,42 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		 * follow the register mode instead of reading the EN_L/EN_R_SW
 		 * bits, which would leave the enables above inert.
 		 */
-		return regmap_write(priv->regmap, MT6320_SPK_CON11,
-				    MT6320_SPK_OUTSTG_EN_L_SW |
-				    MT6320_SPK_OUTSTG_EN_R_SW |
-				    MT6320_SPK_EN_L_SW |
-				    MT6320_SPK_EN_R_SW);
+		ret = regmap_write(priv->regmap, MT6320_SPK_CON11,
+				   MT6320_SPK_OUTSTG_EN_L_SW |
+				   MT6320_SPK_OUTSTG_EN_R_SW |
+				   MT6320_SPK_EN_L_SW |
+				   MT6320_SPK_EN_R_SW);
+		if (ret)
+			return ret;
+
+		/*
+		 * Bring up the board's external amplifier last, after the PMIC
+		 * analogue path has settled, and let it warm up before audio
+		 * starts.  The Blade's speaker is driven by an SN2145B wired to
+		 * GPIO73, not by the PMIC Class-D output: the vendor kernel's
+		 * Sound_Speaker_Turnon() (Speaker_Init() configures GPIO73 and
+		 * GPIO142 as outputs) sets that pin and then waits.  40 ms is
+		 * the figure the working B8000-H port uses
+		 * (lenovo-b8000h-linux mt6589_audio.c), and the vendor waits
+		 * 40-80 ms depending on how long the pin has been off.
+		 *
+		 * On a board without the amp this is a no-op, so the DAPM path
+		 * still works where the PMIC drives the speaker directly.
+		 */
+		if (priv->amp_en_gpio) {
+			gpiod_set_value_cansleep(priv->amp_en_gpio, 1);
+			msleep(40);
+		}
+
+		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
+		/* Mute the amplifier before the PMIC path collapses, so the
+		 * shutdown transient is not audible.
+		 */
+		if (priv->amp_en_gpio)
+			gpiod_set_value_cansleep(priv->amp_en_gpio, 0);
+
 		ret = regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0000);
 		if (ret)
 			return ret;
@@ -1526,6 +1563,17 @@ static int mt6320_codec_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->clk_aud26m))
 		return dev_err_probe(&pdev->dev, PTR_ERR(priv->clk_aud26m),
 				     "failed to get aud26m clock\n");
+
+	/*
+	 * Optional external speaker amplifier enable.  The Blade wires its
+	 * SN2145B to GPIO73; boards that use the PMIC Class-D output leave
+	 * the property out and this stays NULL.
+	 */
+	priv->amp_en_gpio = devm_gpiod_get_optional(&pdev->dev, "amp-en",
+						    GPIOD_OUT_LOW);
+	if (IS_ERR(priv->amp_en_gpio))
+		return dev_err_probe(&pdev->dev, PTR_ERR(priv->amp_en_gpio),
+				     "failed to get amp-en GPIO\n");
 
 	/* Analog idle baseline; DAPM powers the path per stream. */
 	ret = regmap_multi_reg_write(priv->regmap, mt6320_codec_init,
