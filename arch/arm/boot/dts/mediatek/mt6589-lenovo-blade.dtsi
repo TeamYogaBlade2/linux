@@ -215,11 +215,40 @@
 		};
 	};
 
+	/*
+	 * Headset jack detect.  EINT10 is NOT exclusive to the pad the jack
+	 * switch is wired to: the pin controller exposes it on three of them,
+	 * GPIO92 (mode 2), GPIO115 (mode 1) and GPIO120 (mode 2).
+	 *
+	 * mtk_xt_find_eint_num() resolves an EIC input to a pad by walking the
+	 * pin table in order and taking the first pin whose eint_n matches and
+	 * whose *current* mode equals that pin's EINT mux.  Pins 92 and 120 are
+	 * both examined before pin 115, so if either is left sitting in its
+	 * EINT10 mux - by the bootloader, or by a pinctrl state that never got
+	 * applied - the EIC line is routed to that pad instead and the jack
+	 * edge is never seen.  Nothing reports an error: the IRQ is registered,
+	 * EINT_MASK and EINT_D0EN are set for the line, and only the status bit
+	 * stays clear.
+	 *
+	 * So drive the two unused pads to plain GPIO explicitly rather than
+	 * relying on whatever mode they happen to reset to.  This is what makes
+	 * the EINT10 assignment to GPIO115 deterministic; the pull-up and
+	 * input-enable belong to the jack pad alone.
+	 */
 	accdet_pins: accdet-pins {
 		pin-accdet {
 			pinmux = <MT6589_GPIO115__FUNC_EINT10>;
 			input-enable;
 			bias-pull-up;
+		};
+
+		/* Not the jack pad: keep these out of the EINT10 mux. */
+		pin-accdet-eint10-gpio92 {
+			pinmux = <MT6589_GPIO92__FUNC_GPIO92>;
+		};
+
+		pin-accdet-eint10-gpio120 {
+			pinmux = <MT6589_GPIO120__FUNC_GPIO120>;
 		};
 	};
 
