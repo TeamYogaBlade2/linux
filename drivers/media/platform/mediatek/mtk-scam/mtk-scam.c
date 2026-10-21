@@ -144,80 +144,27 @@
 #define SCAM_CFG_RESET				0x10000400
 
 /*
- * SCAM_CFG value this driver programs in mtk_scam_start_stream(), spelled as
- * a build-up from the documented reset state rather than as a mask against
- * it.
+ * The value mtk_scam_start_stream() writes: the documented reset state plus
+ * continuous mode, built by OR-ing named fields onto SCAM_CFG_RESET so no
+ * field can be cleared by accident.
  *
- * This expression used to read
+ * WARN_MASK (reset 1), CYC (reset 4) and CLK_INV (reset 0) are inherited: the
+ * first two are the documented operating point, CLK_INV inverts the sensor's
+ * serial-clock latch and is a wiring property nothing in this tree describes.
  *
- *	(SCAM_CFG_RESET & ~SCAM_CFG_PRESERVE) | SCAM_CFG_CONT
+ * INTEN0..6 stay 0 (the SCAM_CFG_RESET value has them clear).  They
+ * enable frame-end plus six fault sources, and this
+ * driver has no IRQ handler and no interrupt in its DT node, so enabling them
+ * would only assert the block's interrupt output with nothing to clear it.
+ * SCAM_INT is still written at stream start to drop a latch from a previous
+ * run.
  *
- * which is arithmetically self-defeating: SCAM_CFG_PRESERVE was
- * WARN_MASK|CLK_INV|CYC == 0x10001700, a *superset* of everything
- * SCAM_CFG_RESET sets, so SCAM_CFG_RESET & ~SCAM_CFG_PRESERVE == 0 and the
- * block was actually programmed with CONT alone (0x00020000).  The comment
- * claimed the mask was "keeping the enables", but it kept nothing -- it
- * discarded the reset configuration, WARN_MASK=1 and CYC=4 both, while
- * looking like it was protecting them.
- *
- * Building up from the reset value cannot fail that way: OR-ing more bits
- * into a nonzero base can only add bits, never clear the base.  Each field
- * below is a named constant, so what the driver sets is readable without
- * doing hex arithmetic, and a field added here cannot silently collide with
- * one already in SCAM_CFG_RESET the way a complement-and-mask could.
- *
- * What this driver keeps from reset, and the two fields it adds on top:
- *
- *   WARN_MASK - left at its reset value of 1 (inherited from SCAM_CFG_RESET,
- *	           not added below): "warnings before the 1st frame start
- *	           packet will not be recorded", i.e. suppress startup
- *	           warnings.  That is the documented reset behaviour and this
- *	           driver has no evidence to change it.
- *   CYC=4     - likewise inherited; see the reset decomposition above.
- *   INTEN0..6 - left at their reset value of 0.  There is no IRQ handler
- *	           and the DT node declares no interrupt, so enabling them
- *	           could not produce a serviced event; see the note on
- *	           SCAM_CFG_INTEN_NONE.  SCAM_INT is still cleared on stream
- *	           start, to drop a latch left by a previous run.
- *   CONT=1    - continuous mode.  SCAM's job here is to run for as long as
- *	           streaming is on, and there is no stop-frame mechanism in
- *	           this driver, so single-run mode would capture one frame and
- *	           then sit idle.  The vendor agrees for its own SCAM use:
- *	           sensor_hal.cpp:1144 passes conti_mode=1.
- *   CLK_INV   - left at 0 from the reset value.  It inverts the latch for
- *	           the sensor's serial clock and is a property of the sensor
- *	           wiring, not of this block; the vendor takes it from
- *	           sensorInfo[0].SensorClockPolarity.  Nothing in this tree
- *	           carries that information, so the reset value stands and a
- *	           sensor needing the other polarity needs a DT property.
+ * CONT=1 is continuous mode: there is no stop-frame mechanism here, so a
+ * single run would capture one frame and idle.
  *
  * Result: 0x10000400 | 0x00020000 == 0x10020400.
  */
-/*
- * Interrupt enables: NONE.
- *
- * SCAM_CFG.INTEN0..6 enable frame-end plus six fault sources (wrong sync
- * header, CRC error, wrong packet/line/data ID, wrong size; data sheet page
- * 2268-2269).  This driver has no IRQ handler and its DT node declares no
- * interrupt, so enabling them cannot produce a serviced event - it only arms
- * the block's own interrupt output, which stays asserted until SCAM_INT is
- * cleared, and leaves the fault diagnostics unread.
- *
- * The comment here used to justify the whole set on the grounds that
- * "this driver clears SCAM_INT on every stream start as if the interrupts
- * were live", which is circular: a clear that exists to make an enable
- * meaningful is not a reason to enable them.  They are cleared at start
- * regardless (a stale latch from a previous run has to go), and the enables
- * stay off until something actually services them.
- */
-#define SCAM_CFG_INTEN_NONE			0
 
-/*
- * CYC = 4 as a plain constant.  FIELD_PREP() would say it more obviously, but
- * it expands to a statement expression and so cannot be used in a file-scope
- * static_assert(); the shift and mask are spelled out to keep the assertions
- * below constant expressions.
- */
 #define SCAM_CFG_CYC_4				(4 << 8)
 
 #define SCAM_CFG_START				(SCAM_CFG_RESET |		\
@@ -534,43 +481,15 @@ static int mtk_scam_get_pad(struct v4l2_subdev *sd,
 /*
  * Apply a proposed format.
  *
- * TRY and ACTIVE are different operations and are kept apart here:
+ * TRY must not touch hardware and must not become the driver's current
+ * geometry; only ACTIVE caches it and programs SCAM_SIZE.
  *
- *   V4L2_SUBDEV_FORMAT_TRY     a proposal.  Nothing has been accepted by the
- *                              pipeline, so the driver must not touch the
- *                              hardware and must not adopt the geometry as
- *                              its current one.  It is validated and stored
- *                              in the caller's TRY state only.
- *   V4L2_SUBDEV_FORMAT_ACTIVE  the pipeline has accepted it.  The geometry is
- *                              cached and SCAM_SIZE is programmed.
- *
- * The TRY path used to write SCAM_SIZE unconditionally, because get_fmt and
- * set_fmt were the same function and nothing branched on format->which before
- * the register write.  A TRY format is only a suggestion -- the v4l2-subdev
- * documentation is explicit that it must not modify any device state -- so
- * writing a hardware register from it meant a userspace format negotiation
- * loop, which probes TRY formats freely before committing anything, was
- * silently reprogramming the frame size of a block that might have been
- * streaming at the time.
- *
- * Validation policy, deliberately chosen and applied identically to TRY and
- * ACTIVE: a geometry outside the encodable range is rejected with -EINVAL
- * rather than clamped.
- *
- * Clamping is the more common subdev convention and would have been the
- * easier choice here, but it is wrong for this block.  The clamp target would
- * be SCAM_SIZE_MAX = 4095, a size no sensor in this graph produces; reporting
- * that back as the accepted format would leave get_fmt() and get_selection()
- * describing a 4095-line frame that was never requested and that the block was
- * never told to expect.  -EINVAL instead tells the caller its proposal is
- * unsupportable, which is true, and leaves the driver's idea of the format
- * unchanged and consistent with the hardware.  The range is a hard register
- * limit rather than a preference, so silently reshaping the caller's frame is
- * never the right answer.
- *
- * A zero width or height is rejected on the same grounds: it is not a frame.
- * That is also exactly what a G_FMT query legitimately carries, which is why
- * the getter above must never run this check.
+ * Out-of-range geometry is rejected with -EINVAL rather than clamped: the
+ * limit is a hard register width, and clamping to SCAM_SIZE_MAX (4095) would
+ * leave get_fmt() describing a frame nothing asked for and the block was never
+ * told to expect.  Zero width or height is rejected on the same grounds - it is
+ * not a frame - which is why the getter below must not run this check, since
+ * G_FMT legitimately arrives with zeroes.
  */
 static int mtk_scam_set_pad(struct v4l2_subdev *sd,
 			    struct v4l2_subdev_state *state,
@@ -1016,37 +935,11 @@ static int mtk_scam_probe(struct platform_device *pdev)
 	scam->sd.internal_ops = &mtk_scam_internal_ops;
 
 	/*
-	 * v4l2_subdev_init() first, then everything it leaves to the driver.
-	 *
-	 * It has to come first because it is the only thing that initialises
-	 * sd.name, and __v4l2_device_register_subdev() in
-	 * drivers/media/v4l2-core/v4l2-device.c rejects any subdev whose name
-	 * is empty:
-	 *
-	 *	if (!v4l2_dev || !sd || sd->v4l2_dev || !sd->name[0])
-	 *		return -EINVAL;
-	 *
-	 * so a subdev registered without it never joins the V4L2 device, and
-	 * because that is the async notifier's path the media graph would
-	 * never see this node either -- whatever else was fixed in probe.
-	 * Assigning the subdev fields by hand, as this used to, left
-	 * sd.name all zeroes because none of those fields alias sd.name.
-	 *
-	 * What v4l2_subdev_init() already does, and so must not be repeated:
-	 * it zeroes sd.name, points sd.ops at the ops passed here, sets
-	 * sd.v4l2_dev = NULL, resets sd.flags and sd.grp_id, clears
-	 * dev_priv/host_priv/privacy_led, initialises sd.list and
-	 * sd.async_subdev_endpoint_list, and -- because CONFIG_MEDIA_CONTROLLER
-	 * is set -- makes sd.entity.name *point at* sd.name and sets
-	 * sd.entity.obj_type = MEDIA_ENTITY_TYPE_V4L2_SUBDEV and
-	 * sd.entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN.
-	 *
-	 * Note in particular that entity.name is not a separate copy: it is the
-	 * same array as sd.name, so writing dev_name() into entity.name is
-	 * exactly what fills sd.name in, which is why this used to appear to
-	 * work right up until registration refused it.  Setting sd.name
-	 * explicitly below and leaving entity.name alone is therefore both
-	 * sufficient and non-duplicative.
+	 * v4l2_subdev_init() must come first: it is the only thing that
+	 * initialises sd.name, and __v4l2_device_register_subdev() rejects a
+	 * subdev with an empty name, so a hand-initialised struct never joins
+	 * the V4L2 device and the async notifier never sees this node.
+	 * entity.name aliases sd.name, so filling sd.name below covers both.
 	 */
 	v4l2_subdev_init(&scam->sd, &mtk_scam_subdev_ops);
 	strscpy(scam->sd.name, dev_name(dev), sizeof(scam->sd.name));

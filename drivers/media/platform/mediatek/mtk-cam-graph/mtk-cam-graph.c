@@ -4,133 +4,16 @@
  *
  * Copyright (c) 2026 Lenovo Linux Team
  *
- * WHAT THIS DRIVER IS FOR
- * -----------------------
- * The three blocks in the camera chain -- mtk-csi2-rx, mtk-scam and mtk-cam --
- * each register a subdev, and the dtsi wires them together with
- * "remote-endpoint" properties.  That is not enough to build a media graph.
- * Something has to own:
+ * The three camera blocks (mtk-csi2-rx, mtk-scam, mtk-cam) each register a
+ * subdev and the dtsi wires them with "remote-endpoint" properties, but that
+ * alone does not produce a media graph: something has to own the
+ * media_device, the v4l2_device and the async notifier that actually pulls
+ * each subdev in and registers its entity.
  *
- *   - a struct media_device, which is where media_device_register_entity()
- *     files the entities and where media-ctl reports them;
- *   - a struct v4l2_device, because the async notifier only binds subdevs
- *     when the root notifier has one;
- *   - a struct v4l2_async_notifier, which is the mechanism that actually
- *     pulls a subdev into a v4l2_device, and therefore the mechanism that
- *     registers the entities into the media_device;
- *   - the media_links themselves, derived from the DT endpoints.
- *
- * Before this driver none of that existed anywhere on the camera path.  The
- * subdevs registered as async subdevs that nothing was waiting for, so no
- * entity joined a media_device and no media_link was ever created.  The
- * "receiver -> SCAM -> CAM resolves" claim in the three drivers' comments was
- * not established by anything in the tree; the pads existed and the DT
- * endpoints pointed at each other, but a media_link is a runtime object that
- * has to be created, not something the DT creates on its own.
- *
- * WHY A SEPARATE DRIVER RATHER THAN ONE OF THE THREE
- * --------------------------------------------------
- * The notifier must be owned by a device that is not itself one of the three
- * blocks, for two reasons:
- *
- *  1. The notifier has to be re-registered (v4l2_async_nf_register() retries
- *     every waiting match against the subdevs already present) every time a
- *     new subdev shows up.  Binding the notifier to one of the hardware
- *     blocks would make that block's probe order decide when the rest of the
- *     chain joins the graph.
- *
- *  2. On unbind, v4l2_async_nf_unregister() plus media_device_unregister()
- *     take the whole graph down.  If one of the three blocks owned them,
- *     unbinding that one block -- for instance a suspend or a driver
- *     unbind -- would tear down links the other two still need.
- *
- * So this driver owns nothing but the graph.  It is pure plumbing.
- *
- * HOW THE LINKS ARE CREATED
- * -------------------------
- * From the DT, via the endpoints.  v4l2_async_nf_add_fwnode_remote() is given
- * each of this driver's own local endpoints; for each one it resolves the
- * remote endpoint in the DT and registers a v4l2_async_connection whose match
- * descriptor is that remote fwnode.
- *
- * THAT CONNECTION IS THE ONLY WAY A SUBDEV EVER JOINS THIS v4l2_device, and
- * the consequence is easy to get wrong.  A subdev's DT declaring "my remote
- * is somebody else's endpoint" -- scam_out_ep naming cam_in_ep, say -- binds
- * nothing: v4l2_async_find_match() only ever looks at descriptors that were
- * added to notifier->waiting_list, and those come from THIS node's own
- * endpoints.  So every block that has to be in the graph needs an endpoint of
- * its own here, CAM included.  With CAM's endpoint missing, nothing matched,
- * __v4l2_device_register_subdev() was never called for it, and since
- * mtk_cam_graph_create_links() below iterates v4l2_dev->subdevs -- the very
- * list that call populates -- the SCAM -> CAM link was never created even
- * though both pads and both remote-endpoint properties existed.
- *
- * Once a subdev HAS matched, the links are created in .complete() by
- * v4l2_create_fwnode_links_to_pad(), which walks the source subdev's own
- * endpoints with fwnode_graph_for_each_endpoint(), resolves each to a source
- * pad via media_entity_get_fwnode_pad(), resolves that endpoint's remote in
- * the DT, and creates the media_link when the remote turns out to be the sink
- * pad offered to it.  No link is ever hardcoded here: the wiring is exactly
- * what the dtsi says.
- *
- * The receiver's SINK pad is deliberately not handled and must not be.  There
- * is no sensor node and no D-PHY node in the tree, so that pad has no peer:
- * v4l2_create_fwnode_links_to_pad() finds no source endpoint pointing at it
- * and simply creates nothing.  This is documented rather than treated as an
- * error, because it is the documented state of the DT (see the long note on
- * the receiver node in mt6589-lenovo-blade-camera.dtsi).
- *
- * An earlier version of this header claimed that "when a sensor lands, its
- * source endpoint will resolve and the link will be created with no change
- * here".  That was wrong, and it is worth recording why, because the same
- * wrong reasoning is what had left CAM without an endpoint.  A sensor landing
- * does NOT by itself produce this link.  Two things would have to change in
- * the DT, and neither is in this driver:
- *
- *   1. The receiver has no sink endpoint for a sensor to point at.  Its ports
- *      node carries only seninf_out (port@1); seninf_in and seninf_in_ep were
- *      removed along with the dead A5142 node, and the D-PHY that would sit
- *      between the sensor and the receiver is not modelled.
- *   2. Nothing here waits for a sensor.  Even with (1) done, a sensor that
- *      registered its own subdev would be absent from v4l2_dev->subdevs,
- *      because the notifier only matches descriptors taken from this node's
- *      own endpoints, and mtk_cam_graph_create_links() iterates that list and
- *      nothing else.  A graph_to_sensor endpoint would be needed.
- *
- * Until both exist, the graph honestly begins at the receiver's source pad.
- *
- * WHY CAM's MISSING pad_ops AND VIDEO NODE DO NOT BREAK LINK CREATION
- * ------------------------------------------------------------------
- * They do not, and it is worth being explicit because it looks like it might:
- *
- *  - media_create_pad_link() checks only the pad direction flags
- *    (MEDIA_PAD_FL_SOURCE on the source, MEDIA_PAD_FL_SINK on the sink).  It
- *    does not consult pad_ops, and it does not require a video node.
- *  - media_entity_get_fwnode_pad() (drivers/media/mc/mc-entity.c) needs
- *    entity->ops->get_fwnode_pad only if the entity set one:
- *
- *	if (!entity->ops || !entity->ops->get_fwnode_pad) {
- *		for (i = 0; i < entity->num_pads; i++)
- *			if (entity->pads[i].flags & direction_flags)
- *				return i;
- *		return -ENXIO;
- *	}
- *
- *    None of the three drivers sets entity.ops at all -- not v4l2_subdev_init()
- *    and not v4l2_subdev_init_finalize() -- so for CAM this is the fallback,
- *    and it returns pad 0, which is its single sink pad.  That is correct for
- *    CAM precisely because it has exactly one pad of that direction.  It also
- *    means the SCAM -> CAM link does not depend on CAM having pad_ops.
- *  - The .complete() callback calls v4l2_device_register_subdev_nodes(),
- *    which creates /dev/v4l-subdevN nodes.  Each of the three subdevs must
- *    therefore set V4L2_SUBDEV_FL_HAS_DEVNODE to get one.  None of them does,
- *    so today this call registers nothing; it is kept because it is the
- *    correct place for it and it becomes meaningful the moment a subdev opts
- *    in.  It is not an error either way.
- *
- * See README.md for what this graph does and does not deliver.
+ * This driver owns those three objects for the camera chain.  It is not a
+ * subdev and has no video node of its own; it waits for the chain's endpoints
+ * to bind, then creates the links the DT describes.
  */
-
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>

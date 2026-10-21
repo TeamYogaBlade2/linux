@@ -98,70 +98,33 @@
 #define CAM_CTL_DMA_EN_IMGO_EN			BIT(0)
 
 /*
- * CAM_CTL_SW_CTL (0x1500405c), reset value 0x00000002.  This is NOT a
- * per-module reset mask: it is a single trigger/status handshake for the
- * CAM block as a whole.  Bit by bit, from the MT6589 data sheet page 1971
- * (field table) and page 1972 (descriptions):
- *
- *   2  HW_RST      RW  0: No HW reset
- *                     1: Async HW reset.  Resets all CAM modules, except
- *                       for register-setting modules.
- *   1  SW_RST_ST   RO  Software reset status:
- *                       0: DMA is busy.
- *                       1: DMA is idle.  HW reset can be done.
- *   0  SW_RST_Trig WO  Triggers software reset.  Write 1 to trigger.
- *
- * Bits 31:3 are unnamed and undocumented in the data sheet, and the register
- * does not reset to zero, so there is no basis for treating them as
- * resettable.  Writing "all ones" here would additionally drive the
- * read-only SW_RST_ST bit and slam ~29 unknown bits.  Only the three
- * documented fields are defined below.
+ * CAM_CTL_SW_CTL (0x1500405c): one trigger/status handshake for the whole CAM
+ * block, not a per-module reset mask.  HW_RST resets every module except the
+ * register-setting ones, SW_RST_ST reads 1 once DMA is idle, SW_RST_TRIG
+ * starts it.  Bits 31:3 are undocumented and the register does not reset to
+ * zero, so only these three are ever written.
  */
 #define CAM_SW_CTL_HW_RST			BIT(2)
 #define CAM_SW_CTL_SW_RST_ST			BIT(1)
 #define CAM_SW_CTL_SW_RST_TRIG			BIT(0)
 
 /*
- * CAM_CTL_INT_EN (0x15004020) bit 20, IMGO_ERR_EN, and bit 30, DMA_ERR_EN.
- * Data sheet page 1958-1959 (bit table) and 1960 (descriptions):
+ * CAM_CTL_INT_EN: DMA_ERR_EN is block-wide (the block has no per-channel
+ * equivalent), IMGO_ERR_EN covers this channel's overrun.  Both are needed
+ * for a stalled buffer to reach the shared ISP interrupt line.
  *
- *   30  DMA_ERR_EN  "Enables DMA error"
- *   20  IMGO_ERR_EN "Enables IMGO overrun interrupt"
- *
- * Enabling both means an IMGO overrun reaches the shared ISP interrupt line,
- * which is what lets a stalled buffer be detected at all.  Bit 30 is the
- * block-wide DMA error enable rather than a per-channel one; the data sheet
- * gives no per-channel DMA_ERR bit, so it is either all or nothing.
+ * CAM_CTL_INT_STATUS mirrors those positions.  With INT_WCLR_EN
+ * (CAM_CTL_INT_EN bit 31) left at 0 the register is read-clear, so the read
+ * in mtk_cam_irq() is also the acknowledgement.
  */
 #define CAM_CTL_INT_EN_DMA_ERR_EN		BIT(30)
 #define CAM_CTL_INT_EN_IMGO_ERR_EN		BIT(20)
-
-/*
- * CAM_CTL_INT_STATUS (0x15004024): the two reports whose enables are set
- * above.  Same bit positions as the enables, which is what the vendor's
- * kernel-side map confirms - ISP_IRQ_INT_STATUS_IMGO_ERR_ST is bit 20 and
- * ISP_IRQ_INT_STATUS_DMA_ERR_ST is bit 30
- * (aquaris-5 .../kernel/core/include/mach/camera_isp.h:35 and :45).
- *
- * The register is read-clear while INT_WCLR_EN is 0, so the read in
- * mtk_cam_irq() is also the acknowledgement; there is no separate clear.
- */
 #define CAM_CTL_INT_STATUS_IMGO_ERR		BIT(20)
 #define CAM_CTL_INT_STATUS_DMA_ERR		BIT(30)
 
 /*
- * CAM_CTL_DMA_INT (0x15004028).  Data sheet page 1960 (bit table) and 1961
- * (descriptions):
- *
- *   16  IMGO_DONE_EN  RW  "Enables IMGO done" (page 1962 field table)
- *    0  IMGO_DONE_ST  RO  IMGO done status (page 1962 field table)
- *
- * Bits 31:16 are RW enables, bits 15:0 are RO status -- the split is visible
- * in the data sheet's own Type row (RW above bit 15, RO below).  Status bits
- * are cleared by writing the data sheet's INT_WCLR_EN (CAM_CTL_INT_EN bit 31)
- * select; this driver never sets bit 31, so it stays in its reset value of
- * 0, which the data sheet documents as "0: Read clear".  So the driver clears
- * status with a plain read, which is what mtk_cam_dma_dequeue() does.
+ * CAM_CTL_DMA_INT: bits 31:16 are RW enables, bits 15:0 RO status.  Status is
+ * read-clear for the same reason as above.
  */
 #define CAM_CTL_DMA_INT_IMGO_DONE_EN		BIT(16)
 #define CAM_CTL_DMA_INT_IMGO_DONE_ST		BIT(0)
@@ -187,63 +150,23 @@
 #define CAM_CTL_CQ0C_BASEADDR		0x0bc
 
 /*
- * CAM_CTL_FMT_SEL (0x15004010) field positions, data sheet page 1954-1956.
+ * CAM_CTL_FMT_SEL: scenario 3:0, sub_mode 7:4, cam_in_fmt 11:8,
+ * cam_out_fmt 15:12.
  *
- *   3:0    scenario
- *   7:4    sub_mode
- *  11:8    cam_in_fmt   pass 2 path input format
- *  15:12   cam_out_fmt  pass 1 path output format
+ * sub_mode and cam_in_fmt are one decision, not two: sub_mode selects which
+ * of the data sheet's input tables cam_in_fmt is read against.  This driver
+ * programs the RAW pair - sub_mode = CAM_SUB_MODE_RAW with
+ * cam_in_fmt = CAM_FMT_SEL_BAYER10 - because SCAM passes the sensor's Bayer
+ * payload through unconverted.
  *
- * Only two of these are set here, and only because the DMA programming below
- * cannot be self-consistent without them:
- *
- *   - cam_out_fmt is documented at 15:12 for a YUV output as "2: 422 1 plane"
- *     (page 1955), which is the single-plane packed layout the IMGO size
- *     arithmetic in this driver assumes.  Note the data sheet's own note: at
- *     VR/SMT the out_fmt must be YUV422 1 plane; at other scenarios it
- *     describes the CDRZ output instead.  1 plane is the only value valid in
- *     every scenario, which is why it is the one chosen.
- *   - cam_in_fmt is documented at 11:8 in three separate readings depending on
- *     what pass 2 is fed (page 1955-1956): "If pass 2 is YUV input", "If pass 2
- *     is RGB input", and "If pass 2 is bayer, 0: Bayer 8 / 1: Bayer 10 /
- *     2: Bayer 12".  Which table applies is decided by sub_mode, not chosen
- *     independently -- so cam_in_fmt and sub_mode cannot disagree.
- *
- * THE TWO MUST BE READ TOGETHER, and this driver programs the Bayer pair:
- *
- *   sub_mode = CAM_SUB_MODE_RAW, cam_in_fmt = CAM_FMT_SEL_BAYER10.
- *
- * That is the only pair that matches what is actually wired up.  SCAM is a CSD
- * parser that does not convert the payload (see mtk-scam.c), so CAM's sink
- * carries the sensor's own Bayer 10 bits, and the data sheet's Bayer table is
- * the one that applies.  The vendor agrees on the value from the other
- * direction: isp_function.h:328-330 spells out
- *
- *	#define CAM_FMT_SEL_BAYER8       0
- *	#define CAM_FMT_SEL_BAYER10      1
- *	#define CAM_FMT_SEL_BAYER12      2
- *
- * matching page 1956 exactly, and PostProcPipe.cpp:781-785 is what selects it
- * (CAM_FMT_SEL_BAYER10 for a eImgFmt_BAYER10 IMGI port), in the same switch
- * whose YUV arm at :715 is what selected the pair used before.
- *
- * The vendor spells out the same bit layout in stIspTopFmtSel
- * (isp_function.h:517-541: scenario:3, sub_mode:3, cam_in_fmt:4,
- * cam_out_fmt:4), which matches these shifts.
+ * cam_out_fmt is YUV422 1 plane: it is the only value the data sheet allows
+ * in every scenario, and it is the packed layout the IMGO size arithmetic
+ * below assumes.
  */
 #define CAM_CTL_FMT_SEL_SCENARIO_SHIFT		0
 #define CAM_CTL_FMT_SEL_SUB_MODE_SHIFT		4
 #define CAM_CTL_FMT_SEL_CAM_IN_FMT_SHIFT	8
 #define CAM_CTL_FMT_SEL_CAM_OUT_FMT_SHIFT	12
-/*
- * The matching masks.  GENMASK() takes (hi, lo) -- see include/linux/bits.h,
- * where the BUILD_BUG_ON in GENMASK_RANGE_REV_CHECK fires precisely because a
- * hi < lo pair is the mistake everyone makes at least once.  Both of these were
- * previously GENMASK(3, 8) and GENMASK(3, 12), i.e. hi < lo with the two digits
- * transposed.  Neither mask is referenced anywhere in the driver (CAM_CTL_FMT_SEL
- * is written as one whole word, see mtk_cam_start()), so the reversal was inert
- * and merely a trap for the first future caller.
- */
 #define CAM_CTL_FMT_SEL_CAM_IN_FMT_MASK		GENMASK(11, 8)
 #define CAM_CTL_FMT_SEL_CAM_OUT_FMT_MASK	GENMASK(15, 12)
 
@@ -253,22 +176,12 @@
  * sub_mode, so these two are only meaningful together.
  */
 
-/* cam_in_fmt: Bayer 10 bits.  Data sheet page 1956, "If pass 2 is bayer". */
+/* cam_in_fmt values, valid when sub_mode is RAW. */
 #define CAM_FMT_SEL_BAYER10			1
-/* cam_out_fmt: 422 1 plane.  Data sheet page 1955, YUV output table. */
+/* cam_out_fmt values, from the YUV output table. */
 #define CAM_FMT_OUT_YUV422_1P			2
 
-/*
- * CAM_CTL_FMT_SEL sub_mode: the pipeline is in its RAW sub-mode, i.e. it is
- * fed by a RAW (Bayer) sensor.  Page 1956 spells the IC-scenario values out as
- * "0: IC_RAW, connect to RAW sensor" and "1: IC_YUV, connect to YUV sensor";
- * the vendor names the same two ISP_SUB_MODE_RAW / ISP_SUB_MODE_YUV at
- * isp_function.h:303-304, both 0 and 1 respectively.
- *
- * This was CAM_SUB_MODE_YUV (1) paired with the Bayer cam_in_fmt value, which
- * is the contradiction this driver carried: sub_mode=1 would have made the
- * data sheet select the *YUV* input table for a Bayer sensor.
- */
+/* CAM_CTL_FMT_SEL sub_mode: 0 connects a RAW sensor, 1 a YUV sensor. */
 #define CAM_SUB_MODE_RAW			0
 
 /* ------------------------------------------------------------------ */
@@ -302,47 +215,13 @@
 #define CAM_IMGO_CROP			0x31c
 
 /*
- * CAM_IMGO_CON, as a whole-word value.
- *
- * THE DATA SHEET HAS NO BIT TABLE FOR THIS REGISTER.  Chapter 54.3 lists
- * CAM_IMGO_CON at 0x15004314 with the function "DMA control register" and
- * then stops (chapter 54.3 register table, page 1930); there is no bit table
- * for it anywhere in chapter 54 -- searching the whole chapter for "burst"
- * returns nothing.  So the fields below are NOT traceable to the data sheet
- * and are recorded here explicitly as vendor-derived, with the vendor line
- * that establishes each one.
- *
- * The vendor writes this register as a single literal, isp_function.cpp:2122
- * and :2145:
- *
- *	ISP_WRITE_REG(m_pIspReg, CAM_IMGO_CON, 0x08141450);  // ultra-
- *
- * and isp_function.h:128 documents the intent: "CAM_IMGO_CON = 0x08505050
- * max_burst_len = {1,2,4,8}".  Comparing the three variants the vendor
- * leaves in the source, the fields are:
- *
- *	 0x08505050  "ultra-high"    (isp_function.cpp:2116)
- *	 0x08010150  "ultra-highest" (isp_function.cpp:2119)
- *	 0x08141450  "ultra-"        (isp_function.cpp:2122, the one compiled in)
- *
- * Read as bytes, each has 0x50 in the low byte and the three differ only in
- * the upper three bytes, which is the vendor tuning burst-length-related
- * fields.  This driver takes the *lowest* of the three, 0x08505050, rather
- * than the tuned 0x08141450, because:
- *
- *   - 0x08505050 is the value isp_function.h:128 itself documents as the
- *     generic programming recipe, i.e. the non-tuned default;
- *   - the tuned variants set fields whose meaning is not recoverable from any
- *     source available here, so writing them would be copying a magic number
- *     that nobody can justify, whereas 0x08505050 at least has a documented
- *     field (max_burst_len) behind it.
- *
- * Only the burst-length nibble is defined by name below, because that is the
- * only field any source describes.  The rest of the word is deliberately kept
- * as one opaque constant, with a comment saying so, rather than being split
- * into invented bit names.
+ * CAM_IMGO_CON is written as one opaque word: the data sheet documents the
+ * register as "DMA control register" and gives no bit table for it, so its
+ * fields cannot be named here.  0x08505050 is the value the vendor source
+ * documents as the generic recipe (isp_function.h:128, "max_burst_len =
+ * {1,2,4,8}"); the tuned variants in isp_function.cpp set fields no source
+ * here explains, so they are not copied.
  */
-#define CAM_IMGO_CON_MAX_BURST_LEN	GENMASK(3, 4)
 #define CAM_IMGO_CON_VALUE		0x08505050u
 
 /*
@@ -393,11 +272,8 @@
  * index it has there; and every pad_ops handler in mtk-cam.c indexes by pad
  * number.
  *
- * CAM now has BOTH directions.  Previously it had only the sink, which made
- * it the terminal entity of the graph and left nothing for userspace to
- * open.  The source pad is the ISP's processed output, which is what the
- * IMGO DMA engine writes into a videobuf2 buffer and what the video node
- * below exposes as /dev/videoN.
+ * The source pad is the ISP's processed output: IMGO writes it into a
+ * videobuf2 buffer, which the video node exposes as /dev/videoN.
  */
 enum {
 	CAM_PAD_SINK = 0,	/* from the SCAM adaptor */
@@ -417,12 +293,8 @@ enum {
  * The sink code is the sensor's, and it is Bayer 10-bit packed: the only
  * sensor this platform ever shipped is the A5142, which is
  * SENSOR_OUTPUT_FORMAT_RAW_B over MIPI with a 10-bit payload
- * (aquaris-5/.../imgsensor/a5142_mipi_raw/a5142mipi_Sensor.h:79-81), and
- * MT6589 data sheet chapter 54.1 states outright that "MT6589 camera receives
- * RAW and SOC sensor image data ... and outputting YUV data to DRAM" (p.1926),
- * i.e. RAW in and YUV out.  CAM_CTL_FMT_SEL's own sub_mode field agrees:
- * CAM_SUB_MODE_RAW below, not CAM_SUB_MODE_YUV.  The YUV reading was never
- * right and is gone.
+ * Per data sheet ch. 54.1 the block takes RAW in and emits YUV to DRAM, which
+ * CAM_CTL_FMT_SEL's sub_mode = RAW agrees with.
  */
 #define CAM_MBUS_CODE_SINK			MEDIA_BUS_FMT_SBGGR10_1X10
 #define CAM_MBUS_CODE_SRC			MEDIA_BUS_FMT_YUYV8_1X16
@@ -465,12 +337,8 @@ enum {
  * off the sensor.  Nothing in between is implemented, so on this board the
  * engine never actually converts one into the other.
  *
- * The vendor corroborates the two-byte IMGO output the same way, but only for
- * IMG2O: PostProcPipe.cpp:551 sets pixel_byte_img2o to "2<<CAM_ISP_PIXEL_BYTE_FP"
- * and passes it to configDmaPort() at :1254-1260.  For IMGO proper the vendor
- * leaves pixel_byte_imgo at its initialiser of 1 (PostProcPipe.cpp:550), which
- * is a different channel configured differently; so this constant rests on the
- * cam_out_fmt encoding above, not on that line.
+ * Rests on the cam_out_fmt encoding above (YUV422 1 plane), not on a vendor
+ * constant: the vendor's IMG2O channel is configured separately.
  */
 #define CAM_IMGO_BYTES_PER_PIXEL	2
 

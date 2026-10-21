@@ -4,102 +4,33 @@
  *
  * Copyright (c) 2026 Lenovo Linux Team
  *
- * WHAT THIS DRIVER IS
- * -------------------
- * The MT6589 CAM block at 0x15004000 is the ISP.  This driver drives the part
- * of it that can be driven from documentation alone: the control plane (the
- * software-reset handshake, the block enable, the start/stop strobes) and the
- * IMGO output DMA engine, which is what actually moves a processed frame into
- * DRAM.  IMGO is the engine behind a V4L2 video node, so frames have somewhere
- * to go and userspace has something to open.
+ * The CAM block at 0x15004000 is the ISP.  This driver implements the part
+ * that documentation alone can drive: the control plane (software-reset
+ * handshake, block enable, start/stop strobes) and the IMGO output DMA engine
+ * that moves a frame into DRAM, exposed as a V4L2 video node.
  *
- * WHAT IS STILL NOT HERE
- * ----------------------
- * The image processing itself -- the CPIPE stages, the TG (timing generator)
- * and the 3A statistics -- is a large register space with no upstream MediaTek
- * ISP driver to port and no way to test here.  None of the CPIPE stage enables
- * are programmed, because turning them on without writing the pipeline would
- * run blocks against unconfigured registers.  So CAM's output is not a
+ * Not implemented: the CPIPE image-processing stages, the timing generator and
+ * the 3A statistics.  They are a large register space with no upstream driver
+ * to port, and enabling stages without programming the pipeline would run
+ * hardware against unconfigured registers.  CAM's output is therefore not a
  * processed picture; the plumbing around the DMA engine is complete and inert.
  *
- * Two things this driver is sometimes assumed to do, and does not:
+ * There are no CQ (command queue) base-address registers armed here: chapter
+ * 54 documents the registers but not the descriptor format they point at, so
+ * only the PASS2 start strobe in CAM_CTL_START is used.
  *
- *   - The memory sequencer.  There is no such register on this part.  The
- *     closest thing chapter 54 documents is the command-queue base-address
- *     registers (CAM_CTL_CQ0/CQ1/CQ2/CQ3/CQ0B/CQ0C_BASEADDR, pages 1985-1987,
- *     each a single RW 32-bit field) plus the CQ0/CQ0B start strobes in
- *     CAM_CTL_START (bits 5 and 6, page 1949).  The descriptor format those
- *     base addresses point at is documented nowhere in the data sheet and lives
- *     only in a vendor header absent from this tree, so no queue is armed and
- *     neither strobe is used.  Only the PASS2 strobe (bit 0) is written.
- *   - The TG.  CAM_CTL_EN1 bits 1 and 0 are TG2_EN_SET and TG1_EN_SET (page
- *     1977) and nothing here sets them: without a sensor there are no pixel
- *     clocks, and a TG that is never programmed has no frame to time.
+ * With no camera sensor wired on this board nothing ever completes a frame, so
+ * no buffer is dequeued: the node opens, formats negotiate, REQBUFS allocates
+ * and STREAMON succeeds, then DQBUF blocks.  That is correct for a pipeline
+ * with no source rather than a defect.
  *
- * WHAT THIS BOARD ACTUALLY HAS
- * ---------------------------
- * There is no camera sensor wired to this board, so there is no MIPI CSI-2
- * clock and lane data and no D-PHY.  The consequence for this driver is
- * concrete and is worth stating up front: mtk_cam_start() programs the engine
- * and strobes the start bits, but with no frame arriving from the sensor
- * nothing ever completes, so mtk_cam_irq() is never called and no buffer is
- * ever dequeued.  The node opens, formats negotiate, REQBUFS allocates, and
- * STREAMON succeeds; DQBUF simply blocks until userspace closes the file.
- * That is the intended behaviour for a pipeline with no source, not a defect,
- * and it is what makes this driver safe to load.
- *
- * THE IMGO BASE ADDRESS, AND A DATASHEET/CODE DIVERGENCE
- * -----------------------------------------------------
- * CAM_IMGO_BASE_ADDR is written here directly, at 0x15004300, which the data
- * sheet documents at page 2032 as "CAM_IMGO_BASE_ADDR / DMA Base Address
- * Register" (bit table BASE_ADDR[31:0], type RW).
- *
- * The vendor does NOT write it that way, and it is worth recording why, because
- * it looks like a contradiction and is not:
- *
- *   - Both direct writes in the vendor are commented out --
- *     isp_function.cpp:2110 (read-only path) and :2129 (physical path):
- *
- *	//ISP_IOCTL_WRITE_REG(..., CAM_IMGO_BASE_ADDR, this->dma_cfg.memBuf.base_pAddr);
- *	//ISP_WRITE_REG(m_pIspReg, CAM_IMGO_BASE_ADDR, this->dma_cfg.memBuf.base_pAddr);
- *
- *     so DMAO_B::_config() programs XSIZE, YSIZE, STRIDE, CON, CON2 and CROP
- *     and deliberately leaves the base address alone.
- *
- *   - On the vendor's real-time-buffer-control path the base address is
- *     instead delivered through a command queue held in DRAM
- *     (isp_drv.cpp:2471):
- *
- *	pcqrtbcring_va->rtbc_ring[i].cq_rtbc.imgo.inst = 0x00004300; //ISP_DRV_CQ_DUMMY_WR_TOKEN; //reg_4300
- *
- *     i.e. a CQ instruction whose operand is the register offset 0x4300, which
- *     is CAM_IMGO_BASE_ADDR.
- *
- *   - But the vendor's own CQ module table says IMGO is only registers
- *     0x4304..0x431C -- seven registers, starting *past* the base address.
- *     isp_drv.cpp:394 reads "{CAM_DMA_IMGO, 0x4304, 7}", and isp_drv.h:469
- *     spells out why in a comment on the same line:
- *
- *	CAM_DMA_IMGO,        // 7    15004304~1500431C  //remove base_addr
- *
- *     The same comment appears on CAM_DMA_IMG2O, which is the same situation.
- *
- * So on the vendor's *normal* (non-RTBC) pass2 path, CAM_IMGO_BASE_ADDR is
- * never written at all, by either mechanism.  That is a genuine gap in the
- * vendor code as shipped in this tree, not something this driver can reproduce
- * faithfully, and the honest choices were:
- *
- *   (a) skip the write, which means the engine reads whatever the reset value
- *       of 0x15004300 is and would DMA into address 0;
- *   (b) write the documented register, which is what the data sheet says the
- *       register is for.
- *
- * (b) is what this driver does.  It is the datasheet-documented behaviour and
- * it is the only choice that can produce a coherent buffer address, and the
- * vendor's own RTBC path proves the register is writable this way.  It has not
- * been run against hardware and is flagged as such in mtk_cam_config_imgo().
+ * CAM_IMGO_BASE_ADDR (0x15004300) is written directly, as the data sheet
+ * documents.  The vendor leaves it alone on its normal pass2 path - its CQ
+ * table deliberately starts at 0x4304 - and only delivers it through the RTBC
+ * ring on the other path, which would mean DMAing into whatever the reset value
+ * holds.  Writing the documented register is the only choice that yields a
+ * coherent buffer address, and the vendor's own RTBC path shows it is writable.
  */
-
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
