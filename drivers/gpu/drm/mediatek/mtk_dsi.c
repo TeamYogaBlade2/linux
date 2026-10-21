@@ -332,6 +332,8 @@ static inline struct mtk_dsi *host_to_dsi(struct mipi_dsi_host *h)
 	return container_of(h, struct mtk_dsi, host);
 }
 
+static void mtk_dsi_wait_for_idle(struct mtk_dsi *dsi);
+
 static void mtk_dsi_mask(struct mtk_dsi *dsi, u32 offset, u32 mask, u32 data)
 {
 	u32 temp = readl(dsi->regs + offset);
@@ -1128,6 +1130,21 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 {
 	if (dsi->enabled)
 		return;
+
+	/*
+	 * Make sure the last transmission has drained before programming a
+	 * new mode and pulsing START.  Downstream does exactly this before
+	 * every start (DSI_StartTransfer() -> _WaitForEngineNotBusy(), and
+	 * dsi_drv.c:942 "while(DSI_REG->DSI_INTSTA.BUSY);"), and for good
+	 * reason: DSI_START is a level the engine samples, so a start issued
+	 * while the controller is still busy is dropped and the engine then
+	 * sits with DSI_BUSY asserted and no interrupt ever following.  That
+	 * is the observed failure - INTSTA reading 0x80000000 for the rest of
+	 * the boot with the DSI interrupt count at zero.
+	 *
+	 * mtk_dsi_wait_for_idle() was written for this and never called.
+	 */
+	mtk_dsi_wait_for_idle(dsi);
 
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_start(dsi);

@@ -453,12 +453,25 @@ void mt6589_bls_ddp_start(struct device *dev)
 		return;
 
 	/*
-	 * Match the downstream main-path configuration (0x80000000).
-	 * Do not enable the optional BLS scaling or histogram engines.
+	 * Enable BLS *and* its PWM output: 0x80010001, which is what the
+	 * downstream main-path configuration writes
+	 * (ddp_bls.c:171, DISP_REG_SET(DISP_REG_BLS_EN, 0x80010001) on the
+	 * aal_debug_flag == 0 path - the 0x80000000 variant on the next line
+	 * is the debug/backlight-only mode).
+	 *
+	 * BLS_EN bit 0 is BLS_En, "Enables BLS or not" (data sheet page 1655),
+	 * and BLS is a *stage of the pixel path*, not only a backlight PWM
+	 * generator: the MT6589 main path is OVL -> COLOR -> BLS -> RDMA0 ->
+	 * DSI.  Driving just the PWM bit (0x80000000) therefore leaves the
+	 * data path disabled at the BLS stage: RDMA0 receives nothing, its
+	 * EOF_ABNORMAL fires every frame, and DSI never gets a frame to
+	 * transmit, which shows up as DSI_BUSY stuck high with zero DSI
+	 * interrupts.  The histogram engine stays off; it is optional and
+	 * only feeds AAL.
 	 */
 	mt6589_bls_update_en(bls,
 			     BLS_EN_PWM | BLS_EN_BLS | BLS_EN_HISTOGRAM,
-			     BLS_EN_PWM);
+			     BLS_EN_PWM | BLS_EN_BLS);
 	dev_info(dev,
 		 "MT6589 BLS start: en=%#x src_size=%#x setting=%#x\n",
 		 readl(bls->base + BLS_EN), readl(bls->base + BLS_SRC_SIZE),
