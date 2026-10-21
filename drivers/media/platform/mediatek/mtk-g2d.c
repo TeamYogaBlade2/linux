@@ -227,9 +227,9 @@ struct mtk_g2d_ctx {
 	struct v4l2_pix_format_mplane dst_fmt;
 	struct v4l2_rect src_sel;
 	struct v4l2_rect dst_sel;
-	/* True once userspace sets COMPOSE, so S_FMT stops overwriting it. */
+	/* True once userspace sets the corresponding selection. */
 	bool dst_sel_explicit;
-	bool fill;
+	bool src_sel_explicit;
 };
 
 /*
@@ -1282,7 +1282,8 @@ static void mtk_g2d_device_run(void *priv)
 	dpitch = ctx->dst_fmt.plane_fmt[0].bytesperline;
 	if (!dfmt)
 		ret = -EINVAL;
-	else if (ctx->fill)
+	/* A zero-sized COMPOSE rectangle is the request for a fill. */
+	else if (!ctx->dst_sel.width && !ctx->dst_sel.height)
 		ret = mtk_g2d_fill(g2d, daddr, dpitch, dfmt->clrfmt,
 				   ctx->dst_sel.left, ctx->dst_sel.top,
 				   ctx->dst_sel.width, ctx->dst_sel.height,
@@ -1389,11 +1390,13 @@ static int mtk_g2d_open(struct file *file)
 	ctx->fh.m2m_ctx = ctx->m2m_ctx;
 	v4l2_fh_add(&ctx->fh, file);
 
-	/* Geometry starts out as "the whole buffer, at the origin". */
-	ctx->src_sel.width = MTK_G2D_DEFAULT_WIDTH;
-	ctx->src_sel.height = MTK_G2D_DEFAULT_HEIGHT;
-	ctx->dst_sel.width = MTK_G2D_DEFAULT_WIDTH;
-	ctx->dst_sel.height = MTK_G2D_DEFAULT_HEIGHT;
+	/*
+	 * The source rectangle starts at "not selected": both dimensions zero,
+	 * which src_sel() reads as "the whole of the OUTPUT buffer".  It has to
+	 * be resolved at run time rather than seeded here, because the buffer
+	 * size is only known after VIDIOC_S_FMT and may change until the queue
+	 * starts streaming.
+	 */
 
 	return 0;
 
@@ -1492,17 +1495,22 @@ static int mtk_g2d_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	*mtk_g2d_q_fmt(ctx, f->type) = f->fmt.pix_mp;
 
 	/*
-	 * Keep the default geometry in step with the buffer size until
-	 * userspace overrides it: a caller that never touches the selection
-	 * API still gets "copy the whole frame".
+	 * A new size invalidates a selection that was derived from the old one,
+	 * so both defaults are re-derived here; an explicit COMPOSE is kept,
+	 * because that is what distinguishes a blit from a fill.
 	 */
-	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
-		ctx->src_sel.width = f->fmt.pix_mp.width;
-		ctx->src_sel.height = f->fmt.pix_mp.height;
-	} else if (!ctx->dst_sel_explicit) {
-		ctx->dst_sel.width = f->fmt.pix_mp.width;
-		ctx->dst_sel.height = f->fmt.pix_mp.height;
+	if (!ctx->dst_sel_explicit) {
+		ctx->dst_sel.left = 0;
+		ctx->dst_sel.top = 0;
+		ctx->dst_sel.width = ctx->dst_fmt.width;
+		ctx->dst_sel.height = ctx->dst_fmt.height;
 	}
+
+	ctx->src_sel_explicit = false;
+	ctx->src_sel.left = 0;
+	ctx->src_sel.top = 0;
+	ctx->src_sel.width = ctx->src_fmt.width;
+	ctx->src_sel.height = ctx->src_fmt.height;
 
 	return 0;
 }
@@ -1554,56 +1562,55 @@ static int mtk_g2d_s_selection(struct file *file, void *priv,
 			       struct v4l2_selection *s)
 {
 	struct mtk_g2d_ctx *ctx = container_of(priv, struct mtk_g2d_ctx, fh);
-	struct v4l2_rect *sel, bounds;
+	struct v4l2_rect *sel;
 	u32 max_w, max_h;
 
 	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
 		if (s->target != V4L2_SEL_TGT_CROP)
 			return -EINVAL;
 		sel = &ctx->src_sel;
-		bounds.width = ctx->src_fmt.width;
-		bounds.height = ctx->src_fmt.height;
-		bounds.left = 0;
-		bounds.top = 0;
 	} else {
 		if (s->target != V4L2_SEL_TGT_COMPOSE)
 			return -EINVAL;
 		sel = &ctx->dst_sel;
-		bounds.width = ctx->dst_fmt.width;
-		bounds.height = ctx->dst_fmt.height;
-		bounds.left = 0;
-		bounds.top = 0;
-		ctx->dst_sel_explicit = true;
 	}
 
 	/*
-	 * Apply V4L2_SEL_FLAG_KEEP_CONFIG semantics the way the selection API
-	 * defines them: grow the rectangle to the request, then clamp it into
-	 * the buffer.  Zero width and height are legal and meaningful on the
-	 * COMPOSE target - that is how a fill is requested - so they are not
-	 * "corrected" to the buffer size here.
+	 * V4L2_SEL_FLAG_KEEP_CONFIG semantics, as the selection API defines
+	 * them: the requested rectangle is applied as given, and this driver
+	 * accepts or rejects it rather than silently shrinking it.  Zero width
+	 * and height are therefore rejected on the CROP target (a blit has to
+	 * read something) and *accepted* on COMPOSE, where they are how a
+	 * constant-colour fill is requested.
 	 */
-	v4l2_rect_intersect(&s->r, &s->r, &bounds);
-
-	if (V4L2_TYPE_IS_OUTPUT(s->type)) {
-		/* A blit must read something. */
-		if (!s->r.width || !s->r.height)
+	if (!s->r.width || !s->r.height) {
+		if (sel != &ctx->dst_sel)
 			return -EINVAL;
-	} else if (s->r.width || s->r.height) {
+	} else {
 		max_w = mtk_g2d_max_width();
 		max_h = mtk_g2d_max_height();
 		if (s->r.width > max_w || s->r.height > max_h)
 			return -EINVAL;
 
-		/* A blit copies the source rectangle, so the sizes must match. */
-		if (!ctx->fill &&
+		/* Both ports move the same window, so the sizes must agree. */
+		if (ctx->src_sel_explicit && ctx->dst_sel_explicit &&
 		    (s->r.width != ctx->src_sel.width ||
-		     s->r.height != ctx->src_sel.height))
-			return -EINVAL;
+		     s->r.height != ctx->src_sel.height)) {
+			const struct v4l2_rect *other =
+				sel == &ctx->dst_sel ? &ctx->src_sel :
+						       &ctx->dst_sel;
+
+			if (s->r.width != other->width ||
+			    s->r.height != other->height)
+				return -EINVAL;
+		}
 	}
 
 	*sel = s->r;
-	ctx->fill = !ctx->dst_sel.width && !ctx->dst_sel.height;
+	if (sel == &ctx->src_sel)
+		ctx->src_sel_explicit = true;
+	else
+		ctx->dst_sel_explicit = true;
 
 	return 0;
 }

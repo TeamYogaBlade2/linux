@@ -9,10 +9,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/types.h>
 
-/* Default rectangle, before userspace selects one: the whole 1280x800 panel. */
-#define MTK_G2D_DEFAULT_WIDTH	1280
-#define MTK_G2D_DEFAULT_HEIGHT	800
-
 struct mtk_g2d;
 
 /* CLRFMT encodings, from the data sheet's SRC_CON/DST_CON description. */
