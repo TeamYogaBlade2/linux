@@ -479,11 +479,23 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	}
 
 	/*
-	 * Defer MT6589's start sequence until bridge enable, after the panel
-	 * supply/GPIO and DSI PHY are prepared. Then start in reverse graph order:
-	 * DSI, RDMA0, BLS, COLOR, OVL. MT6589 OVL begins fetching as soon as it
-	 * is enabled, so the sink path must be running before OVL starts a frame.
-	 * Starting OVL first can cause RDMA0_EOF_ABNORMAL on every frame.
+	 * MT6589 defers its start sequence until bridge enable, after the panel
+	 * supply/GPIO and the DSI PHY are prepared.
+	 *
+	 * The order at that point is the same one every other MediaTek SoC in
+	 * this driver uses - ddp_comp[0..n-1], i.e. the OF graph order, source
+	 * to sink, with DSI last - and it is also the order of the downstream
+	 * MT6589 path, which brings up the overlay and the rest of the source
+	 * path before it pulses DSI START.
+	 *
+	 * A previous version of this ran the loop backwards, on the theory that
+	 * OVL "begins fetching as soon as it is enabled" and so needs its sink
+	 * already running.  That has it the wrong way round for this engine: the
+	 * pipeline is gated by the mutex SOF, so OVL cannot complete a frame
+	 * until RDMA0 clocks one out of it, and RDMA0 cannot until DSI pulls
+	 * data.  Starting DSI first therefore has OVL's pixels arrive at a
+	 * pipeline that is not producing SOFs yet, which is exactly the
+	 * RDMA0_EOF_ABNORMAL the reordering was meant to avoid.
 	 */
 	if (priv->data->defer_start_until_bridge) {
 		mtk_crtc->ddp_start_pending = true;
@@ -515,8 +527,8 @@ void mtk_crtc_ddp_start_pending(struct drm_crtc *crtc)
 
 	/* Clear first so a re-entrant enable cannot start the path twice. */
 	mtk_crtc->ddp_start_pending = false;
-	for (i = mtk_crtc->ddp_comp_nr; i > 0; i--)
-		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i - 1]);
+	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
+		mtk_ddp_comp_start(mtk_crtc->ddp_comp[i]);
 }
 
 static void mtk_crtc_ddp_hw_fini(struct mtk_crtc *mtk_crtc)

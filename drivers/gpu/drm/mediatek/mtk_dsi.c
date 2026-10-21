@@ -1182,17 +1182,19 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 	/*
 	 * MT6589 defers the complete DDP start until this point, after the panel
 	 * bridge's atomic_pre_enable has enabled its supply/GPIO and the DSI PHY
-	 * is configured. The CRTC starts in reverse graph order: DSI first, then
-	 * RDMA0, and OVL last. This prevents OVL from fetching before its sink
-	 * path is ready.
+	 * is configured.  The CRTC then starts the components in OF graph order,
+	 * source to sink, so DSI - the last element of the path - is started
+	 * last, exactly as the downstream path does it.
+	 *
+	 * mtk_output_dsi_enable() below is therefore the first START pulse for
+	 * this enable: the DDP hook has not run for DSI yet.
 	 */
 	mtk_crtc_ddp_start_pending(dsi->encoder.crtc);
 	mtk_output_dsi_enable(dsi);
 	/*
-	 * The DSI component is the final element of the MT6589 path, so its
-	 * start hook has already pulsed START after RDMA0 was enabled. This
-	 * idempotent call is a no-op for that path; retain the final snapshot
-	 * here to compare the link after all components have started.
+	 * Keep a final snapshot here to compare the link after every component
+	 * has started.  mtk_output_dsi_enable() is idempotent, so this call is
+	 * a no-op for the case where the DDP hook already got here first.
 	 */
 	mtk_dsi_dump_status(dsi, "post-start");
 }
@@ -1294,15 +1296,17 @@ void mtk_dsi_ddp_start(struct device *dev)
 	}
 
 	/*
-	 * The CRTC starts MT6589 DDP components in reverse order, so this is
-	 * the sink-side start hook and runs before RDMA0 and OVL are enabled.
-	 * Powering DSI on alone is not enough: the actual DSI_START write used
-	 * to wait for the bridge atomic_enable callback, which runs only after
-	 * CRTC atomic_enable has already started OVL.  Start the video engine
-	 * here so the downstream path is ready before OVL begins fetching.
+	 * The CRTC starts the MT6589 DDP components in OF graph order, so this
+	 * is the sink-side hook and runs last, after OVL, COLOR and RDMA0 have
+	 * been configured and started.  Powering DSI on alone is not enough:
+	 * the DSI_START pulse is what makes the controller begin pulling frames
+	 * out of RDMA0, and it belongs at the end of the sequence.  It used to
+	 * wait for the bridge atomic_enable callback, which runs after the same
+	 * point but cannot be relied on to come first.
 	 *
-	 * atomic_pre_enable normally did this lane setup already.  Keep it
-	 * idempotent here because the DDP hook can also handle a retried power-on.
+	 * atomic_pre_enable normally did the lane setup already.  Keep it
+	 * idempotent here because the DDP hook can also handle a retried
+	 * power-on.
 	 */
 	mtk_dsi_lane_ready(dsi);
 	mtk_dsi_clk_hs_mode(dsi, true);

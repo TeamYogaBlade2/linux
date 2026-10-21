@@ -372,6 +372,88 @@ static int panel_simple_enable(struct drm_panel *panel)
 	return 0;
 }
 
+/*
+ * panel_simple_dsi_prepare - put a DSI panel into a state that accepts video
+ *
+ * panel_simple_prepare() above only resumes the device and enables the supply;
+ * it sends no DCS command at all.  That is fine for the parallel and LVDS
+ * panels this file started with, and it is not fine for a DSI panel: after
+ * reset such a panel sits in sleep-in mode with its display off, and it shows
+ * nothing however correct the pixel stream on the lanes is.  The two commands
+ * that leave that state are the two below - exit sleep, then display on, with a
+ * settle time between them because the second is ignored while the first is
+ * still being processed.
+ *
+ * The delays do not have to be per panel: exit-sleep is specified to take at
+ * most 120 ms, and 20 ms is the usual minimum before display-on is honoured.
+ * A panel that needs longer can still say so, because the per-panel
+ * desc->delay.prepare/enable are honoured first, as before.
+ *
+ * A failure here is not fatal to the pipeline.  A panel that does not answer a
+ * DCS write has a link problem that will show up as a blank screen anyway, and
+ * the DSI host logs the transfer error; refusing to enable the mode would turn
+ * a possible screen into a certain one.  It is reported once so the cause is
+ * visible in a boot log.
+ */
+static int panel_simple_dsi_prepare(struct drm_panel *panel)
+{
+	struct panel_simple *p = to_panel_simple(panel);
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(panel->dev);
+	int ret;
+
+	ret = panel_simple_prepare(panel);
+	if (ret < 0)
+		return ret;
+
+	if (p->desc->delay.prepare)
+		msleep(p->desc->delay.prepare);
+
+	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
+	if (ret < 0) {
+		dev_warn(panel->dev, "failed to exit sleep mode: %d\n", ret);
+		return 0;
+	}
+
+	msleep(20);
+
+	ret = mipi_dsi_dcs_set_display_on(dsi);
+	if (ret < 0)
+		dev_warn(panel->dev, "failed to turn display on: %d\n", ret);
+
+	return 0;
+}
+
+static int panel_simple_dsi_disable(struct drm_panel *panel)
+{
+	struct panel_simple *p = to_panel_simple(panel);
+	int ret;
+
+	if (p->desc->delay.disable)
+		msleep(p->desc->delay.disable);
+
+	ret = mipi_dsi_dcs_set_display_off(to_mipi_dsi_device(panel->dev));
+	if (ret < 0)
+		dev_warn(panel->dev, "failed to turn display off: %d\n", ret);
+
+	return 0;
+}
+
+static int panel_simple_dsi_unprepare(struct drm_panel *panel)
+{
+	int ret;
+
+	ret = mipi_dsi_dcs_enter_sleep_mode(to_mipi_dsi_device(panel->dev));
+	if (ret < 0)
+		dev_warn(panel->dev, "failed to enter sleep mode: %d\n", ret);
+
+	/*
+	 * The generic unprepare drops the runtime-PM reference that releases the
+	 * supply and the enable GPIO.  It comes last, so the panel is already
+	 * asleep before it loses power.
+	 */
+	return panel_simple_unprepare(panel);
+}
+
 static int panel_simple_get_modes(struct drm_panel *panel,
 				  struct drm_connector *connector)
 {
@@ -433,6 +515,24 @@ static const struct drm_panel_funcs panel_simple_funcs = {
 	.disable = panel_simple_disable,
 	.unprepare = panel_simple_unprepare,
 	.prepare = panel_simple_prepare,
+	.enable = panel_simple_enable,
+	.get_modes = panel_simple_get_modes,
+	.get_orientation = panel_simple_get_orientation,
+	.get_timings = panel_simple_get_timings,
+};
+
+/*
+ * DSI panels only.  After reset a DSI panel is in sleep-in mode with its
+ * display off, and it shows nothing until it is told otherwise - a correct
+ * pixel stream on the lanes is not enough.  These three wrappers add the DCS
+ * commands that leave and re-enter that state around the generic power
+ * sequencing above; every other connector type still uses the plain table,
+ * because it has no DCS channel.
+ */
+static const struct drm_panel_funcs panel_simple_dsi_funcs = {
+	.disable = panel_simple_dsi_disable,
+	.unprepare = panel_simple_dsi_unprepare,
+	.prepare = panel_simple_dsi_prepare,
 	.enable = panel_simple_enable,
 	.get_modes = panel_simple_get_modes,
 	.get_orientation = panel_simple_get_orientation,
@@ -676,7 +776,15 @@ static struct panel_simple *panel_simple_probe(struct device *dev)
 		break;
 	}
 
+	/*
+	 * DSI panels need the DCS commands that leave sleep-in mode, which the
+	 * plain table above does not send; WebSearch panels keep the plain one
+	 * because they have no DCS channel at all.
+	 */
 	panel = devm_drm_panel_alloc(dev, struct panel_simple, base,
+				     IS_ENABLED(CONFIG_DRM_MIPI_DSI) &&
+				     dev_is_mipi_dsi(dev) ?
+				     &panel_simple_dsi_funcs :
 				     &panel_simple_funcs, connector_type);
 	if (IS_ERR(panel))
 		return ERR_CAST(panel);
