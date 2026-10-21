@@ -125,6 +125,16 @@ static inline u32 csi2_ofs(const struct mtk_csi2_rx *priv, u32 reg)
 	return 0x100 + priv->port * CSI2_PORT_STRIDE + reg;
 }
 
+/*
+ * The SENINF per-port blocks (SENINF1_* at +0x00, SENINF2_* at +0x80) are a
+ * separate window from the csi2 receivers at +0x100, and are selected by the
+ * same port index.
+ */
+static inline u32 seninf_ofs(const struct mtk_csi2_rx *priv, u32 reg)
+{
+	return priv->port * SENINF_PORT_STRIDE + reg;
+}
+
 static inline void csi2_write(struct mtk_csi2_rx *priv, u32 reg, u32 val)
 {
 	writel(val, priv->regs + csi2_ofs(priv, reg));
@@ -490,10 +500,7 @@ static int mtk_csi2_rx_get_fmt(struct v4l2_subdev *sd,
 			       struct v4l2_subdev_state *state,
 			       struct v4l2_subdev_format *fmt)
 {
-	struct mtk_csi2_rx *priv = sd_to_csi2rx(sd);
 	struct v4l2_mbus_framefmt *sink;
-
-	lockdep_assert_held(&priv->lock);
 
 	if (fmt->pad != CSI2_PAD_SINK && fmt->pad != CSI2_PAD_SRC)
 		return -EINVAL;
@@ -552,8 +559,6 @@ static int mtk_csi2_rx_set_fmt(struct v4l2_subdev *sd,
 	struct v4l2_mbus_framefmt *sink, *src;
 	bool try_fmt = fmt->which == V4L2_SUBDEV_FORMAT_TRY;
 
-	lockdep_assert_held(&priv->lock);
-
 	if (fmt->pad != CSI2_PAD_SINK && fmt->pad != CSI2_PAD_SRC)
 		return -EINVAL;
 
@@ -577,11 +582,22 @@ static int mtk_csi2_rx_set_fmt(struct v4l2_subdev *sd,
 	 * to the subdev state, and the block's own size registers are
 	 * programmed from here.  A TRY format is confined to the state object
 	 * above.
+	 *
+	 * The cache is written under priv->lock because s_stream() reads it
+	 * under that lock.  The pad ops themselves are serialised by the
+	 * subdev state lock, which the V4L2 core takes around this call when
+	 * it is invoked without a state argument - but that is a *different*
+	 * lock from the one s_stream() holds, so it excludes nothing.  This
+	 * used to assert priv->lock instead, which the core never takes for a
+	 * pad op: the assertion could never have fired, and the cache update
+	 * was genuinely unsynchronised against a concurrent STREAMON.
 	 */
 	if (!try_fmt) {
+		mutex_lock(&priv->lock);
 		priv->width = sink->width;
 		priv->height = sink->height;
 		priv->code = sink->code;
+		mutex_unlock(&priv->lock);
 	}
 
 	fmt->format = *sink;
@@ -877,6 +893,25 @@ static int mtk_csi2_rx_start_stream(struct mtk_csi2_rx *priv)
 	reg = readl(priv->regs + SENINF_TOP_CTRL);
 	reg |= SENINF_PCLK_EN(priv->port);
 	writel(reg, priv->regs + SENINF_TOP_CTRL);
+
+	/*
+	 * Tell the front end the image size it is receiving.
+	 *
+	 * SENINFn_SIZE is the one register that carries the frame geometry, and
+	 * it was never written: the driver cached the negotiated width/height
+	 * in set_fmt() and then never used them, so the block ran with whatever
+	 * the bootloader left there.  The cache exists for this call - s_stream()
+	 * has no access to the subdev state - and this is the only reader.
+	 *
+	 * Written before CSI2_EN so the receiver is enabled with its size
+	 * already in place rather than being re-programmed underneath a
+	 * running stream.  The register lives in the SENINF window, not the
+	 * csi2 one, hence seninf_ofs().
+	 */
+	if (priv->width && priv->height)
+		writel(FIELD_PREP(SENINF_HSIZE, priv->width) |
+		       FIELD_PREP(SENINF_VSIZE, priv->height),
+		       priv->regs + seninf_ofs(priv, SENINF_SIZE));
 
 	/* Drain any pending error, then clear the status. */
 	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_STATUS);

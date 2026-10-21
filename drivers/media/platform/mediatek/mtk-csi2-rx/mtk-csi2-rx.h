@@ -63,6 +63,18 @@ enum {
 #define SENINF_TOP_CTRL				0x00
 
 /*
+ * SENINF1_SIZE / SENINF2_SIZE (0x1500801C and 0x1500809C): the sensor image
+ * size the front end is told to expect, HSIZE[31:16] and VSIZE[15:0], both RW
+ * with no documented encoding beyond "sensor image horizontal/vertical size"
+ * (data sheet page 2227).  The vendor's own register block agrees on the
+ * layout (seninf_reg.h REG_SENINF1_SIZE: H_SIZE then V_SIZE).
+ */
+#define SENINF_SIZE				0x1c
+#define SENINF_PORT_STRIDE			0x80
+#define SENINF_HSIZE				GENMASK(31, 16)
+#define SENINF_VSIZE				GENMASK(15, 0)
+
+/*
  * 31     SENINF_TOP_DBG_SEL    0: seninf 1 csi2, 1: seninf 2 csi2
  * 16     SENINF_TOP_N3D_SW_RST  N3D software reset, active high
  * 11:10  SENINF{1,2}_PCLK_EN   parallel sensor clock enable (0: gated)
