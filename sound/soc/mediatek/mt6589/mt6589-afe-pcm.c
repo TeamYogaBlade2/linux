@@ -166,7 +166,6 @@
 #define AFE_IRQ_MCU_STATUS_OWNED	(AFE_IRQ_MCU_STATUS_IRQ1 |	\
 					 AFE_IRQ_MCU_STATUS_IRQ2)
 #define AFE_IRQ_MCU_STATUS_LINE	(GENMASK(5, 0) | GENMASK(13, 8))
-#define AFE_IRQ_MCU_CLR_OWNED	AFE_IRQ_MCU_STATUS_OWNED
 #define AFE_IRQ_MCU_CLR_LINE	AFE_IRQ_MCU_STATUS_LINE
 /*
  * AFE_IRQ_CLR bit 6: "clears the MCU IRQ for AFE while all IRQ statuses are
@@ -558,6 +557,19 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (sparse_code < 0)
 		return -EINVAL;
 
+	/*
+	 * Re-seed the memif read pointer on every start.  hw_params() writes
+	 * it once, but prepare() runs again before each restart, and a
+	 * stopped stream leaves DL1_CUR wherever the memif left it.  Starting
+	 * a fresh stream from a stale cursor makes .pointer() report an
+	 * arbitrary offset into the new buffer, so ALSA's first period is
+	 * mis-counted.  The AFE has no DMA engine to reset it for us.
+	 */
+	ret = regmap_write(afe->regmap, AFE_DL1_CUR,
+			   lower_32_bits(runtime->dma_addr));
+	if (ret)
+		return ret;
+
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
 	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
 				 AFE_IRQ_MCU_CON_IRQ1_RATE,
@@ -827,6 +839,12 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	if (rate_code < 0)
 		return -EINVAL;
 
+	/* Re-seed the capture cursor for the same reason as DL1_CUR above. */
+	ret = regmap_write(afe->regmap, AFE_VUL_CUR,
+			   lower_32_bits(runtime->dma_addr));
+	if (ret)
+		return ret;
+
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_VUL_RATE,
 				 FIELD_PREP(AFE_DAC_CON1_VUL_RATE, rate_code));
@@ -1089,54 +1107,35 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 	owned = status & AFE_IRQ_MCU_STATUS_OWNED;
 	if (!owned) {
 		/*
-		 * The line asserted but no defined status bit is set.  The
-		 * vendor ISR treats exactly this as a fault rather than a
-		 * no-op (AudDrv_Kernel.c:839-858): it tests `status & 0xf`,
-		 * and when that is zero it disables and re-enables the
-		 * audio path and writes bit 6 of AFE_IRQ_CLR.  Bit 6 is the
-		 * "IRQ MCU clear while every status is already 0" handshake
-		 * (data sheet p.2500); clearing bits 0-5 / 8-13 cannot drop
-		 * a line held in this state, so a handler that only acks
-		 * those re-enters forever and never reports progress.
+		 * The line asserted but no period bit is set.  Both references
+		 * treat this as "ack and stop", not as a period: downstream
+		 * tests `status & 0xf` and, when zero, writes bit 6 of
+		 * AFE_IRQ_CLR and returns (AudDrv_Kernel.c:839-858), and the
+		 * working mt6572-afe-pcm.c does the same with
+		 * AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6)|BIT(1)|BIT(0)).
 		 *
-		 * Observed on this hardware during playback: status read
-		 * back 0x04604600 / 0x06406400 / 0x0B00B000, i.e. every
-		 * defined flag (bits 0-5) clear, undefined high bits set,
-		 * and the high half always equal to the low half >> 4, so
-		 * the value is not meaningful status.  The GIC line still
-		 * fired ~14 times a second, and because the old code
-		 * returned here, snd_pcm_period_elapsed() was never called
-		 * and the stream never advanced.
+		 * Bit 6 is the "IRQ MCU clear while all IRQ statuses are 0"
+		 * handshake (data sheet p.2500); a handler that only clears
+		 * bits 0-5 / 8-13 leaves a line held in this state asserted
+		 * and re-enters forever.
 		 *
-		 * So perform the handshake and still report the period: the
-		 * MCU counter reaching its target is the period event, and
-		 * suppressing it is what stalls ALSA.  Warn once so the
-		 * broken status is visible instead of silent.
+		 * Reporting a period here instead is wrong and was tried: it
+		 * makes ALSA advance on an interrupt that carries no data.
 		 */
 		regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
 			     AFE_IRQ_MCU_CLR_HANDSHAKE);
-		dev_warn_ratelimited(afe->dev,
-				     "AFE IRQ with no status (0x%08x); assuming the period elapsed\n",
-				     status);
+		return IRQ_HANDLED;
 	}
 
 	dl1 = READ_ONCE(afe->dl1_substream);
 	vul = READ_ONCE(afe->vul_substream);
 
-	/*
-	 * Report the period for the direction whose counter fired.  When the
-	 * status word carried no owned bit at all - the case above - fall back
-	 * to whichever substream is running: the MCU counter reaching its
-	 * target is the period event, and not reporting it is what leaves
-	 * ALSA waiting out its own period timeout.
-	 */
-	if ((owned & AFE_IRQ_MCU_STATUS_IRQ1) || (!owned && dl1)) {
-		if (dl1)
-			snd_pcm_period_elapsed(dl1);
-	} else if ((owned & AFE_IRQ_MCU_STATUS_IRQ2) || (!owned && vul)) {
-		if (vul)
-			snd_pcm_period_elapsed(vul);
-	}
+	/* Report the period for the direction whose counter fired. */
+	if ((owned & AFE_IRQ_MCU_STATUS_IRQ1) && dl1)
+		snd_pcm_period_elapsed(dl1);
+
+	if ((owned & AFE_IRQ_MCU_STATUS_IRQ2) && vul)
+		snd_pcm_period_elapsed(vul);
 
 	return IRQ_HANDLED;
 }

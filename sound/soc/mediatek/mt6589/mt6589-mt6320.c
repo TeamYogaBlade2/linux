@@ -104,7 +104,18 @@ static int mt6589_mt6320_late_probe(struct snd_soc_card *card)
 	}
 
 	if (!accdet) {
-		dev_info(card->dev, "no headset detection support\n");
+		/*
+		 * accdet is declared in this card's "aux-devs", so its
+		 * absence means the aux component failed to bind - not that
+		 * the board has no headset detection.  Losing it silently is
+		 * how the jack then never reports and the Speaker pin is
+		 * never un-muted: DAPM keeps whatever state it had and the
+		 * stream runs with no output.  It cannot be fixed from here
+		 * (late_probe runs after binding, too late to defer), so say
+		 * so loudly instead of returning quietly.
+		 */
+		dev_err(card->dev,
+			"mt6320-accdet is in aux-devs but did not bind; headset detection and speaker un-mute will not work\n");
 		return 0;
 	}
 

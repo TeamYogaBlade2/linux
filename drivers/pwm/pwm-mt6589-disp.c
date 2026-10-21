@@ -42,6 +42,13 @@
 #define BLS_GAMMA_SETTING		0x0030
 #define BLS_GAMMA_BOUNDARY		0x0034
 #define BLS_LUT_UPDATE			0x0038
+/*
+ * BLS_LUT_UPDATE strobes (datasheet p. 1661).  Bit 0 gates the gamma table,
+ * bit 1 the inverse-gamma table and bit 2 the PWM table; each is asserted
+ * before its table is written and released afterwards.  A table written
+ * without its strobe is not latched by the engine.
+ */
+#define BLS_LUT_UPDATE_GAMMA		BIT(0)
 #define BLS_PWM_LUT_SEL			0x003C
 #define BLS_MAXCLR_LIMIT		0x0040
 #define BLS_PRE_DIST_THD		0x0044
@@ -194,11 +201,20 @@ static unsigned int duty_to_level(const struct pwm_state *state,
  * Identity gamma: 256 entries of 10-bit {R,G,B} packed as bits 29:20, 19:10
  * and 9:0 (datasheet ch. 45.3, p. 1674), so entry[i] = (i << 2) maps 255 to
  * 1020, plus the 257th entry in BLS_GAMMA_BOUNDARY (p. 1661).
+ *
+ * The LUT writes only take effect when bracketed by the matching update
+ * strobe: BLS_LUT_UPDATE bit 0 is "Gamma_Update", asserted before the table
+ * is written and released afterwards (datasheet p. 1661; downstream
+ * ddp_bls.c:275,292 wraps the same loop this way).  Without it the entries
+ * land in a buffer the gamma engine never latches, which is silent because
+ * the LUT registers still read back what was written.
  */
 static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
 {
 	unsigned int i;
 	u32 val;
+
+	writel(BLS_LUT_UPDATE_GAMMA, bls->base + BLS_LUT_UPDATE);
 
 	for (i = 0; i < 256; i++) {
 		val = ((i << 2) & 0x3FF) << 20 |	/* Red */
@@ -211,6 +227,8 @@ static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
 	      (0x3FF << 10) |
 	      0x3FF;
 	writel(val, bls->base + BLS_GAMMA_BOUNDARY);
+
+	writel(0, bls->base + BLS_LUT_UPDATE);
 
 	writel(0x00000001, bls->base + BLS_GAMMA_SETTING);
 }
