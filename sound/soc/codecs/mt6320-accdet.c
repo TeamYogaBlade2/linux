@@ -674,11 +674,6 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, PTR_ERR(priv->key),
 				     "failed to get key ADC\n");
 
-	ret = gpiod_set_debounce(priv->detect, 256000);
-	if (ret && ret != -ENOTSUPP)
-		return dev_err_probe(&pdev->dev, ret,
-				     "failed to set detect debounce\n");
-
 	ret = mt6320_accdet_hw_init(priv);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
@@ -734,6 +729,33 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to request detect IRQ\n");
+
+	/*
+	 * Program the EINT debounce only now that the line is ours.
+	 *
+	 * gpiod_set_debounce() ends in mtk_eint_set_debounce(), which masks
+	 * and then *unmasks* the EINT line it touches.  Unmasking before
+	 * request_irq() has run is not a harmless early enable: the EINT's
+	 * polarity register still holds its reset value (mtk_eint_set_type()
+	 * is what programs it, and that runs just above), the pin is still a
+	 * GPIO (mtk_eint_irq_request_resources() is what calls
+	 * set_gpio_as_eint(), and that only runs from the request) and no
+	 * handler is registered.  An edge arriving in that window latches the
+	 * EINT status bit that mtk_eint_irq_handler() has to see and ack on
+	 * behalf of a *child* handler; with no child registered, nothing acks
+	 * it, the status register stays non-zero, and the chained handler
+	 * spins on it forever.  That is the observed symptom of the jack
+	 * interrupt never arriving at all, and it is permanent for the boot.
+	 *
+	 * -EINVAL is tolerated: mtk_eint_can_en_debounce() accepts a debounce
+	 * value only for a pin some other consumer marked debounce-capable,
+	 * and nothing in this SoC's pin table does.  The debounce is an
+	 * optimisation for a mechanical jack switch, not a requirement.
+	 */
+	ret = gpiod_set_debounce(priv->detect, 256000);
+	if (ret && ret != -ENOTSUPP && ret != -EINVAL)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to set detect debounce\n");
 
 	if (priv->plugged) {
 		ret = regmap_write(priv->regmap, MT6320_AUDENCSPARE_CON0,
