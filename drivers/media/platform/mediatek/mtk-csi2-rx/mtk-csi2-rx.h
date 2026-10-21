@@ -68,11 +68,20 @@ enum {
  * 11:10  SENINF{1,2}_PCLK_EN   parallel sensor clock enable (0: gated)
  *  9     SENINF2_PCLK_SEL       parallel sensor clock select (0: pclk, 1: mclk)
  *  8     SENINF1_PCLK_SEL       parallel sensor clock select (0: pclk, 1: mclk)
+ *
+ * The field order above is the vendor one (seninf_reg.h:46-49, whose bitfield
+ * declares SENINF1_PCLK_SEL at bit 8, then SENINF2_PCLK_SEL at 9,
+ * SENINF2_PCLK_EN at 10 and SENINF1_PCLK_EN at 11), so port 0 - the first
+ * receiver, SENINF1_* - owns the *lower* bit of each pair.  These macros used
+ * to be written as "BIT(11 - port)" and "BIT(9 - port + 1)", which for port 0
+ * gives bit 11 for both the enable and the select: the enable landed on
+ * SENINF1_PCLK_EN only by coincidence of the subtraction, and the select
+ * pointed at a bit that is not a select at all.
  */
 #define SENINF_TOP_DBG_SEL			BIT(31)
 #define SENINF_TOP_N3D_SW_RST			BIT(16)
 #define SENINF_PCLK_EN(port)			BIT(11 - (port))
-#define SENINF_PCLK_SEL(port)			BIT(9 - (port) + 1)
+#define SENINF_PCLK_SEL(port)			BIT(8 + (port))
 
 /*
  * SENINF_TOP_DBG_SEL selects which receiver a debug write applies to.  It
@@ -187,8 +196,21 @@ enum {
 #define CSI2_ECC_ERR_IRQ			BIT(1)
 #define CSI2_CRC_ERR_IRQ			BIT(0)
 
-/* Status bits this driver owns; excludes the read-only sync outputs. */
-#define CSI2_INTSTA_ERR				GENMASK(3, 0)
+/*
+ * The four latched status bits this driver owns.  CSI2_IRQ_CLR_SEL (bit 4) is
+ * deliberately NOT in this mask even though it lives in the same register:
+ * it is a control bit that selects write-1-to-clear behaviour for the four
+ * below, not a report.  It used to be spelled GENMASK(3, 0), which was right
+ * by luck for the status bits and wrong for that reason - once
+ * CSI2_IRQ_CLR_SEL is set, a "clear the status" write built from this mask
+ * would leave it set (correct) but the equivalent read-then-clear would echo
+ * it back (wrong).  Name the bits explicitly so the control bit can never be
+ * folded in by accident.
+ */
+#define CSI2_INTSTA_STATUS			(CSI2_CRC_ERR_IRQ | \
+						 CSI2_ECC_ERR_IRQ | \
+						 CSI2_ECC_CORRECT_IRQ | \
+						 CSI2SYNC_NONSYNC_IRQ)
 
 /* CSI2_LNMUX: how the four received lanes map onto the two output pairs. */
 #define CSI2_DATA_LN1_MUX			GENMASK(5, 4)

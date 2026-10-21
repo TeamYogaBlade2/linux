@@ -94,6 +94,15 @@ struct mtk_csi2_rx {
 	 */
 	u32 num_data_lanes;
 	u32 dlane_bits;
+
+	/*
+	 * LP11 -> HS settle/termination delays programmed into CSI2_DELAY, in
+	 * units of the receiver's own timing steps.  Optional in the DT: a
+	 * board that does not describe them keeps the reset value, which is
+	 * what the driver used to do unconditionally.
+	 */
+	u32 hs_settle;
+	u32 hs_term;
 };
 
 static inline struct mtk_csi2_rx *sd_to_csi2rx(struct v4l2_subdev *sd)
@@ -593,6 +602,7 @@ static const struct v4l2_subdev_pad_ops mtk_csi2_rx_pad_ops = {
  */
 static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 {
+	u32 reg;
 	int ret;
 
 	/* Each of these may be absent; see the note at the clk_get calls. */
@@ -660,8 +670,15 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 		}
 	}
 
-	/* Gate off the parallel sensor clock until a stream is running. */
-	writel(0, priv->regs + SENINF_TOP_CTRL);
+	/*
+	 * Gate this port's parallel sensor clock until a stream is running.
+	 * Read-modify-write, not a wholesale zero: SENINF_TOP_CTRL is shared
+	 * with the other receiver, whose PCLK enable (and the N3D reset) must
+	 * survive this port's power cycle.
+	 */
+	reg = readl(priv->regs + SENINF_TOP_CTRL);
+	reg &= ~SENINF_PCLK_EN(priv->port);
+	writel(reg, priv->regs + SENINF_TOP_CTRL);
 
 	/*
 	 * Restore CSI2_CTRL to its documented reset value, then clear the
@@ -685,12 +702,54 @@ static int mtk_csi2_rx_power_on(struct mtk_csi2_rx *priv)
 	 */
 	csi2_write(priv, CSI2_CTRL, CSI2_CTRL_RESET & CSI2_CTRL_RW);
 
+	/*
+	 * LP11 -> HS timing.  The receiver samples the sensor's entry into HS
+	 * after a fixed settle window, and if the window is shorter than the
+	 * sensor's own transition the first packets of every frame are
+	 * truncated; too long and the receiver misses the start of the packet
+	 * instead.  Both values therefore come from the board's DT, in the
+	 * receiver's timing steps, because they are a property of the sensor
+	 * and the PCB trace length rather than of this SoC.
+	 *
+	 * Downstream programs the same two fields per sensor in
+	 * SeninfDrvImp::setTg1CSI2() (seninf_drv.cpp:1281-1285 writes
+	 * CSI2_DELAY[23:16] unconditionally and leaves the other two fields
+	 * clear).  Where the DT does not describe them the register keeps its
+	 * reset value, which is what this driver did for every board before.
+	 */
+	if (priv->hs_settle || priv->hs_term)
+		csi2_write(priv, CSI2_DELAY,
+			   FIELD_PREP(CSI2_LP2HS_DATA_SETTLE_DELAY,
+				      priv->hs_settle) |
+			   FIELD_PREP(CSI2_LP2HS_DATA_TERM_DELAY, priv->hs_term));
+
+	/*
+	 * Enable the three error reports and make the status register
+	 * write-1-to-clear.
+	 *
+	 * The vendor does exactly this before enabling the receiver
+	 * (seninf_drv.cpp:1286-1289): CRC error, ECC error and ECC-corrected
+	 * all enabled, then CSI2_IRQ_CLR_SEL set.  Without the last one the
+	 * status bits are read-only latches and the clearing write in
+	 * start_stream() would have no effect, so an error raised once would
+	 * stay visible forever; without the enables a corrupted frame is
+	 * delivered as if it were clean.
+	 *
+	 * ECC-correctable reports are enabled as well as the hard errors,
+	 * because that is what the vendor does: a corrected error is the only
+	 * early warning that the settle window is marginal.
+	 */
+	csi2_write(priv, CSI2_INTEN,
+		   CSI2_CRC_ERR_IRQ_EN | CSI2_ECC_ERR_IRQ_EN |
+		   CSI2_ECC_CORRECT_IRQ_EN);
+	csi2_update_bits(priv, CSI2_INTSTA, CSI2_IRQ_CLR_SEL, CSI2_IRQ_CLR_SEL);
+
 	csi2_update_bits(priv, CSI2_CTRL, CSI2_LANE_MASK, priv->dlane_bits);
 
 	csi2_update_bits(priv, CSI2_CTRL, CSI2_EN, CSI2_EN);
 
 	/* Clear any stale latched error status from a previous run. */
-	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_ERR);
+	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_STATUS);
 
 	return 0;
 
@@ -756,6 +815,7 @@ static const struct dev_pm_ops mtk_csi2_rx_pm_ops = {
 
 static int mtk_csi2_rx_start_stream(struct mtk_csi2_rx *priv)
 {
+	u32 reg;
 	int ret;
 
 	lockdep_assert_held(&priv->lock);
@@ -774,29 +834,45 @@ static int mtk_csi2_rx_start_stream(struct mtk_csi2_rx *priv)
 
 	/*
 	 * The parallel sensor clock must be running before the receiver is
-	 * released, otherwise the first frame is missed.  mtk_csi2_rx_power_on()
-	 * gated it off, so re-open it here.
+	 * released, otherwise the first frame is missed.
+	 * mtk_csi2_rx_power_on() gated it off, so re-open it here.
+	 *
+	 * This is a read-modify-write of one bit in a register shared by both
+	 * receivers: SENINF_TOP_CTRL also carries the other port's PCLK
+	 * enable, its PCLK select and the N3D reset.  Writing the bit pattern
+	 * outright - as this and stop_stream() used to - cleared the other
+	 * receiver's PCLK enable every time this one started streaming, so a
+	 * dual-camera configuration could only ever have one port clocked.
 	 */
-	writel(SENINF_PCLK_EN(priv->port), priv->regs + SENINF_TOP_CTRL);
+	reg = readl(priv->regs + SENINF_TOP_CTRL);
+	reg |= SENINF_PCLK_EN(priv->port);
+	writel(reg, priv->regs + SENINF_TOP_CTRL);
 
 	/* Drain any pending error, then clear the status. */
-	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_ERR);
+	csi2_write(priv, CSI2_INTSTA, CSI2_INTSTA_STATUS);
 
 	return 0;
 }
 
 static void mtk_csi2_rx_stop_stream(struct mtk_csi2_rx *priv)
 {
+	u32 reg;
+
 	lockdep_assert_held(&priv->lock);
 
 	/*
-	 * Tear the stream down while the block is still powered: gate the
-	 * parallel sensor clock, then release the PM reference.  runtime_suspend()
-	 * disables the receiver and asserts the reset, so doing it in this
-	 * order means the gate-off happens inside the resume window instead
-	 * of after the clocks have already gone away.
+	 * Tear the stream down while the block is still powered: gate this
+	 * port's parallel sensor clock, then release the PM reference.
+	 * runtime_suspend() disables the receiver and asserts the reset, so
+	 * doing it in this order means the gate-off happens inside the resume
+	 * window instead of after the clocks have already gone away.
+	 *
+	 * Only this port's bit is cleared; see start_stream() for why the
+	 * register must not be written wholesale.
 	 */
-	writel(0, priv->regs + SENINF_TOP_CTRL);
+	reg = readl(priv->regs + SENINF_TOP_CTRL);
+	reg &= ~SENINF_PCLK_EN(priv->port);
+	writel(reg, priv->regs + SENINF_TOP_CTRL);
 
 	pm_runtime_put_autosuspend(priv->dev);
 }
@@ -879,6 +955,22 @@ static int mtk_csi2_rx_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, -EINVAL,
 				     "mediatek,seninf-port %u out of range (max %u)\n",
 				     priv->port, SENINF_MAX_PORTS - 1);
+
+	/*
+	 * Optional LP11 -> HS timing.  Absent means "keep the reset value",
+	 * which is what every board got before these properties existed.
+	 */
+	ret = of_property_read_u32(dev->of_node, "mediatek,hs-settle",
+				   &priv->hs_settle);
+	if (ret && ret != -EINVAL)
+		return dev_err_probe(dev, ret,
+				     "invalid mediatek,hs-settle\n");
+
+	ret = of_property_read_u32(dev->of_node, "mediatek,hs-term",
+				   &priv->hs_term);
+	if (ret && ret != -EINVAL)
+		return dev_err_probe(dev, ret,
+				     "invalid mediatek,hs-term\n");
 
 	/*
 	 * Resolve the data-lane count and its CSI2_CTRL[3:1] enable word now,

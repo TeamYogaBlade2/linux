@@ -68,6 +68,27 @@ properties:
       camera and port 1 is the front camera.
     enum: [0, 1]
 
+  mediatek,hs-settle:
+    description: |
+      LP11 -> HS data settle delay written to CSI2_DELAY[23:16], in the
+      receiver's timing steps.  This is how long the receiver waits after a
+      lane leaves LP11 before it starts sampling, and it has to cover the
+      sensor's own transition time plus the PCB propagation delay.
+
+      A property of the sensor and the board, not of the SoC, so it belongs
+      in the board DTS.  Where it is absent the register keeps its reset
+      value.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 0xff
+
+  mediatek,hs-term:
+    description: |
+      LP11 -> HS data termination delay written to CSI2_DELAY[31:24], in the
+      receiver's timing steps.  Companion to mediatek,hs-settle with the same
+      "board property, reset value if absent" rule.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 0xff
+
   clocks:
     description: |
       Up to three clocks, in this order:
