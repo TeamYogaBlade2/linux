@@ -478,10 +478,20 @@
 	 *     CSI-2 D-PHY node (see the long note on &seninf), so there is no
 	 *     remote endpoint to point at yet.
 	 *
-	 * Reset and power-down are GPIO211 and GPIO212 per the board's DCT
-	 * output (blade10 cust_gpio_usage.h:184-190), active low and active
-	 * low respectively; the driver does not model them yet, so they are
-	 * not listed here either rather than being listed and ignored.
+	 * Reset and power-down are GPIO211 and GPIO212, now confirmed in the
+	 * shipped kernel rather than only in the board DCT: kdCISModulePowerOn()
+	 * (kernel_blade10_row_wifi-kk.elf @ c0454c40) copies its camera GPIO
+	 * descriptor from the table at c07133e4, which holds two 8-int entries:
+	 *
+	 *   camera 0 (main)   GPIO211, GPIO212   mode 0, driven 0 then 1
+	 *   camera 1 (sub)    GPIO 32, GPIO 31   mode 0, driven 0 then 1
+	 *
+	 * Both are plain GPIO outputs toggled low-then-high with 1-5 ms gaps
+	 * between them; the order in the code is powerdown first, then reset.
+	 *
+	 * The driver does not model these lines yet, so they are still not
+	 * listed here - the values are recorded so the binding can be written
+	 * against something verified rather than inferred.
 	 */
 	a5142: camera@6c {
 		compatible = "onnn,a5142";
