@@ -49,6 +49,7 @@
  * without its strobe is not latched by the engine.
  */
 #define BLS_LUT_UPDATE_GAMMA		BIT(0)
+#define BLS_LUT_UPDATE_PWM		BIT(2)
 #define BLS_PWM_LUT_SEL			0x003C
 #define BLS_MAXCLR_LIMIT		0x0040
 #define BLS_PRE_DIST_THD		0x0044
@@ -233,6 +234,44 @@ static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
 	writel(0x00000001, bls->base + BLS_GAMMA_SETTING);
 }
 
+/*
+ * The PWM LUT is a 33x33 table: BLS_PWM_LUT_SEL picks one of 33 input rows,
+ * and the 33 entries of that row are the output levels for the 33 duty steps.
+ * The stock driver fills every row with the same linear ramp, value = n * 4
+ * clamped at 255, which makes the table an identity map expressed in the
+ * block's own units (disp_bls_update_pwm_lut(), shipped blade10 kernel at
+ * c05410f0, reading the table at c09925c0).
+ *
+ * Like the gamma table this is only latched when bracketed by its update
+ * strobe, and here the bit is BIT(2), "PWM_Update".  The vendor asserts it,
+ * selects each row, writes the 33 entries and releases it.
+ *
+ * It is worth being explicit about why this matters for brightness: with the
+ * gamma table present but the PWM LUT never written, the duty value in
+ * BLS_PWM_DUTY still reads back whatever was written to it, so the control
+ * looks like it works, but the engine has no mapping to apply and the panel's
+ * average brightness does not follow.  That is exactly the "registers update,
+ * backlight does not change" symptom reported on this board.
+ */
+static void mt6589_bls_pwm_lut_init(struct mt6589_bls_pwm *bls)
+{
+	unsigned int row, col;
+	u32 val;
+
+	writel(BLS_LUT_UPDATE_PWM, bls->base + BLS_LUT_UPDATE);
+
+	for (row = 0; row < 33; row++) {
+		writel(row, bls->base + BLS_PWM_LUT_SEL);
+
+		for (col = 0; col < 33; col++) {
+			val = min(col * 4U, 255U);
+			writel(val, bls->base + BLS_PWM_LUT(col));
+		}
+	}
+
+	writel(0, bls->base + BLS_LUT_UPDATE);
+}
+
 /* Dither matrix, from ddp_bls.c:357-363 (disp_bls_init). */
 static void mt6589_bls_dither_init(struct mt6589_bls_pwm *bls)
 {
@@ -411,6 +450,8 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 	writel(0x0, bls->base + BLS_SRC_SIZE);
 
 	mt6589_bls_gamma_init(bls);
+
+	mt6589_bls_pwm_lut_init(bls);
 
 	mt6589_bls_dither_init(bls);
 
