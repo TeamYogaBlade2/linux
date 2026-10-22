@@ -5,8 +5,18 @@
 
 #include "mt6589-lenovo-blade.dtsi"
 
+/*
+ * Geometry confirmed from both candidate panels in the shipped kernel: the
+ * two lcm_get_params() implementations both report width 800 and
+ * height 0x500 = 1280
+ *
+ *   lcm_get_params_2 (nt35521_cmi_080)    800 x 1280
+ *   lcm_get_params_3 (s6d7aa0x04_cpt_080) 800 x 1280
+ *
+ * so a 16-bit r5g6b5 framebuffer of 800 * 2 bytes per line is right for
+ * either part, and the previous "TODO: recheck it" is resolved.
+ */
 / {
-	// TODO: recheck it
 	framebuffer0: framebuffer@bf600000 {
 		compatible = "simple-framebuffer";
 		memory-region = <&framebuffer_reserved>;
