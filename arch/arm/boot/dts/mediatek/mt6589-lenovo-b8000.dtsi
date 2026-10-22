@@ -119,8 +119,20 @@
 		 */
 		voltage-max-design-microvolt = <4352000>;
 
-		/* BQ24196 stock configuration. */
-		precharge-current-microamp = <512000>;
+		/*
+		 * BQ24196 stock configuration.  ChargerHwInit_bq24196() in the
+		 * shipped kernel calls both setters with code 1:
+		 *
+		 *   bq24196_set_iprechg(1)  reg3 bits 7:4
+		 *   bq24196_set_iterm(1)    reg3 bits 3:0
+		 *
+		 * and the BQ24196 encodes each field as 128 mA steps starting at
+		 * 128 mA, so code 1 is 256 mA in both cases.  Precharge was
+		 * listed here as 512 mA, which the hardware is not programmed
+		 * for; it only matters for a deeply discharged pack, but that is
+		 * exactly when getting it wrong is least welcome.
+		 */
+		precharge-current-microamp = <256000>;
 		charge-term-current-microamp = <256000>;
 
 		constant-charge-voltage-max-microvolt = <4352000>;
