@@ -54,25 +54,36 @@
 	#size-cells = <0>;
 	status = "okay";
 
-	panel@0 {
-		compatible = "boe,hx8896-a01-panel";
-		reg = <0>;
-		power-supply = <&mt6320_ldo_vrf28_2>;
-		backlight = <&backlight_lcd>;
-		enable-gpios = <&pio 137 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&panel_pins>;
-
-		port {
-			panel_in: endpoint {
-				remote-endpoint = <&dsi_out>;
-			};
-		};
-	};
-
 	/*
+	 * The board ships with one of two DSI panels, told apart by the
+	 * ID strap on GPIO154 (GPIO_LCM_ID_PIN in the vendor DCT):
+	 *
+	 *   strap == 0  ->  cm_hx8896a01_dsi_vdo      (CMI)
+	 *                   1521x833,  hfp186 hsw5 hbp50, vfp21 vsw2 vbp10
+	 *   strap == 1  ->  cm_hx8896a01_dsi_vdo_boe  (BOE)
+	 *                   1416x822,  hfp100 hsw4 hbp32, vfp10 vsw2 vbp10
+	 *
+	 * Both were recovered from the Blade kernel image
+	 * (kernel_blade10_row_wifi.elf): lcm_get_params_0 @ c0461a2c and
+	 * lcm_get_params_1 @ c0461c58, with lcm_compare_id_0/_1 reading the
+	 * strap and returning mutually exclusive answers.  The vendor's
+	 * disp_drv_get_lcm_driver() @ c050dfd8 walks lcm_driver_list in
+	 * ProjectConfig order, calls compare_id() on each and takes the first
+	 * match, so exactly one is ever selected.
+	 *
+	 * Neither panel takes a DCS init sequence: lcm_init_0/_1 are literally
+	 * "lcd_power_en(); return;" - power the rail, drive GPIO137, done.
+	 * That is why panel-simple fits this board, unlike the B6000.
+	 *
+	 * panel-simple cannot express the strap, so the panel is chosen here.
+	 * The compatible below selects the CMI timing; a unit with a BOE panel
+	 * needs "boe,hx8896-a01-panel" instead: "cmi,hx8896-a01-panel" carries
+	 * the CMI timings (76019 kHz) and "boe,hx8896-a01-panel" the BOE ones
+	 * (69837 kHz).  The older "innolux,hx8896-a01-panel" name still maps to
+	 * the CMI timings for compatibility.
+	 */
 	panel@0 {
-		compatible = "innolux,hx8896-a01-panel";
+		compatible = "cmi,hx8896-a01-panel";
 		reg = <0>;
 		power-supply = <&mt6320_ldo_vrf28_2>;
 		backlight = <&backlight_lcd>;
@@ -86,7 +97,6 @@
 			};
 		};
 	};
-	*/
 
 
 	battery: battery {

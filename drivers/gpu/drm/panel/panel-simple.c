@@ -5871,7 +5871,16 @@ static const struct panel_desc_dsi boe_tv080wum_nl0 = {
 	.lanes = 4,
 };
 
-static const struct drm_display_mode innolux_hx8896_a01_mode = {
+/*
+ * CMI variant of the HX8896 panel, which the vendor calls
+ * cm_hx8896a01_dsi_vdo.  Timings verified against lcm_get_params_0() in
+ * kernel_blade10_row_wifi.elf @ c0461a2c: hfp 186, hsw 5, hbp 50,
+ * vfp 21, vsw 2, vbp 10 over 1280x800.
+ *
+ * This entry was previously named innolux_hx8896_a01; "innolux" does not
+ * appear anywhere in the vendor tree, and the timings are the CMI ones.
+ */
+static const struct drm_display_mode cmi_hx8896_a01_mode = {
 	.clock		= 76019, /* 1521 * 833 * 60 / 1000 kHz */
 	.hdisplay	= 1280,
 	.hsync_start	= 1280 + 186, /* + HFP */
@@ -5883,9 +5892,9 @@ static const struct drm_display_mode innolux_hx8896_a01_mode = {
 	.vtotal		= 800 + 21 + 2 + 10, /* + VBP */
 };
 
-static const struct panel_desc_dsi innolux_hx8896_a01 = {
+static const struct panel_desc_dsi cmi_hx8896_a01 = {
 	.desc = {
-		.modes = &innolux_hx8896_a01_mode,
+		.modes = &cmi_hx8896_a01_mode,
 		.num_modes = 1,
 		.bpc = 8,
 		.size = { .width = 217, .height = 136 }, /* TODO */
@@ -6028,8 +6037,12 @@ static const struct of_device_id dsi_of_match[] = {
 		.compatible = "boe,tv080wum-nl0",
 		.data = &boe_tv080wum_nl0
 	}, {
+		.compatible = "cmi,hx8896-a01-panel",
+		.data = &cmi_hx8896_a01
+	}, {
+		/* Name used before the CMI/BOE distinction was established. */
 		.compatible = "innolux,hx8896-a01-panel",
-		.data = &innolux_hx8896_a01
+		.data = &cmi_hx8896_a01
 	}, {
 		.compatible = "lg,lh500wx1-sd03",
 		.data = &lg_lh500wx1_sd03
