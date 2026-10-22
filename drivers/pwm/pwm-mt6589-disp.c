@@ -110,6 +110,14 @@
 #define BLS_EN_PWM			BIT(31)
 #define BLS_EN_HISTOGRAM		BIT(16)
 #define BLS_EN_BLS			BIT(0)
+/*
+ * bit 11 is PWMLUT_En ("Enables PWM LUT or not", datasheet p. 1656).  It is
+ * defined here for reference only: this driver does not set it, and the
+ * board's working configuration leaves it clear, so BLS_PWM_LUT is loaded but
+ * not consulted.  Driving brightness through the LUT would require setting
+ * this along with whatever BLS_En implies for the scaling path.
+ */
+#define BLS_EN_PWMLUT			BIT(11)
 
 /* BLS_PWM_DUTY format */
 /*
@@ -246,12 +254,14 @@ static void mt6589_bls_gamma_init(struct mt6589_bls_pwm *bls)
  * strobe, and here the bit is BIT(2), "PWM_Update".  The vendor asserts it,
  * selects each row, writes the 33 entries and releases it.
  *
- * It is worth being explicit about why this matters for brightness: with the
- * gamma table present but the PWM LUT never written, the duty value in
- * BLS_PWM_DUTY still reads back whatever was written to it, so the control
- * looks like it works, but the engine has no mapping to apply and the panel's
- * average brightness does not follow.  That is exactly the "registers update,
- * backlight does not change" symptom reported on this board.
+ * Note what this does and does not fix.  The LUT is only consulted when
+ * BLS_EN bit 11 (PWMLUT_En) is set, and this board runs BLS_EN at
+ * 0x80000000 - PWM_En only - so as things stand the table is loaded but not
+ * used.  Initialising it is nonetheless correct, because the vendor driver
+ * does so unconditionally at init and leaving the block's RAM in whatever
+ * state the bootloader left it is not a defensible default; but it will not
+ * by itself change brightness on the current routing.  Anyone reading this
+ * while chasing the dimming bug should look at PWMLUT_En and BLS_En first.
  */
 static void mt6589_bls_pwm_lut_init(struct mt6589_bls_pwm *bls)
 {
