@@ -470,8 +470,8 @@ static void mt6320_accdet_eint_work(struct work_struct *work)
 	}
 
 	ret = irq_set_irq_type(priv->eint_irq,
-				       priv->plugged ? IRQ_TYPE_EDGE_RISING :
-				       IRQ_TYPE_EDGE_FALLING);
+			       priv->plugged ? IRQ_TYPE_LEVEL_HIGH :
+					       IRQ_TYPE_LEVEL_LOW);
 	mutex_unlock(&priv->lock);
 	if (!ret)
 		return;
@@ -531,9 +531,13 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 			goto out;
 		}
 
-		/* Active-low detect: insertion was falling, so removal is rising. */
+		/*
+		 * detect-gpios is GPIO_ACTIVE_LOW, so the line is asserted
+		 * (logical 1 / physical low) while the jack is in.  Wait for
+		 * it to leave that state, i.e. level-high in logical terms.
+		 */
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_EDGE_RISING);
+				       IRQ_TYPE_LEVEL_HIGH);
 		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure plug-in IRQ: %d\n",
@@ -586,9 +590,9 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 		priv->last_state = 3;
 		mt6320_accdet_report(priv, 0);
 
-		/* Active-low detect: removal was rising, so insertion is falling. */
+		/* Jack is out; wait for insertion, i.e. the active level. */
 		ret = irq_set_irq_type(priv->eint_irq,
-				       IRQ_TYPE_EDGE_FALLING);
+				       IRQ_TYPE_LEVEL_LOW);
 		if (ret) {
 			dev_err_ratelimited(priv->dev,
 					    "failed to configure next plug-in IRQ: %d\n",
@@ -705,19 +709,30 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 	priv->last_state = 3;
 
 	/*
-	 * Arm for the edge that reports the *next* transition, not for the
-	 * level the line is already sitting at.  detect-gpios is
-	 * GPIO_ACTIVE_LOW, so the pin idles high with nothing plugged and is
-	 * pulled low on insertion: an unplugged jack needs EDGE_FALLING and a
-	 * plugged one needs EDGE_RISING.  Level-triggering on the current
-	 * level instead leaves the line asserted in the stable state, and the
-	 * handler is IRQF_ONESHOT, so it re-arms and immediately re-fires -
-	 * an interrupt storm that also drives the jack report and therefore
-	 * DAPM.
+	 * Arm for the level that reports the *next* transition.
+	 *
+	 * The detect line is level-triggered on the vendor board, not edge.
+	 * mediatek/custom/blade10/kernel/dct/dct/cust_eint.h declares
+	 * CUST_EINT_ACCDET_SENSITIVE = CUST_EINT_LEVEL_SENSITIVE with
+	 * CUST_EINT_ACCDET_TYPE = CUST_EINTF_TRIGGER_LOW and
+	 * CUST_EINT_ACCDET_DEBOUNCE_CN = 256, and the vendor handler
+	 * accdet_eint_func() (kernel_blade10_row_wifi.elf @ c054c75c) drives
+	 * mt_eint_set_polarity(10, ...) on every interrupt to flip which level
+	 * is active.  mt_eint_set_polarity() writes EINT_POL_SET/CLR and then
+	 * acks - the polarity register is the level control, so the vendor is
+	 * genuinely running the line level-triggered and re-arming it by
+	 * inverting the sense.
+	 *
+	 * detect-gpios is GPIO_ACTIVE_LOW, so the line is asserted (logical 1)
+	 * while the jack is in.  A line sitting at its active level would
+	 * storm an edge-irrelevant handler, but this one is IRQF_ONESHOT and
+	 * changes the polarity before returning, exactly as the vendor does,
+	 * so the level deasserts and the next interrupt is the opposite
+	 * transition.
 	 */
 	ret = irq_set_irq_type(priv->eint_irq,
 			       priv->plugged ?
-			       IRQ_TYPE_EDGE_RISING : IRQ_TYPE_EDGE_FALLING);
+			       IRQ_TYPE_LEVEL_HIGH : IRQ_TYPE_LEVEL_LOW);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret,
 				     "failed to configure detect IRQ\n");
