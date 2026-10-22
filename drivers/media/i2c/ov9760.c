@@ -88,14 +88,19 @@
 #define OV9760_TEST_PATTERN_ON		0x84
 
 /*
- * Only the full-resolution table is carried.  OV9760MIPI_Set720P() is
- * misnamed: despite the name it programs 1472x1104, which is what the vendor
- * HAL lists as the maximum picture size for this part
- * (custom/mt6592/hal/imgsensor/ov9760_mipi_raw/config.ftbl.ov9760_mipi_raw.h:66,
- * ITEM_AS_DEFAULT_("1472x1104") under KEY_PICTURE_SIZE).
+ * Only the full-resolution table is carried.  The size this part reports is
+ * 1470x1100 in every scenario, from the B8000 vendor kernel itself:
+ * OV9760MIPIGetResolution() (kernel_blade10_row_wifi-kk.elf @ c045e598) fills
+ * all of preview, capture and video with 0x5be x 0x44c.
+ *
+ * A third-party copy of this sensor driver programs 0x034c = 0x05c0, i.e.
+ * 1472, and that is where the 1472x1104 figure in earlier revisions of this
+ * comment came from.  The kernel this board actually shipped reports 1470, so
+ * that is what the driver advertises; the 2-pixel difference is inside the
+ * sensor's own x_offset range and does not change the register table.
  */
-#define OV9760_FULL_WIDTH		1472u
-#define OV9760_FULL_HEIGHT		1104u
+#define OV9760_FULL_WIDTH		1470u	/* 0x5be */
+#define OV9760_FULL_HEIGHT		1100u	/* 0x44c */
 /*
  * VTS 0x047c = 1148 and HTS 0x06c8 = 1736, the only timing the table sets
  * (:226-229).  They match OV9760MIPI_PERIOD_LINE_NUMS/PERIOD_PIXEL_NUMS
@@ -217,7 +222,10 @@ static int ov9760_write_table(struct ov9760_device *dev,
  * Every entry is one OV9760MIPI_write_cmos_sensor() call in
  * OV9760MIPI_Set720P() (ov9760mipiraw_Sensor.c:222-331) with its source
  * line.  The function name says 720p but the output-size registers below
- * program 1472x1104; see the note on OV9760_FULL_WIDTH.
+ * program 0x034c = 0x05c0 and 0x034e = 0x0450.  They are kept exactly as the
+ * vendor writes them even though the kernel reports 1470x1100 for this part
+ * (see the note on OV9760_FULL_WIDTH): inventing a different value here would
+ * be a worse guess than reproducing the vendor's own write.
  *
  * The vendor's step order is preserved, including the fact that streaming is
  * left OFF at :250 and turned back on at the very end (:327).
