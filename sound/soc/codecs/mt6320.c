@@ -250,6 +250,9 @@ struct mt6320_codec_priv {
 	 * boards with the PMIC speaker path keep working.
 	 */
 	struct gpio_desc *amp_en_gpio;
+	/* When the amplifier was last switched off, for the re-enable guard. */
+	unsigned long amp_off_jiffies;
+	bool amp_on;
 };
 
 /*
@@ -1108,10 +1111,25 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		 *
 		 * On a board without the amp this is a no-op, so the DAPM path
 		 * still works where the PMIC drives the speaker directly.
+		 *
+		 * The vendor's Sound_Speaker_Turnon() (@ c0467388) also refuses
+		 * to re-enable an amplifier that was switched off less than
+		 * 80 ms ago: it sleeps out the remainder of that window before
+		 * raising the pin, so a rapid stop/start cannot click.  Reproduce
+		 * that here, since DAPM can gate and ungate the widget quickly.
 		 */
 		if (priv->amp_en_gpio) {
+			unsigned long elapsed;
+
+			if (!priv->amp_on && priv->amp_off_jiffies) {
+				elapsed = jiffies - priv->amp_off_jiffies;
+				if (elapsed < msecs_to_jiffies(80))
+					msleep(jiffies_to_msecs(
+						msecs_to_jiffies(80) - elapsed));
+			}
 			gpiod_set_value_cansleep(priv->amp_en_gpio, 1);
 			msleep(40);
+			priv->amp_on = true;
 		}
 
 		return 0;
@@ -1120,8 +1138,11 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 		/* Mute the amplifier before the PMIC path collapses, so the
 		 * shutdown transient is not audible.
 		 */
-		if (priv->amp_en_gpio)
+		if (priv->amp_en_gpio) {
 			gpiod_set_value_cansleep(priv->amp_en_gpio, 0);
+			priv->amp_on = false;
+			priv->amp_off_jiffies = jiffies;
+		}
 
 		ret = regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0000);
 		if (ret)
