@@ -16,8 +16,13 @@
 
 / {
 	chosen {
-		/* DEBUG: testing clock drivers */
-		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+		/* stdout-path is what tells the kernel which UART is the console.
+		 * Without it there is no console at all unless the bootloader
+		 * supplies console= in bootargs, and then early boot is silent -
+		 * which looks exactly like a hang. serial0 is the alias for
+		 * /soc/serial@11006000. */
+		stdout-path = "serial0:115200n8";
+		bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
 	};
 
 	memory {
