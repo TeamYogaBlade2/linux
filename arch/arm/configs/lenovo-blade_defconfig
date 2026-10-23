@@ -337,3 +337,29 @@ CONFIG_VIDEO_A5142=m
 CONFIG_VIDEO_OV9760=m
 CONFIG_MEDIA_CAMERA_SUPPORT=y
 CONFIG_DRM_PANEL_LENOVO_B6000=m
+
+### Boot protocol
+# CONFIG_ARM_APPENDED_DTB: the decompressor looks past _edata for an OF_DT_MAGIC
+# and, when it finds one, sets r8 to it and carries the tree through relocation.
+# The emulator appends the DTB to the zImage, so this is the path actually used.
+CONFIG_ARM_APPENDED_DTB=y
+# CONFIG_ARM_ATAG_DTB_COMPAT: converts an ATAG list into the device tree. Only
+# runs when the tree was found above; harmless otherwise.
+CONFIG_ARM_ATAG_DTB_COMPAT=y
+CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_EXTEND=y
+
+### Early console for emulator bring-up
+# Without this the kernel reaches dump_machine_table's `b .` with no output at
+# all, which is indistinguishable from a hang. DEBUG_LL gives printascii before
+# the real console exists; the generic 8250 driver is used because
+# mach-mediatek has no debug-macro.S of its own.
+# CONFIG_DEBUG_KERNEL/EXPERT are prerequisites of DEBUG_LL, hence both.
+CONFIG_EXPERT=y
+CONFIG_DEBUG_KERNEL=y
+CONFIG_DEBUG_LL=y
+CONFIG_EARLY_PRINTK=y
+CONFIG_DEBUG_UART_8250=y
+CONFIG_DEBUG_UART_PHYS=0x11006000
+CONFIG_DEBUG_UART_VIRT=0xf1006000
+CONFIG_DEBUG_UART_8250_SHIFT=2
+CONFIG_DEBUG_UART_8250_WORD=y
