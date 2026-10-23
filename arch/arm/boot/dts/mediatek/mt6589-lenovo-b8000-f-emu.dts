@@ -37,3 +37,17 @@
 	/* see the file header: the emulated CPU does not implement CNTVCT */
 	status = "disabled";
 };
+
+/*
+ * calibrate_delay() spins a busy loop timed against the clock to derive
+ * loops_per_jiffy. On an interpreted CPU model that takes an enormous amount of
+ * emulated time - the boot sits in calibrate_delay_converge() and looks hung.
+ *
+ * lpj= sets preset_lpj, which makes calibrate_delay() skip the measurement. It
+ * has to be here rather than in the ATAG command line: the ATAG line is merged
+ * into /chosen/bootargs by atags_to_fdt(), and the merge did not take effect
+ * (the kernel's reported command line showed no lpj=).
+ */
+&{/chosen} {
+	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+};
