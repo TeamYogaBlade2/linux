@@ -22,7 +22,6 @@
 	interrupt-parent = <&sysirq>;
 
 	aliases {
-		serial0 = &uart0;
 		bls0 = &bls;
 		color0 = &color;
 		tdshp0 = &tdshp;
