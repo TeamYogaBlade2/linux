@@ -49,15 +49,5 @@
  * (the kernel's reported command line showed no lpj=).
  */
 &{/chosen} {
-	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
-};
-
-/*
- * TEMPORARY probe: drop the COLOR reset so the probe skips
- * mtk_mmsys_reset()'s usleep_range(1000, 1100). Used to confirm from the guest
- * side that the display stall really is that sleep and not something after it.
- * Remove once the sleep itself is fixed in the emulator.
- */
-&color {
-	/delete-property/ resets;
+	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
 };
