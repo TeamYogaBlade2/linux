@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Emulator-only variant of the B8000 device tree.
+ *
+ * This exists for exactly one reason: the Renode ARM CPU model used for the
+ * MT6589 emulator does not service the CP15 generic timer. Measured with two
+ * bare-metal stubs on the same machine file:
+ *
+ *     nop + b .                              PC reaches 0x80000004 normally
+ *     mrc p15,0,r0,c14,c0,0  (read CNTVCT)   hangs, no PC ever reported
+ *
+ * So `arm,armv7-timer` cannot be used there. The kernel binds the first timer in
+ * the tree for the sched clock and then reads CNTVCT in hrtimers_init() /
+ * timekeeping_init(), which is precisely where the emulated boot stops (the log
+ * ends at srcu_init, the statement immediately before hrtimers_init()).
+ *
+ * Disabling the node here makes timer_probe() fall through to
+ * `mediatek,mt6577-timer`, which is a normal MMIO peripheral served by the
+ * emulator's GPT model.
+ *
+ * `arm,armv7-timer` is CORRECT for real MT6589 hardware, so this must not be
+ * folded into mt6589.dtsi or into the board dts. The real trees stay honest and
+ * this file carries the workaround, which is also the thing to delete once the
+ * CPU model grows a generic timer.
+ */
+
+#include "mt6589-lenovo-b8000-f.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (Wi-Fi) (emulator)";
+};
+
+/* The generic timer node has no label in mt6589.dtsi, so it is addressed by
+ * path. Note `timer` as a label belongs to timer@10008000 (the GPT) - using
+ * &timer here would disable the wrong device. */
+&{/timer} {
+	/* see the file header: the emulated CPU does not implement CNTVCT */
+	status = "disabled";
+};
