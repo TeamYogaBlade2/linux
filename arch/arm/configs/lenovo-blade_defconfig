@@ -363,3 +363,8 @@ CONFIG_DEBUG_UART_PHYS=0x11006000
 CONFIG_DEBUG_UART_VIRT=0xf1006000
 CONFIG_DEBUG_UART_8250_SHIFT=2
 CONFIG_DEBUG_UART_8250_WORD=y
+# Either a driver binds or it does not, and without this the only trace of a
+# failing probe is the absence of anything in dmesg - which looks exactly like a
+# hang. With it, really_probe() logs the outcome of every probe attempt including
+# the -EPROBE_DEFER ones, so a stall can be attributed to a specific driver.
+CONFIG_DEBUG_DRIVER=y
