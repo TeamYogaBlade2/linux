@@ -49,5 +49,5 @@
  * (the kernel's reported command line showed no lpj=).
  */
 &{/chosen} {
-	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
 };
