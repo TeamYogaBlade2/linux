@@ -193,6 +193,9 @@ int prismrv_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object *obj;
 	int ret;
 
+	if (args->flags)		/* reserved */
+		return -EINVAL;
+
 	obj = drm_gem_object_lookup(file, args->handle);
 	if (!obj)
 		return -ENOENT;
@@ -317,6 +320,9 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 {
 	struct prismrv_device *pv = to_prismrv(dev);
 	struct drm_prismrv_get_param *args = data;
+
+	if (args->pad)			/* reserved, must be zero */
+		return -EINVAL;
 
 	switch (args->param) {
 	case PRISMRV_PARAM_CORE_ID:

@@ -5,7 +5,9 @@
 #ifndef _PRISMRV_DEVICE_H_
 #define _PRISMRV_DEVICE_H_
 
+#include <linux/build_bug.h>
 #include <linux/clk.h>
+#include <linux/stddef.h>
 #include <linux/platform_device.h>
 #include <linux/devfreq.h>
 #include <linux/reset.h>
@@ -72,15 +74,56 @@ enum prismrv_cmd_type {
 };
 
 
-/* HostCtl block shared with the uKernel (SGXMKIF_HOST_CTL subset) */
+/*
+ * HostCtl block shared with the uKernel: the leading part of the vendor
+ * SGXMKIF_HOST_CTL (services4/include/sgx_mkif_km.h) for the MT6589 build
+ * options (SUPPORT_HW_RECOVERY, no PVRSRV_USSE_EDM_BREAKPOINTS, no
+ * FIX_HW_BRN_28889 on SGX544 rev 115).
+ *
+ * The layout is not a guess: the stock uKernel image addresses this block
+ * through sa1 with dword offsets 0, 1, 2, 3, 8, 9, 12 and 14 (e.g. its first
+ * store is [sa1,+14] <- 0xAD002700, the AssertFail code), exactly the dword
+ * positions below (analysis/ukernel/ukernel_full_disasm.txt, evidence in
+ * prismrv repo, analysis/LINUX_REVIEW_2026_10.md).  An earlier version of this struct
+ * had InterruptFlags at 0, ClearFlags at 4, InitStatus at 8 and HostClock at
+ * 12, which does not match the uKernel: it would have polled the wrong word
+ * for "init complete" and treated InitStatus as interrupt flags.
+ */
 struct prismrv_host_ctl {
-	__le32 ui32InterruptFlags;
-	__le32 ui32ClearFlags;
-	__le32 ui32InitStatus;
-	__le32 ui32HostClock;
-	/* remaining fields opaque to the kernel; sized to 256 bytes total */
-	u8 pad[240];
+	__le32 ui32InitStatus;			/* dword 0: uKernel -> host */
+	__le32 ui32PowerStatus;			/* 1 */
+	__le32 ui32CleanupStatus;		/* 2 */
+	__le32 ui32uKernelDetectedLockups;	/* 3 (SUPPORT_HW_RECOVERY) */
+	__le32 ui32HostDetectedLockups;		/* 4 */
+	__le32 ui32HWRecoverySampleRate;	/* 5: uKernelFreq / HWRecoveryFreq */
+	__le32 ui32uKernelTimerClock;		/* 6: core clock / uKernelFreq */
+	__le32 ui32ActivePowManSampleRate;	/* 7: 0 = active PM disabled */
+	__le32 ui32InterruptFlags;		/* 8: uKernel -> host requests */
+	__le32 ui32InterruptClearFlags;		/* 9: host acknowledges (|=) */
+	__le32 ui32BPSetClearSignal;		/* 10 */
+	__le32 ui32NumActivePowerEvents;	/* 11 */
+	__le32 ui32TimeWraps;			/* 12 */
+	__le32 ui32HostClock;			/* 13: host clock at power-up */
+	__le32 ui32AssertFail;			/* 14: uKernel assert code */
+	/* performance-counter selectors, OpenCL delay, InterruptCount ... */
+	u8 pad[256 - 15 * 4];
 } __packed;
+static_assert(offsetof(struct prismrv_host_ctl, ui32InitStatus) == 0);
+static_assert(offsetof(struct prismrv_host_ctl, ui32InterruptFlags) == 8 * 4);
+static_assert(offsetof(struct prismrv_host_ctl, ui32InterruptClearFlags) == 9 * 4);
+static_assert(offsetof(struct prismrv_host_ctl, ui32HostClock) == 13 * 4);
+static_assert(offsetof(struct prismrv_host_ctl, ui32AssertFail) == 14 * 4);
+static_assert(sizeof(struct prismrv_host_ctl) == 256);
+
+/* uKernel timing: vendor sysconfig.h for MT6589 */
+#define PRISMRV_UKERNEL_FREQ_HZ		1000	/* SYS_SGX_PDS_TIMER_FREQ */
+#define PRISMRV_HWRECOVERY_FREQ_HZ	100	/* SYS_SGX_HWRECOVERY_TIMEOUT_FREQ */
+#define PRISMRV_DEFAULT_CORE_HZ		286000000 /* SYS_SGX_CLOCK_SPEED */
+
+/* ui32InterruptFlags / ui32InterruptClearFlags bits (PVRSRV_USSE_EDM_INTERRUPT_*) */
+#define PRISMRV_EDM_INTERRUPT_HWR		BIT(0)	/* uKernel asks for HW recovery */
+#define PRISMRV_EDM_INTERRUPT_ACTIVE_POWER	BIT(1)
+#define PRISMRV_EDM_INTERRUPT_IDLE		BIT(2)
 #define PRISMRV_EDM_INIT_COMPLETE	BIT(0)
 
 /* firmware-loaded init script record */
@@ -390,5 +433,29 @@ void prismrv_devfreq_fini(struct prismrv_device *pv);
 
 int prismrv_ccb_init(struct prismrv_device *pv);
 void prismrv_ccb_fini(struct prismrv_device *pv);
+
+
+/**
+ * prismrv_kick_ukernel() - raise the "new work / host event" kick the uKernel
+ * waits for.
+ *
+ * Mirrors the vendor driver (sgxinit.c, sgxutils.c): the kick is written to
+ * the register bank of CORE 0, not to bank 0 where EVENT_STATUS is read, and
+ * SGX544 (SGX_FEATURE_MULTI_EVENT_KICK) uses EUR_CR_EVENT_KICK2 rather than
+ * EUR_CR_EVENT_KICK:
+ *   SGX_MP_CORE_SELECT(EUR_CR_EVENT_KICK2, 0) <- EUR_CR_EVENT_KICK2_NOW_MASK
+ * Writing EVENT_KICK in the plain (bank 0) window, as the driver did before,
+ * is not what the stock driver ever does.  Callers order their memory writes
+ * (CCB, HostCtl) with wmb() before calling this.
+ */
+static inline void prismrv_kick_ukernel(struct prismrv_device *pv)
+{
+	if (pv->info->has_multi_event_kick)
+		writel(EUR_CR_EVENT_KICK2_NOW_MASK,
+		       pv->regs + PRISMRV_MP_CORE_SELECT(EUR_CR_EVENT_KICK2, 0));
+	else
+		writel(EUR_CR_EVENT_KICK_NOW_MASK,
+		       pv->regs + PRISMRV_MP_CORE_SELECT(EUR_CR_EVENT_KICK, 0));
+}
 
 #endif /* _PRISMRV_DEVICE_H_ */

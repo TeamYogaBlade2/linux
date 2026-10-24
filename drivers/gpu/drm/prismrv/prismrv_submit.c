@@ -274,7 +274,7 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 	spin_unlock(&pv->ccb_lock);
 
 	/* Step 5: kick, and make sure the hang watchdog is armed */
-	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
+	prismrv_kick_ukernel(pv);
 	schedule_delayed_work(&pv->hang_work,
 			      msecs_to_jiffies(PRISMRV_HANG_TIMEOUT_MS / 2));
 	return 0;
@@ -482,7 +482,6 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	struct prismrv_fence *f = NULL;
 	struct sync_file *sf = NULL;
 	struct drm_exec exec;
-	u32 __user *in_fds;
 	__le32 cmd_data[6] = {};
 	int ret = 0, fd = -1;
 	bool exec_active = false, rwsem_held = false;
@@ -518,7 +517,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * routine in this uKernel at all (entry 0).  The enum keeps the
 	 * full list for the driver's own use.
 	 */
-	if (args->cmd_type != PRISMRV_CMD_TA ||
+	if (args->pad0 || args->pad1 ||
+	    args->cmd_type != PRISMRV_CMD_TA ||
 	    args->num_bos > PRISMRV_MAX_SUBMIT_BOS ||
 	    args->num_in_fences > PRISMRV_MAX_IN_FENCES) {
 		ret = -EINVAL;
@@ -531,10 +531,8 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		goto err_pm;
 	}
 
-	in_fds = u64_to_user_ptr(args->in_fences);
-	ret = prismrv_wait_in_fences(args->num_in_fences, in_fds);
-	if (ret)
-		goto err_objs;
+	/* the explicit in-fences were already waited for, outside the
+	 * drm_dev_enter() section, by prismrv_submit_ioctl_guarded() */
 
 	objs[0] = drm_gem_object_lookup(file, args->cmd_handle);
 	if (!objs[0]) {

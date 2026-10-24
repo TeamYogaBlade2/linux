@@ -53,6 +53,15 @@
  */
 #define PRISMRV_MP_CORE_SELECT(reg, core)	((reg) + (((core) + 2) * 0x4000))
 
+/*
+ * Event-kick family (vendor sgx544defs.h).  prismrv_regs_gen.h only carries
+ * the offset of EVENT_KICK (the generator drops KICK1/2/3), so the offsets
+ * the driver needs are defined here.
+ */
+#ifndef EUR_CR_EVENT_KICK2
+#define EUR_CR_EVENT_KICK2			0x0AC0
+#endif
+
 #define EUR_CR_MASTER_SOFT_RESET		0x4080
 #define  MASTER_SOFT_RESET_CORE(i)		BIT(i)
 #define  MASTER_SOFT_RESET_IPF			BIT(4)

@@ -394,20 +394,35 @@ irqreturn_t prismrv_irq_thread(int irq, void *data)
 	}
 
 	/*
-	 * HostCtl flag path: the uKernel raises bits in ui32InterruptFlags
-	 * to request host-side services; the host acknowledges by writing
-	 * the same mask into ui32ClearFlags (vendor SGXMKIF_HOST_CTL
-	 * convention).
+	 * HostCtl flag path (vendor SGXMKIF_HOST_CTL convention): the uKernel
+	 * raises bits in ui32InterruptFlags to request host-side services and
+	 * the host acknowledges a bit by OR-ing it into ui32InterruptClearFlags
+	 * once it has done the work.
+	 *   HWR          the uKernel detected a lockup and asks for a hardware
+	 *                recovery: start it and do NOT acknowledge here (the
+	 *                reinit starts the uKernel from a fresh HostCtl);
+	 *   IDLE, ACTIVE_POWER  informational / active-PM requests; active PM
+	 *                is disabled (ActivePowManSampleRate = 0) so there is
+	 *                nothing to do but acknowledge.
 	 */
 	if (READ_ONCE(pv->hw_ready) && pv->hostctl) {
 		u32 flags = le32_to_cpu(READ_ONCE(pv->hostctl->ui32InterruptFlags));
+		u32 clear = le32_to_cpu(READ_ONCE(pv->hostctl->ui32InterruptClearFlags));
 
+		if ((flags & PRISMRV_EDM_INTERRUPT_HWR) &&
+		    !(clear & PRISMRV_EDM_INTERRUPT_HWR)) {
+			dev_warn(pv->drm.dev,
+				 "uKernel requested hardware recovery (HostCtl flags 0x%x)\n",
+				 flags);
+			prismrv_request_recovery(pv);
+		}
+		flags &= ~(u32)PRISMRV_EDM_INTERRUPT_HWR;
+		flags &= ~clear;			/* already acknowledged */
 		if (flags) {
-			WRITE_ONCE(pv->hostctl->ui32ClearFlags,
-				   cpu_to_le32(flags));
+			WRITE_ONCE(pv->hostctl->ui32InterruptClearFlags,
+				   cpu_to_le32(clear | flags));
 			wmb();
-			writel(EUR_CR_EVENT_KICK_NOW_MASK,
-			       pv->regs + EUR_CR_EVENT_KICK);
+			prismrv_kick_ukernel(pv);
 		}
 	}
 	return IRQ_HANDLED;

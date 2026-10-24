@@ -282,12 +282,35 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	if (ret)
 		goto out_hostctl;
 
+	/*
+	 * Same as a first boot: the uKernel starts from a zeroed block (a
+	 * recovery or resume must not leave stale InterruptFlags / PowerStatus
+	 * behind).  Then the host-owned fields, as the vendor
+	 * SGXUpdateTimingInfo()/SGXInitialise() set them before the kick:
+	 *   uKernelTimerClock       = core clock / uKernelFreq
+	 *   HWRecoverySampleRate    = uKernelFreq / HWRecoveryFreq
+	 *   ActivePowManSampleRate  = 0   (active power management off: the
+	 *                                  host side of it is not implemented)
+	 *   HostClock               = host time at power-up
+	 */
+	memset(pv->hostctl, 0, sizeof(*pv->hostctl));
+	{
+		unsigned long core_hz = pv->clk_core ? clk_get_rate(pv->clk_core) : 0;
+
+		if (!core_hz)
+			core_hz = PRISMRV_DEFAULT_CORE_HZ;
+		pv->hostctl->ui32uKernelTimerClock =
+			cpu_to_le32(core_hz / PRISMRV_UKERNEL_FREQ_HZ);
+		pv->hostctl->ui32HWRecoverySampleRate =
+			cpu_to_le32(PRISMRV_UKERNEL_FREQ_HZ / PRISMRV_HWRECOVERY_FREQ_HZ);
+	}
+	pv->hostctl->ui32ActivePowManSampleRate = 0;
 	pv->hostctl->ui32HostClock = cpu_to_le32(jiffies_to_usecs(jiffies));
 	pv->hostctl->ui32InitStatus = 0;
 	wmb();
 
 	/* start the uKernel */
-	writel(EUR_CR_EVENT_KICK_NOW_MASK, pv->regs + EUR_CR_EVENT_KICK);
+	prismrv_kick_ukernel(pv);
 
 	/* wait for the uKernel to report initialisation complete */
 	for (i = 0; i < 500; i++) {

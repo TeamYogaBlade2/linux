@@ -33,7 +33,7 @@ static const struct prismrv_chip_info prismrv_sgx544_info = {
 	.core_id = PRISMRV_CORE_SGX544,
 	.num_cores = 1,
 	.has_isp2 = true,
-	.has_multi_event_kick = false,
+	.has_multi_event_kick = true,	/* vendor: SGX_FEATURE_MULTI_EVENT_KICK for SGX544 */
 };
 
 static const struct of_device_id prismrv_of_match[] = {
@@ -85,7 +85,13 @@ static int prismrv_submit_ioctl_guarded(struct drm_device *dev, void *data,
 				     u64_to_user_ptr(args->in_fences));
 	if (ret)
 		return ret;
-	args->num_in_fences = 0;	/* done; the handler must not wait again */
+	/*
+	 * Do NOT clear args->num_in_fences to tell the handler the wait is
+	 * done: DRM copies the argument block back to userspace even when the
+	 * ioctl fails, and a syscall restarted after -ERESTARTSYS re-reads it,
+	 * so the restarted submit would silently skip every in-fence.  The
+	 * handler simply never waits (see prismrv_submit_ioctl()).
+	 */
 
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
@@ -373,6 +379,20 @@ static int prismrv_runtime_suspend(struct device *dev)
 	mutex_lock(&pv->init_mutex);
 
 	WRITE_ONCE(pv->hw_ready, false);
+
+	/*
+	 * Stop the GPU BEFORE its memory is freed (same order as the
+	 * recovery path).  An idle uKernel is not a halted one: its timer
+	 * task keeps reading/writing HostCtl and walking the page tables,
+	 * so freeing HostCtl, the CCB and the MMU first - which hw_fini()
+	 * below does - would let the GPU DMA into freed pages.  The vendor
+	 * driver quiesces the uKernel (CMD_POWER / POWEROFF_COMPLETE) and
+	 * then resets; a full soft reset has the same effect on the memory
+	 * clients (BIF reset included), and also works if the uKernel is
+	 * wedged.
+	 */
+	if (READ_ONCE(pv->hw_powered))
+		prismrv_soft_reset(pv, true);
 
 	/*
 	 * Invalidate every BO's gpu_va before zeroing the page tables

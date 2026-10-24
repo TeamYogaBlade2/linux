@@ -12,7 +12,7 @@
 #include <linux/types.h>
 
 /* Incremented when ABI-incompatible changes are made. */
-#define PRISMRV_UAPI_VERSION		4
+#define PRISMRV_UAPI_VERSION		5
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -37,15 +37,17 @@ struct drm_prismrv_gem_mmap_offset {
 struct drm_prismrv_submit {
 	__u32 cmd_handle;	/* GEM handle holding the command stream */
 	__u32 cmd_size;		/* valid bytes in the command buffer */
+	__u32 cmd_type;		/* PRISMRV_CMD_* service type */
 
 	__u32 num_in_fences;	/* sync_file fds to wait on before start */
-	__u64 in_fences;	/* pointer to __s32 array */
+	__u64 in_fences;	/* pointer to __s32 array (not modified) */
 
 	__u32 num_bos;		/* BOs referenced by this submit */
+	__u32 pad0;		/* must be zero */
 	__u64 bos;		/* pointer to __u32 GEM handle array */
 
-	__u32 out_fence_fd;	/* out: sync_file fd signalling completion */
-	__u32 cmd_type;		/* PRISMRV_CMD_* service type */
+	__s32 out_fence_fd;	/* out: sync_file fd signalling completion */
+	__u32 pad1;		/* must be zero */
 };
 
 struct drm_prismrv_get_param {
@@ -63,6 +65,11 @@ struct drm_prismrv_get_param {
  * must check PRISMRV_PARAM_UAPI_VERSION (v3+) before trusting values.
  * v3 added GEM_CREATE.gpu_va, PARAM_UAPI_VERSION and PARAM_CMD_ABI.
  * v4 added GEM_WAIT.
+ * v5 (ABI break, kernel and Mesa change together): struct drm_prismrv_submit
+ *    has no implicit padding any more (cmd_type moved up, explicit pad0/pad1
+ *    that must be zero), out_fence_fd is __s32, and the kernel no longer
+ *    modifies num_in_fences; GET_PARAM.pad and GEM_MMAP_OFFSET.flags are now
+ *    rejected when non-zero.
  */
 #define PRISMRV_PARAM_CORE_ID		1 /* raw EUR_CR_CORE_ID register */
 #define PRISMRV_PARAM_CORE_REVISION	5 /* raw EUR_CR_CORE_REVISION register */
