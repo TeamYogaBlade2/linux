@@ -97,7 +97,25 @@ static void mmc_pwrseq_mt6628_pre_power_on(struct mmc_host *host)
 
 	mutex_lock(&pwrseq->lock);
 	consumers = pwrseq->consumers;
-	if (consumers) {
+	/*
+	 * "A lease exists" is not the same as "the chip is already powered".
+	 *
+	 * Consumers take their lease from probe (devm_mt6628_pwrseq_get() hands
+	 * it out unconditionally since this provider stopped deferring, so that
+	 * UART/STP binding would not depend on the MMC host having powered the
+	 * chip), and their probe runs before the host gets here.  So consumers
+	 * != 0 is the normal state of the very first power-up, and testing the
+	 * lease count alone skipped the whole sequence there: PMU_EN stayed low
+	 * and RESET asserted, the chip never answered SDIO (CMD5/CMD52 timeout,
+	 * "Failed to initialize a non-removable card"), and a consumer waiting
+	 * on power_ready for a completion that is only posted at the end of the
+	 * sequence gave up with -ETIMEDOUT.
+	 *
+	 * Retain power only when a sequence has actually run, which is the case
+	 * a consumer can depend on: the chip is up, and restarting the card
+	 * interface must not reset it underneath a live UART/STP transfer.
+	 */
+	if (consumers && pwrseq->power_ready_state) {
 		/*
 		 * A shared consumer owns the powered combo chip. The MMC host
 		 * may be restarting its card interface, but must not reset the
@@ -135,7 +153,18 @@ static void mmc_pwrseq_mt6628_post_power_on(struct mmc_host *host)
 
 	mutex_lock(&pwrseq->lock);
 	if (pwrseq->skip_power_cycle) {
+		/*
+		 * pre_power_on() already established that the chip is up and left
+		 * power_ready_state set; it only cleared skip_power_cycle here, so
+		 * the sequence is not run again.  Keep the remaining state
+		 * consistent on the way out anyway: this callback is the only
+		 * place that reports power-up completion, and a stale
+		 * power_transition would make every later
+		 * mt6628_pwrseq_wait_powered() caller time out.
+		 */
 		pwrseq->skip_power_cycle = false;
+		pwrseq->power_transition = false;
+		complete_all(&pwrseq->power_ready);
 		mutex_unlock(&pwrseq->lock);
 		return;
 	}
