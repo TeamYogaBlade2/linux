@@ -3453,6 +3453,8 @@ static const struct v4l2_file_operations mtk_venc_fops = {
 static int mtk_venc_querycap(struct file *file, void *priv,
 				   struct v4l2_capability *cap)
 {
+	struct video_device *vfd = video_devdata(file);
+
 	/*
 	 * V4L2_CAP_VIDEO_M2M is the mem-to-mem capability.  This driver's UAPI copy has
 	 * no separate V4L2_CAP_VIDEO_CODEC bit, so a codec node is expressed as a
@@ -3464,9 +3466,13 @@ static int mtk_venc_querycap(struct file *file, void *priv,
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
 		 MTK_VENC_DRIVER_NAME);
 
-	/* Nothing here needs 32-bit interface emulation, so they are the same set. */
-	cap->device_caps = cap->capabilities = V4L2_CAP_VIDEO_M2M |
-						  V4L2_CAP_STREAMING;
+	/*
+	 * Leave device_caps alone: v4l_querycap() set it from the video_device
+	 * and WARNs when the driver disagrees.  Report the same set through
+	 * capabilities and flag it as per-device with V4L2_CAP_DEVICE_CAPS,
+	 * without which v4l_querycap()'s superset check fails on every call.
+	 */
+	cap->capabilities = vfd->device_caps | V4L2_CAP_DEVICE_CAPS;
 
 	return 0;
 }

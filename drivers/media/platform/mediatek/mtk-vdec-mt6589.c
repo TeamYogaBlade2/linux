@@ -1917,13 +1917,24 @@ static const struct v4l2_file_operations mtk_vdec_fops = {
 static int mtk_vdec_querycap(struct file *file, void *priv,
 				   struct v4l2_capability *cap)
 {
+	struct video_device *vfd = video_devdata(file);
+
 	strscpy(cap->driver, MTK_VDEC_DRIVER_NAME, sizeof(cap->driver));
 	strscpy(cap->card, MTK_VDEC_DRIVER_NAME, sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
 		 MTK_VDEC_DRIVER_NAME);
 
-	cap->device_caps = cap->capabilities = V4L2_CAP_VIDEO_M2M |
-						  V4L2_CAP_STREAMING;
+	/*
+	 * Leave device_caps alone - v4l_querycap() has already set it from the
+	 * video_device and WARNs if the driver disagrees - and mark the
+	 * capability set as per-device by including V4L2_CAP_DEVICE_CAPS.
+	 *
+	 * That bit is not decoration: v4l_querycap() checks that capabilities is
+	 * a superset of device_caps | V4L2_CAP_DEVICE_CAPS, so omitting it made
+	 * every VIDIOC_QUERYCAP on this node trip that WARN, and userspace could
+	 * not tell that device_caps was the authoritative set.
+	 */
+	cap->capabilities = vfd->device_caps | V4L2_CAP_DEVICE_CAPS;
 
 	return 0;
 }
