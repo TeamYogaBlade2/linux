@@ -79,8 +79,18 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.name = "isp",
 		.sta_mask = PWR_STATUS_ISP,
 		.ctl_offs = SPM_ISP_PWR_CON,
+		/*
+		 * SRAM_PDN is 11:8 but SRAM_PDN_ACK is only 13:12: the ISP
+		 * domain acknowledges a power-down with two bits, not four
+		 * (ISP_PWR_CON field table in the data sheet). Waiting on
+		 * GENMASK(15, 12) never satisfies, scpsys_sram_disable()
+		 * times out, the power-off stops half way and the domain is
+		 * left on with its SRAM already down. Observed on MT6589 as
+		 * SPM_ISP_PWR_CON reading 0x3f0d instead of 0x000d; after that
+		 * the camera ISP writes nothing but zeros until reboot.
+		 */
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		.sram_pdn_ack_bits = GENMASK(13, 12),
 		.caps = MTK_SCPD_SRAM_PDN_INLINE,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
