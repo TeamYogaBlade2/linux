@@ -257,7 +257,22 @@
 		pin-accdet {
 			pinmux = <MT6589_GPIO115__FUNC_EINT10>;
 			input-enable;
-			bias-pull-up;
+			/*
+			 * No internal pull.  The downstream driver disables it
+			 * explicitly before arming the EINT:
+			 *
+			 *   mt_set_gpio_mode(0x73, 1);         // EINT10
+			 *   mt_set_gpio_dir(0x73, 0);          // input
+			 *   mt_set_gpio_pull_enable(0x73, 0);  // pull OFF
+			 *   mt_eint_set_sens(10, 1);           // level
+			 *
+			 * The jack switch is the pull: an internal pull-up holds
+			 * the pad high against it, so the level the level-
+			 * triggered EINT samples never crosses its threshold and
+			 * EINT10 never fires.  That is the observed symptom -
+			 * mt-eint 10 stuck at the same count across boots.
+			 */
+			bias-disable;
 		};
 
 		/* Not the jack pad: keep these out of the EINT10 mux. */
