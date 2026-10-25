@@ -1198,6 +1198,26 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 
 	WRITE_ONCE(wl->tx_work_running, false);
 
+	/*
+	 * Re-check after clearing the flag.
+	 *
+	 * tx_release() deliberately does not kick this worker while it is
+	 * running, because re-queueing the work item from inside its own run
+	 * would re-enter the drain loop and the frame still at the head would
+	 * be picked up twice.  The cost of that rule is a race right here: a
+	 * release that observes tx_work_running == true does not reschedule,
+	 * and if it lands between this store and the worker actually
+	 * finishing, nothing is left to drain whatever it just unblocked.  The
+	 * queue then sits there - not stopped, not being drained - and the link
+	 * carries nothing more.
+	 *
+	 * So the worker has to be the one to look again once it owns the
+	 * "not running" state.  Only when frames are actually queued: a bare
+	 * reschedule would spin for as long as the link is idle.
+	 */
+	if (wl->netdev && !skb_queue_empty(&wl->tx_queue))
+		mod_delayed_work(system_wq, &wl->tx_work, 0);
+
 	if (wl->netdev && skb_queue_len(&wl->tx_queue) < MT6628_TX_QUEUE_LIMIT)
 		netif_wake_queue(wl->netdev);
 }
