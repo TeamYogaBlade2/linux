@@ -951,6 +951,8 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	int ret;
 
 	if (!wl->connected) {
+		if (wl->netdev)
+			wl->netdev->stats.tx_dropped++;
 		dev_kfree_skb_any(skb);
 		return 0;
 	}
@@ -960,6 +962,8 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	 * changed after this packet was queued by ndo_start_xmit().
 	 */
 	if (unlikely(!mt6628_control_port_allows(wl, skb))) {
+		if (wl->netdev)
+			wl->netdev->stats.tx_dropped++;
 		dev_kfree_skb_any(skb);
 		return 0;
 	}
@@ -1173,8 +1177,23 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			}
 			return;
 		}
-		if (ret)
+		if (ret) {
+			/*
+			 * Anything other than -EAGAIN drops the frame.  Do not do
+			 * that silently: a link that stops carrying traffic with
+			 * nothing in the log is the hardest failure to attribute,
+			 * and by the time it is noticed the reason is long gone.
+			 * -EAGAIN is excluded above because it retries the same
+			 * frame rather than dropping it.
+			 */
+			dev_warn_ratelimited(&wl->func->dev,
+					     "dropping TX frame after error %d (tc=%u len=%u queued=%u)\n",
+					     ret, mt6628_runtime_tc_from_skb(skb),
+					     skb->len, skb_queue_len(&wl->tx_queue));
+			if (wl->netdev)
+				wl->netdev->stats.tx_dropped++;
 			dev_kfree_skb_any(skb);
+		}
 	}
 
 	WRITE_ONCE(wl->tx_work_running, false);
@@ -1194,11 +1213,13 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 	struct mt6628_wlan *wl = mt6628_wlan_from_ndev(ndev);
 
 	if (unlikely(!wl->runtime_started || !wl->fw_running || !wl->connected)) {
+		ndev->stats.tx_dropped++;
 		dev_kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}
 
 	if (unlikely(!mt6628_control_port_allows(wl, skb))) {
+		ndev->stats.tx_dropped++;
 		dev_kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}
@@ -1219,6 +1240,7 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 	 */
 	if (skb_queue_len(&wl->tx_queue) >= MT6628_TX_QUEUE_LIMIT) {
 		netif_stop_queue(ndev);
+		ndev->stats.tx_dropped++;
 		dev_kfree_skb(skb);
 		mod_delayed_work(system_wq, &wl->tx_work, 0);
 		return NETDEV_TX_OK;
