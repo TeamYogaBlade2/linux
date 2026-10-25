@@ -38,6 +38,13 @@
  * this short enough that an idle interface actually releases the bus.
  */
 #define MT6628_PM_IDLE_DELAY_MS		200
+/*
+ * How many 200 ms rounds pm_work will wait for the firmware's SLEEPY_NOTIFY
+ * before giving up on that idle period.  6 s is far longer than a healthy
+ * firmware needs, and it stops the countdown becoming a permanent wakeup source
+ * on a link that never goes idle.
+ */
+#define MT6628_PM_IDLE_MAX_POLLS		30
 #define MT6628_IRQ_RETRY_DELAY_MS	100
 
 struct mt6628_hif_tx_hdr {
@@ -1965,18 +1972,43 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 	 * that follows is not competing with a reclaim.
 	 */
 	if (!READ_ONCE(wlan->fw_sleepy)) {
-		schedule_delayed_work(&wlan->pm_work,
-				      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		/*
+		 * Nothing to hand over yet.
+		 *
+		 * This used to reschedule every 200 ms for as long as the link
+		 * was up.  The firmware only sends SLEEPY_NOTIFY when it
+		 * genuinely goes idle, so on a link that keeps traffic flowing
+		 * the timer ran for ever: a permanent 5 Hz wakeup, with nothing
+		 * in dmesg to show for it.  Bound the polling instead.  If the
+		 * firmware has not offered the chip after this many rounds the
+		 * countdown is abandoned; the next transfer arms it again
+		 * through mt6628_wlan_pm_idle(), so a later idle period still
+		 * gets its hand-off.
+		 */
+		if (wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
+			wlan->pm_idle_polls++;
+			schedule_delayed_work(&wlan->pm_work,
+				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		}
 		return;
 	}
+
+	wlan->pm_idle_polls = 0;
 
 	ret = mt6628_wlan_give_firmware_own(wlan);
 
 	/* Traffic still outstanding: back off and try again shortly. */
 	if (ret == -EBUSY) {
-		if (!atomic_read(&wlan->recovery_pending))
+		/*
+		 * Bounded for the same reason as the wait above: a queue that
+		 * never drains would otherwise keep this timer running for ever.
+		 */
+		if (!atomic_read(&wlan->recovery_pending) &&
+		    wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
+			wlan->pm_idle_polls++;
 			schedule_delayed_work(&wlan->pm_work,
 				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		}
 		return;
 	}
 
@@ -2058,6 +2090,9 @@ void mt6628_wlan_pm_idle(struct mt6628_wlan *wl)
 	 */
 	if (wl->pm_idle)
 		mt6628_wlan_pm_resume(wl);
+
+	/* A transfer happened, so the idle countdown starts fresh. */
+	wl->pm_idle_polls = 0;
 
 	schedule_delayed_work(&wl->pm_work,
 			      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));

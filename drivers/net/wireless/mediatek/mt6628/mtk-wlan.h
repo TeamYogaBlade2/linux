@@ -101,6 +101,12 @@ struct mt6628_wlan {
 	 * frame that is still at the head.
 	 */
 	bool tx_work_running;
+	/*
+	 * How many pm_work rounds have run without the firmware offering the
+	 * chip.  Bounds the idle countdown so it cannot become a permanent
+	 * wakeup source on a link that never reports SLEEPY_NOTIFY.
+	 */
+	unsigned int pm_idle_polls;
 	/* Remain-on-channel state, including the request we granted it with. */
 	/* Keep the sequence across runtime stop/start so old cookies stay stale. */
 	u64 roc_cookie_next;
