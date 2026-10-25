@@ -1920,8 +1920,15 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	 * cfg80211 state freed below, and it reconnects, so it must not run
 	 * during or after teardown.  Cancel it here rather than in each caller:
 	 * the remove path already did, the probe-failure path did not.
+	 *
+	 * Skip it when we *are* that worker: recovery_work restarts the runtime
+	 * after resetting the firmware, so cancelling synchronously from inside
+	 * it would wait for itself.  current_work() identifies exactly that
+	 * case, and there is nothing to cancel anyway - it is running now, and
+	 * it will not re-arm once runtime_started is clear.
 	 */
-	cancel_work_sync(&wl->recovery_work);
+	if (current_work() != &wl->recovery_work)
+		cancel_work_sync(&wl->recovery_work);
 
 	if (ndev) {
 		unregister_netdev(ndev);
