@@ -106,6 +106,13 @@ struct mtk_vdec_dev {
 
 	bool suspended;
 
+	/*
+	 * Set by mtk_vdec_remove() before it forces the runtime-PM transition.
+	 * Removal must power the block down even if a client still has the node
+	 * open, because the DRAM it DMAs into is about to be freed.
+	 */
+	bool removing;
+
 	unsigned int irq_count;
 
 	/* The device this driver instance belongs to. */
@@ -1408,6 +1415,7 @@ static void mtk_vdec_device_run(void *priv)
 	dma_addr_t rd_ptr, wr_ptr, dst_y, dst_c;
 	unsigned long flags;
 	size_t len;
+	bool pm_held = false;
 	int ret;
 
 	src_buf = v4l2_m2m_next_src_buf(ctx->m2m);
@@ -1527,6 +1535,27 @@ static void mtk_vdec_device_run(void *priv)
 		goto fail;
 	}
 
+	/*
+	 * Take the runtime-PM reference BEFORE touching any register.
+	 *
+	 * The completion path drops a reference with pm_runtime_put_autosuspend()
+	 * when dp_pm_held is set, and until now nothing ever took one: the
+	 * suspend/resume refcount was decremented without ever being incremented.
+	 * That is an underflow in the PM core's counter, and its effects are
+	 * exactly the kind of unrelated-looking corruption that shows up as a
+	 * garbled stack - the core's bookkeeping is a plain int.
+	 *
+	 * It also has a direct hardware meaning: writing a register while the
+	 * block's clocks are gated is undefined behaviour on this SoC.
+	 */
+	ret = pm_runtime_resume_and_get(&vdec->pdev->dev);
+	if (ret) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "cannot power the decoder: %d\n", ret);
+		goto fail;
+	}
+	pm_held = true;
+
 	mtk_vdec_h264_bring_up(vdec, (u32)mtk_vdec_dp_pred_dma(&vdec->dp));
 
 	ret = mtk_vdec_h264_prime_barrel_shifter(vdec,
@@ -1553,6 +1582,11 @@ static void mtk_vdec_device_run(void *priv)
 	vdec->frame_error = false;
 	vdec->dp_pm_held = true;
 	spin_unlock_irqrestore(&vdec->state_lock, flags);
+	/*
+	 * The reference now belongs to the completion path: it drops it when
+	 * dp_pm_held is set, so this frame must not drop it again.
+	 */
+	pm_held = false;
 
 	ret = mtk_vdec_h264_start(vdec, ctx, sps, pps, dst_y, dst_c);
 	if (ret) {
@@ -1562,6 +1596,11 @@ static void mtk_vdec_device_run(void *priv)
 		vdec->dp_pm_held = false;
 		spin_unlock_irqrestore(&vdec->state_lock, flags);
 		v4l2_err(&vdec->v4l2_dev, "cannot start the pipeline: %d\n", ret);
+		/*
+		 * The job was never published, so nothing will retire it and
+		 * nothing will drop the runtime-PM reference taken above.
+		 */
+		pm_runtime_put_autosuspend(&vdec->pdev->dev);
 		goto fail;
 	}
 
@@ -1574,6 +1613,15 @@ static void mtk_vdec_device_run(void *priv)
 	return;
 
 fail:
+	/*
+	 * Everything from the pm_runtime_resume_and_get() above to the
+	 * publication of the job can fail with the reference still held and
+	 * dp_pm_held unset, so it has to be dropped here or the device never
+	 * suspends again and every later get() leaks too.
+	 */
+	if (pm_held)
+		pm_runtime_put_autosuspend(&vdec->pdev->dev);
+
 	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m,
 					 VB2_BUF_STATE_ERROR);
 }
@@ -2019,7 +2067,14 @@ static int mtk_vdec_runtime_suspend(struct device *dev)
 	struct mtk_vdec_dev *vdec = dev_get_drvdata(dev);
 
 	mutex_lock(&vdec->vdec_lock);
-	if (atomic_read(&vdec->dec_users) == 0)
+	/*
+	 * Normally only power down when no client holds the node open: a system
+	 * suspend must not tear the registers out from under an idle decoder
+	 * that is still owned.  Removal is the exception - the driver is going
+	 * away and the DRAM is about to be freed, so the block has to be
+	 * stopped regardless of who has it open.
+	 */
+	if (atomic_read(&vdec->dec_users) == 0 || vdec->removing)
 		mtk_vdec_power_off(vdec);
 	mutex_unlock(&vdec->vdec_lock);
 
@@ -2143,6 +2198,17 @@ static void mtk_vdec_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&vdec->timeout_work);
 	cancel_work_sync(&vdec->complete_work);
 
+	/*
+	 * Put the device back into suspend before freeing anything it can DMA
+	 * to.  pm_runtime_disable() only stops *new* resumes - it does not run
+	 * the suspend callback of a device that is currently active, so the
+	 * clocks stay on, the hardware stays enabled, and dp_free() hands a
+	 * DMA-capable region back to the allocator while the block can still
+	 * write to it.  Force the transition first; the power-off in
+	 * mtk_vdec_runtime_suspend() is what actually quiesces it.
+	 */
+	vdec->removing = true;
+	pm_runtime_force_suspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	mtk_vdec_dp_free(&pdev->dev, &vdec->dp);
