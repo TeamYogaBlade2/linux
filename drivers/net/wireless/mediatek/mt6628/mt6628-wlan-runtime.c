@@ -1752,6 +1752,7 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	unsigned long flags;
 	bool mgmt_tx_pending;
 	bool tx_pending = false;
+	bool service_pending = false;
 	unsigned int i;
 	int ret;
 
@@ -1832,12 +1833,34 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	if (ret)
 		goto out_release;
 
-	/* Consume anything already latched before releasing the chip. */
+	/*
+	 * Consume anything already latched before releasing the chip.
+	 *
+	 * The downstream driver does not simply refuse here: nicpmSetFWOwn()
+	 * calls nicProcessIST() first and only gives up if interrupts are
+	 * *still* pending afterwards (nic_pwr_mgt.c:279-282).  Refusing
+	 * without servicing is not equivalent - the latch is cleared by being
+	 * handled, so a bare refusal leaves the bit set, this path returns
+	 * -EBUSY, and the countdown retries 200 ms later to find exactly the
+	 * same latched status.  That is a permanent -EBUSY, i.e. the chip is
+	 * never handed over and every later access is refused.
+	 *
+	 * So hand the work to irq_work and return the debt as still owed;
+	 * once it has drained the interrupt status the next round succeeds.
+	 * recovery_pending is the one case that must still be refused: the
+	 * chip is about to be reset under us.
+	 */
 	if (val & (MT6628_WHISR_TX_DONE | MT6628_WHISR_RX0_DONE |
 		   MT6628_WHISR_RX1_DONE | MT6628_WHISR_ABNORMAL |
 		   MT6628_WHISR_FW_OWN_BACK |
 		   MT6628_WHISR_D2H_SW_ASSERT_INFO)) {
+		/*
+		 * Remembered and dispatched after the SDIO host is released:
+		 * irq_work claims the same host, so queueing it here would
+		 * deadlock against our own claim.
+		 */
 		ret = -EBUSY;
+		service_pending = true;
 		goto out_release;
 	}
 
@@ -1888,6 +1911,16 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 out_release:
 	sdio_release_host(wl->func);
 	mutex_unlock(&wl->cmd_mutex);
+
+	/*
+	 * Dispatch the servicing we deferred while holding the SDIO host.
+	 * The interrupt has to be handled for the latch to clear; refusing
+	 * without doing so leaves it set and this function returns -EBUSY for
+	 * ever.
+	 */
+	if (service_pending)
+		schedule_work(&wl->irq_work);
+
 	return ret;
 
 out_busy:
