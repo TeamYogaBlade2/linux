@@ -292,9 +292,21 @@ int mtk_h264_parse_sps(const u8 *data, size_t len, struct mtk_h264_sps *out)
 
 	if (!out->pic_width_in_mbs_minus1 || !out->pic_height_in_map_units_minus1)
 		return -ERANGE;
-	/* Guard the multiply as well as the hardware's own limit. */
-	if (out->pic_width_in_mbs_minus1 > 255 ||
-	    out->pic_height_in_map_units_minus1 > 255)
+	/*
+	 * Reject anything larger than the picture the driver allocates for.
+	 *
+	 * 255 is only the H.264 syntax limit (the field is bounded so the
+	 * geometry cannot overflow the register fields); it is not this
+	 * decoder's limit.  The datapath allocates one 1920x1088 picture per
+	 * reference frame and the hardware writes a full macroblock grid into
+	 * it, so a stream wider or taller than that makes the writeback run past
+	 * the end of the allocation into whatever physically follows - which
+	 * corrupts unrelated pages and shows up later as a crash somewhere
+	 * completely unrelated (a page-cache refcount underflow in exit_mmap,
+	 * for instance), never as a decode error.
+	 */
+	if (out->pic_width_in_mbs_minus1 + 1 > MTK_H264_MAX_MB_WIDTH ||
+	    out->pic_height_in_map_units_minus1 + 1 > MTK_H264_MAX_MB_HEIGHT)
 		return -ERANGE;
 
 	out->frame_mbs_only_flag = br_bit(&br, 1);

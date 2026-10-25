@@ -38,6 +38,18 @@
 #define MTK_H264_MAX_PPS		256
 #define MTK_H264_MAX_REF_FRAMES		16
 
+/*
+ * Largest picture this decoder can be pointed at.
+ *
+ * The datapath allocates one 1920x1088 buffer per reference picture and the
+ * hardware writes a full macroblock grid into it, so these are hard safety
+ * limits, not just a capability statement: a larger geometry makes the writeback
+ * run off the end of the allocation.  Keep MTK_VDEC_PIC_W/MTK_VDEC_PIC_H in
+ * mtk-vdec-mt6589-dp.h in step with these.
+ */
+#define MTK_H264_MAX_MB_WIDTH		120	/* 1920 / 16 */
+#define MTK_H264_MAX_MB_HEIGHT		68	/* 1088 / 16 */
+
 /**
  * struct mtk_h264_sps - the SPS fields the hardware is given.
  * @valid: set once parsed; the driver refuses a slice without it.

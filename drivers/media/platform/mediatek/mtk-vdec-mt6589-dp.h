@@ -54,6 +54,16 @@ struct device;
 #define MTK_VDEC_PIC_W			1920
 #define MTK_VDEC_PIC_H			1088
 
+/* The parsed-stream limit, the format limit and this allocation must agree. */
+static_assert(MTK_VDEC_PIC_W == 1920 && MTK_VDEC_PIC_H == 1088);
+
+/*
+ * These must equal MTK_H264_MAX_MB_WIDTH/HEIGHT * 16 in
+ * mtk-vdec-mt6589-h264.h; that is where an oversized stream is rejected.
+ */
+static_assert(MTK_VDEC_PIC_W / 16 == 120);
+static_assert(MTK_VDEC_PIC_H / 16 == 68);
+
 /*
  * What is allocated per open, in one dma_alloc_coherent() so the whole datapath
  * shares one coherency domain and one set of cache operations.
