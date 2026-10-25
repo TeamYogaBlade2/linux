@@ -121,6 +121,7 @@ struct mt6628_wlan {
 	 */
 	unsigned int irq_seen;
 	unsigned int rx_seen;
+	unsigned int tx_poll_count;
 	unsigned int irq_seen_last;
 	unsigned int rx_seen_last;
 	unsigned int rx_report_count;

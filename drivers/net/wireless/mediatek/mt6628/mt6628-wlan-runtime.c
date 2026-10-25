@@ -788,8 +788,20 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	int ret;
 
 	ret = mt6628_wlan_pm_busy(wl);
-	if (ret)
+	if (ret) {
+		/*
+		 * This is the one exit from here that records nothing, and it
+		 * fires when the driver has lost the chip - the very state the
+		 * caller is polling to get out of.  Without this the poll looks
+		 * like it ran once and then went quiet, which says nothing about
+		 * which of the two it was.
+		 */
+		dev_warn_ratelimited(&wl->func->dev,
+				     "TX poll skipped: cannot reclaim driver ownership: %d (pm_idle=%u owned=%u)\n",
+				     ret, (unsigned int)READ_ONCE(wl->pm_idle),
+				     (unsigned int)READ_ONCE(wl->driver_owned));
 		return ret;
+	}
 
 	sdio_claim_host(wl->func);
 	wtsr0 = sdio_readl(wl->func, MT6628_MCR_WTSR0, &ret);
@@ -824,16 +836,19 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 		return ret;
 	}
 	rx_pending = !diag_ret && wrplr;
-	if (!diag_ret)
+	if (!diag_ret) {
+		wl->tx_poll_count++;
 		dev_warn_ratelimited(&wl->func->dev,
 			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
 			"WHIER=%#010x WRPLR=%#010x WTSR0=%#010x "
-			"WTSR1=%#010x\n",
-			whlpcr, whcr, whier, wrplr, wtsr0, wtsr1);
-	else
+			"WTSR1=%#010x polls=%u\n",
+			whlpcr, whcr, whier, wrplr, wtsr0, wtsr1,
+			wl->tx_poll_count);
+	} else {
 		dev_warn_ratelimited(&wl->func->dev,
 			"failed to read TX poll diagnostic registers: %d\n",
 			diag_ret);
+	}
 
 	*wtsr0_out = wtsr0;
 	*wtsr1_out = wtsr1;
