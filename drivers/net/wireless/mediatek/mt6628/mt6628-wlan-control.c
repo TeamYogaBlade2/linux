@@ -1443,11 +1443,10 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 
 	packet_len = MT6628_HIF_TX_HEADER_LEN + frame_len;
 	/*
-	 * Reserve the TX-aggregation terminator DWORD as well; see the note in
-	 * mt6628_runtime_tx_frame().  kzalloc() zeroes it, which is exactly the
-	 * "single dword of zero" the firmware looks for to end the burst.
+	 * Reproduce kalDevPortWrite()'s block rounding; see the long note in
+	 * mt6628_runtime_tx_frame().
 	 */
-	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4) + sizeof(u32));
+	xfer_len = mt6628_sdio_xfer_len(packet_len);
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;

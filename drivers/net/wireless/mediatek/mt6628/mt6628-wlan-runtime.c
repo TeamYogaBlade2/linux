@@ -798,8 +798,9 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	if (!diag_ret)
 		dev_warn_ratelimited(&wl->func->dev,
 			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
-			"WHIER=%#010x WRPLR=%#010x\n",
-			whlpcr, whcr, whier, wrplr);
+			"WHIER=%#010x WRPLR=%#010x WTSR0=%#010x "
+			"WTSR1=%#010x\n",
+			whlpcr, whcr, whier, wrplr, wtsr0, wtsr1);
 	else
 		dev_warn_ratelimited(&wl->func->dev,
 			"failed to read TX poll diagnostic registers: %d\n",
@@ -983,23 +984,22 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	}
 
 	/*
-	 * Reserve room for the TX-aggregation terminator.
+	 * Reproduce the transfer length the downstream host driver produces.
 	 *
-	 * HAL_WRITE_TX_PORT() in the downstream driver always writes a zero DWORD
-	 * at ALIGN_4(len) past the packet - "fill with single dword of zero as
-	 * TX-aggregation termination" (hal.h:300-305).  The firmware treats that
-	 * DWORD as the end of the burst, so a transfer without it is a burst that
-	 * never terminates: the packet is accepted, no completion is ever
-	 * reported, and the TC's credit is never returned.  Registers look
-	 * perfect the whole time - WHLPCR shows the driver owning the chip with
-	 * interrupts enabled and WRPLR empty - and nothing is logged.
+	 * kalDevPortWrite() splits the buffer into whole blocks and, when there
+	 * is a remainder behind at least one full block, rounds the transfer up
+	 * to a block boundary: it sends "cur_blksize * bNum", not the length it
+	 * was given (sdio.c:1206-1228).  Below one block it sends the length
+	 * as-is.  mt6628_sdio_xfer_len() is exactly that rule.
 	 *
-	 * The old length calculation rounded the payload up but did not reserve
-	 * the extra DWORD, so any packet whose aligned length was already a
-	 * multiple of the block size ended flush against the end of the transfer
-	 * and had nowhere to put the terminator.
+	 * The block rounding is also what delivers the "single dword of zero as
+	 * TX-aggregation termination" that HAL_WRITE_TX_PORT() writes at
+	 * ALIGN_4(len) (hal.h:300-315): the DWORD is part of the transfer only
+	 * when rounding made the transfer longer than the packet.  kzalloc()
+	 * supplies it.  Reserving an extra DWORD on top, as this driver used to,
+	 * sends four bytes that the HIF byte count does not claim.
 	 */
-	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4) + sizeof(u32));
+	xfer_len = mt6628_sdio_xfer_len(packet_len);
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
