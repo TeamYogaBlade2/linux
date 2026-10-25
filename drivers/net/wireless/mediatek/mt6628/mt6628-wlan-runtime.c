@@ -526,8 +526,20 @@ static void mt6628_runtime_recovery_work(struct work_struct *work)
 	atomic_set(&wl->recovery_pending, 0);
 }
 
+/*
+ * @host_claimed: the caller already holds the SDIO host and has already
+ * reclaimed Driver Own, so the bulk read can go straight out.
+ *
+ * That distinction is not cosmetic.  mt6628_wlan_pm_busy() below can enter
+ * mt6628_wlan_take_driver_own(), which polls with usleep_range() for up to
+ * MT6628_DRIVER_OWN_TIMEOUT.  Called from irq_work() - which claims the host and
+ * takes ownership before it gets here - an unexpected pm_idle would therefore
+ * sleep for seconds with the SDIO host held, stalling every other user of the
+ * bus for the duration.
+ */
 static int mt6628_runtime_read_rx_packet(struct mt6628_wlan *wl,
-							 unsigned int port, u16 packet_len)
+					 unsigned int port, u16 packet_len,
+					 bool host_claimed)
 {
 	struct mt6628_hif_rx_hdr *rx_hdr;
 	struct sk_buff *skb;
@@ -549,10 +561,12 @@ int ret;
 	if (!buf)
 		return -ENOMEM;
 
-	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
-	ret = mt6628_wlan_pm_busy(wl);
-	if (ret)
-		goto out_free;
+	if (!host_claimed) {
+		/* Bulk transfer: reclaim Driver Own, 32-bit helpers bypassed. */
+		ret = mt6628_wlan_pm_busy(wl);
+		if (ret)
+			goto out_free;
+	}
 
 	ret = sdio_readsb(wl->func, buf,
 			  port ? MT6628_MCR_WRDR1 : MT6628_MCR_WRDR0,
@@ -871,7 +885,8 @@ static int mt6628_runtime_sync_startup(struct mt6628_wlan *wl,
 			break;
 
 		if (rx0_len) {
-			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
+			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len,
+							    false);
 			if (ret && ret != -ENOBUFS && ret != -EPROTO &&
 			    ret != -EOPNOTSUPP) {
 				dev_err(&wl->func->dev,
@@ -885,7 +900,8 @@ static int mt6628_runtime_sync_startup(struct mt6628_wlan *wl,
 		}
 
 		if (rx1_len) {
-			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
+			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len,
+							    false);
 			if (ret && ret != -ENOBUFS && ret != -EPROTO &&
 			    ret != -EOPNOTSUPP) {
 				dev_err(&wl->func->dev,
@@ -1436,7 +1452,13 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 
 		if (rx0_len) {
 			wl->rx_seen++;
-			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
+			/*
+			 * irq_work() claimed the host and took Driver Own
+			 * before this loop, so do not reclaim a second time
+			 * here: it can sleep for seconds.
+			 */
+			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len,
+							    true);
 			if (ret && ret != -ENOBUFS)
 				dev_warn_ratelimited(&wl->func->dev,
 						     "RX0 packet failed: %d\n",
@@ -1444,7 +1466,8 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		}
 		if (rx1_len) {
 			wl->rx_seen++;
-			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
+			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len,
+							    true);
 			if (ret && ret != -ENOBUFS)
 				dev_warn_ratelimited(&wl->func->dev,
 						     "RX1 packet failed: %d\n",
