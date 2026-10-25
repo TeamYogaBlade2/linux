@@ -1007,15 +1007,47 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 	struct mt6628_wlan *wl =
 		container_of(to_delayed_work(work), struct mt6628_wlan, tx_work);
 	struct sk_buff *skb;
+	unsigned long flags;
+	u32 wtsr0 = 0, wtsr1 = 0;
 
 	while ((skb = skb_dequeue(&wl->tx_queue))) {
 		int ret;
 
 		ret = mt6628_runtime_tx_frame(wl, skb);
 		if (ret == -EAGAIN) {
+			/*
+			 * Out of credits for this TC.  Reading WTSR is
+			 * what makes them come back: it is the
+			 * read-and-consume release counter, so the
+			 * firmware's completions only reach tx_free[]
+			 * through a read.  The old code rescheduled
+			 * blindly and hoped the SDIO IRQ would do it,
+			 * which wedges the queue for good whenever the
+			 * IRQ path is not running - one HTTP request is
+			 * enough to exhaust a small TC and the link then
+			 * never carries another frame.
+			 *
+			 * Downstream does the same thing in
+			 * nicTxPollingResource() (nic_tx.c:597-640):
+			 * HAL_READ_TX_RELEASED_COUNT() in a loop, then
+			 * nicTxReleaseResource(), then retry the frame.
+			 */
+			unsigned int wait = 0;
+
+			if (mt6628_wlan_poll_tx_status(wl, &wtsr0, &wtsr1) == 0) {
+				spin_lock_irqsave(&wl->tx_lock, flags);
+				wait = wl->tx_free[mt6628_runtime_tc_from_skb(skb)];
+				spin_unlock_irqrestore(&wl->tx_lock, flags);
+			}
+
 			skb_queue_head(&wl->tx_queue, skb);
-			mod_delayed_work(system_wq, &wl->tx_work,
-					 msecs_to_jiffies(10));
+			if (wait) {
+				/* A credit arrived: retry at once. */
+				mod_delayed_work(system_wq, &wl->tx_work, 0);
+			} else {
+				mod_delayed_work(system_wq, &wl->tx_work,
+						 msecs_to_jiffies(10));
+			}
 			return;
 		}
 		if (ret)
