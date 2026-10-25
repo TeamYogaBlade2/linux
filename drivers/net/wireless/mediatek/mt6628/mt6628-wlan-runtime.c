@@ -880,8 +880,18 @@ static int mt6628_runtime_sync_startup(struct mt6628_wlan *wl,
 		return ret;
 
 	ret = mt6628_runtime_read32(wl, MT6628_MCR_WTSR1, &wtsr1);
-	if (ret)
+	if (ret) {
+		/*
+		 * WTSR is read-and-consume and WTSR0 has already been read, so
+		 * returning here would discard releases the firmware considers
+		 * accounted for.  Credit what did come back before giving up;
+		 * the startup resource sync below will not run, so the leak
+		 * would otherwise be permanent.
+		 */
+		if (!reset_resources)
+			mt6628_runtime_tx_release(wl, wtsr0, 0);
 		return ret;
+	}
 
 	if (!reset_resources &&
 	    ((whisr & MT6628_WHISR_TX_DONE) || wtsr0 || wtsr1))
