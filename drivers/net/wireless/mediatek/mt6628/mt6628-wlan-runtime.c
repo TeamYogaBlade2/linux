@@ -1816,6 +1816,18 @@ err_netdev:
 	netif_napi_del(&wl->napi);
 	free_netdev(ndev);
 err_runtime:
+	/*
+	 * Stop the connect retry before the queues go away.
+	 *
+	 * conn_retry_work re-issues a connection and touches the queues, but the
+	 * cancel for it lives in cfg80211_deinit() below - which runs *after*
+	 * free_queues().  That left a window where the worker could run against
+	 * skbs that had just been purged.  Cancel it here so the ordering is
+	 * right, and leave cfg80211_deinit() last: free_queues() completes
+	 * pending management frames through cfg80211_scan_done(), so the wiphy
+	 * must still exist while the queues are dropped.
+	 */
+	cancel_delayed_work_sync(&wl->conn_retry_work);
 	mt6628_runtime_free_queues(wl);
 	wl->event_handler = NULL;
 	wl->mgmt_handler = NULL;
