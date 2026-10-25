@@ -129,8 +129,19 @@ static int mt6628_init_read_tx_released(struct mt6628_wlan *wl)
 		return ret;
 
 	ret = mt6628_read32(wl, MT6628_MCR_WTSR1, &wtsr1);
-	if (ret)
+	if (ret) {
+		/*
+		 * WTSR0 has already been read and WTSR is read-and-consume, so
+		 * its releases are gone from the hardware whether or not this
+		 * read succeeded.  Returning without crediting them loses INIT
+		 * TC0 credits permanently, and this runs in the resource-wait
+		 * loop that exists precisely to recover them.
+		 */
+		wl->init_tx_free = min_t(unsigned int,
+					 wl->init_tx_free + (wtsr0 & 0xff),
+					 MT6628_INIT_TX_TC0_RESOURCES);
 		return ret;
+	}
 
 	wl->init_tx_free = min_t(unsigned int,
 				 wl->init_tx_free + (wtsr0 & 0xff),
