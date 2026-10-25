@@ -121,6 +121,25 @@
 };
 
 &pio {
+	/*
+	 * DISP_PWM on GPIO129, function 1.
+	 *
+	 * The BLS block generates the panel backlight PWM, but the waveform
+	 * only leaves the SoC if this pin is muxed away from GPIO.  The
+	 * vendor board file programmes GPIO129_MODE = GPIO_MODE_01 in
+	 * cust_gpio_boot.h, which is this same function; without it every
+	 * BLS register reads back exactly what was written (PWM_En set, the
+	 * duty tracking brightness) while the panel sees nothing, because
+	 * the pin is still a plain GPIO.
+	 */
+	disp_pwm_pins: disp-pwm-pins {
+		pin-disp-pwm {
+			pinmux = <MT6589_GPIO129__FUNC_DISP_PWM>;
+			/* GPIO129_PULLEN/PULL as the vendor sets them. */
+			bias-pull-down;
+		};
+	};
+
 	pmic_eint_pins: pmic-eint-pins {
 		pin-pmic-eint {
 			pinmux = <MT6589_GPIO37__FUNC_EINT3>;
@@ -979,6 +998,15 @@
 
 &bls {
 	status = "okay";
+
+	/*
+	 * Route the PWM out to GPIO129.  The BLS block is usable without this
+	 * (its registers are written and read back correctly), which is why
+	 * the missing pinmux was not obvious: everything except the light
+	 * worked.
+	 */
+	pinctrl-names = "default";
+	pinctrl-0 = <&disp_pwm_pins>;
 };
 
 /*
