@@ -249,6 +249,8 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	unsigned int start;
 	unsigned int n_channels;
 	unsigned int max_channels;
+	unsigned int max_ssids;
+	size_t max_ie_len;
 	unsigned int ssid_type;
 	size_t cmd_len;
 	bool passive;
@@ -284,6 +286,23 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	}
 	mutex_unlock(&wl->cfg_mutex);
 
+	/*
+	 * Clamp the two variable-length fields to what the command buffer holds.
+	 *
+	 * ssids[] has MT6628_SCAN_MAX_SSIDS entries and ie[] has
+	 * MT6628_SCAN_MAX_IE_LEN bytes, but the allocation below is a fixed
+	 * sizeof(*cmd) and these two lengths are copied into it without their own
+	 * check.  cfg80211 currently makes that unreachable by enforcing
+	 * wiphy->max_scan_ssids / max_scan_ie_len, which this driver sets to
+	 * exactly these two constants - but that safety lives in another file and
+	 * only holds while the two stay in step.  Clamp here so that the copy is
+	 * bounded by what this function actually allocated, and do it next to the
+	 * channel clamp that was already there.
+	 */
+	max_ssids = min_t(unsigned int, request->n_ssids,
+			  MT6628_SCAN_MAX_SSIDS);
+	max_ie_len = min_t(size_t, request->ie_len, MT6628_SCAN_MAX_IE_LEN);
+
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
 	if (!cmd) {
 		mutex_unlock(&wl->scan_mutex);
@@ -307,9 +326,9 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	cmd->channel_dwell_time = cpu_to_le16(0);
 	cmd->channel_type = MT6628_SCAN_CHANNEL_SPECIFIED;
 	cmd->channel_list_num = n_channels;
-	cmd->ie_len = cpu_to_le16(request->ie_len);
+	cmd->ie_len = cpu_to_le16(max_ie_len);
 
-	for (i = 0; i < request->n_ssids; i++) {
+	for (i = 0; i < max_ssids; i++) {
 		if (request->ssids[i].ssid_len)
 			ssid_type |= MT6628_SCAN_SSID_SPECIFIC;
 		else
@@ -319,10 +338,10 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 		       request->ssids[i].ssid_len);
 	}
 	cmd->ssid_type = ssid_type;
-	if (request->ie_len)
-		memcpy(cmd->ie, request->ie, request->ie_len);
+	if (max_ie_len)
+		memcpy(cmd->ie, request->ie, max_ie_len);
 
-	cmd_len = offsetof(struct mt6628_scan_cmd, ie) + request->ie_len;
+	cmd_len = offsetof(struct mt6628_scan_cmd, ie) + max_ie_len;
 
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->scan_req != request) {
