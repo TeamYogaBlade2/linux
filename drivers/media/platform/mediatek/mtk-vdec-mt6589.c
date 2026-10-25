@@ -1778,6 +1778,13 @@ static int mtk_vdec_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->ops		= &mtk_vdec_qops;
 	src_vq->buf_ops		= &mtk_vdec_buf_ops;
 	src_vq->mem_ops		= &vb2_dma_contig_memops;
+	/*
+	 * vb2_queue_init() WARNs when the timestamp source is UNKNOWN, and a
+	 * zeroed queue is exactly that.  The bitstream carries no timestamps, so
+	 * the buffer timestamp is copied from what userspace queued on the
+	 * output side - which is what TIMESTAMP_COPY means.
+	 */
+	src_vq->timestamp_flags	= V4L2_BUF_FLAG_TIMESTAMP_COPY;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)
@@ -1790,6 +1797,7 @@ static int mtk_vdec_queue_init(void *priv, struct vb2_queue *src_vq,
 	dst_vq->ops		= &mtk_vdec_qops;
 	dst_vq->buf_ops		= &mtk_vdec_buf_ops;
 	dst_vq->mem_ops		= &vb2_dma_contig_memops;
+	dst_vq->timestamp_flags	= V4L2_BUF_FLAG_TIMESTAMP_COPY;
 
 	return vb2_queue_init(dst_vq);
 }

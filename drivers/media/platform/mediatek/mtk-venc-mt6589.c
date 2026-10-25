@@ -3260,6 +3260,8 @@ static int mtk_venc_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->ops		= &mtk_venc_qops;
 	src_vq->buf_ops		= &mtk_venc_buf_ops;
 	src_vq->mem_ops		= &vb2_dma_contig_memops;
+	/* See the note in mtk-vdec-mt6589.c: a zeroed queue is UNKNOWN. */
+	src_vq->timestamp_flags	= V4L2_BUF_FLAG_TIMESTAMP_COPY;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)
@@ -3272,6 +3274,7 @@ static int mtk_venc_queue_init(void *priv, struct vb2_queue *src_vq,
 	dst_vq->ops		= &mtk_venc_qops;
 	dst_vq->buf_ops		= &mtk_venc_buf_ops;
 	dst_vq->mem_ops		= &vb2_dma_contig_memops;
+	dst_vq->timestamp_flags	= V4L2_BUF_FLAG_TIMESTAMP_COPY;
 
 	return vb2_queue_init(dst_vq);
 }
