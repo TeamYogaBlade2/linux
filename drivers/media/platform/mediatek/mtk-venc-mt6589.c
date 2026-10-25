@@ -2786,7 +2786,16 @@ static int mtk_venc_open(struct file *file)
 	if (ret)
 		goto err_free;
 
-	v4l2_fh_init(&ctx->fh, file2m2m(file));
+	/*
+	 * v4l2_fh_init() wants the struct video_device the file was opened
+	 * through, not the driver's own device struct.  file2m2m() is
+	 * video_drvdata() and yields the mtk_venc_dev, which put fh->vdev on
+	 * the wrong object: the fields v4l2_fh_init()/v4l2_fh_add() touch
+	 * (ctrl_handler, flags, valid_ioctls, prio, fh_lock) then landed on
+	 * unrelated members of mtk_venc_dev.  Same defect as the decoder's
+	 * open(); see the note there.
+	 */
+	v4l2_fh_init(&ctx->fh, video_devdata(file));
 	ctx->fh.m2m_ctx = ctx->m2m = v4l2_m2m_ctx_init(venc->m2m_dev, ctx,
 							&mtk_venc_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {

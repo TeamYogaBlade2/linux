@@ -716,8 +716,21 @@ static int mtk_vdec_open(struct file *file)
 	 * Same shape as the encoder's open(), and for the same reason: file->private_data
 	 * has to be a v4l2_fh, because v4l2_m2m_fop_poll() and v4l2_m2m_fop_mmap() read a
 	 * m2m context out of it and video_ioctl2() does the same for every ioctl.
+	 *
+	 * v4l2_fh_init() takes the struct video_device, not the driver's own
+	 * device struct.  This used to pass file2m2m(file), which is
+	 * video_drvdata() - i.e. the mtk_vdec_dev - so fh->vdev pointed at
+	 * the wrong object entirely.  v4l2_fh_init() then dereferenced
+	 * vdev->ctrl_handler and set bits in vdev->flags and
+	 * vdev->valid_ioctls before v4l2_fh_add() read vdev->prio and took
+	 * vdev->fh_lock, all at offsets belonging to unrelated fields.  The
+	 * result was the reported v4l2_fh_add() failure at open() time.
+	 *
+	 * video_devdata() is the accessor that returns the video_device the
+	 * file was opened through, which is what the fh has to be linked
+	 * into.
 	 */
-	v4l2_fh_init(&ctx->fh, file2m2m(file));
+	v4l2_fh_init(&ctx->fh, video_devdata(file));
 	ctx->fh.m2m_ctx = ctx->m2m = v4l2_m2m_ctx_init(vdec->m2m_dev, ctx,
 							&mtk_vdec_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {
