@@ -132,8 +132,21 @@ struct mtk_h264_pps {
  * @direct_spatial_mv_pred_flag: B slices only.
  * @num_ref_idx_l0_active_minus1: slice override, or the PPS value.
  * @num_ref_idx_l1_active_minus1: slice override, or the PPS value.
- * @slice_qp_delta: signed; kept for completeness, not programmed (the QP comes
- *	from the PPS and the MB layer).
+ * @slice_qp_delta: signed; SHDRAVLD2[6:0].
+ * @nal_ref_idc: from the NAL unit header byte, not the slice header.  Carried
+ *	here because SHDRAVLD2[18:17] needs it and the NAL header is a long way
+ *	from the register write.  0 means "not a reference picture".
+ * @disable_deblocking_filter_idc: 0..2.  Only present when the PPS has
+ *	deblocking_filter_control_present_flag; the default of 0 applies otherwise.
+ * @slice_alpha_c0_offset_div2: signed, -6..6, SHDRAVLD2[12:9].
+ * @slice_beta_offset_div2: signed, -6..6, SHDRAVLD2[16:13].
+ * @cabac_init_idc: 0..2, SHDRAVLD2[21:20].  Meaningful only for CABAC.
+ *
+ * The last five fields are recorded because the AVC_VLD block needs them in
+ * SHDRAVLD2 even though they play no part in the fields the parser already
+ * extracted: the block reads the slice *data* itself, but the deblocking and
+ * CABAC parameters come from the header, which it is handed.  They were being
+ * parsed and thrown away before, so recording them changes no existing value.
  */
 struct mtk_h264_slice {
 	bool valid;
@@ -148,22 +161,87 @@ struct mtk_h264_slice {
 	u8 num_ref_idx_l0_active_minus1;
 	u8 num_ref_idx_l1_active_minus1;
 	s8 slice_qp_delta;
+	u8 nal_ref_idc;
+	u8 disable_deblocking_filter_idc;
+	s8 slice_alpha_c0_offset_div2;
+	s8 slice_beta_offset_div2;
+	u8 cabac_init_idc;
 };
 
 /**
  * struct mtk_h264_ps - parameter set storage for one context.
  * @sps: indexed by seq_parameter_set_id.
  * @pps: indexed by pic_parameter_set_id.
- */
-struct mtk_h264_ps {
+ */struct mtk_h264_ps {
 	struct mtk_h264_sps sps[MTK_H264_MAX_SPS];
 	struct mtk_h264_pps pps[MTK_H264_MAX_PPS];
 };
 
 int mtk_h264_parse_sps(const u8 *data, size_t len, struct mtk_h264_sps *out);
 int mtk_h264_parse_pps(const u8 *data, size_t len, struct mtk_h264_pps *out);
-int mtk_h264_parse_slice(const u8 *data, size_t len, u8 nal_type,
+/*
+ * @nal_type is the NAL unit type (1 or 5) and @nal_ref_idc its top two header
+ * bits, both from the NAL unit header byte, which is NOT part of @data: @data
+ * points at the payload one byte later.  nal_ref_idc is a separate argument
+ * because it decides whether dec_ref_pic_marking is present, so it has to be
+ * known *before* the walk rather than recorded after it.
+ */
+int mtk_h264_parse_slice(const u8 *data, size_t len, u8 nal_type, u8 nal_ref_idc,
 			 const struct mtk_h264_ps *ps, struct mtk_h264_slice *out);
+
+/**
+ * struct mtk_h264_rbsp - the driver's RBSP reader.
+ *
+ * Exposed only so that one function on it is reachable from the datapath:
+ * mtk_h264_slice_data_bits().  Everything else in here is an implementation
+ * detail and is private to mtk-vdec-mt6589-h264.c; nothing outside that file
+ * should touch these fields.
+ *
+ * It is a hand-rolled reader rather than a kernel bitfield helper because the
+ * emulation-prevention escape (00 00 03 -> 00 00) makes the byte-to-bit mapping
+ * non-linear, and because the reader has to report overflow rather than fault at
+ * the end of a NAL unit.
+ */
+struct mtk_h264_rbsp {
+	const u8 *data;
+	size_t len;
+	size_t bit;		/* absolute bit position in the RBSP */
+	size_t zeros;		/* consecutive zero bytes seen, for 00 00 03 */
+	bool overflow;
+};
+
+/**
+ * mtk_h264_slice_data_bits() - how many bits of a slice NAL unit the hardware
+ * should decode.
+ *
+ * The parser programs the AVC_VLD block with the slice header fields and then
+ * expects the block to read the slice *data* off the bitstream FIFO, starting at
+ * the byte the header ended on.  So it needs two numbers: the byte offset of the
+ * first slice_data bit, and how many bits from there belong to this NAL - not to
+ * the next start code, and not including this NAL's trailing pad.
+ *
+ * Both come out of the same walk, because both are properties of where the
+ * header ended:
+ *
+ *   @data_bits = (bit offset of rbsp_stop_one_bit) - (bit offset of slice_data)
+ *   @data_len covers the bytes from slice_data's byte to the NAL unit's last
+ *   non-zero byte inclusive.
+ *
+ * The subtraction is what makes this safe.  Once slices may be packed (the
+ * stream has a deblocking-filter-control flag, which x264 sets, so the header
+ * always ends with ue/se fields), the stop bit is the ONLY upper bound the
+ * driver has on slice_data: without it the decoder would run past the end of
+ * the picture and into the next slice, and the hardware would not report an
+ * error, because a wrong slice length looks exactly like a corrupt bitstream.
+ *
+ * Returns 0 on success, -EOPNOTSUPP if this driver cannot compute the header
+ * length for this stream, or another negative errno on a malformed NAL unit.
+ */
+int mtk_h264_slice_data_bits(const u8 *data, size_t len, u8 nal_type,
+			     const struct mtk_h264_ps *ps,
+			     const struct mtk_h264_slice *slice,
+			     size_t *data_off, size_t *data_len,
+			     unsigned int *data_bits);
 
 /**
  * mtk_h264_find_nal - locate the next NAL unit in a buffer.
