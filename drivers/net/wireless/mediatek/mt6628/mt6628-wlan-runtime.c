@@ -1054,6 +1054,8 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 		int ret;
 
 		ret = mt6628_runtime_tx_frame(wl, skb);
+		if (!ret)
+			wl->tx_stall_count = 0;
 		if (ret == -EAGAIN) {
 			/*
 			 * Out of credits for this TC.  Reading WTSR is
@@ -1124,6 +1126,31 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 				/* This frame's credit arrived: retry at once. */
 				mod_delayed_work(system_wq, &wl->tx_work, 0);
 			} else {
+				/*
+				 * No credit came back for this frame's TC.  If
+				 * this repeats, the link is stalled and there is
+				 * otherwise nothing in dmesg to say why - so
+				 * report the state that decides it: the full
+				 * credit array, the queue depth, and whether the
+				 * driver even owns the chip.
+				 */
+				if (++wl->tx_stall_count == 100) {
+					unsigned int stall_tc =
+						mt6628_runtime_tc_from_skb(skb);
+
+					spin_lock_irqsave(&wl->tx_lock, flags);
+					dev_warn(&wl->func->dev,
+						 "TX stalled: tc=%u free=%u/%u/%u/%u/%u/%u queued=%u pm_idle=%u owned=%u\n",
+						 stall_tc,
+						 wl->tx_free[0], wl->tx_free[1],
+						 wl->tx_free[2], wl->tx_free[3],
+						 wl->tx_free[4], wl->tx_free[5],
+						 skb_queue_len(&wl->tx_queue),
+						 (unsigned int)READ_ONCE(wl->pm_idle),
+						 (unsigned int)READ_ONCE(wl->driver_owned));
+					spin_unlock_irqrestore(&wl->tx_lock, flags);
+					wl->tx_stall_count = 0;
+				}
 				mod_delayed_work(system_wq, &wl->tx_work,
 						 msecs_to_jiffies(10));
 			}

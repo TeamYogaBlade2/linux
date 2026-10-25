@@ -107,6 +107,12 @@ struct mt6628_wlan {
 	 * wakeup source on a link that never reports SLEEPY_NOTIFY.
 	 */
 	unsigned int pm_idle_polls;
+	/*
+	 * Consecutive tx_work rounds that found no credit for the frame at the
+	 * head of the queue.  Used only to decide when to print the stall
+	 * diagnostic; reset whenever a frame is transmitted.
+	 */
+	unsigned int tx_stall_count;
 	/* Remain-on-channel state, including the request we granted it with. */
 	/* Keep the sequence across runtime stop/start so old cookies stay stale. */
 	u64 roc_cookie_next;
