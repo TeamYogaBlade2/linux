@@ -200,10 +200,10 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 	if (ret)
 		return ret;
 
-	dev_info(&wl->func->dev,
-		 "driver-own start: WCIR=%#010x, chip_id=%#lx, WLAN_READY=%u\n",
-		 wcir, wcir & MT6628_WCIR_CHIP_ID,
-		 !!(wcir & MT6628_WCIR_WLAN_READY));
+	dev_dbg(&wl->func->dev,
+		"driver-own start: WCIR=%#010x, chip_id=%#lx, WLAN_READY=%u\n",
+		wcir, wcir & MT6628_WCIR_CHIP_ID,
+		!!(wcir & MT6628_WCIR_WLAN_READY));
 
 	ret = mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
 	if (ret)
@@ -220,9 +220,9 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 			return ret;
 
 		if (val & MT6628_IS_DRIVER_OWN) {
-			dev_info(&wl->func->dev,
-				 "driver ownership acquired: WHLPCR=%#010x\n",
-				 val);
+			dev_dbg(&wl->func->dev,
+				"driver ownership acquired: WHLPCR=%#010x\n",
+				val);
 			/*
 			 * Re-enable the SDIO interrupt that the
 			 * MT6628_INT_EN_CLR above turned off.
@@ -249,10 +249,10 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		 * periodically while the LP engine is completing its transition.
 		 */
 		if (!(tries & 0x3ff))
-			dev_info(&wl->func->dev,
-				 "waiting for driver ownership: "
-				 "WCIR=%#010x WHLPCR=%#010x iteration=%u\n",
-				 wcir, val, tries);
+			dev_dbg(&wl->func->dev,
+				"waiting for driver ownership: "
+				"WCIR=%#010x WHLPCR=%#010x iteration=%u\n",
+				wcir, val, tries);
 
 		if (tries && !(tries & 0xff)) {
 			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,

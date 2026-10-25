@@ -1815,6 +1815,36 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 	if (!wlan->runtime_started)
 		return;
 
+	/*
+	 * Do not hand the chip over on a timer alone.
+	 *
+	 * Downstream gates this on two things at once: the firmware must have
+	 * said it is idle (fgWiFiInSleepyState, set from EVENT_ID_SLEEPY_NOTIFY)
+	 * and the driver must hold no blocking reference
+	 * (u4PwrCtrlBlockCnt == 0), as RECLAIM_POWER_CONTROL_TO_PM spells out
+	 * (pwr_mgt.h:124-131).  The reference half is covered here by
+	 * give_firmware_own()'s own checks on the queues, TX credits and
+	 * pending commands; the sleepy half was missing entirely, so this
+	 * fired 200 ms after every burst regardless.
+	 *
+	 * What that cost: the chip was handed to the firmware between
+	 * packets, the next RX interrupt then found pm_idle set and could not
+	 * even mask the interrupt ("failed to acquire driver ownership in
+	 * SDIO IRQ: -11"), and irq_work had to poll driver-own back before it
+	 * could read anything.  On a connected link the log shows that cycle
+	 * repeating dozens of times a minute, which is exactly the latency and
+	 * throughput cost the connect test showed.
+	 *
+	 * Waiting for the notify is what makes the hand-off cheap: the
+	 * firmware only sends it when it has nothing queued, so the transfer
+	 * that follows is not competing with a reclaim.
+	 */
+	if (!READ_ONCE(wlan->fw_sleepy)) {
+		schedule_delayed_work(&wlan->pm_work,
+				      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+		return;
+	}
+
 	ret = mt6628_wlan_give_firmware_own(wlan);
 
 	/* Traffic still outstanding: back off and try again shortly. */
