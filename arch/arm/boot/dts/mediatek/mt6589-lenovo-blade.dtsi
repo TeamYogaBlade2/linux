@@ -91,7 +91,6 @@
 		compatible = "mediatek,mt6628-pwrseq";
 		status = "okay";
 		mediatek,rtc = <&mt6320_rtc>;
-		vmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
 		pmu-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;

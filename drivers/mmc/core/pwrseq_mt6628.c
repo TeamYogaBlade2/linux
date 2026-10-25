@@ -47,7 +47,6 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
-#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
 #include <linux/mmc/host.h>
@@ -77,7 +76,6 @@ struct mt6628_pwrseq {
 	struct mmc_pwrseq pwrseq;
 	struct gpio_desc *pmu_gpio;
 	struct gpio_desc *reset_gpio;
-	struct regulator *vmmc;
 	struct mutex lock;
 	struct completion power_ready;
 	unsigned int consumers;
@@ -85,7 +83,6 @@ struct mt6628_pwrseq {
 	bool power_transition;
 	bool skip_power_cycle;
 	bool power_off_pending;
-	bool vmmc_held;
 	bool stp_ready_state;
 };
 
@@ -195,10 +192,9 @@ static void mmc_pwrseq_mt6628_power_off(struct mmc_host *host)
 	consumers = pwrseq->consumers;
 	if (consumers) {
 		/*
-		 * Keep PMU_EN, RESET and the extra VMMC regulator reference
-		 * until the last consumer releases the combo chip. This callback
-		 * cannot veto the MMC core's supply change, so the additional
-		 * regulator reference is essential here.
+		 * Keep PMU_EN and RESET until the last consumer releases the
+		 * combo chip, so a card-interface restart cannot reset a live
+		 * UART/STP or SDIO transfer.
 		 */
 		pwrseq->power_off_pending = true;
 		mutex_unlock(&pwrseq->lock);
@@ -229,7 +225,6 @@ static void mmc_pwrseq_mt6628_consumer_put(void *data)
 	struct device *provider_dev = pwrseq->pwrseq.dev;
 	struct module *owner = pwrseq->pwrseq.owner;
 	bool power_off;
-	int ret;
 
 	mutex_lock(&pwrseq->lock);
 	if (WARN_ON(!pwrseq->consumers)) {
@@ -243,8 +238,8 @@ static void mmc_pwrseq_mt6628_consumer_put(void *data)
 	}
 
 	/*
-	 * Serialize the last release with a new acquisition. Otherwise a new
-	 * consumer could acquire a lease just before regulator_disable().
+	 * Serialize the last release with a new acquisition, so a consumer
+	 * that takes a lease concurrently never sees a half-torn-down chip.
 	 */
 	pwrseq->power_transition = true;
 	reinit_completion(&pwrseq->power_ready);
@@ -258,15 +253,6 @@ static void mmc_pwrseq_mt6628_consumer_put(void *data)
 		gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
 	}
 
-	if (pwrseq->vmmc_held) {
-		ret = regulator_disable(pwrseq->vmmc);
-		if (!ret)
-			pwrseq->vmmc_held = false;
-		else
-			dev_warn(pwrseq->pwrseq.dev,
-				 "failed to release retained VMMC: %d\n", ret);
-	}
-
 	pwrseq->power_transition = false;
 	if (pwrseq->power_ready_state)
 		complete_all(&pwrseq->power_ready);
@@ -274,9 +260,9 @@ static void mmc_pwrseq_mt6628_consumer_put(void *data)
 
 out_put:
 	/*
-	 * The regulator/GPIO provider must remain alive until the consumer
-	 * drops its lease. Save the module and device references above before
-	 * releasing them here.
+	 * The GPIO provider must remain alive until the consumer drops its
+	 * lease. Save the module and device references above before releasing
+	 * them here.
 	 */
 	put_device(provider_dev);
 	module_put(owner);
@@ -352,18 +338,9 @@ struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
 	mutex_lock(&pwrseq->lock);
 
 	/*
-	 * Hold a second reference to the actual VMMC supply. The MMC host
-	 * may drop its own reference while UART STP or WLAN is still using
-	 * the combo chip.
+	 * Take the lease.  The provider deliberately does not touch the PMIC
+	 * beyond this bookkeeping - see the note in probe().
 	 */
-	if (!pwrseq->consumers && !pwrseq->vmmc_held) {
-		ret = regulator_enable(pwrseq->vmmc);
-		if (ret) {
-			mutex_unlock(&pwrseq->lock);
-			goto err_put;
-		}
-		pwrseq->vmmc_held = true;
-	}
 	pwrseq->consumers++;
 	mutex_unlock(&pwrseq->lock);
 
@@ -394,7 +371,7 @@ int mt6628_pwrseq_recover(struct mt6628_pwrseq *pwrseq)
 
 	mutex_lock(&pwrseq->lock);
 	if (pwrseq->consumers != 1 || pwrseq->power_transition ||
-	    pwrseq->power_off_pending || !pwrseq->vmmc_held) {
+	    pwrseq->power_off_pending) {
 		mutex_unlock(&pwrseq->lock);
 		return -EBUSY;
 	}
@@ -510,11 +487,19 @@ static int mmc_pwrseq_mt6628_probe(struct platform_device *pdev)
 	if (!pwrseq)
 		return -ENOMEM;
 
-	pwrseq->vmmc = devm_regulator_get(dev, "vmmc");
-	if (IS_ERR(pwrseq->vmmc))
-		return dev_err_probe(dev, PTR_ERR(pwrseq->vmmc),
-				     "can't get VMMC supply\n");
-
+	/*
+	 * This provider drives PMU_EN and RESET only; it does not hold, enable
+	 * or disable any PMIC rail.
+	 *
+	 * It used to take a second reference on the combo chip's supply so an
+	 * MMC power-off could not drop the rail under a live UART/STP
+	 * transport.  That reference was the only thing this driver ever did
+	 * to the MT6320, and enabling the node started breaking unrelated
+	 * peripherals (USB among them) on hardware - so the supply is gone and
+	 * the rail is left to the MMC host, which already names it as vmmc.
+	 * The combo chip is fixed at 1.8 V I/O, so nothing here needs to gate
+	 * it.
+	 */
 	mutex_init(&pwrseq->lock);
 	init_completion(&pwrseq->power_ready);
 
