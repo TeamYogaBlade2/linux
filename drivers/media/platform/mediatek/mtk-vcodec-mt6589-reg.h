@@ -841,4 +841,51 @@
 #define VDEC_AVC_VLD_STATE_INFO		0x278
 #define VDEC_AVC_PIC_FINISH		BIT(31)
 
+/*
+ * AVC_VLD_CTRL (0x84) - the parser's master enable and mode word.
+ * Layout from vdec_hw_common.h:939-960, values from the MT6589 branch of
+ * vdec_hw_h264.c:423-460 (CONFIG_CHIP_VER_CURR < MT8560).
+ */
+#define VDEC_AVC_VLD_CTRL		0x84
+#define VDEC_AVC_CTRL_EN		BIT(0)
+/*
+ * AVC_RDY_WITH_CNT is 3<<1 for every chip >= MT8530 and 0 below it, so MT6589
+ * takes the 3.  The comment in the harness says why: "in search start code, it
+ * should be set as 3".
+ */
+#define VDEC_AVC_CTRL_RDY_WITH_CNT	(3u << 1)
+#define VDEC_AVC_CTRL_RDY_CNT_THD	(0u << 3)
+#define VDEC_AVC_CTRL_MEM_PAUSE_EN	BIT(27)	/* MEM_PAUSE_SUPPORT is defined */
+#define VDEC_AVC_CTRL_RBSP_CHK_INV	(0u << 28)
+#define VDEC_AVC_CTRL_SUM6_APPEND_INV	BIT(29)
+#define VDEC_AVC_CTRL_READ_FLAG_CHK_INV	BIT(30)	/* MEM_PAUSE_SUPPORT branch */
+#define VDEC_AVC_CTRL_NOT_CHK_DATA_VALID BIT(31)
+
+#define VDEC_AVC_VLD_RESET_SUM		0x28C
+#define VDEC_AVC_RESET_SUM_ON		1
+#define VDEC_AVC_RESET_SUM_OFF		0
+#define VDEC_AVC_VLD_RM03R		0x2C8
+#define VDEC_AVC_RM03R_FIND_03		BIT(11)
+
+/* Shared VLD block registers (VDEC_VLD_BASE = 0x1000). */
+#define VDEC_VLD_PROC			0x08C
+#define VDEC_VLD_PROC_INIFET		BIT(20)
+#define VDEC_VLD_PROC_INIBR		BIT(23)
+#define VDEC_VLD_RPTR			0x0B0
+#define VDEC_VLD_RPTR_STRIDE		0x400	/* << 10 per barrel-shifter instance */
+#define VDEC_VLD_WPTR			0x110
+#define VDEC_VLD_WPTR_CLEAR		BIT(0)
+#define VDEC_VLD_VBAR			0x0EC
+#define VDEC_VLD_ASYNC			0x0D0
+#define VDEC_VLD_ASYNC_WR_ENABLE	BIT(18)
+#define VDEC_VLD_SRST			0x108
+
+/*
+ * MC_OPBUF (VDEC_MC_BASE + 0x24).  The harness writes 6 unconditionally during
+ * H.264 bring-up (vdec_hw_h264.c:462) with no explanation; 6 is what it uses, so
+ * 6 is what this driver writes.
+ */
+#define VDEC_MC_OPBUF			0x24
+#define VDEC_MC_OPBUF_AVC		6
+
 #endif /* _MTK_VCODEC_MT6589_REG_H */

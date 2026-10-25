@@ -706,6 +706,60 @@ static int mtk_vdec_h264_program(struct mtk_vdec_ctx *ctx)
 	return 0;
 }
 
+/*
+ * Bring the AVC parser out of reset.
+ *
+ * Sequence from the MT6589 branch of the vendor harness's H.264 bring-up
+ * (vdec_hw_h264.c:423-500, the CONFIG_CHIP_VER_CURR < MT8560 arm, which is the
+ * branch this silicon takes).  In order:
+ *
+ *   1. AVC_VLD_CTRL: enable, the "search start code" counter mode, and the
+ *      inverse-check flags that are on for this configuration.
+ *   2. MC_OPBUF = 6, which the harness writes unconditionally for H.264 with no
+ *      explanation.  6 is reproduced.
+ *   3. The prediction/scratch address, or 0 when the caller has none.
+ *   4. Reset the AVC VLD sum, a two-write strobe.
+ *
+ * Deliberately NOT done here, because they need state this driver does not own
+ * yet:
+ *   - the bitstream VFIFO addresses (VLD_WPTR/RPTR plus the FIFO base).  Without
+ *     a DRAM FIFO the parser has nothing to read, so this leaves the block
+ *     enabled but idle.
+ *   - the barrel-shifter priming handshake (VLD_PROC INIFET/INIBR, then spin on
+ *     RO_VLD_VBAR and step the shifter 8 bits at a time).  That is interactive
+ *     and its success depends on there being valid data behind the read pointer.
+ *
+ * Returns 0 once the registers are written; it does not mean a picture can be
+ * decoded, and the caller must not report one.
+ */
+static int mtk_vdec_h264_bring_up(struct mtk_vdec_dev *vdec, u32 pred_addr)
+{
+	u32 ctrl;
+
+	ctrl = VDEC_AVC_CTRL_EN
+	     | VDEC_AVC_CTRL_RDY_WITH_CNT
+	     | VDEC_AVC_CTRL_RDY_CNT_THD
+	     | VDEC_AVC_CTRL_MEM_PAUSE_EN
+	     | VDEC_AVC_CTRL_SUM6_APPEND_INV
+	     | VDEC_AVC_CTRL_READ_FLAG_CHK_INV
+	     | VDEC_AVC_CTRL_NOT_CHK_DATA_VALID;
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_CTRL, ctrl);
+
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_OPBUF, VDEC_MC_OPBUF_AVC);
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_PRED_ADDR,
+		       pred_addr);
+
+	/* Two-write strobe: assert, then deassert. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_RESET_SUM,
+		       VDEC_AVC_RESET_SUM_ON);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_RESET_SUM,
+		       VDEC_AVC_RESET_SUM_OFF);
+
+	return 0;
+}
+
 static void mtk_vdec_device_run(void *priv)
 {
 	struct mtk_vdec_ctx *ctx = priv;
@@ -758,10 +812,19 @@ static void mtk_vdec_device_run(void *priv)
 	}
 
 	/*
-	 * The register programming above is what this driver can do today.  It
-	 * does NOT yet start the VLD/MC/PP pipeline: those need the per-plane
-	 * addresses and the parser SRAM handshake, and until they are written the
-	 * buffers are returned as failed rather than as a picture.
+	 * Bring the parser up after the parameter sets are in place.  No
+	 * prediction/scratch buffer is allocated yet, so the address is 0 -
+	 * which the harness explicitly allows ("u4PredSa ? PHYSICAL(u4PredSa) :
+	 * 0") for streams that do not need one.
+	 */
+	mtk_vdec_h264_bring_up(vdec, 0);
+
+	/*
+	 * This is as far as the datapath goes today.  The parser is enabled and
+	 * loaded, but the VLD/MC/PP pipeline is not started: that needs a DRAM
+	 * bitstream FIFO, the barrel-shifter priming handshake and a reference
+	 * picture list, none of which exist here yet.  The buffers are returned
+	 * as failed rather than as a picture, which is the honest answer.
 	 */
 	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m,
 					 VB2_BUF_STATE_ERROR);
