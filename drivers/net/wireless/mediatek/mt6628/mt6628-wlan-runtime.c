@@ -1039,7 +1039,6 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 		container_of(to_delayed_work(work), struct mt6628_wlan, tx_work);
 	struct sk_buff *skb;
 	unsigned long flags;
-	unsigned int i;
 	u32 wtsr0 = 0, wtsr1 = 0;
 
 	WRITE_ONCE(wl->tx_work_running, true);
@@ -1067,28 +1066,23 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			 * nicTxReleaseResource(), then retry the frame.
 			 */
 			unsigned int wait = 0;
-			unsigned int free_total = 0;
 			bool released_any = false;
 
 			if (mt6628_wlan_poll_tx_status(wl, &wtsr0, &wtsr1) == 0) {
 				spin_lock_irqsave(&wl->tx_lock, flags);
 				wait = wl->tx_free[mt6628_runtime_tc_from_skb(skb)];
-				/*
-				 * A release on a different TC still means the
-				 * hardware is making progress, and the queue
-				 * must not stay stopped for it.  Checking only
-				 * the head frame's TC left the queue stopped
-				 * whenever that particular TC was the one that
-				 * did not return - the link then looks dead
-				 * with nothing in dmesg to say why.
-				 */
-				free_total = 0;
-				for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
-					if (wl->tx_free[i])
-						free_total++;
-				}
 				spin_unlock_irqrestore(&wl->tx_lock, flags);
-				released_any = free_total > 0;
+				/*
+				 * Use the release the firmware just reported, not
+				 * a scan of the free counts: those are non-zero
+				 * for TCs that never ran out, so scanning them
+				 * says "progress" on every pass and the queue is
+				 * woken immediately after tx_frame() stopped it.
+				 * WTSR is read-and-consume, so a non-zero value
+				 * here is precisely "credits came back since the
+				 * last read".
+				 */
+				released_any = (wtsr0 || wtsr1);
 			}
 
 			skb_queue_head(&wl->tx_queue, skb);
