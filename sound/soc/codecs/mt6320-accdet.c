@@ -134,8 +134,26 @@ static void mt6320_accdet_report(struct mt6320_accdet *priv,
 		SND_JACK_BTN_1 |
 		SND_JACK_BTN_2;
 
-	if (priv->jack)
-		snd_soc_jack_report(priv->jack, report, mask);
+	/*
+	 * A missing jack here used to be entirely silent, and that is a
+	 * bad failure mode for exactly the bug this driver keeps having:
+	 * mt6320_accdet_set_jack() stores whatever it is given, and the
+	 * machine driver treats a negative return as fatal-but-ignorable, so
+	 * if binding ever missed, every report below would be dropped and
+	 * nothing in dmesg would say so - the jack simply never changes
+	 * state and the speaker/headphone handover never happens.
+	 *
+	 * Warn once per report so dmesg answers "is the report path even
+	 * connected?" without needing debugfs on the device.
+	 */
+	if (!priv->jack) {
+		dev_warn_ratelimited(priv->dev,
+				     "jack report 0x%x dropped: no snd_soc_jack bound\n",
+				     report);
+		return;
+	}
+
+	snd_soc_jack_report(priv->jack, report, mask);
 }
 
 static int mt6320_accdet_key(struct mt6320_accdet *priv)

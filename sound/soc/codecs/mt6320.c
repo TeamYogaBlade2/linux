@@ -1348,14 +1348,16 @@ static int mt6320_spk_amp_event(struct snd_soc_dapm_widget *w,
 					elapsed));
 		}
 		gpiod_set_value_cansleep(priv->amp_en_gpio, 1);
-		msleep(MT6320_AMP_WARMUP_MS);
 		priv->amp_on = true;
+		dev_info(priv->dev, "speaker amplifier on (GPIO73 high)\n");
+		msleep(MT6320_AMP_WARMUP_MS);
 		return 0;
 
 	case SND_SOC_DAPM_PRE_PMD:
 		gpiod_set_value_cansleep(priv->amp_en_gpio, 0);
 		priv->amp_on = false;
 		priv->amp_off_jiffies = jiffies;
+		dev_info(priv->dev, "speaker amplifier off (GPIO73 low)\n");
 		return 0;
 	}
 
