@@ -583,6 +583,22 @@ static irqreturn_t mt6320_accdet_eint(int irq, void *data)
 	}
 
 	/*
+	 * Log every detected transition.
+	 *
+	 * The EINT is the only source of jack presence, and its plumbing
+	 * (pin table, EIC domain enable, mask/unmask, debounce, level
+	 * polarity) all reads correctly in this tree, so the question "did the
+	 * interrupt arrive, and what level did the pad actually show?" cannot
+	 * be answered by reading the code - it needs a hardware observation.
+	 * This line is that observation: it fires only on a real transition,
+	 * so its absence over a plug/unplug cycle means the EINT never
+	 * reached us, and its presence together with an implausible level
+	 * means the pad or its polarity is wrong rather than the report path.
+	 */
+	dev_info(priv->dev, "detect: gpio level %d -> %s\n", inserted,
+		 inserted ? "plugged" : "unplugged");
+
+	/*
 	 * Stop the key scanner before taking the lock on plug-out: the
 	 * worker needs the lock itself, so cancelling it underneath would
 	 * deadlock.  It would otherwise re-arm itself, read the ACCDET
@@ -846,6 +862,15 @@ static int mt6320_accdet_probe(struct platform_device *pdev)
 				     "failed to read detect GPIO\n");
 	priv->plugged = !!ret;
 	priv->last_state = 3;
+
+	/*
+	 * Record the level seen at probe.  The jack is usually empty here, so
+	 * this should read 0 (including on the very first boot, where nothing
+	 * has touched the pad yet), and it is the baseline the per-transition
+	 * log below is compared against.
+	 */
+	dev_info(&pdev->dev, "detect: gpio level at probe %d (%s)\n",
+		 ret, ret ? "plugged" : "unplugged");
 
 	/*
 	 * Arm for the level that reports the *next* transition.
