@@ -605,16 +605,40 @@ static bool mt6628_connect_is_wpa_psk(
 	    crypto->wpa_versions & ~(NL80211_WPA_VERSION_1 |
 				     NL80211_WPA_VERSION_2))
 		return false;
-	if (crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP &&
+	/*
+	 * Group and pairwise ciphers are independent choices, and a
+	 * WPA/WPA2 mixed-mode AP commonly advertises group TKIP with
+	 * pairwise CCMP.  Accept both suites in either slot: the RSN
+	 * information element is handed to the firmware verbatim, so it
+	 * decides what it can do with the group key.  What this driver
+	 * does need is a pairwise cipher and a PSK AKM, checked below.
+	 */
+	if (crypto->cipher_group &&
+	    crypto->cipher_group != WLAN_CIPHER_SUITE_CCMP &&
 	    crypto->cipher_group != WLAN_CIPHER_SUITE_TKIP)
 		return false;
 	if (crypto->n_ciphers_pairwise != 1 ||
 	    (crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_CCMP &&
 	     crypto->ciphers_pairwise[0] != WLAN_CIPHER_SUITE_TKIP))
 		return false;
-	if (crypto->n_akm_suites != 1 ||
-	    crypto->akm_suites[0] != WLAN_AKM_SUITE_PSK)
+	/*
+	 * A WPA2 AP may advertise several AKM suites (PSK plus PSK-SHA256
+	 * is common); the association only needs one to be usable, and the
+	 * RSN element goes to the firmware whole.  Require PSK to be
+	 * present rather than to be the only entry.
+	 */
+	if (!crypto->n_akm_suites)
 		return false;
+	{
+		unsigned int i;
+		bool have_psk = false;
+
+		for (i = 0; i < crypto->n_akm_suites; i++)
+			if (crypto->akm_suites[i] == WLAN_AKM_SUITE_PSK)
+				have_psk = true;
+		if (!have_psk)
+			return false;
+	}
 	/*
 	 * EAPOL is supported through the Ethernet data path, where the
 	 * runtime TX code marks ETH_P_PAE as an 802.1X HIF frame.
