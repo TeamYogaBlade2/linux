@@ -844,9 +844,10 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 		dev_warn_ratelimited(&wl->func->dev,
 			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
 			"WHIER=%#010x WRPLR=%#010x WTSR0=%#010x "
-			"WTSR1=%#010x polls=%u\n",
+			"WTSR1=%#010x polls=%u sent=%u txq=%u\n",
 			whlpcr, whcr, whier, wrplr, wtsr0, wtsr1,
-			wl->tx_poll_count);
+			wl->tx_poll_count, wl->tx_sent,
+			skb_queue_len(&wl->tx_queue));
 	} else {
 		dev_warn_ratelimited(&wl->func->dev,
 			"failed to read TX poll diagnostic registers: %d\n",
@@ -1130,6 +1131,7 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	if (ret)
 		goto err_resource;
 
+	wl->tx_sent++;
 	dev_consume_skb_any(skb);
 	return 0;
 
@@ -1612,26 +1614,12 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	 * has stopped signalling us at all.  Those have completely different
 	 * causes and are otherwise indistinguishable from userspace.
 	 */
-	if (++wl->rx_report_count >= 200) {
-		unsigned int irqs = wl->irq_seen;
-		unsigned int rxs = wl->rx_seen;
-		bool stuck = (irqs == wl->irq_seen_last &&
-			      rxs == wl->rx_seen_last);
-		bool busy = !skb_queue_empty(&wl->tx_queue) ||
-			    !skb_queue_empty(&wl->rx_queue);
-
-		wl->rx_report_count = 0;
-		if (stuck && busy)
-			dev_warn(&wl->func->dev,
-				 "RX/TX idle with work pending: irq=%u rx=%u txq=%u rxq=%u pm_idle=%u owned=%u\n",
-				 irqs, rxs,
-				 skb_queue_len(&wl->tx_queue),
-				 skb_queue_len(&wl->rx_queue),
-				 (unsigned int)READ_ONCE(wl->pm_idle),
-				 (unsigned int)READ_ONCE(wl->driver_owned));
-		wl->irq_seen_last = irqs;
-		wl->rx_seen_last = rxs;
-	}
+	/*
+	 * The stall check lives on the pm_work timer instead, not here.  This
+	 * worker only runs when the chip interrupts us, so a chip that has gone
+	 * quiet would never reach a check placed here - which is exactly the
+	 * case it is meant to report.  See mt6628_runtime_pm_work().
+	 */
 
 	/*
 	 * Everything that was pending has been handed to the workers, so
@@ -1690,6 +1678,56 @@ static void mt6628_runtime_pm_work(struct work_struct *work);
 
 static void mt6628_runtime_irq_retry_work(struct work_struct *work);
 
+/*
+ * Watchdog for a link that has stopped moving traffic.
+ *
+ * Everything else in this driver reacts to an interrupt.  When the firmware
+ * stops raising them nothing runs: no RX, no credit release, no reclaim, and no
+ * diagnostic - the interface keeps its address and simply carries nothing, with
+ * an empty dmesg.  This runs on its own timer for that reason.
+ */
+static void mt6628_runtime_stall_check_work(struct work_struct *work)
+{
+	struct mt6628_wlan *wl =
+		container_of(to_delayed_work(work), struct mt6628_wlan,
+			     stall_check_work);
+	unsigned int irqs, rxs, sent;
+	bool busy;
+
+	if (!READ_ONCE(wl->runtime_started))
+		return;
+
+	irqs = wl->irq_seen;
+	rxs = wl->rx_seen;
+	sent = wl->tx_sent;
+
+	/*
+	 * "Busy" is any traffic the driver still owes: frames queued to send, or
+	 * received frames waiting to be handed up.  An honestly idle link has
+	 * neither, and reporting on that alone would be noise.
+	 */
+	busy = !skb_queue_empty(&wl->tx_queue) ||
+	       !skb_queue_empty(&wl->rx_queue);
+
+	if (busy && irqs == wl->irq_seen_last && rxs == wl->rx_seen_last &&
+	    sent == wl->tx_sent_last)
+		dev_warn(&wl->func->dev,
+			 "TX/RX stalled 6s: irq=%u rx=%u sent=%u txq=%u rxq=%u pm_idle=%u owned=%u connected=%u\n",
+			 irqs, rxs, sent,
+			 skb_queue_len(&wl->tx_queue),
+			 skb_queue_len(&wl->rx_queue),
+			 (unsigned int)READ_ONCE(wl->pm_idle),
+			 (unsigned int)READ_ONCE(wl->driver_owned),
+			 (unsigned int)READ_ONCE(wl->connected));
+
+	wl->irq_seen_last = irqs;
+	wl->rx_seen_last = rxs;
+	wl->tx_sent_last = sent;
+
+	schedule_delayed_work(&wl->stall_check_work,
+			      msecs_to_jiffies(6000));
+}
+
 int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 {
 	struct net_device *ndev = NULL;
@@ -1710,6 +1748,8 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 		  mt6628_runtime_event_dispatch_work);
 	INIT_WORK(&wl->mgmt_work, mt6628_runtime_mgmt_work);
 	INIT_DELAYED_WORK(&wl->pm_work, mt6628_runtime_pm_work);
+	INIT_DELAYED_WORK(&wl->stall_check_work,
+			  mt6628_runtime_stall_check_work);
 	if (!wl->runtime_locks_initialized) {
 		spin_lock_init(&wl->tx_lock);
 		spin_lock_init(&wl->mgmt_tx_lock);
@@ -1853,6 +1893,12 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	WRITE_ONCE(wl->pm_suspending, false);
 	WRITE_ONCE(wl->runtime_stopping, false);
 
+	/* Baseline the counters so the first watchdog pass reports nothing. */
+	wl->irq_seen_last = wl->irq_seen;
+	wl->rx_seen_last = wl->rx_seen;
+	wl->tx_sent_last = wl->tx_sent;
+	schedule_delayed_work(&wl->stall_check_work, msecs_to_jiffies(6000));
+
 	if (!skb_queue_empty(&wl->event_queue))
 		schedule_work(&wl->event_work);
 	if (!skb_queue_empty(&wl->async_event_queue))
@@ -1906,6 +1952,7 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 
 	/* Drain outstanding handoffs before tearing down firmware state. */
 	cancel_delayed_work_sync(&wl->pm_work);
+	cancel_delayed_work_sync(&wl->stall_check_work);
 
 	if (ndev)
 		netif_stop_queue(ndev);

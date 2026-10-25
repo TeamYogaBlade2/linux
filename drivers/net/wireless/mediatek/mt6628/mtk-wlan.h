@@ -122,6 +122,8 @@ struct mt6628_wlan {
 	unsigned int irq_seen;
 	unsigned int rx_seen;
 	unsigned int tx_poll_count;
+	unsigned int tx_sent;
+	unsigned int tx_sent_last;
 	unsigned int irq_seen_last;
 	unsigned int rx_seen_last;
 	unsigned int rx_report_count;
@@ -141,6 +143,12 @@ struct mt6628_wlan {
 
 	struct work_struct irq_work;
 	struct delayed_work irq_retry_work;
+	/*
+	 * Periodic check that the link is still moving traffic.  Runs on its own
+	 * timer because every other recovery path is driven by an interrupt,
+	 * and "the chip went silent" is precisely the case where they all stop.
+	 */
+	struct delayed_work stall_check_work;
 	struct work_struct recovery_work;
 	bool recovery_work_initialized;
 	struct delayed_work tx_work;
