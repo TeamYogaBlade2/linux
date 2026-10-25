@@ -1101,8 +1101,19 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 		 * leaves the queue empty, so nothing drives another attempt and
 		 * the link simply stops.  Returning the raw error dropped it
 		 * silently before.
+		 *
+		 * Give the credit back first.  It was taken before the transfer
+		 * was attempted, and the path below that retries does not go
+		 * through err_resource, so returning -EAGAIN without this leaks
+		 * one credit per failed reclaim - and a TC only has a handful to
+		 * begin with, so the link starves itself in short order.
 		 */
-		if (ret == -EAGAIN || ret == -EBUSY)
+		spin_lock_irqsave(&wl->tx_lock, flags);
+		wl->tx_free[tc] = min_t(unsigned int, wl->tx_free[tc] + 1,
+					wl->tx_max[tc]);
+		spin_unlock_irqrestore(&wl->tx_lock, flags);
+		wake_up_all(&wl->tx_wait);
+		if (ret == -EAGAIN || ret == -EBUSY || ret == -ETIMEDOUT)
 			return -EAGAIN;
 		goto err_resource;
 	}
