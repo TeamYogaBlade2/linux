@@ -119,6 +119,28 @@
  */
 #define BLS_EN_PWMLUT			BIT(11)
 
+/*
+ * BLS_PWM_CON bit 7 is PWM_IDLE_VALUE: "PWM output value when in idle state"
+ * (datasheet p. 1669).  It is the level the PWM pin is held at whenever the
+ * generator is not emitting a waveform, so it decides what the panel's
+ * backlight driver sees between periods and, more importantly, whether the
+ * backlight is on or off while the block is idle.
+ *
+ * Idle must be the *lit* level, not dark.  This board's panel is lit by
+ * pulling its backlight enable low, so a cleared PWM_IDLE_VALUE holds the
+ * backlight off whenever there is no waveform - which is what a PWM-only
+ * backlight looks like the moment its duty cycle is low or its clock is
+ * gated.  The working B8000-H driver keeps this bit set while brightness is
+ * non-zero and clears it only to switch the panel off
+ * (lenovo-b8000h-linux, mt6589-bls-bl.c: "Vendor: idle level low when off,
+ * high otherwise"), and the vendor's own 0x00050000 also leaves bit 7 clear
+ * only because it re-derives the register from a saved value.
+ *
+ * This driver previously programmed bit 7 as part of the 0x00050000 constant
+ * and never changed it, so the backlight had no defined idle level at all.
+ */
+#define BLS_PWM_CON_IDLE_VALUE		BIT(7)
+
 /* BLS_PWM_DUTY format */
 /*
  * PWM_DUTY_LOW_LIMIT is left at 0.  Setting it would clamp the output to
@@ -187,6 +209,23 @@ static void mt6589_bls_update_en(struct mt6589_bls_pwm *bls,
 	en = readl(bls->base + BLS_EN);
 	en = (en & ~mask) | (value & mask);
 	writel(en, bls->base + BLS_EN);
+	spin_unlock_irqrestore(&bls->en_lock, flags);
+}
+
+/*
+ * RMW for BLS_PWM_CON.  The register is shared with the divider and the
+ * display-side fields, so only ever touch the bit being changed.
+ */
+static void mt6589_bls_update_pwm_con(struct mt6589_bls_pwm *bls,
+				      u32 mask, u32 value)
+{
+	unsigned long flags;
+	u32 con;
+
+	spin_lock_irqsave(&bls->en_lock, flags);
+	con = readl(bls->base + BLS_PWM_CON);
+	con = (con & ~mask) | (value & mask);
+	writel(con, bls->base + BLS_PWM_CON);
 	spin_unlock_irqrestore(&bls->en_lock, flags);
 }
 
@@ -325,6 +364,13 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 			reg = level & 0x1FF;	/* PWM_DUTY_IN is bits 8:0 */
 
 		writel(reg, bls->base + BLS_PWM_DUTY);
+		/*
+		 * Idle high while the backlight is on, so the panel reads "lit"
+		 * for the whole period including the duty=0 gap at the bottom of
+		 * the range instead of flickering dark there.
+		 */
+		mt6589_bls_update_pwm_con(bls, BLS_PWM_CON_IDLE_VALUE,
+					  BLS_PWM_CON_IDLE_VALUE);
 		mt6589_bls_update_en(bls, BLS_EN_PWM, BLS_EN_PWM);
 		bls->state = *state;
 	} else {
@@ -342,6 +388,8 @@ static int mt6589_bls_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		}
 
 		writel(0x0, bls->base + BLS_PWM_DUTY);
+		/* Idle low once the backlight is off, so "off" really is dark. */
+		mt6589_bls_update_pwm_con(bls, BLS_PWM_CON_IDLE_VALUE, 0);
 		mt6589_bls_update_en(bls, BLS_EN_PWM, 0);
 
 		clk_disable_unprepare(bls_ddp_clk);
