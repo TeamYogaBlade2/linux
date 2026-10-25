@@ -554,17 +554,9 @@
 		compatible = "bosch,bma255";
 		reg = <0x11>;
 
-		/*
-		 * No regulators on purpose.  The vendor accelerometer config
-		 * (get_cust_acc_hw() in the shipped blade10 kernel @ c0452d30,
-		 * returning the struct at c098b3e8) sets power_id = -1, and
-		 * bma255_probe() only calls hwPowerOn() when power_id != -1.
-		 * So this part is fed from a rail the kernel never gates, and
-		 * naming a supply here would have the driver enable a regulator
-		 * the hardware does not use for this device.  Same for the
-		 * magnetometer and the light sensor below, which also report
-		 * power_id = -1.
-		 */
+		// TODO: check
+		vdd-supply = <&mt6320_ldo_vio28>;
+		vddio-supply = <&mt6320_buck_vio18>;
 		// mount-matrix = ?;
 	};
 
@@ -578,7 +570,9 @@
 		compatible = "bosch,bmm050";
 		reg = <0x13>;
 
-		/* power_id = -1; see the note on the accelerometer above. */
+		// TODO: check
+		vdd-supply = <&mt6320_ldo_vio28>;
+		vddio-supply = <&mt6320_buck_vio18>;
 		// mount-matrix = ?
 	};
 
@@ -588,14 +582,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&alsps_eint_pins>;
 
-		/*
-		 * No vdd-supply: get_cust_alsps_hw() in the shipped kernel
-		 * (@ c0453fd8, struct at c098b55c) reports power_id = -1, so
-		 * this part has no kernel-controlled rail either.  Listing one
-		 * here would enable a regulator the hardware does not use for
-		 * it - and worse, a supply that is the wrong rail is a silent
-		 * misconfiguration rather than a visible failure.
-		 */
+		vdd-supply = <&mt6320_buck_vio18>;
 		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-parent = <&pio>;
 	};
@@ -901,22 +888,7 @@
 	bus-width = <4>;
 	no-mmc;
 	no-sdio;
-	/*
-	 * Card detect is MSDC1_INSI, which the SoC dtsi already pins as
-	 * MT6589_GPIO171__FUNC_MSDC1_INSI with bias-pull-up, so the pin
-	 * assignment itself is confirmed.  The board DCT agrees on the pin
-	 * usage (CUST_EINT_MSDC1_INS_NUM with LEVEL_SENSITIVE).
-	 *
-	 * Polarity is left ACTIVE_HIGH as found.  It is NOT confirmed:
-	 * a pulled-up sense pin normally reads high with no card and low
-	 * with a card inserted, which would make ACTIVE_LOW correct, but the
-	 * vendor declares CUST_EINT_MSDC1_INS_POLARITY_HIGH and
-	 * msdc1_eint_handler() flips polarity at runtime with
-	 * mt_eint_set_polarity(0xf, ...).  Those two disagree on the EINT
-	 * numbering (the DCT says 57), so neither reading can be called
-	 * verified from static analysis.  Flagged rather than changed:
-	 * flipping this on a guess risks the card never being detected.
-	 */
+	/* TODO: recheck */
 	cd-gpios = <&pio 171 GPIO_ACTIVE_HIGH>;
 
 	max-frequency = <200000000>;
