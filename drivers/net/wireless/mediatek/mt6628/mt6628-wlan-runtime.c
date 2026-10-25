@@ -414,10 +414,18 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 
 static void mt6628_runtime_schedule_rx(struct mt6628_wlan *wl)
 {
-	if (wl->netdev && netif_running(wl->netdev) &&
-	    (netif_carrier_ok(wl->netdev) ||
-	     READ_ONCE(wl->conn_state) == MT6628_CONN_DISCONNECTED) &&
-	    !skb_queue_empty(&wl->rx_queue))
+	if (!wl->netdev || !netif_running(wl->netdev))
+		return;
+
+	/*
+	 * Do not gate this on carrier.  napi_poll() drops frames itself when the
+	 * link is not up, so scheduling is safe either way - and refusing to
+	 * schedule while carrier is down strands everything already queued in
+	 * rx_queue, holding up to MT6628_RUNTIME_QUEUE_LIMIT skbs until the link
+	 * happens to come back.  Under a sustained transfer that is exactly when
+	 * carrier flaps, so this was a memory leak that grew with traffic.
+	 */
+	if (!skb_queue_empty(&wl->rx_queue))
 		napi_schedule(&wl->napi);
 }
 
@@ -1214,7 +1222,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 
 	sdio_claim_host(wl->func);
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
-		u32 whisr, wtsr0, wtsr1, rx_len;
+		u32 whisr = 0, wtsr0 = 0, wtsr1 = 0, rx_len = 0;
 		u16 rx0_len, rx1_len;
 		int tx_status_ret;
 
@@ -1313,6 +1321,18 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 						     ret);
 		}
 	}
+
+	/*
+	 * The loop is bounded so one interrupt cannot monopolise the worker, but
+	 * WHISR's RX_DONE bits have already been consumed by the reads above.  If
+	 * the budget ran out while WRPLR still reports data, no further interrupt
+	 * is guaranteed to arrive for it, and the frames sit in the hardware for
+	 * good - the link then degrades as traffic continues and finally stops
+	 * altogether, which is what a sustained transfer looks like from the
+	 * outside.  Re-arm the worker instead of relying on an interrupt.
+	 */
+	if (loops == MT6628_RUNTIME_RX_LOOPS && READ_ONCE(wl->runtime_started))
+		schedule_work(&wl->irq_work);
 
 	if (wl->runtime_started) {
 		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
