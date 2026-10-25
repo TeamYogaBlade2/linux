@@ -50,4 +50,14 @@
  */
 &{/chosen} {
 	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+	/*
+	 * `console=ttyS0` above is not enough on its own: when the 8250 driver
+	 * unbinds and rebinds ttyS0 during probe, the kernel drops the boot console
+	 * and needs stdout-path to know which device to pick up again. Without it
+	 * printk simply stops - measured, the log ended at fb0 device_add while the
+	 * guest was still running, sitting in cpu_v7_do_idle.
+	 *
+	 * MT6589-aquaris5.dts, same SoC, uses stdout-path = &uart0.
+	 */
+	stdout-path = &uart0;
 };

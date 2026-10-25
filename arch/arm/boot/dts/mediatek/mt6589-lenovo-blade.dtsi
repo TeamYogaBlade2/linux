@@ -18,6 +18,16 @@
 	chosen {
 		/* DEBUG: testing clock drivers */
 		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+		/*
+		 * With no stdout-path the kernel has no bootstrap console to fall
+		 * back to, so when the 8250 driver unbinds and rebinds ttyS0 during
+		 * probe it drops the boot console and never selects a replacement.
+		 * The boot then looks like it hangs - printk just stops - while the
+		 * guest is actually idle in cpu_v7_do_idle waiting for a timer.
+		 *
+		 * Same SoC, same port: mt6589-aquaris5.dts uses stdout-path = &uart0.
+		 */
+		stdout-path = &uart0;
 	};
 
 	memory {
