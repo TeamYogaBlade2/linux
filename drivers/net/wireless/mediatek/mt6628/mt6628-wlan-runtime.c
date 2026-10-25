@@ -1700,8 +1700,27 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 		goto out_release;
 	}
 
+	/*
+	 * Keep INT_EN_SET asserted in the same write.  WHLPCR is a single
+	 * register, so writing FW_OWN_REQ_SET alone clears BIT(0) and turns
+	 * the SDIO interrupt off.  Downstream never does that: both
+	 * nicEnableInterrupt() with fgIsIntEnableWithLPOwnSet and
+	 * HAL_INTR_ENABLE_AND_LP_OWN_SET() write WHLPCR_INT_EN_SET |
+	 * WHLPCR_FW_OWN_REQ_SET together, and the matching
+	 * HAL_LP_OWN_SET()/HAL_INTR_ENABLE pair keeps the same invariant.
+	 *
+	 * Turning the interrupt off here is what made the host go deaf: the
+	 * reclaim path (mt6628_wlan_take_driver_own()) also disables it
+	 * first and nothing re-enabled it, so after one hand-off no SDIO IRQ
+	 * arrived at all.  A command issued afterwards still reached the
+	 * firmware, but its CMD_RESULT could only be noticed by the 1 s poll
+	 * in the TX-credit path, which is far too slow - so the WPA2 key
+	 * install timed out with -ETIMEDOUT while every non-blocking command
+	 * (response = NULL) succeeded.
+	 */
 	ret = mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
-				     MT6628_FW_OWN_REQ_SET);
+				     MT6628_FW_OWN_REQ_SET |
+				     MT6628_INT_EN_SET);
 	if (ret)
 		goto out_release;
 
@@ -1716,7 +1735,8 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	 */
 	if (val & MT6628_FW_OWN_REQ_SET) {
 		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
-					MT6628_FW_OWN_REQ_CLR);
+					MT6628_FW_OWN_REQ_CLR |
+					MT6628_INT_EN_SET);
 		ret = -EBUSY;
 		goto out_release;
 	}

@@ -223,6 +223,24 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 			dev_info(&wl->func->dev,
 				 "driver ownership acquired: WHLPCR=%#010x\n",
 				 val);
+			/*
+			 * Re-enable the SDIO interrupt that the
+			 * MT6628_INT_EN_CLR above turned off.
+			 *
+			 * This function is the reclaim path as well as the
+			 * initial bring-up, and it runs every time the driver
+			 * takes the chip back from the firmware.  Leaving
+			 * BIT(0) clear meant that after the first hand-off no
+			 * SDIO interrupt was ever delivered again, so a
+			 * command whose completion is only reported by
+			 * CMD_RESULT (the WPA2 key install) waited out its
+			 * full timeout while non-blocking commands still
+			 * appeared to work.
+			 */
+			ret = mt6628_write8(wl, MT6628_MCR_WHLPCR,
+					    MT6628_INT_EN_SET);
+			if (ret)
+				return ret;
 			return 0;
 		}
 
