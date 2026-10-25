@@ -206,7 +206,7 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			goto drop;
 
 		if (event->eid == MT6628_EVENT_ID_CMD_RESULT && body_len == 4)
-			dev_info_ratelimited(&wl->func->dev,
+			dev_dbg_ratelimited(&wl->func->dev,
 				"unmatched CMD_RESULT: seq=%u cid=%u status=%u\n",
 				event->seq_num,
 				skb->data[MT6628_WIFI_EVENT_HEADER_LEN],
@@ -230,7 +230,7 @@ static void mt6628_runtime_event_work(struct work_struct *work)
 			tx_done = (const struct mt6628_event_tx_done *)
 				(skb->data + MT6628_WIFI_EVENT_HEADER_LEN);
 			if (body_len == 4)
-				dev_info_ratelimited(&wl->func->dev,
+				dev_dbg_ratelimited(&wl->func->dev,
 					"compact TX_DONE: packet_seq=%u status=%u\n",
 					tx_done->packet_seq, tx_done->status);
 
@@ -545,7 +545,7 @@ int ret;
 		const struct mt6628_wifi_event_hdr *event =
 			(const struct mt6628_wifi_event_hdr *)buf;
 
-		dev_info_ratelimited(&wl->func->dev,
+		dev_dbg_ratelimited(&wl->func->dev,
 			"RX event packet: port=%u len=%u eid=%u seq=%u\n",
 			port, packet_len, event->eid, event->seq_num);
 	}
@@ -568,7 +568,7 @@ int ret;
 				(buf + MT6628_HIF_RX_HEADER_LEN + header_offset);
 
 			if (eth->h_proto == cpu_to_be16(ETH_P_PAE))
-				dev_info_ratelimited(&wl->func->dev,
+				dev_dbg_ratelimited(&wl->func->dev,
 					"RX EAPOL data: len=%u src=%pM dst=%pM "
 					"sta_rec=%u conn_state=%u\n",
 					payload_len, eth->h_source, eth->h_dest,
@@ -622,7 +622,7 @@ int ret;
 		if (packet_len >= MT6628_WIFI_EVENT_HEADER_LEN &&
 		    (buf[4] == MT6628_EVENT_ID_CMD_RESULT ||
 		     buf[4] == MT6628_EVENT_ID_SCAN_DONE))
-			dev_info_ratelimited(&wl->func->dev,
+			dev_dbg_ratelimited(&wl->func->dev,
 				"firmware event RX: eid=%#x seq=%u len=%u\n",
 				buf[4], buf[5], packet_len);
 
@@ -704,7 +704,7 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 	spin_unlock_irqrestore(&wl->tx_lock, flags);
 
 	if (wake)
-		dev_info_ratelimited(&wl->func->dev,
+		dev_dbg_ratelimited(&wl->func->dev,
 			"TX credits released: WTSR0=%#010x WTSR1=%#010x "
 			"CMD TC free=%u/%u\n",
 			wtsr0, wtsr1, cmd_credits,
@@ -1156,7 +1156,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 				"failed to read TX status registers: %d\n",
 				tx_status_ret);
 		}
-		dev_info_ratelimited(&wl->func->dev,
+		dev_dbg_ratelimited(&wl->func->dev,
 			"runtime SDIO IRQ status: WHISR=%#010x "
 			"WTSR0=%#010x WTSR1=%#010x\n",
 			whisr, wtsr0, wtsr1);
@@ -1260,7 +1260,7 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 	if (!wl || !wl->runtime_started)
 		return;
 
-	dev_info_ratelimited(&wl->func->dev,
+	dev_dbg_ratelimited(&wl->func->dev,
 		"SDIO IRQ callback: pm_idle=%u driver_owned=%u\n",
 		(unsigned int)wl->pm_idle, (unsigned int)wl->driver_owned);
 

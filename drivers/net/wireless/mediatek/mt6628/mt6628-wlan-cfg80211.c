@@ -341,10 +341,10 @@ static int mt6628_scan_send_chunk(struct mt6628_wlan *wl,
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_SCAN_REQ_V2, 1,
 					   cmd, cmd_len, NULL, 0, NULL, 0, 0);
 	if (!ret)
-		dev_info(&wl->func->dev,
-			 "scan chunk sent: seq=%u start=%u count=%u passive=%u "
-			 "cursor=%u/%u\n", seq, start, n_channels, passive,
-			 start + n_channels, request->n_channels);
+		dev_dbg(&wl->func->dev,
+			"scan chunk sent: seq=%u start=%u count=%u passive=%u "
+			"cursor=%u/%u\n", seq, start, n_channels, passive,
+			start + n_channels, request->n_channels);
 
 out_free:
 	kfree(cmd);
@@ -443,7 +443,7 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 			dev_err(&wl->func->dev,
 				"failed to activate AIS BSS before scan: %d\n", ret);
 		else
-			dev_info(&wl->func->dev, "activated AIS BSS before scan\n");
+			dev_dbg(&wl->func->dev, "activated AIS BSS before scan\n");
 	} else {
 		ret = 0;
 	}
@@ -454,10 +454,10 @@ static int mt6628_scan_start(struct wiphy *wiphy,
 			"scan setup/send failed: seq=%u ret=%d\n",
 			wl->scan_seq, ret);
 	else
-		dev_info(&wl->func->dev,
-			 "scan request sent: seq=%u ssids=%u channels=%u ie_len=%zu\n",
-			 wl->scan_seq, request->n_ssids, request->n_channels,
-			 request->ie_len);
+		dev_dbg(&wl->func->dev,
+			"scan request sent: seq=%u ssids=%u channels=%u ie_len=%zu\n",
+			wl->scan_seq, request->n_ssids, request->n_channels,
+			request->ie_len);
 	if (ret) {
 		mutex_lock(&wl->cfg_mutex);
 		if (wl->scan_req == request)
@@ -1284,14 +1284,14 @@ bool mt6628_cfg80211_event_handler(struct mt6628_wlan *wl,
 
 	mutex_lock(&wl->cfg_mutex);
 	request = wl->scan_req;
-	dev_info(&wl->func->dev,
-		 "SCAN_DONE event: seq=%u expected=%u request=%s channel=%u/%u\n",
-		 scan_done->seq_num, wl->scan_seq,
-		 request ? "active" : "none", wl->scan_chan_idx,
-		 request ? request->n_channels : 0);
+	dev_dbg(&wl->func->dev,
+		"SCAN_DONE event: seq=%u expected=%u request=%s channel=%u/%u\n",
+		scan_done->seq_num, wl->scan_seq,
+		request ? "active" : "none", wl->scan_chan_idx,
+		request ? request->n_channels : 0);
 	if (request && scan_done->seq_num != wl->scan_seq)
-		dev_info(&wl->func->dev,
-			 "ignoring stale SCAN_DONE: seq=%u current=%u cursor=%u/%u\n",
+		dev_dbg(&wl->func->dev,
+			"ignoring stale SCAN_DONE: seq=%u current=%u cursor=%u/%u\n",
 			 scan_done->seq_num, wl->scan_seq, wl->scan_chan_idx,
 			 request->n_channels);
 	if (request && scan_done->seq_num == wl->scan_seq) {
