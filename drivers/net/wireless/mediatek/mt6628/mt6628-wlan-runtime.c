@@ -1914,6 +1914,14 @@ void mt6628_wlan_runtime_stop(struct mt6628_wlan *wl)
 	cancel_work_sync(&wl->event_dispatch_work);
 	cancel_work_sync(&wl->mgmt_work);
 	cancel_delayed_work_sync(&wl->pm_work);
+	/*
+	 * irq_work() queues this on an abnormal-interrupt report, so it can be
+	 * pending regardless of who called us.  It touches the queues and the
+	 * cfg80211 state freed below, and it reconnects, so it must not run
+	 * during or after teardown.  Cancel it here rather than in each caller:
+	 * the remove path already did, the probe-failure path did not.
+	 */
+	cancel_work_sync(&wl->recovery_work);
 
 	if (ndev) {
 		unregister_netdev(ndev);

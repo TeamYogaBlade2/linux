@@ -824,6 +824,15 @@ err_disable:
 		int probe_err = ret;
 
 	if (wl->driver_owned) {
+		/*
+		 * A failed start may already have seen an abnormal-interrupt
+		 * report and queued the recovery worker.  Cancel it before
+		 * stopping the runtime: recovery_work touches the queues and
+		 * the cfg80211 state that runtime_stop tears down, so letting
+		 * it run afterwards is a use-after-free, not just a stray
+		 * reset.
+		 */
+		cancel_work_sync(&wl->recovery_work);
 		mt6628_wlan_runtime_stop(wl);
 
 		ret = mt6628_fw_own(wl);
