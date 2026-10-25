@@ -314,6 +314,20 @@ int mtk_h264_parse_sps(const u8 *data, size_t len, struct mtk_h264_sps *out)
 		out->mb_adaptive_frame_field_flag = br_bit(&br, 1);
 	out->direct_8x8_inference_flag = br_bit(&br, 1);
 
+	/*
+	 * pic_height_in_map_units_minus1 counts *map units*, and a frame-coded
+	 * stream has two macroblocks per map unit.  The limit above therefore
+	 * has to be re-checked against the real macroblock height once
+	 * frame_mbs_only_flag is known, or a map-unit height that fits within
+	 * the allocation becomes twice that in practice.  Deeper callers reject
+	 * field-coded streams outright, but this has to hold on its own: it is
+	 * the last place the geometry is validated before it reaches the
+	 * hardware, and an accepted value here is an accepted picture size.
+	 */
+	if (!out->frame_mbs_only_flag &&
+	    (out->pic_height_in_map_units_minus1 + 1) * 2 > MTK_H264_MAX_MB_HEIGHT)
+		return -ERANGE;
+
 	br_bit(&br, 1);				/* frame_cropping_flag */
 	/*
 	 * Cropping offsets are parsed for validity only; the hardware takes the
