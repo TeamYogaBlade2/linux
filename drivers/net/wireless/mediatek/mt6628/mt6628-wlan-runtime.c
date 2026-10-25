@@ -1976,17 +1976,16 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 		 * Nothing to hand over yet.
 		 *
 		 * This used to reschedule every 200 ms for as long as the link
-		 * was up.  The firmware only sends SLEEPY_NOTIFY when it
-		 * genuinely goes idle, so on a link that keeps traffic flowing
-		 * the timer ran for ever: a permanent 5 Hz wakeup, with nothing
-		 * in dmesg to show for it.  Bound the polling instead.  If the
-		 * firmware has not offered the chip after this many rounds the
-		 * countdown is abandoned; the next transfer arms it again
-		 * through mt6628_wlan_pm_idle(), so a later idle period still
-		 * gets its hand-off.
+		 * was up, which is a permanent 5 Hz wakeup for no work.  Bound
+		 * it - but only while there is nothing owed.  If a reclaim is
+		 * outstanding (pm_idle set) this timer is the only thing that
+		 * retries it, so abandoning it there would leave every later
+		 * access failing with -EAGAIN for ever.
 		 */
-		if (wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
-			wlan->pm_idle_polls++;
+		if (READ_ONCE(wlan->pm_idle) ||
+		    wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
+			if (!READ_ONCE(wlan->pm_idle))
+				wlan->pm_idle_polls++;
 			schedule_delayed_work(&wlan->pm_work,
 				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
 		}
@@ -2000,12 +1999,15 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 	/* Traffic still outstanding: back off and try again shortly. */
 	if (ret == -EBUSY) {
 		/*
-		 * Bounded for the same reason as the wait above: a queue that
-		 * never drains would otherwise keep this timer running for ever.
+		 * Bounded, but never abandoned while a hand-off is still owed:
+		 * like the wait above, this is the retry path for an ownership
+		 * reclaim, and stopping it would wedge every later access.
 		 */
 		if (!atomic_read(&wlan->recovery_pending) &&
-		    wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
-			wlan->pm_idle_polls++;
+		    (READ_ONCE(wlan->pm_idle) ||
+		     wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS)) {
+			if (!READ_ONCE(wlan->pm_idle))
+				wlan->pm_idle_polls++;
 			schedule_delayed_work(&wlan->pm_work,
 				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
 		}
