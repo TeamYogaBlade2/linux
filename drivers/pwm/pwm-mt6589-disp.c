@@ -468,25 +468,33 @@ static int mt6589_bls_pwm_probe(struct platform_device *pdev)
 		return ret;
 
 	/*
-	 * Release the block's reset properly.  BLS sits in the middle of the
-	 * OVL -> COLOR -> BLS -> RDMA0 -> DSI0 path, so while its reset bit
-	 * is asserted the block RDMA0 fetches from is held in reset.  The
-	 * DISPSYS reset is active low (\"0: Reset, 1: Does not reset\",
-	 * datasheet ch. 38, p. 1458), so clearing the bit releases it; the
-	 * reset controller on the node performs the same assert-then-deassert.
+	 * Deassert the block's reset without pulsing it.
 	 *
-	 * Look the reset up by index: the node carries a bare resets property
-	 * with no reset-names, and a named lookup fails with -ENOENT.
+	 * BLS sits in the middle of the OVL -> COLOR -> BLS -> RDMA0 -> DSI0
+	 * path, so while its reset bit is asserted RDMA0 fetches from a block
+	 * held in reset.  The DISPSYS reset is active low ("0: Reset, 1: Does
+	 * not reset", datasheet ch. 38, p. 1458), so clearing the bit releases
+	 * it.
+	 *
+	 * reset_control_reset() is deliberately NOT used: it asserts the reset
+	 * and then deasserts it, and the deassert leaves every BLS register at
+	 * its reset value - including PWM_CON, which holds the clock divider
+	 * that decides the PWM period.  This driver then programs PWM_CON, and
+	 * on this hardware that sequence leaves the backlight dark even though
+	 * BLS_EN reads back as 0x80000000 and PWM_DUTY tracks brightness
+	 * exactly.  Neither the downstream kernel nor LK ever pulses it:
+	 * ddp_path.c only backs the register up and restores it, and LK writes
+	 * 0 to release it.  Match them - release, do not reset.
 	 */
 	bls->rstc = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(bls->rstc))
 		return dev_err_probe(dev, PTR_ERR(bls->rstc),
 				     "failed to get reset control\n");
 
-	ret = reset_control_reset(bls->rstc);
+	ret = reset_control_deassert(bls->rstc);
 	if (ret)
 		return dev_err_probe(dev, ret,
-				     "bls pwm: failed to reset BLS\n");
+				     "bls pwm: failed to release BLS reset\n");
 
 	/* Clock divider and idle level high (ddp_bls.c:348). */
 	writel(0x00050000 | PWM_DEFAULT_DIV, bls->base + BLS_PWM_CON);
