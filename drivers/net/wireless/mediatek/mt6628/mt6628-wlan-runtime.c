@@ -1039,6 +1039,7 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 		container_of(to_delayed_work(work), struct mt6628_wlan, tx_work);
 	struct sk_buff *skb;
 	unsigned long flags;
+	unsigned int i;
 	u32 wtsr0 = 0, wtsr1 = 0;
 
 	WRITE_ONCE(wl->tx_work_running, true);
@@ -1066,11 +1067,28 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			 * nicTxReleaseResource(), then retry the frame.
 			 */
 			unsigned int wait = 0;
+			unsigned int free_total = 0;
+			bool released_any = false;
 
 			if (mt6628_wlan_poll_tx_status(wl, &wtsr0, &wtsr1) == 0) {
 				spin_lock_irqsave(&wl->tx_lock, flags);
 				wait = wl->tx_free[mt6628_runtime_tc_from_skb(skb)];
+				/*
+				 * A release on a different TC still means the
+				 * hardware is making progress, and the queue
+				 * must not stay stopped for it.  Checking only
+				 * the head frame's TC left the queue stopped
+				 * whenever that particular TC was the one that
+				 * did not return - the link then looks dead
+				 * with nothing in dmesg to say why.
+				 */
+				free_total = 0;
+				for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
+					if (wl->tx_free[i])
+						free_total++;
+				}
 				spin_unlock_irqrestore(&wl->tx_lock, flags);
+				released_any = free_total > 0;
 			}
 
 			skb_queue_head(&wl->tx_queue, skb);
@@ -1087,13 +1105,13 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			 * path, so a frame that ran out of credits left the
 			 * stack unable to queue another one - which looks
 			 * exactly like "the link has an address but nothing
-			 * is transmitted".  Wake it as soon as the credit is
+			 * is transmitted".  Wake it as soon as any credit is
 			 * back; the retry below then drains what is queued.
 			 */
-			if (wait && wl->netdev)
+			if (released_any && wl->netdev)
 				netif_wake_queue(wl->netdev);
 			if (wait) {
-				/* A credit arrived: retry at once. */
+				/* This frame's credit arrived: retry at once. */
 				mod_delayed_work(system_wq, &wl->tx_work, 0);
 			} else {
 				mod_delayed_work(system_wq, &wl->tx_work,
