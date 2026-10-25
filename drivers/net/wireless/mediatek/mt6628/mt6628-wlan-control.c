@@ -741,6 +741,15 @@ static int __mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 		return -EOPNOTSUPP;
 	if (params->seq_len < 0 || params->seq_len > MT6628_KEY_RSC_LEN)
 		return -EINVAL;
+	/*
+	 * key_len reaches here straight from NL80211_ATTR_KEY_DATA, which the
+	 * user may make up to 255 bytes.  key_material is MT6628_KEY_MATERIAL_LEN
+	 * (32, the largest key any supported cipher has: TKIP), and it is below
+	 * in a struct on the stack, so an unchecked copy is a stack overflow
+	 * driven entirely from userspace.
+	 */
+	if (params->key_len < 0 || params->key_len > MT6628_KEY_MATERIAL_LEN)
+		return -EINVAL;
 	if (!params->key)
 		return -EINVAL;
 
