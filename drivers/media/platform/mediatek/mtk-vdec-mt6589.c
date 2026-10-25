@@ -510,33 +510,264 @@ static int mtk_vdec_queue_setup(struct vb2_queue *vq,
  * back as failed and reports, in dmesg, that there is no datapath.  See the VP8 note at
  * the end of mtk-vdec-mt6589-reg.h for the full argument.
  */
+/*
+ * Program the AVC parser with a parsed SPS.
+ *
+ * Field packing transcribed from the vendor harness
+ * (hal/vdec_hal_if_h264.c:1176-1197); see the per-field documentation in
+ * mtk-vcodec-mt6589-reg.h.  The width/height register is the one field whose
+ * location differs between MT8580 and earlier silicon, and MT6589 takes the
+ * older AVC_VLD form.
+ */
+static void mtk_vdec_h264_set_sps(struct mtk_vdec_dev *vdec,
+				  const struct mtk_h264_sps *sps)
+{
+	u32 v;
+
+	v = FIELD_PREP(VDEC_AVC_SPS_CHROMA_FORMAT, sps->chroma_format_idc);
+	v |= FIELD_PREP(VDEC_AVC_SPS_LOG2_MAX_FRAME_NUM,
+			sps->log2_max_frame_num_minus4);
+	v |= FIELD_PREP(VDEC_AVC_SPS_POC_TYPE, sps->pic_order_cnt_type);
+	v |= FIELD_PREP(VDEC_AVC_SPS_LOG2_MAX_POC_LSB,
+			sps->log2_max_pic_order_cnt_lsb_minus4);
+	v |= sps->delta_pic_order_always_zero_flag ?
+		VDEC_AVC_SPS_DELTA_POC_ALWAYS_ZERO : 0;
+	v |= FIELD_PREP(VDEC_AVC_SPS_NUM_REF_FRAMES, sps->num_ref_frames);
+	v |= sps->frame_mbs_only_flag ? VDEC_AVC_SPS_FRAME_MBS_ONLY : 0;
+	v |= sps->mb_adaptive_frame_field_flag ?
+		VDEC_AVC_SPS_MB_ADAPTIVE_FRAME_FIELD : 0;
+	v |= sps->direct_8x8_inference_flag ?
+		VDEC_AVC_SPS_DIRECT_8X8_INFERENCE : 0;
+	/*
+	 * The harness sets bit 21 unconditionally.  Its meaning is not
+	 * documented in any source available here, so it is reproduced rather
+	 * than explained - if decode misbehaves, this is a candidate.
+	 */
+	v |= VDEC_AVC_SPS_RESERVED_21;
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_SPS, v);
+
+	v = FIELD_PREP(VDEC_AVC_PIC_HEIGHT_IN_MBS,
+		       sps->pic_height_in_map_units_minus1);
+	v |= FIELD_PREP(VDEC_AVC_PIC_WIDTH_IN_MBS,
+			sps->pic_width_in_mbs_minus1);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_PIC_SIZE, v);
+}
+
+static void mtk_vdec_h264_set_pps(struct mtk_vdec_dev *vdec,
+				  const struct mtk_h264_pps *pps)
+{
+	u32 v;
+
+	v = pps->entropy_coding_mode_flag ? VDEC_AVC_PPS_ENTROPY_CODING : 0;
+	v |= pps->pic_order_present_flag ? VDEC_AVC_PPS_PIC_ORDER_PRESENT : 0;
+	v |= pps->weighted_pred_flag ? VDEC_AVC_PPS_WEIGHTED_PRED : 0;
+	v |= FIELD_PREP(VDEC_AVC_PPS_WEIGHTED_BIPRED_IDC,
+			pps->weighted_bipred_idc);
+	v |= FIELD_PREP(VDEC_AVC_PPS_PIC_INIT_QP,
+			(pps->pic_init_qp_minus26 & 0x3f));
+	v |= FIELD_PREP(VDEC_AVC_PPS_CHROMA_QP_OFFSET,
+			(pps->chroma_qp_index_offset & 0x1f));
+	v |= pps->deblocking_filter_control_present_flag ?
+		VDEC_AVC_PPS_DEBLOCKING_CONTROL : 0;
+	v |= pps->constrained_intra_pred_flag ?
+		VDEC_AVC_PPS_CONSTRAINED_INTRA : 0;
+	v |= pps->transform_8x8_mode_flag ? VDEC_AVC_PPS_TRANSFORM_8X8 : 0;
+	v |= FIELD_PREP(VDEC_AVC_PPS_SECOND_CHROMA_QP_OFFSET,
+			(pps->second_chroma_qp_index_offset & 0x1f));
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_PPS_1, v);
+
+	/*
+	 * Word 2 carries the scaling-list presence bits, which this driver
+	 * never sets: a stream that needs a user scaling list is rejected during
+	 * parsing rather than given a flag pointing at a table it does not have.
+	 */
+	v = FIELD_PREP(VDEC_AVC_PPS_NUM_REF_L0, pps->num_ref_idx_l0_active_minus1);
+	v |= FIELD_PREP(VDEC_AVC_PPS_NUM_REF_L1, pps->num_ref_idx_l1_active_minus1);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_PPS_2, v);
+}
+
+static void mtk_vdec_h264_set_slice(struct mtk_vdec_dev *vdec,
+				    const struct mtk_h264_slice *slice)
+{
+	u32 v;
+
+	v = FIELD_PREP(VDEC_AVC_SHDR_FIRST_MB, slice->first_mb_in_slice);
+	v |= FIELD_PREP(VDEC_AVC_SHDR_SLICE_TYPE, slice->slice_type);
+	v |= slice->field_pic_flag ? VDEC_AVC_SHDR_FIELD_PIC : 0;
+	v |= slice->bottom_field_flag ? VDEC_AVC_SHDR_BOTTOM_FIELD : 0;
+	v |= slice->direct_spatial_mv_pred_flag ?
+		VDEC_AVC_SHDR_DIRECT_SPATIAL_MV : 0;
+	v |= FIELD_PREP(VDEC_AVC_SHDR_NUM_REF_L0,
+			slice->num_ref_idx_l0_active_minus1);
+	v |= FIELD_PREP(VDEC_AVC_SHDR_NUM_REF_L1,
+			slice->num_ref_idx_l1_active_minus1);
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_SHDR_1, v);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_CUR_PIC_NUM,
+		       slice->frame_num);
+}
+
+/*
+ * Walk the OUTPUT buffer and load every parameter set it carries, then parse
+ * the first slice header against them.
+ *
+ * Returns 0 when the context holds a usable SPS/PPS and a parsed slice, or a
+ * negative errno describing what the stream is missing.  Nothing is programmed
+ * unless this succeeds, so a partial parse cannot leave half a picture in the
+ * registers.
+ */
+static int mtk_vdec_h264_load_stream(struct mtk_vdec_ctx *ctx,
+				     const u8 *data, size_t len)
+{
+	struct mtk_h264_slice slice;
+	size_t pos = 0, nal_start = 0, nal_len = 0;
+	bool have_slice = false;
+	int ret;
+
+	while (mtk_h264_find_nal(data, len, &pos, &nal_start, &nal_len) == 0) {
+		const u8 *nal;
+		u8 type;
+
+		if (!nal_len || nal_start >= len)
+			continue;
+
+		nal = data + nal_start;
+		type = nal[0] & 0x1f;
+
+		switch (type) {
+		case MTK_H264_NAL_SPS: {
+			struct mtk_h264_sps sps;
+
+			ret = mtk_h264_parse_sps(nal + 1, nal_len - 1, &sps);
+			if (ret)
+				return ret;
+			ctx->ps.sps[sps.id] = sps;
+			break;
+		}
+		case MTK_H264_NAL_PPS: {
+			struct mtk_h264_pps pps;
+
+			ret = mtk_h264_parse_pps(nal + 1, nal_len - 1, &pps);
+			if (ret)
+				return ret;
+			ctx->ps.pps[pps.id] = pps;
+			break;
+		}
+		case MTK_H264_NAL_SLICE:
+		case MTK_H264_NAL_IDR:
+			if (have_slice)
+				break;
+			ret = mtk_h264_parse_slice(nal + 1, nal_len - 1, type,
+						   &ctx->ps, &slice);
+			if (ret)
+				return ret;
+			have_slice = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (!have_slice)
+		return -ENODATA;
+
+	ctx->slice = slice;
+	return 0;
+}
+
+/*
+ * Program the picture geometry taken from the SPS the slice refers to.
+ * Separate from the parameter-set writes so the caller can resolve the SPS
+ * through the slice's PPS.
+ */
+static int mtk_vdec_h264_program(struct mtk_vdec_ctx *ctx)
+{
+	struct mtk_vdec_dev *vdec = ctx->dev;
+	const struct mtk_h264_pps *pps = &ctx->ps.pps[ctx->slice.pps_id];
+	const struct mtk_h264_sps *sps = &ctx->ps.sps[pps->sps_id];
+
+	if (!pps->valid || !sps->valid || !ctx->slice.valid)
+		return -ENOENT;
+
+	mtk_vdec_h264_set_sps(vdec, sps);
+	mtk_vdec_h264_set_pps(vdec, pps);
+	mtk_vdec_h264_set_slice(vdec, &ctx->slice);
+
+	dev_dbg(&vdec->pdev->dev,
+		"h264: %ux%u mb=%ux%u refs=%u poc=%u slice_type=%u first_mb=%u\n",
+		sps->width, sps->height,
+		sps->pic_width_in_mbs_minus1 + 1,
+		sps->pic_height_in_map_units_minus1 + 1,
+		sps->num_ref_frames, sps->pic_order_cnt_type,
+		ctx->slice.slice_type, ctx->slice.first_mb_in_slice);
+
+	return 0;
+}
+
 static void mtk_vdec_device_run(void *priv)
 {
 	struct mtk_vdec_ctx *ctx = priv;
 	struct mtk_vdec_dev *vdec = ctx->dev;
+	struct vb2_v4l2_buffer *src_buf, *dst_buf;
+	const u8 *data;
+	size_t len;
+	int ret;
 
 	/*
-	 * A job can only have been queued if the framework believed this node could
-	 * run one.  Since it cannot, the buffers taken for it must be handed back as
-	 * failed rather than left owned: returning them is what stops a client that
-	 * ignored that from waiting forever for a DQBUFS that will never come.
-	 *
-	 * One buffer per queue, and one done each.  Nothing here loops: v4l2_m2m_buf_done()
-	 * completes a vb2 buffer but does not touch the framework's ready list, so a loop
-	 * bounded by v4l2_m2m_num_dst_bufs_ready() would never see the count fall -- the
-	 * loop ran forever, warning on every pass because the same buffer was being
-	 * completed again.  The count only drops when a buffer is REMOVED, which is
-	 * v4l2_m2m_buf_done_and_job_finish()'s job below, one buffer at a time.
-	 *
-	 * That single job is also the reason this driver peeks rather than removes.  Both
-	 * buffers stay on their ready lists until that helper removes them, and it needs
-	 * to find both: it warns and skips _v4l2_m2m_job_finish() if either is missing,
-	 * which would leave TRANS_RUNNING set and hang STREAMOFF in
-	 * v4l2_m2m_cancel_job()'s wait_event().
+	 * PEEK both buffers and leave them on their ready lists.
+	 * v4l2_m2m_buf_done_and_job_finish() removes them itself and warns if
+	 * either is missing, which would leave TRANS_RUNNING set and hang
+	 * STREAMOFF in v4l2_m2m_cancel_job()'s wait_event().  The encoder's
+	 * device_run() documents the same convention.
 	 */
-	v4l2_err(&vdec->v4l2_dev,
-		 "decoder datapath not implemented in the kernel: the MT6589 VDEC register sequence lives in the vendor's closed userspace libraries, which program the block through MFV_SET_CMD_CMD\n");
+	src_buf = v4l2_m2m_next_src_buf(ctx->m2m);
+	dst_buf = v4l2_m2m_next_dst_buf(ctx->m2m);
+	if (!src_buf || !dst_buf) {
+		v4l2_err(&vdec->v4l2_dev, "device_run without a buffer pair\n");
+		goto fail;
+	}
 
+	data = vb2_plane_vaddr(&src_buf->vb2_buf, 0);
+	len = vb2_get_plane_payload(&src_buf->vb2_buf, 0);
+	if (!data || !len) {
+		v4l2_err(&vdec->v4l2_dev, "empty bitstream buffer\n");
+		goto fail;
+	}
+
+	ret = mtk_vdec_h264_load_stream(ctx, data, len);
+	if (ret) {
+		/*
+		 * A buffer with no slice yet is not an error: clients commonly
+		 * send SPS/PPS in one buffer and the first slice in the next.
+		 * Anything else is reported, because a silently dropped frame is
+		 * how a parse bug becomes an inexplicable stall.
+		 */
+		if (ret != -ENODATA)
+			v4l2_err(&vdec->v4l2_dev,
+				 "bitstream parse failed: %d\n", ret);
+		goto fail;
+	}
+
+	ret = mtk_vdec_h264_program(ctx);
+	if (ret) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "cannot program the AVC parser: %d\n", ret);
+		goto fail;
+	}
+
+	/*
+	 * The register programming above is what this driver can do today.  It
+	 * does NOT yet start the VLD/MC/PP pipeline: those need the per-plane
+	 * addresses and the parser SRAM handshake, and until they are written the
+	 * buffers are returned as failed rather than as a picture.
+	 */
+	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m,
+					 VB2_BUF_STATE_ERROR);
+	return;
+
+fail:
 	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m,
 					 VB2_BUF_STATE_ERROR);
 }

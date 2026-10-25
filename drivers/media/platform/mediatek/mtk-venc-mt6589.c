@@ -34,6 +34,9 @@
  *     including the reconstructed-frame pair, from DMA addresses it is handed;
  *   - programs the H.264 rate control into the fields the registers really have,
  *     rejecting quantisers outside the hardware's documented 0..51 range;
+ *   - tells the encoder the picture geometry the SPS describes, and emits the SPS
+ *     and PPS into the bitstream ahead of the first frame of a stream (see
+ *     mtk_venc_emit_param_sets());
  *   - acknowledges and dispatches the encoder frame-done interrupt for both
  *     datapaths, reporting the true coded-bitstream length;
  *   - exposes the H.264 datapath as a V4L2 memory-to-memory codec node, owning the
@@ -51,9 +54,10 @@
  *
  * What this driver does NOT do
  * ----------------------------
- * It does not produce a conformant H.264 bitstream, and no amount of further kernel
- * work will make it do so.  The specific gaps, each a real blocker rather than an
- * oversight:
+ * It does not guarantee a conformant H.264 bitstream end to end, and no amount of
+ * further kernel work can change that, because the piece that decides whether the
+ * coded picture is valid is in the vendor's closed userspace.  The specific gaps,
+ * each a real blocker rather than an oversight:
  *   - Entropy coding, motion estimation and the coefficient buffer.  These exist
  *     only in the vendor's closed userspace libraries (encrypted for H.264/HEVC),
  *     which are stripped ARM blobs: there is no source to port, only the register
@@ -67,12 +71,17 @@
  *     RC DRAM address registers point at memory the driver owns instead of at
  *     DRAM address integer * 16; that makes the registers valid, not the rate
  *     control correct.
- *   - Slice control.  A frame larger than one MB row has to be driven as several
- *     slices, restarting VENC_MP4_SLICE_START with a moving MBX/MBY stop position.
- *     Nothing does that.
- *   - SPS/PPS.  They are separate one-shot bits of VENC_CODEC_CTRL and need a
- *     parameter-set buffer to point at, which the driver does not have, so no
- *     parameter set is ever emitted.
+ *   - Slice control.  This is NOT a gap in the driver, it is a property of the
+ *     silicon: the H.264 datapath has no slice control at all.  Chapter 60 defines
+ *     no slice start, no MB stop position and no per-slice trigger anywhere in its
+ *     register file, and the only slice machinery in the block belongs to the
+ *     MPEG-4 datapath (VENC_MP4_SLICE_START at +0x604 with MBX_STOP/MBY_STOP at
+ *     +0x610/+0x614, plus a per-slice command queue at +0x6A4..+0x6BC).  The vendor
+ *     userspace encoder's own slice dispatcher writes exactly those MPEG-4 offsets
+ *     and nothing on the H.264 side.  So one frame is one slice here, always, and
+ *     that is conformant: a picture is allowed to be a single slice.  What is not
+ *     available is the ability to split one, which only matters for error
+ *     resilience and low-latency parsing.  See NOTES.md, "VENC SPS/PPS + slice".
  *   - MPEG-4 encoding.  The datapath's address programming is written
  *     (mtk_venc_set_mp4_frame_addr()) and its interrupt is handled, but it needs
  *     three distinct chroma planes plus a per-MB side information buffer at
@@ -242,6 +251,32 @@ struct mtk_venc_dev;
 #define MTK_VENC_TIMEOUT_MS			1000
 
 /*
+ * Bounded wait for one parameter-set run (SPS or PPS), in microseconds.
+ *
+ * Much shorter than the frame watchdog above on purpose, and the difference is not
+ * arbitrary: a frame timeout has to accommodate the slowest documented encode
+ * (2592x1592@5fps, 200ms per frame), while a parameter set is a synthesised
+ * header of a few dozen bytes that the entropy coder produces without touching the
+ * source picture.  It is a bound on a wedged unit, not a prediction of its
+ * duration -- and it is still 10ms, three orders of magnitude above anything a
+ * header should need.
+ */
+#define MTK_VENC_PARAM_SET_TIMEOUT_US		10000
+
+/*
+ * Capture-buffer allowance for the SPS and PPS, which share the bitstream buffer
+ * with the frame rather than having one of their own.
+ *
+ * Sized well above the real thing: an H.264 SPS for this encoder's profile and
+ * level without VUI is about ten bytes and a PPS under ten, so 128 bytes is an
+ * order of magnitude of slack.  It is subtracted from the bitstream limit handed
+ * to the hardware in mtk_venc_device_run(), which keeps it in the 128-byte units
+ * VENC_BITSTREAM_BUF_SIZE is expressed in.  The point is that the header can
+ * never be the reason a frame the caller sized the buffer for overflows.
+ */
+#define MTK_VENC_HEADER_RESERVE_BYTES		128
+
+/*
  * Per-probe encoder state.  This is now the whole of the old merged driver's
  * private state: the decoder half never shared any of it except the platform
  * device, because VENC and VDEC are separate blocks that probe separately.
@@ -285,6 +320,26 @@ struct mtk_venc_dev {
 	 */
 	spinlock_t enc_state_lock;
 	bool enc_pm_held;
+
+	/*
+	 * SPS/PPS completion events the interrupt handler observed, as a
+	 * VENC_IRQ_STATUS_SPS/PPS bitmask.
+	 *
+	 * The parameter-set runs are waited for from process context, but the interrupt
+	 * handler owns VENC_IRQ_ACK: it reads VENC_IRQ_STATUS and acknowledges every
+	 * defined bit it finds, which includes these two.  A waiter polling the status
+	 * register would therefore race the handler for the same bit, would sometimes
+	 * lose it, and would then sit out its whole timeout and fail a parameter set the
+	 * hardware had in fact completed.  Instead the handler publishes what it saw
+	 * here, under enc_state_lock, and the waiter polls this: one writer, one reader,
+	 * and no event can fall through the gap because the handler records the bit
+	 * before it acknowledges and thus clears it.
+	 *
+	 * Only the two parameter-set bits are ever stored here.  The frame and overflow
+	 * bits drive frame_pending and the completion path, and mirroring them would
+	 * invite a second consumer to disagree with that one.
+	 */
+	u32 param_irq_seen;
 
 	/*
 	 * The device this driver instance belongs to.  Assigned in probe() before
@@ -592,16 +647,25 @@ static void mtk_venc_complete_job(struct mtk_venc_dev *venc,
 
 	/*
 	 * Publish the coded length before the buffer is returned.  bs_bytes is the count
-	 * the hardware itself reported, so it is the true bytesused -- but only for a
-	 * good frame.  A failed frame retires with a length of zero: an overflow would
+	 * the hardware itself reported, so it is the frame's true length -- but only for
+	 * a good frame.  A failed frame retires with a length of zero: an overflow would
 	 * otherwise publish the bytes emitted before the encoder gave up, which is a
 	 * truncated, unparseable frame, and reporting that as bytesused is worse than
 	 * reporting nothing.
+	 *
+	 * The parameter sets share this buffer with the frame, and PIC_BITSTREAM_BYTE_CNT
+	 * counts only the frame ("Number of bytes in coded bitstream of one frame",
+	 * draft/ds/venc.txt:768780), so the buffer's real content on a stream's first
+	 * frame is header + frame.  ctx->header_bytes is what the emit path measured, and
+	 * it is deliberately added only on a good frame: a failed frame reports zero, and
+	 * leaving a header length on it would describe a buffer that ends after a header
+	 * with no slice data, which is not a picture either.
 	 */
 	dst = v4l2_m2m_next_dst_buf(ctx->m2m);
 	if (dst) {
 		dst->planes[0].bytesused =
-			state == VB2_BUF_STATE_DONE ? (size_t)bs_bytes : 0;
+			state == VB2_BUF_STATE_DONE ?
+				(size_t)bs_bytes + ctx->header_bytes : 0;
 		if (state == VB2_BUF_STATE_ERROR)
 			dst->flags |= V4L2_BUF_FLAG_ERROR;
 
@@ -781,6 +845,28 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 	status = mtk_venc_read(venc, VENC_IRQ_STATUS);
 	if (status & VENC_IRQ_MASK_ALL) {
 		venc->venc_irq_count++;
+
+		/*
+		 * Publish the parameter-set completions before acknowledging them.
+		 *
+		 * This handler owns VENC_IRQ_ACK and clears every defined bit it finds, so
+		 * the SPS/PPS bits are gone from the register by the time it returns.  The
+		 * process-context waiter in mtk_venc_emit_param_sets() cannot poll the
+		 * register for them without racing this, so the handler records what it saw
+		 * here and the waiter polls that instead.  The ordering is what makes it
+		 * safe: the bit is recorded under enc_state_lock BEFORE the acknowledge
+		 * clears it, so a waiter either sees it here or has not read yet -- there is
+		 * no window in which the hardware has completed but nothing remembers it.
+		 *
+		 * Only the two parameter-set bits are recorded.  The frame and overflow bits
+		 * drive frame_pending and the completion path below, and putting them here
+		 * would invite a second consumer to disagree with that one.
+		 */
+		spin_lock(&venc->enc_state_lock);
+		venc->param_irq_seen |= status & (VENC_IRQ_STATUS_SPS |
+						  VENC_IRQ_STATUS_PPS);
+		spin_unlock(&venc->enc_state_lock);
+
 		mtk_venc_write(venc, VENC_IRQ_ACK, status & VENC_IRQ_MASK_ALL);
 
 		/*
@@ -960,6 +1046,50 @@ static irqreturn_t mtk_venc_isr(int irq, void *data)
 /* ------------------------------------------------------------------ */
 
 /**
+ * mtk_venc_set_bs_addr - point the encoder at a bitstream buffer and size it.
+ * @venc: driver instance
+ * @bs_addr: bitstream buffer, byte address, 16-byte aligned
+ * @bs_size: bitstream buffer size in bytes, a multiple of 128
+ *
+ * The two chapter-60 registers that say where coded bits go and how much room
+ * there is before BS_DRAM_FULL_INT fires.  Split out from
+ * mtk_venc_set_frame_addr() because the parameter sets need exactly these two and
+ * nothing else: an SPS or PPS run reads no source picture and writes no
+ * reconstructed frame, so pointing the frame, reference and reconstruction
+ * registers at a capture buffer to emit a header would be meaningless work.
+ *
+ * The size matters more here than it looks.  It is the same limit for the
+ * parameter sets and the frame (BS_DRAM_FULL_INT is "During SPS/PPS/frame
+ * encoding, ..."), so a buffer sized to the frame alone can overflow purely
+ * because the header got there first.  Which is why the limit handed to this
+ * helper is sizeimage minus the header reserve, not sizeimage: see
+ * mtk_venc_device_run().
+ *
+ * Return: 0 on success, -EINVAL if the address or size is out of range.
+ */
+static int mtk_venc_set_bs_addr(struct mtk_venc_dev *venc,
+				dma_addr_t bs_addr, dma_addr_t bs_size)
+{
+	if (bs_addr & ((1 << VENC_ADDR_SHIFT) - 1))
+		return -EINVAL;
+	if (lower_32_bits(bs_addr >> VENC_ADDR_SHIFT) & ~VENC_ADDR_MASK)
+		return -EINVAL;
+
+	/* BITSTREAM_BUF_SIZE is DIV128, not DIV16. */
+	if (bs_size & ((1 << VENC_BS_SIZE_SHIFT) - 1))
+		return -EINVAL;
+	if (lower_32_bits(bs_size >> VENC_BS_SIZE_SHIFT) & ~VENC_BS_SIZE_MASK)
+		return -EINVAL;
+
+	mtk_venc_write(venc, VENC_BITSTREAM_BUF_ADDR,
+		       lower_32_bits(bs_addr >> VENC_ADDR_SHIFT));
+	mtk_venc_write(venc, VENC_BITSTREAM_BUF_SIZE,
+		       lower_32_bits(bs_size >> VENC_BS_SIZE_SHIFT));
+
+	return 0;
+}
+
+/**
  * mtk_venc_set_frame_addr - program the H.264/VP8 frame and bitstream buffers.
  * @venc: driver instance
  * @bs_addr: bitstream buffer, byte address, 16-byte aligned
@@ -996,6 +1126,7 @@ static int mtk_venc_set_frame_addr(struct mtk_venc_dev *venc,
 		bs_addr, src_y, src_uv, ref_y, ref_uv, rec_y, rec_uv,
 	};
 	unsigned int i;
+	int ret;
 
 	/*
 	 * The address fields are 28-bit DIV16 values, so the encodable window is
@@ -1010,16 +1141,10 @@ static int mtk_venc_set_frame_addr(struct mtk_venc_dev *venc,
 			return -EINVAL;
 	}
 
-	/* BITSTREAM_BUF_SIZE is DIV128, not DIV16. */
-	if (bs_size & ((1 << VENC_BS_SIZE_SHIFT) - 1))
-		return -EINVAL;
-	if (lower_32_bits(bs_size >> VENC_BS_SIZE_SHIFT) & ~VENC_BS_SIZE_MASK)
-		return -EINVAL;
-
-	mtk_venc_write(venc, VENC_BITSTREAM_BUF_ADDR,
-		       lower_32_bits(bs_addr >> VENC_ADDR_SHIFT));
-	mtk_venc_write(venc, VENC_BITSTREAM_BUF_SIZE,
-		       lower_32_bits(bs_size >> VENC_BS_SIZE_SHIFT));
+	/* BITSTREAM_BUF_SIZE is DIV128, not DIV16; checked in the helper. */
+	ret = mtk_venc_set_bs_addr(venc, bs_addr, bs_size);
+	if (ret)
+		return ret;
 
 	mtk_venc_write(venc, VENC_FRM_CUR_Y_ADDR,
 		       lower_32_bits(src_y >> VENC_ADDR_SHIFT));
@@ -1315,11 +1440,9 @@ static int mtk_venc_set_rc_scratch_addr(struct mtk_venc_dev *venc,
  * was wrong in both directions: 0 started nothing at all for H.264, and 1 -- bit
  * 0, ENC_SPS -- started a parameter set rather than a frame.
  *
- * SPS and PPS are not programmed here.  They are separate ENC_SPS / ENC_PPS
- * bits of the same register and they are one-shot commands in their own right,
- * issued when the caller wants a parameter set written rather than on every
- * frame; the driver has no parameter-set buffer to point them at, so starting
- * one per frame would produce a bitstream nothing can decode.
+ * SPS and PPS are not started here: they are separate ENC_SPS / ENC_PPS bits of
+ * the same register and one-shot commands in their own right, issued once per
+ * stream by mtk_venc_emit_param_sets() below rather than on every frame.
  */
 static void mtk_venc_start_frame(struct mtk_venc_dev *venc, bool mpeg4)
 {
@@ -1330,6 +1453,274 @@ static void mtk_venc_start_frame(struct mtk_venc_dev *venc, bool mpeg4)
 	}
 
 	mtk_venc_write(venc, VENC_CODEC_CTRL, VENC_CODEC_CTRL_ENC_FRM);
+}
+
+/*
+ * Program the picture geometry the H.264/VP8 front end encodes at.
+ *
+ * Until this existed the driver never told the encoder how big the picture was.
+ * Every frame address register was programmed and the quantiser and rate control
+ * were programmed, but the two registers that say "the picture is this many
+ * macroblocks wide and this many tall, with this pitch and this source layout"
+ * were left at their reset value of zero.  That is not survivable: an encoder
+ * that has not been told the width has no idea where a macroblock row ends, and
+ * the SPS it would emit cannot carry a correct frame size when it has never been
+ * given one.  So this is a prerequisite for emitting a parameter set at all, not
+ * an independent fix.
+ *
+ * @w and @h are the negotiated picture dimensions in pixels; the registers take
+ * them in whole macroblocks, rounded up, because the datapath walks whole MBs.
+ * @pitch is the luma pitch in pixels, which for this driver is the picture width
+ * (there is no stride/width distinction in the negotiated NV12 format).
+ *
+ * All three fields carry a documented floor (10 and 8 macroblocks for width and
+ * height, pitch >= image_width_div16) and the pitch a documented ceiling of 128,
+ * so the values are validated here rather than truncated into a different
+ * picture than the caller asked for.
+ *
+ * Return: 0 on success, -EINVAL if the geometry does not fit the fields.
+ */
+static int mtk_venc_set_image_geometry(struct mtk_venc_dev *venc,
+				       unsigned int w, unsigned int h,
+				       unsigned int pitch)
+{
+	u32 mb_w = round_up(w, MTK_VENC_MB_SIZE) / MTK_VENC_MB_SIZE;
+	u32 mb_h = round_up(h, MTK_VENC_MB_SIZE) / MTK_VENC_MB_SIZE;
+	u32 pitch_div16 = round_up(pitch, MTK_VENC_MB_SIZE) / MTK_VENC_MB_SIZE;
+
+	if (mb_w < VENC_IMAGE_WIDTH_DIV16_MIN ||
+	    mb_w > VENC_IMAGE_PITCH_MAX)
+		return -EINVAL;
+	if (mb_h < VENC_IMAGE_HEIGHT_DIV16_MIN ||
+	    mb_h > VENC_IMAGE_PITCH_MAX)
+		return -EINVAL;
+	if (pitch_div16 < mb_w || pitch_div16 > VENC_IMAGE_PITCH_MAX)
+		return -EINVAL;
+
+	mtk_venc_write(venc, VENC_IMAGE_INFO_0,
+		       ((mb_h << VENC_IMAGE_HEIGHT_DIV16_SHIFT) &
+			VENC_IMAGE_HEIGHT_DIV16_MASK) |
+		       ((mb_w << VENC_IMAGE_WIDTH_DIV16_SHIFT) &
+			VENC_IMAGE_WIDTH_DIV16_MASK));
+
+	/*
+	 * Line NV12 with the same pitch on both planes: the source this driver hands
+	 * the datapath is one semi-planar buffer whose chroma half is exactly as wide
+	 * as its luma half, which is what source_scan_type 0 means (the values are
+	 * listed in mtk-vcodec-mt6589-reg.h).  The crop fields are left at their
+	 * reset 0: nothing negotiated here pads a picture, because
+	 * mtk_venc_enc_plane_size() already rounds the geometry up to whole
+	 * macroblocks and the caller's buffers are allocated at that size.
+	 */
+	mtk_venc_write(venc, VENC_IMAGE_INFO_1,
+		       ((VENC_IMAGE_SCAN_LINE_NV12 << VENC_IMAGE_SCAN_TYPE_SHIFT) &
+			VENC_IMAGE_SCAN_TYPE_MASK) |
+		       ((pitch_div16 << VENC_IMAGE_UV_PITCH_SHIFT) &
+			VENC_IMAGE_UV_PITCH_MASK) |
+		       ((pitch_div16 << VENC_IMAGE_PITCH_SHIFT) &
+			VENC_IMAGE_PITCH_MASK));
+
+	return 0;
+}
+
+/*
+ * Wait for one bitstream-command interrupt, bounded.
+ *
+ * The SPS and PPS runs are asynchronous like the frame run: VENC_CODEC_CTRL starts
+ * one, and the hardware reports completion by raising the matching bit of
+ * VENC_IRQ_STATUS.  Unlike a frame there is no buffer to hand back and no reason
+ * for the job to outlive the call, so the issuing path waits for the interrupt
+ * itself -- but bounded, because the same hardware that can fail to finish a
+ * frame can fail to finish a parameter set, and an unbounded wait here would hang
+ * device_run() with the runtime-PM reference held.
+ *
+ * The bit is observed through venc->param_irq_seen rather than by reading
+ * VENC_IRQ_STATUS, and that is a correctness requirement rather than indirection.
+ * mtk_venc_isr() unconditionally reads VENC_IRQ_STATUS and acknowledges every
+ * defined bit it finds, so it clears this bit as soon as the interrupt is
+ * delivered.  A waiter polling the status register would race the handler for the
+ * same bit, would sometimes find it already cleared, and would then sit out its
+ * whole timeout and fail a parameter set the hardware had in fact completed.  The
+ * handler records the bit in param_irq_seen before it acknowledges, under the same
+ * lock this clears it under, so the event cannot fall through the gap.
+ *
+ * A 10us poll interval is right for something the hardware finishes in
+ * microseconds: tight enough not to add latency, loose enough not to sit on the
+ * bus spinning.
+ *
+ * Return: 0 if the bit was observed, -ETIMEDOUT otherwise.
+ */
+static u32 mtk_venc_get_param_irq_seen(struct mtk_venc_dev *venc)
+{
+	return READ_ONCE(venc->param_irq_seen);
+}
+
+static int mtk_venc_wait_param_irq(struct mtk_venc_dev *venc, u32 bit,
+				   unsigned long timeout_us)
+{
+	u32 seen;
+	int ret;
+
+	/*
+	 * read_poll_timeout() over readl_poll_timeout(): the latter takes an MMIO
+	 * address and re-reads the register, which is exactly what must NOT happen
+	 * here.  The status register cannot be the source of truth because the
+	 * interrupt handler clears it -- see mtk_venc_emit_param_sets().
+	 */
+	ret = read_poll_timeout(mtk_venc_get_param_irq_seen, seen,
+				seen & bit, 10, timeout_us, false, venc);
+	if (ret)
+		return ret;
+
+	spin_lock_irq(&venc->enc_state_lock);
+	venc->param_irq_seen &= ~bit;
+	spin_unlock_irq(&venc->enc_state_lock);
+
+	return 0;
+}
+
+/*
+ * Emit the H.264 sequence and picture parameter sets into the current bitstream
+ * buffer.
+ *
+ * This is the piece whose absence made every bitstream this driver produced
+ * undecodable, and it is worth being precise about what it does and does not do.
+ *
+ * What the hardware provides
+ * --------------------------
+ * VENC_CODEC_CTRL has one bit per bitstream unit: ENC_SPS (BIT(0)), ENC_PPS
+ * (BIT(1)) and ENC_FRM (BIT(2)), each documented identically as "0: No operation
+ * / 1: Start to encode" (draft/ds/venc.txt:766430-766455).  Setting ENC_SPS runs
+ * the entropy coder over a synthesised sequence header and DMAs the result out;
+ * the completion is VENC_IRQ_STATUS.ENC_SPS_INT, "SPS encoding finished
+ * interrupt" (:766520-766530).  PPS is the same with the next bit.  So the
+ * hardware writes SPS and PPS itself -- this driver does not synthesise a
+ * bitstream in software, which is just as well, because a hand-rolled SPS would
+ * have to match whatever the entropy coder assumes.
+ *
+ * Where they go
+ * -------------
+ * They go into the bitstream buffer VENC_BITSTREAM_BUF_ADDR points at, the same
+ * one the frame then writes into.  There is no separate parameter-set address
+ * register anywhere in chapter 60, and the data sheet says so indirectly but
+ * unambiguously: BS_DRAM_FULL_INT is defined as "During SPS/PPS/frame encoding,
+ * the generated bitstream byte count exceeds allocated bitstream DRAM size"
+ * (draft/ds/venc.txt:766520-766530) -- one buffer, one size limit, shared by all
+ * three units.  Two consequences the caller has to handle, and both are:
+ *
+ *   - the frame pass starts writing AFTER the parameter sets, so a frame's
+ *     bytesused is the reported frame length plus the header length; and
+ *   - the header consumes bitstream capacity, so a capture buffer sized only for
+ *     the frame can overflow on a frame that would otherwise have fit.
+ *
+ * The second is why mtk_venc_device_run() reduces the size it tells the hardware
+ * about by MTK_VENC_HEADER_RESERVE_BYTES instead of passing sizeimage through.
+ *
+ * Why the geometry must already be programmed when this runs
+ * ---------------------------------------------------------
+ * The SPS is the sequence header: it carries the picture size and level.  Emitting
+ * it before VENC_IMAGE_INFO_0/1 hold this picture's geometry would emit a header
+ * describing whatever those registers happened to contain.  This function
+ * therefore does not program the geometry itself -- its caller does, and must, and
+ * does so on every frame rather than once per stream, because a runtime resume runs
+ * mtk_venc_reset() and clears them.  See mtk_venc_device_run().
+ *
+ * The other precondition is that the bitstream address registers already point at
+ * the capture buffer, because that is where the header goes.
+ *
+ * Ordering: SPS, then PPS, then the frame
+ * ---------------------------------------
+ * Both parameter sets precede the first frame, and the SPS precedes the PPS.  The
+ * data sheet states the bits separately and never states the order they must be
+ * issued in; the ordering here is the one H.264 itself requires of the resulting
+ * stream (an SPS activation precedes the PPS that refers to it, ITU-T H.264
+ * 7.3.2.1.1/7.4.1.2) and the one the vendor driver's start-option enumeration
+ * encodes, where VENC_DRV_START_OPT_ENCODE_SEQUENCE_HEADER_H264_SPS comes before
+ * ..._PPS and both before ..._ENCODE_FRAME
+ * (mediatek/kernel/include/linux/vcodec/venc_drv_if_public.h:128-131).  That the
+ * RTL emits the SPS bit-stream before the PPS run is started at all is an
+ * assumption this driver makes and hardware has to confirm; it is flagged in
+ * NOTES.md rather than being presented as established.
+ *
+ * Two things deliberately NOT done here
+ * ------------------------------------
+ *   - VENC_HW_MODE_SEL's insert_keyframe (bit 20) and First_SPS_Flag (bit 19) are
+ *     left alone.  First_SPS_Flag is described only as "Only when the first SPS is
+ *     encoded should this flag be 1 during the SPS encoding period"
+ *     (draft/ds/venc.txt:762170-762175), with no second source for what "the first
+ *     SPS" scopes it to or what breaks if it is wrong, so it is not guessed at.
+ *     Keyframe insertion is the GOP control's job, not this function's.
+ *   - Nothing here re-points the bitstream address mid-stream.  The parameter sets
+ *     are written at whatever offset the buffer is at, which is its base.
+ *
+ * Return: 0 on success, or a negative errno.  On failure the caller must not start
+ *	   the frame: a stream whose header is missing or truncated is not decodable.
+ */
+static int mtk_venc_emit_param_sets(struct mtk_venc_dev *venc)
+{
+	u32 status;
+	int ret;
+
+	/*
+	 * Clear any stale SPS/PPS completion before starting a run, in both places it
+	 * can be recorded: the hardware status register, and the mirror the interrupt
+	 * handler publishes into.  Missing either would let the wait below return
+	 * immediately on a previous stream's completion and start the frame before this
+	 * stream's header had been written.
+	 *
+	 * Only the two bits this function is about are cleared.  The frame and overflow
+	 * bits belong to mtk_venc_isr() and frame_pending, and clearing them here would
+	 * drop an event the completion path is waiting for.
+	 */
+	status = mtk_venc_read(venc, VENC_IRQ_STATUS);
+	if (status & (VENC_IRQ_STATUS_SPS | VENC_IRQ_STATUS_PPS))
+		mtk_venc_write(venc, VENC_IRQ_ACK,
+			       status & (VENC_IRQ_STATUS_SPS |
+					 VENC_IRQ_STATUS_PPS));
+
+	spin_lock_irq(&venc->enc_state_lock);
+	venc->param_irq_seen &= ~(VENC_IRQ_STATUS_SPS | VENC_IRQ_STATUS_PPS);
+	spin_unlock_irq(&venc->enc_state_lock);
+
+	/*
+	 * Make sure both completion sources are actually enabled.  Reset value 0x1F
+	 * enables them, but a previous power cycle leaves whatever was last written, and
+	 * a wait on a masked source never completes -- it would burn the full timeout and
+	 * then fail the frame for a reason that has nothing to do with the encoder.
+	 */
+	mtk_venc_write(venc, VENC_IRQ_MODE_SEL,
+		       VENC_IRQ_EN_SPS | VENC_IRQ_EN_PPS | VENC_IRQ_EN_FRM |
+		       VENC_IRQ_EN_DRAM);
+
+	/*
+	 * The geometry is NOT programmed here.  mtk_venc_device_run() has already done
+	 * it before calling this function, on every frame, and it has to be there rather
+	 * than here because a runtime resume in between two frames runs mtk_venc_reset()
+	 * and clears these registers while param_sets_sent stays latched.  Programming it
+	 * twice would be harmless; relying on this call alone would not, because this call
+	 * only happens once per stream.
+	 */
+	mtk_venc_write(venc, VENC_CODEC_CTRL, VENC_CODEC_CTRL_ENC_SPS);
+	ret = mtk_venc_wait_param_irq(venc, VENC_IRQ_STATUS_SPS,
+				    MTK_VENC_PARAM_SET_TIMEOUT_US);
+	if (ret) {
+		dev_warn_ratelimited(&venc->pdev->dev,
+				     "encoder did not finish the SPS within %u us\n",
+				     MTK_VENC_PARAM_SET_TIMEOUT_US);
+		return ret;
+	}
+
+	mtk_venc_write(venc, VENC_CODEC_CTRL, VENC_CODEC_CTRL_ENC_PPS);
+	ret = mtk_venc_wait_param_irq(venc, VENC_IRQ_STATUS_PPS,
+				    MTK_VENC_PARAM_SET_TIMEOUT_US);
+	if (ret) {
+		dev_warn_ratelimited(&venc->pdev->dev,
+				     "encoder did not finish the PPS within %u us\n",
+				     MTK_VENC_PARAM_SET_TIMEOUT_US);
+		return ret;
+	}
+
+	return 0;
 }
 
 /*
@@ -1535,6 +1926,7 @@ enum {
 	MTK_VENC_CTRL_FPS,
 	MTK_VENC_CTRL_CBR,
 	MTK_VENC_CTRL_GOP,
+	MTK_VENC_CTRL_PREPEND_SPSPPS,
 	MTK_VENC_CTRL_LAST,
 };
 
@@ -1600,12 +1992,33 @@ static int mtk_venc_ctrl_init(struct mtk_venc_ctx *ctx)
 					MTK_VENC_CTRL_GOP_DEF);
 
 	/*
+	 * Re-emit the parameter sets ahead of every IDR frame rather than only once per
+	 * stream.
+	 *
+	 * This is a standard V4L2 control with standard semantics, so it is created from
+	 * the standard ID rather than a driver-private one: a caller that joins a stream
+	 * mid-way, or one whose receiver discards data before the first keyframe, needs
+	 * the parameter sets in-band at each IDR to be able to start decoding, and that is
+	 * exactly what V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR means.  Default 0 keeps
+	 * the stream compact, which is what the hardware's shared bitstream buffer wants.
+	 *
+	 * The effect is in mtk_venc_emit_param_sets()'s caller: with this set, the
+	 * param_sets_sent latch is cleared on every keyframe, so the emit path runs again
+	 * ahead of the next frame -- and since it writes into the same buffer the frame
+	 * then uses, the header bytes are counted into that frame's bytesused.
+	 */
+	ctx->ctrl_prepend_spspps =
+		v4l2_ctrl_new_std(hdl, NULL,
+				  V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR,
+				  0, 1, 1, 0);
+
+	/*
 	 * A NULL here means v4l2_ctrl_new_std() rejected the definition, which is a bug
 	 * in the list above rather than anything a user can cause.  The per-frame submit
 	 * path dereferences these without checking, so it has to be caught here.
 	 */
 	if (!ctx->ctrl_bitrate || !ctx->ctrl_qp || !ctx->ctrl_fps ||
-	    !ctx->ctrl_cbr || !ctx->ctrl_gop)
+	    !ctx->ctrl_cbr || !ctx->ctrl_gop || !ctx->ctrl_prepend_spspps)
 		return -ENODEV;
 
 	return 0;
@@ -1659,6 +2072,16 @@ static void mtk_venc_dst_setup(struct v4l2_format *f)
 	 * accepting one here would only turn an S_FMT into a submit-time failure.
 	 * Rounding here means the buffer the user sized is the buffer the hardware is
 	 * told about.
+	 *
+	 * The SPS and PPS share this buffer with the frame and are NOT accounted for
+	 * here, deliberately.  TRY_FMT has to be idempotent -- a caller may round-trip a
+	 * format through it any number of times and must get the same answer -- so this
+	 * function cannot add slack to a size it is also given back.  An earlier revision
+	 * of this change did exactly that and grew sizeimage by 128 bytes per TRY_FMT
+	 * call.  The header allowance is applied instead where it belongs: on the limit
+	 * the hardware is given, in mtk_venc_device_run(), so the allocation stays what
+	 * the caller asked for and the overflow threshold is the allocation minus the
+	 * header space.
 	 */
 	f->fmt.pix.sizeimage = round_up(f->fmt.pix.sizeimage,
 					MTK_VENC_BS_SIZE_ALIGN);
@@ -2199,8 +2622,23 @@ static int mtk_venc_start_streaming(struct vb2_queue *q,
 {
 	struct mtk_venc_ctx *ctx = q->drv_priv;
 
-	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT)
+	/*
+	 * A stream is starting, so the parameter sets for it have to be emitted again
+	 * before the first frame: the previous stream's header is long gone from whatever
+	 * buffer this one will use, and a decoder handed a stream with no SPS/PPS cannot
+	 * decode it.  This is why the latch is per-stream state and not a one-shot for the
+	 * file handle's lifetime.
+	 *
+	 * Cleared on the OUTPUT queue only.  Both queues are started by the caller, in
+	 * either order, and clearing it on the CAPTURE STREAMON as well would be harmless
+	 * but would also mean the two orderings take different code paths for no reason.
+	 * The OUTPUT queue is the one that decides "a stream of frames begins here".
+	 */
+	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT) {
 		ctx->frame_count = 0;
+		ctx->param_sets_sent = false;
+		ctx->header_bytes = 0;
+	}
 
 	return 0;
 }
@@ -2394,14 +2832,49 @@ static void mtk_venc_device_run(void *priv)
 	mtk_venc_get_parm(ctx, &parm);
 
 	/*
+	 * Tell the encoder the picture geometry, on EVERY frame and not only when the
+	 * parameter sets are emitted.
+	 *
+	 * This has to be here rather than only in mtk_venc_emit_param_sets() because
+	 * mtk_venc_runtime_resume() calls mtk_venc_reset(), which clears every register
+	 * this driver programs -- including these two.  A stream that survives a runtime
+	 * suspend between two frames would otherwise come back with
+	 * VENC_IMAGE_INFO_0/1 at their reset value of zero, i.e. a picture zero
+	 * macroblocks wide, while param_sets_sent was still latched and nothing re-emitted
+	 * the header.  Programming it unconditionally per frame costs two register writes
+	 * and removes that whole class of failure.
+	 *
+	 * The SPS is emitted only once per stream, so the values here must match what the
+	 * SPS was built from: both come from ctx->src_fmt, which cannot change between
+	 * them because mtk_venc_s_fmt_out() refuses to change format while buffers are
+	 * allocated.
+	 */
+	ret = mtk_venc_set_image_geometry(venc, ctx->src_fmt.fmt.pix.width,
+					  ctx->src_fmt.fmt.pix.height,
+					  ctx->src_fmt.fmt.pix.bytesperline);
+	if (ret)
+		goto err_job;
+
+	/*
 	 * The bitstream buffer size the hardware is told about is the queue's negotiated
 	 * sizeimage, not the length of whatever the user happened to allocate.  The
 	 * encoder writes up to sizeimage bytes and raises BS_DRAM_FULL_INT past it, so
 	 * telling it the real bound is what makes that interrupt mean "overflow" rather
 	 * than "silently wrote past the buffer".  VENC_BITSTREAM_BUF_SIZE is DIV128,
 	 * which mtk_venc_dst_setup() has already rounded this to.
+	 *
+	 * MTK_VENC_HEADER_RESERVE_BYTES is subtracted from the limit, not added to the
+	 * allocation, for the reason given in mtk_venc_dst_setup(): the SPS and PPS are
+	 * written into this same buffer ahead of the frame, so the frame can only use
+	 * sizeimage minus what the header took.  Telling the hardware the full sizeimage
+	 * would let a frame plus header run past the end of the buffer the driver owns
+	 * before BS_DRAM_FULL_INT ever fired.  Keeping the subtraction here also keeps
+	 * the reserved region in 128-byte units so the DIV128 field stays exact.
 	 */
 	bs_size = ctx->dst_fmt.fmt.pix.sizeimage;
+	if (bs_size > MTK_VENC_HEADER_RESERVE_BYTES +
+		      MTK_VENC_BS_SIZE_ALIGN)
+		bs_size -= MTK_VENC_HEADER_RESERVE_BYTES;
 
 	keyframe = mtk_venc_is_keyframe(ctx);
 
@@ -2421,6 +2894,14 @@ static void mtk_venc_device_run(void *priv)
 	ctx->pending = true;
 	venc->bs_error = false;
 	venc->bs_bytes = 0;
+
+	/*
+	 * The header length belongs to the job that emitted it, not to the stream.  It is
+	 * cleared for every job here and set again only by the emit path below, so a
+	 * frame that did not carry a parameter set reports just its own coded length
+	 * instead of inheriting the first frame's header size.
+	 */
+	ctx->header_bytes = 0;
 	venc->timeout_ctx = ctx;
 	spin_unlock_irqrestore(&venc->enc_state_lock, flags);
 
@@ -2483,6 +2964,62 @@ static void mtk_venc_device_run(void *priv)
 					    ctx->rc_info_addr);
 	if (ret)
 		goto err_job;
+
+	/*
+	 * Emit the parameter sets, once per stream, before the first frame that will
+	 * follow them.
+	 *
+	 * This is what makes the output decodable at all.  Until it existed the driver
+	 * programmed every frame address, the quantiser and the rate control and then
+	 * started the frame, so the encoder wrote slice data with no sequence or picture
+	 * parameter set anywhere in the stream: an H.264 decoder has no frame size, no
+	 * profile and no entropy-coding mode to work from and cannot decode a single
+	 * byte of it.  That was recorded in the file header as a known gap; this is the
+	 * gap closed.
+	 *
+	 * The bitstream address is programmed FIRST, because the SPS and PPS are written
+	 * into the same buffer the frame will use -- there is no separate parameter-set
+	 * address register, and BS_DRAM_FULL_INT covers all three units, which is what
+	 * that shared limit proves.  mtk_venc_submit_frame() programs it again as part of
+	 * the frame's own address set; doing it twice is harmless and doing it here is
+	 * required, since the header runs before that call.
+	 *
+	 * Param sets are emitted ahead of the first frame of a stream and, when the
+	 * standard V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR control is set, ahead of
+	 * every IDR frame as well -- which is why the latch below is cleared on a
+	 * keyframe rather than the emit being unconditional.
+	 */
+	if (keyframe && v4l2_ctrl_g_ctrl(ctx->ctrl_prepend_spspps))
+		ctx->param_sets_sent = false;
+
+	if (!ctx->param_sets_sent) {
+		u32 header_bytes;
+
+		ret = mtk_venc_set_bs_addr(venc, bs_addr, bs_size);
+		if (ret)
+			goto err_job;
+
+		ret = mtk_venc_emit_param_sets(venc);
+		if (ret)
+			goto err_job;
+
+		/*
+		 * How much of the buffer the parameter sets occupied, so the capture
+		 * buffer's bytesused can include them.  PIC_BITSTREAM_BYTE_CNT counts
+		 * "bytes in coded bitstream of one frame" only, so the header length has
+		 * to be measured separately, and the only place that knows it is here --
+		 * the counter is still at zero because no frame has run yet.
+		 *
+		 * A zero here is a real answer rather than a failure: it means the encoder
+		 * reported nothing written for the header, which would be a hardware
+		 * behaviour this driver does not expect but must not paper over by
+		 * inventing a length.
+		 */
+		header_bytes = mtk_venc_read(venc, VENC_PIC_BITSTREAM_BYTE_CNT) &
+			       GENMASK(23, 0);
+		ctx->header_bytes = header_bytes;
+		ctx->param_sets_sent = true;
+	}
 
 	ret = mtk_venc_submit_frame(venc, false, &parm, bs_addr, bs_size,
 				    src_y, src_uv, ref_y, ref_uv,

@@ -198,6 +198,46 @@ struct mtk_venc_ctx {
 	struct v4l2_ctrl			*ctrl_fps;
 	struct v4l2_ctrl			*ctrl_cbr;
 	struct v4l2_ctrl			*ctrl_gop;
+	struct v4l2_ctrl			*ctrl_prepend_spspps;
+	struct v4l2_ctrl			*ctrl_header_mode;
+
+	/*
+	 * Whether the parameter sets for the current stream's geometry have been
+	 * emitted yet.
+	 *
+	 * The SPS carries the picture size and the PPS the entropy-coding choice, so
+	 * both have to be written before any frame that a decoder will be asked to
+	 * decode: without them the frame data is bit-shifted garbage.  They are emitted
+	 * once per stream, ahead of the first frame, and again whenever a new geometry
+	 * or a new stream starts -- not per frame, because repeating them ahead of every
+	 * frame is legal H.264 but wasteful, and because the driver has no second
+	 * bitstream buffer to emit them into without displacing the frame either.
+	 *
+	 * Cleared by STREAMON on the OUTPUT queue, which is where a stream begins, and
+	 * re-armed by a control change that invalidates the parameter sets.  Guarded by
+	 * the driver's enc_lock, since only the submit path touches it.
+	 */
+	bool					param_sets_sent;
+
+	/*
+	 * Bytes of parameter-set bitstream sitting at the front of the CURRENT capture
+	 * buffer, which the hardware wrote on the first pass(es) of the frame in flight.
+	 *
+	 * This exists because the SPS and PPS are emitted into the same bitstream buffer
+	 * the frame then writes into -- the data sheet gives them no buffer of their own;
+	 * BS_DRAM_FULL_INT is documented as "During SPS/PPS/frame encoding, the generated
+	 * bitstream byte count exceeds allocated bitstream DRAM size"
+	 * (draft/ds/venc.txt:766520-766530), i.e. one buffer, one limit, shared by all
+	 * three.  The frame pass therefore starts writing after them, and the byte count
+	 * the hardware reports for the frame is the FRAME's length: PIC_BITSTREAM_BYTE_CNT
+	 * is "Number of bytes in coded bitstream of one frame" (:768780).  So the whole
+	 * buffer's bytesused is frame + header, and this field is the header part.
+	 *
+	 * It is published under the driver's enc_state_lock together with the frame
+	 * length by whichever completion retires the job, so the two cannot be read from
+	 * different frames.
+	 */
+	u32					header_bytes;
 };
 
 #endif /* _MTK_VENC_MT6589_H_ */

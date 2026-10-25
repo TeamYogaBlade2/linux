@@ -20,6 +20,8 @@
 #include <linux/videodev2.h>
 #include <media/v4l2-mem2mem.h>
 
+#include "mtk-vdec-mt6589-h264.h"
+
 struct mtk_vdec_dev;
 
 /*
@@ -79,6 +81,17 @@ struct mtk_vdec_ctx {
 	 */
 	struct v4l2_format		src_fmt;
 	struct v4l2_format		dst_fmt;
+
+	/*
+	 * Parameter sets parsed out of the stream.  The MT6589 AVC parser takes
+	 * already-parsed SPS/PPS/slice fields rather than reading the bitstream
+	 * itself, so these have to be kept per context: an SPS arrives once and
+	 * every following slice header is parsed against it.
+	 */
+	struct mtk_h264_ps		ps;
+
+	/* Last slice header parsed, for the register programming step. */
+	struct mtk_h264_slice		slice;
 };
 
 #endif /* _MTK_VDEC_MT6589_H_ */

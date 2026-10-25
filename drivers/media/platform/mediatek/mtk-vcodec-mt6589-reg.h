@@ -64,7 +64,7 @@
 #define VENC_CE				0x0ec
 
 #define VENC_STUFFING_REPORT		0x0a0	/* bitstream stuffing report */
-#define VENC_IRQ_MODE_SEL		0x0a4	/* irq vs dma completion mode */
+#define VENC_IRQ_MODE_SEL		0x0a4	/* per-source IRQ enable mask */
 #define VENC_SW_HRST_N			0x0a8	/* 1 = encoder out of soft reset */
 #define VENC_SW_PAUSE			0x0ac	/* pause/resume the engine */
 #define VENC_PAUSE_MODE_INFO		0x0b0	/* read-only pause reason */
@@ -97,6 +97,84 @@
  */
 #define VENC_VP8_HDR_BUF_ADDR		0x0e0
 #define VENC_VP8_HDR_BUF_SIZE		0x0e4
+
+/*
+ * Picture geometry for the H.264/VP8 front end.  These are the registers the
+ * encoder reads the frame size and the source pitch from, and they are what the
+ * SPS's own dimensions come out of -- an encoder that is never told the picture
+ * size cannot write a correct SPS even if it is told to start one.
+ *
+ * Field layout (ch.60, draft/ds/venc.txt:763933-763990 for IMAGE_INFO_0 and
+ * :764076-764100 for IMAGE_INFO_1):
+ *
+ *   IMAGE_INFO_0 (0x020)
+ *     15:8   IMAGE_HEIGHT_DIV16   "Image height divided by 16.  It cannot be
+ *                                  smaller than 8."
+ *     7:0    IMAGE_WIDTH_DIV16    "Image width divided by 16.  It cannot be
+ *                                  smaller than 10."
+ *
+ *   IMAGE_INFO_1 (0x028)
+ *     31:29  source_scan_type     0: Line NV12, 1: Block 16x32,
+ *                                  2: Block 64x32, 3: Line YV12, 4: Line NV21
+ *     28:21  uv_pitch_width_div16 pitch of the UV plane, same unit
+ *     18:11  pitch_width_div16    pitch of the Y plane, same unit
+ *     10:5   IMAGE_CROP_RIGHT
+ *     4:0    IMAGE_CROP_BOTTOM
+ *
+ * There is NO IMAGE_NUM_MB field at 0x020, and the extract's claim that there is
+ * one is the data sheet contradicting itself: the bit table for
+ * "VIDEO_IMAGE_INFO_0 Register" (draft/ds/venc.txt:763933ff) documents exactly
+ * two fields, 15:8 and 7:0, and the ASCII bit diagram printed above that table
+ * puts "IMAGE_NUM_MB" at 31:16 -- which the table itself does not define.  The
+ * width it would have to hold does not fit either: pitch_width_div16 is an 8-bit
+ * field with a documented maximum of 128 (i.e. 2048 pixels), so a 1920-pixel
+ * picture is 120 and IMAGE_NUM_MB would be 120 MBs per row -- but 31:16 of _0 is
+ * documented as VENC_ENCODER_INFO_7[31:16] on the diagram for _1 and is not a
+ * field of this register at all.  Believing the bit table and ignoring the
+ * stray label is the only self-consistent reading, so this driver programs the
+ * two fields the table defines and does not invent a third.
+ *
+ * The addresses are also worth a warning: the per-register sections in the
+ * data sheet print the address of the NEXT section's register rather than their
+ * own, so the section titled "VIDEO_IMAGE_INFO_0 Register" is labelled
+ * 17002024, which the chapter-60 summary table (draft/ds/venc.txt:760976-761075)
+ * gives as VENC_ENCODER_INFO_7.  The summary table is self-consistent across all
+ * 40-odd registers and is what this header follows, here and elsewhere.
+ */
+#define VENC_IMAGE_INFO_0		0x020
+#define VENC_IMAGE_WIDTH_DIV16_SHIFT	0
+#define VENC_IMAGE_WIDTH_DIV16_MASK	GENMASK(7, 0)
+#define VENC_IMAGE_HEIGHT_DIV16_SHIFT	8
+#define VENC_IMAGE_HEIGHT_DIV16_MASK	GENMASK(15, 8)
+
+#define VENC_IMAGE_INFO_1		0x028
+#define VENC_IMAGE_SCAN_TYPE_SHIFT	29
+#define VENC_IMAGE_SCAN_TYPE_MASK	GENMASK(31, 29)
+#define VENC_IMAGE_UV_PITCH_SHIFT	21
+#define VENC_IMAGE_UV_PITCH_MASK	GENMASK(28, 21)
+#define VENC_IMAGE_PITCH_SHIFT		11
+#define VENC_IMAGE_PITCH_MASK		GENMASK(18, 11)
+
+/*
+ * source_scan_type values (draft/ds/venc.txt:764297-764303).  This driver only
+ * ever feeds the datapath a two-plane semi-planar NV12 buffer, so Line NV12 is
+ * the only one it programs; the rest are recorded so the field's domain is
+ * visible rather than being a magic 0.
+ */
+#define VENC_IMAGE_SCAN_LINE_NV12	0
+#define VENC_IMAGE_SCAN_BLOCK16x32	1
+#define VENC_IMAGE_SCAN_BLOCK64x32	2
+#define VENC_IMAGE_SCAN_LINE_YV12	3
+#define VENC_IMAGE_SCAN_LINE_NV21	4
+
+/*
+ * Pitch bounds, stated by the same table: "Range[image_width_div16, 128], step
+ * by 1" for source_scan_type 0 or 1 (:764310-764313), and the dimensions'
+ * own floors are 10 and 8 macroblocks (:763960-763968).
+ */
+#define VENC_IMAGE_PITCH_MAX		128
+#define VENC_IMAGE_WIDTH_DIV16_MIN	10
+#define VENC_IMAGE_HEIGHT_DIV16_MIN	8
 
 /*
  * Quantiser fields.  These are the registers the data sheet's bit tables actually
@@ -243,6 +321,33 @@
 #define VENC_IRQ_STATUS_PAUSE		BIT(4)
 #define VENC_IRQ_STATUS_DRAM_VP8	BIT(5)
 #define VENC_IRQ_MASK_ALL		0x3f
+
+/*
+ * The enables for those six sources live in VENC_IRQ_MODE_SEL at +0x0A4, one
+ * bit per source in the same order: "Switch for enabling "SPS DONE" IRQ to host
+ * processor", and likewise PPS done, frame encode done, bitstream DRAM full,
+ * pause frame and (for VP8) the header-partition full
+ * (draft/ds/venc.txt:769202-769260).  Reset value 0x1F, i.e. all five non-VP8
+ * sources enabled out of reset.
+ *
+ * An earlier revision of this header described +0x0A4 as "irq vs dma completion
+ * mode", which the data sheet does not support: the register is a plain enable
+ * mask with no mode field anywhere in its bit table.  Nothing programmed it
+ * before, so nothing depended on the wrong reading; the SPS/PPS waits below do,
+ * which is why it is corrected here rather than left standing.
+ *
+ * The SPS/PPS bits are programmed explicitly by mtk_venc_emit_param_sets()
+ * rather than relied on from reset state: a resume or a reset cycle leaves them
+ * at whatever was last written, and a wait on a source that is masked never
+ * completes.
+ */
+#define VENC_IRQ_EN_SPS			BIT(0)
+#define VENC_IRQ_EN_PPS			BIT(1)
+#define VENC_IRQ_EN_FRM			BIT(2)
+#define VENC_IRQ_EN_DRAM		BIT(3)
+#define VENC_IRQ_EN_PAUSE		BIT(4)
+#define VENC_IRQ_EN_DRAM_VP8		BIT(5)
+#define VENC_IRQ_EN_ALL			0x1f
 
 /* ---- chapter 61: MPEG-4 encoder, the "hybrid" datapath ----
  *
@@ -571,5 +676,161 @@
  * hardware.  The honest kernel-side scope is what this driver does: clocks, reset, the
  * frame-end interrupt, and a node that reports the block as unimplemented.
  */
+
+/* ---- H.264 decoder (VDEC_AVC_VLD_BASE = 0x3000) ----
+ *
+ * Source: the vendor LDVT harness, hal/vdec_hw_common.h:965-1010 and the field
+ * packing in hal/vdec_hal_if_h264.c.  This is the sequence the harness uses to
+ * hand a parsed picture to the AVC parser, and unlike the VP8 case above it is
+ * wholly register programming: the harness parses the bitstream in software and
+ * writes the parsed fields here, which is exactly what a kernel driver would do.
+ *
+ * The harness is compiled as MT8580 (vdec_info_common.h:125,
+ * CONFIG_CHIP_VER_CURR = 80) but that header also sets VDEC_6589_SUPPORT = 1, and
+ * two H.264 code paths carry explicit "if MT6589" markers
+ * (vdec_hal_if_h264.c:565-595, the prediction weight table).  Where the two chips
+ * differ the harness shows both branches and the distinction is recorded per
+ * register below; where it does not, the offsets are shared.
+ *
+ * NOT VERIFIED ON HARDWARE.  A wrong field position here does not fail: it
+ * produces a picture that decodes to garbage, which is why each field is cited.
+ */
+#define VDEC_AVC_VLD_SPS		0x88
+/*
+ * SPS, packed as vVDEC_HAL_H264_SetSPSAVLD does it (vdec_hal_if_h264.c:1176-1197).
+ *
+ *	[1:0]   chroma_format_idc
+ *	[5:2]   log2_max_frame_num_minus4
+ *	[7:6]   pic_order_cnt_type
+ *	[11:8]  log2_max_pic_order_cnt_lsb_minus4
+ *	[12]    delta_pic_order_always_zero_flag
+ *	[17:13] num_ref_frames
+ *	[18]    frame_mbs_only_flag
+ *	[19]    mb_adaptive_frame_field_flag
+ *	[20]    direct_8x8_inference_flag
+ *	[21]    constant 1 - set unconditionally by the harness
+ */
+#define VDEC_AVC_SPS_CHROMA_FORMAT		GENMASK(1, 0)
+#define VDEC_AVC_SPS_LOG2_MAX_FRAME_NUM		GENMASK(5, 2)
+#define VDEC_AVC_SPS_POC_TYPE			GENMASK(7, 6)
+#define VDEC_AVC_SPS_LOG2_MAX_POC_LSB		GENMASK(11, 8)
+#define VDEC_AVC_SPS_DELTA_POC_ALWAYS_ZERO	BIT(12)
+#define VDEC_AVC_SPS_NUM_REF_FRAMES		GENMASK(17, 13)
+#define VDEC_AVC_SPS_FRAME_MBS_ONLY		BIT(18)
+#define VDEC_AVC_SPS_MB_ADAPTIVE_FRAME_FIELD	BIT(19)
+#define VDEC_AVC_SPS_DIRECT_8X8_INFERENCE	BIT(20)
+/* Set unconditionally by the vendor harness; purpose not documented. */
+#define VDEC_AVC_SPS_RESERVED_21		BIT(21)
+
+/*
+ * The picture size register moved between chips:
+ *
+ *   >= MT8580: vVDecWriteVLDTOP(RW_VLD_PIC_MB_SIZE_M1, ...) at VLD_TOP + 0x68
+ *   <  MT8580: vVDecWriteAVCVLD(RW_AVLD_PIC_SIZE, ...)       at AVC_VLD + 0x8C
+ *
+ * Both pack (pic_height_in_map_units_minus1 << 8) | pic_width_in_mbs_minus1.
+ * MT6589 is the older layout, so the AVC_VLD form is what applies here - but
+ * note this is an inference from the chip ordering, not a "if MT6589" marker,
+ * and it is the single most consequential guess in this file.  If pictures come
+ * out with the wrong geometry, check this first: write both, or instrument.
+ */
+#define VDEC_AVC_PIC_SIZE		0x8C
+#define VDEC_AVC_PIC_HEIGHT_IN_MBS	GENMASK(15, 8)	/* << 8 */
+#define VDEC_AVC_PIC_WIDTH_IN_MBS	GENMASK(7, 0)
+
+/*
+ * PPS word 1 (vdec_hal_if_h264.c:1207-1240).
+ *
+ *	[0]     entropy_coding_mode_flag   (0 = CAVLC, 1 = CABAC)
+ *	[1]     pic_order_present_flag
+ *	[2]     weighted_pred_flag
+ *	[4:3]   weighted_bipred_idc
+ *	[10:5]  pic_init_qp_minus26      (6-bit signed)
+ *	[15:11] chroma_qp_index_offset   (5-bit signed)
+ *	[16]    deblocking_filter_control_present_flag
+ *	[17]    constrained_intra_pred_flag
+ *	[18]    transform_8x8_mode_flag
+ *	[23:19] second_chroma_qp_index_offset (5-bit signed)
+ */
+#define VDEC_AVC_VLD_PPS_1		0x90
+#define VDEC_AVC_PPS_ENTROPY_CODING		BIT(0)
+#define VDEC_AVC_PPS_PIC_ORDER_PRESENT		BIT(1)
+#define VDEC_AVC_PPS_WEIGHTED_PRED		BIT(2)
+#define VDEC_AVC_PPS_WEIGHTED_BIPRED_IDC	GENMASK(4, 3)
+#define VDEC_AVC_PPS_PIC_INIT_QP		GENMASK(10, 5)
+#define VDEC_AVC_PPS_CHROMA_QP_OFFSET		GENMASK(15, 11)
+#define VDEC_AVC_PPS_DEBLOCKING_CONTROL		BIT(16)
+#define VDEC_AVC_PPS_CONSTRAINED_INTRA		BIT(17)
+#define VDEC_AVC_PPS_TRANSFORM_8X8		BIT(18)
+#define VDEC_AVC_PPS_SECOND_CHROMA_QP_OFFSET	GENMASK(23, 19)
+
+/*
+ * PPS word 2, same function.
+ *
+ *	[4:0]   num_ref_idx_l0_active_minus1
+ *	[9:5]   num_ref_idx_l1_active_minus1
+ *	[17:10] one bit per scaling list (8 lists), "user scaling list present"
+ *	[18]    user scaling matrix present
+ */
+#define VDEC_AVC_VLD_PPS_2		0x94
+#define VDEC_AVC_PPS_NUM_REF_L0			GENMASK(4, 0)
+#define VDEC_AVC_PPS_NUM_REF_L1			GENMASK(9, 5)
+#define VDEC_AVC_PPS_SCALING_LIST		GENMASK(17, 10)
+#define VDEC_AVC_PPS_SCALING_MATRIX		BIT(18)
+
+/*
+ * Slice header word 1 (vdec_hal_if_h264.c:1245-1259).
+ *
+ *	[12:0]  first_mb_in_slice
+ *	[16:13] slice_type
+ *	[17]    field_pic_flag
+ *	[18]    bottom_field_flag
+ *	[19]    direct_spatial_mv_pred_flag
+ *	[24:20] num_ref_idx_l0_active_minus1
+ *	[29:25] num_ref_idx_l1_active_minus1
+ *
+ * Only word 1 is written on the pre-MT8580 path; the >=MT8580 path additionally
+ * moves first_mb_in_slice into PIC_SIZE[16:0] and writes the high half of this
+ * word separately.  Both are shown in the harness; MT6589 takes the simple form.
+ */
+#define VDEC_AVC_VLD_SHDR_1		0x98
+#define VDEC_AVC_VLD_SHDR_2		0x9C
+#define VDEC_AVC_SHDR_FIRST_MB			GENMASK(12, 0)
+#define VDEC_AVC_SHDR_SLICE_TYPE		GENMASK(16, 13)
+#define VDEC_AVC_SHDR_FIELD_PIC			BIT(17)
+#define VDEC_AVC_SHDR_BOTTOM_FIELD		BIT(18)
+#define VDEC_AVC_SHDR_DIRECT_SPATIAL_MV		BIT(19)
+#define VDEC_AVC_SHDR_NUM_REF_L0		GENMASK(24, 20)
+#define VDEC_AVC_SHDR_NUM_REF_L1		GENMASK(29, 25)
+
+/* Reference picture list handling. */
+#define VDEC_AVC_VLD_MAX_PIC_NUM	0xA0
+#define VDEC_AVC_VLD_CUR_PIC_NUM	0xA4
+#define VDEC_AVC_VLD_REORD_P0_RPL	0xA8	/* 32 words, 0xA8..0x124 */
+#define VDEC_AVC_VLD_REORD_B0_RPL	0x128
+#define VDEC_AVC_VLD_REORD_B1_RPL	0x1A8
+#define VDEC_AVC_VLD_RESET_PIC_NUM	0x228
+#define VDEC_AVC_RESET_PIC_NUM		1
+#define VDEC_AVC_VLD_RPL_REORD		0x22C
+
+/*
+ * Prediction weight table.  0x230 is a one-shot handshake, not a data word: the
+ * harness raises it, spins on it until the hardware clears/accepts it, then drops
+ * it.  MT6589 additionally requires MISC word 60 (0xF0) bit 0 to be raised around
+ * the whole thing (vdec_hal_if_h264.c:565-595, marked "if MT6589").
+ */
+#define VDEC_AVC_VLD_WEIGHT_PRED_TBL	0x230
+#define VDEC_AVC_MISC_WEIGHT_TABLE	(60 * 4)	/* 0x0F0, MISC block */
+#define VDEC_AVC_WEIGHT_TABLE_VALID	BIT(0)
+#define VDEC_AVC_WEIGHT_TABLE_SPIN	100
+
+#define VDEC_AVC_VLD_INIT_CTX_SRAM	0x234
+#define VDEC_AVC_VLD_PROC		0x238
+#define VDEC_AVC_VLD_PRED_ADDR		0x244
+#define VDEC_AVC_VLD_STATUS		0x25C
+#define VDEC_AVC_STATUS_STALL		BIT(25)
+#define VDEC_AVC_VLD_COMPLETE		0x274
+#define VDEC_AVC_VLD_STATE_INFO		0x278
+#define VDEC_AVC_PIC_FINISH		BIT(31)
 
 #endif /* _MTK_VCODEC_MT6589_REG_H */
