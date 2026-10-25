@@ -1160,7 +1160,17 @@ static int mtk_jpeg_open(struct file *file)
 		goto free;
 	}
 
-	INIT_WORK(&ctx->jpeg_work, jpeg->variant->jpeg_worker);
+	/*
+	 * Only the multi-core variants run the job on jpeg_work; the
+	 * single-core ones drive the hardware straight from device_run and
+	 * leave variant->jpeg_worker NULL.  Initialising the work item with a
+	 * NULL function is not harmless - cancel_work_sync() in release then
+	 * hits WARN_ON(!work->func) in __flush_work() on every close, and any
+	 * queue_work() on it would be worse.  Only set it up when there is a
+	 * worker to run.
+	 */
+	if (jpeg->variant->jpeg_worker)
+		INIT_WORK(&ctx->jpeg_work, jpeg->variant->jpeg_worker);
 	INIT_LIST_HEAD(&ctx->dst_done_queue);
 	spin_lock_init(&ctx->done_queue_lock);
 	v4l2_fh_init(&ctx->fh, vfd);
@@ -1202,7 +1212,9 @@ static int mtk_jpeg_release(struct file *file)
 	struct mtk_jpeg_dev *jpeg = video_drvdata(file);
 	struct mtk_jpeg_ctx *ctx = mtk_jpeg_file_to_ctx(file);
 
-	cancel_work_sync(&ctx->jpeg_work);
+	/* Nothing was queued on it unless the variant has a worker. */
+	if (jpeg->variant->jpeg_worker)
+		cancel_work_sync(&ctx->jpeg_work);
 	mutex_lock(&jpeg->lock);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
 	v4l2_ctrl_handler_free(&ctx->ctrl_hdl);
