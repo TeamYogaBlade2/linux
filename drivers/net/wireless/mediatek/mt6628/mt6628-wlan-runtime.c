@@ -1312,11 +1312,18 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		rx1_len = rx_len >> 16;
 		if (!whisr && !rx0_len && !rx1_len)
 			break;
-		if (!(whisr & (MT6628_WHISR_RX0_DONE | MT6628_WHISR_RX1_DONE)) &&
-		    (rx0_len || rx1_len))
-			dev_warn_ratelimited(&wl->func->dev,
-				"RX length pending without WHISR RX_DONE: "
-				"WHISR=%#010x WRPLR=%#010x\n", whisr, rx_len);
+		/*
+		 * A pending length with no RX_DONE bit is normal, not a fault.
+		 * The downstream driver never derives RX from WHISR either: its
+		 * enhanced-SDIO path takes the lengths from the same transfer
+		 * that carries the packets and dispatches to the interrupt
+		 * handler with the RX bits explicitly masked out
+		 * (nic_rx.c:2933, "dispatch to interrupt handler with RX bits
+		 * masked").  WHISR reports *why we were interrupted*, and a
+		 * firmware-initiated RX need not set it at all.  The length
+		 * registers are the authority on what to read, so read them -
+		 * which is what happens below regardless.
+		 */
 
 		if (rx0_len) {
 			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
