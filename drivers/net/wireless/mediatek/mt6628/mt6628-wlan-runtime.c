@@ -367,6 +367,9 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
  * When userspace controls the 802.1X port, only EAPOL may pass until
  * userspace marks the associated AP authorized.
  */
+/* Defined below; used by the TX worker to tell "no credits" from "no chip". */
+static bool mt6628_pm_own_pending(struct mt6628_wlan *wl);
+
 static bool mt6628_control_port_allows(struct mt6628_wlan *wl,
 				       const struct sk_buff *skb)
 {
@@ -1175,7 +1178,21 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			 */
 			unsigned int wait = 0;
 			bool released_any = false;
+			bool retry_now = true;
 
+			/*
+			 * Only an actual credit return justifies an immediate
+			 * retry.  A frame that bounced off a failed ownership
+			 * reclaim has its credit back already, so tx_free[] is
+			 * non-zero and would say "go now" on every pass while the
+			 * chip stays with the firmware - a busy loop that never
+			 * sleeps.  Back off instead and let pm_work() report the
+			 * handover.
+			 *
+			 * Decided after the poll below, not before: the poll
+			 * itself reclaims Driver Own, so an earlier answer can
+			 * be stale in the direction that matters.
+			 */
 			if (mt6628_wlan_poll_tx_status(wl, &wtsr0, &wtsr1) == 0) {
 				spin_lock_irqsave(&wl->tx_lock, flags);
 				wait = wl->tx_free[mt6628_runtime_tc_from_skb(skb)];
@@ -1192,6 +1209,8 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 				 */
 				released_any = (wtsr0 || wtsr1);
 			}
+			if (mt6628_pm_own_pending(wl))
+				retry_now = false;
 
 			skb_queue_head(&wl->tx_queue, skb);
 			/*
@@ -1221,7 +1240,7 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			    (released_any ||
 			     skb_queue_len(&wl->tx_queue) < MT6628_TX_QUEUE_LIMIT))
 				netif_wake_queue(wl->netdev);
-			if (wait) {
+			if (wait && retry_now) {
 				/* This frame's credit arrived: retry at once. */
 				mod_delayed_work(system_wq, &wl->tx_work, 0);
 			} else {
