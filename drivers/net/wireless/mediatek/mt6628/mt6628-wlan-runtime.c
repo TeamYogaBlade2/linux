@@ -1093,6 +1093,17 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	if (ret) {
 		mutex_unlock(&wl->cmd_mutex);
 		kfree(buf);
+		/*
+		 * A failed reclaim means the firmware still owns the chip, not
+		 * that this frame is unsendable.  pm_work() retries that
+		 * handover on a timer, so treat it like being out of credits and
+		 * retry rather than dropping: dropping loses the frame *and*
+		 * leaves the queue empty, so nothing drives another attempt and
+		 * the link simply stops.  Returning the raw error dropped it
+		 * silently before.
+		 */
+		if (ret == -EAGAIN || ret == -EBUSY)
+			return -EAGAIN;
 		goto err_resource;
 	}
 
