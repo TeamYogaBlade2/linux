@@ -113,6 +113,17 @@ struct mt6628_wlan {
 	 * diagnostic; reset whenever a frame is transmitted.
 	 */
 	unsigned int tx_stall_count;
+	/*
+	 * Diagnostics for a receive stall.  irq_seen counts SDIO interrupt
+	 * entries and rx_seen counts data frames handed to NAPI; comparing them
+	 * when traffic stops distinguishes "the interrupt never arrives" from
+	 * "the interrupt arrives and there is nothing to collect".
+	 */
+	unsigned int irq_seen;
+	unsigned int rx_seen;
+	unsigned int irq_seen_last;
+	unsigned int rx_seen_last;
+	unsigned int rx_report_count;
 	/* Remain-on-channel state, including the request we granted it with. */
 	/* Keep the sequence across runtime stop/start so old cookies stay stale. */
 	u64 roc_cookie_next;

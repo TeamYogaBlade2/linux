@@ -1393,6 +1393,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		 */
 
 		if (rx0_len) {
+			wl->rx_seen++;
 			ret = mt6628_runtime_read_rx_packet(wl, 0, rx0_len);
 			if (ret && ret != -ENOBUFS)
 				dev_warn_ratelimited(&wl->func->dev,
@@ -1400,6 +1401,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 						     ret);
 		}
 		if (rx1_len) {
+			wl->rx_seen++;
 			ret = mt6628_runtime_read_rx_packet(wl, 1, rx1_len);
 			if (ret && ret != -ENOBUFS)
 				dev_warn_ratelimited(&wl->func->dev,
@@ -1442,6 +1444,37 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	mt6628_runtime_schedule_rx(wl);
 
 	/*
+	 * Periodic receive health check, but only while something is actually
+	 * outstanding.  An idle link legitimately has no interrupts and no
+	 * frames, so reporting on that alone would be noise.  What matters is
+	 * the combination: frames waiting to be sent and nothing arriving or
+	 * completing.  irq_seen climbing with rx_seen flat means the driver is
+	 * being interrupted and finding nothing; irq_seen flat means the chip
+	 * has stopped signalling us at all.  Those have completely different
+	 * causes and are otherwise indistinguishable from userspace.
+	 */
+	if (++wl->rx_report_count >= 200) {
+		unsigned int irqs = wl->irq_seen;
+		unsigned int rxs = wl->rx_seen;
+		bool stuck = (irqs == wl->irq_seen_last &&
+			      rxs == wl->rx_seen_last);
+		bool busy = !skb_queue_empty(&wl->tx_queue) ||
+			    !skb_queue_empty(&wl->rx_queue);
+
+		wl->rx_report_count = 0;
+		if (stuck && busy)
+			dev_warn(&wl->func->dev,
+				 "RX/TX idle with work pending: irq=%u rx=%u txq=%u rxq=%u pm_idle=%u owned=%u\n",
+				 irqs, rxs,
+				 skb_queue_len(&wl->tx_queue),
+				 skb_queue_len(&wl->rx_queue),
+				 (unsigned int)READ_ONCE(wl->pm_idle),
+				 (unsigned int)READ_ONCE(wl->driver_owned));
+		wl->irq_seen_last = irqs;
+		wl->rx_seen_last = rxs;
+	}
+
+	/*
 	 * Everything that was pending has been handed to the workers, so
 	 * the driver can go idle again once they have drained.
 	 */
@@ -1456,6 +1489,8 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 
 	if (!wl || !wl->runtime_started)
 		return;
+
+	wl->irq_seen++;
 
 	dev_dbg_ratelimited(&wl->func->dev,
 		"SDIO IRQ callback: pm_idle=%u driver_owned=%u\n",
