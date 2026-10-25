@@ -656,15 +656,35 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x0006);
+		/*
+		 * The three-step 0x0006 -> 0x0003 -> 0x000b digital enable
+		 * sequence (AudioPlatformDevice::AnalogOpen, the
+		 * DEVICE_OUT_EARPIECE case, which the DAC path follows).
+		 *
+		 * Bit 7 of this register is the analog mute, and those three
+		 * literals all have it clear - they are the *digital* half of
+		 * the vendor's bring-up, which runs before its analog half
+		 * asserts the mute.  Writing them verbatim here would clear
+		 * the mute that mt6320_analog_event() just asserted, three
+		 * DAPM ordering groups before the HP buffers are configured,
+		 * which is the transient this file is fixing.  Keep bit 7 set
+		 * across the sequence so the mute is held until the output
+		 * stage is settled; the vendor's own AnalogOpen() releases it
+		 * on its last line, which is where mt6320_hp_event()'s
+		 * POST_PMU release sits.
+		 */
+		ret = regmap_update_bits(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x0006);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x0003);
+		ret = regmap_update_bits(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x0003);
 		if (ret)
 			return ret;
 
-		ret = regmap_write(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2, 0x000b);
+		ret = regmap_update_bits(priv->regmap, MT6320_AFE_AFUNC_AUD_CON2,
+					 GENMASK(3, 0), 0x000b);
 		if (ret)
 			return ret;
 
