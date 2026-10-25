@@ -982,7 +982,24 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 		goto err_resource;
 	}
 
-	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
+	/*
+	 * Reserve room for the TX-aggregation terminator.
+	 *
+	 * HAL_WRITE_TX_PORT() in the downstream driver always writes a zero DWORD
+	 * at ALIGN_4(len) past the packet - "fill with single dword of zero as
+	 * TX-aggregation termination" (hal.h:300-305).  The firmware treats that
+	 * DWORD as the end of the burst, so a transfer without it is a burst that
+	 * never terminates: the packet is accepted, no completion is ever
+	 * reported, and the TC's credit is never returned.  Registers look
+	 * perfect the whole time - WHLPCR shows the driver owning the chip with
+	 * interrupts enabled and WRPLR empty - and nothing is logged.
+	 *
+	 * The old length calculation rounded the payload up but did not reserve
+	 * the extra DWORD, so any packet whose aligned length was already a
+	 * multiple of the block size ended flush against the end of the transfer
+	 * and had nowhere to put the terminator.
+	 */
+	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4) + sizeof(u32));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
