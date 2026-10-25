@@ -783,6 +783,7 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 	u32 wtsr0, wtsr1;
 	u32 whlpcr = 0, whcr = 0, whier = 0, wrplr = 0;
 	int diag_ret = 0;
+	bool wtsr0_ok;
 	bool rx_pending;
 	int ret;
 
@@ -792,10 +793,12 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 
 	sdio_claim_host(wl->func);
 	wtsr0 = sdio_readl(wl->func, MT6628_MCR_WTSR0, &ret);
-	if (!ret)
+	wtsr0_ok = !ret;
+	if (!ret) {
 		wtsr1 = sdio_readl(wl->func, MT6628_MCR_WTSR1, &ret);
-	else
+	} else {
 		wtsr1 = 0;
+	}
 	if (!ret) {
 		whlpcr = sdio_readl(wl->func, MT6628_MCR_WHLPCR, &diag_ret);
 		if (!diag_ret)
@@ -806,8 +809,20 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 			wrplr = sdio_readl(wl->func, MT6628_MCR_WRPLR, &diag_ret);
 	}
 	sdio_release_host(wl->func);
-	if (ret)
+	if (ret) {
+		/*
+		 * WTSR0 may have been read successfully before WTSR1 failed.
+		 * It is read-and-consume, so returning here without
+		 * accounting for it throws those releases away and the
+		 * affected TCs lose credits permanently.  Only if that read
+		 * itself succeeded - a failed transfer leaves the register
+		 * value meaningless, and crediting it would hand back counts
+		 * the firmware never released.
+		 */
+		if (wtsr0_ok)
+			mt6628_runtime_tx_release(wl, wtsr0, 0);
 		return ret;
+	}
 	rx_pending = !diag_ret && wrplr;
 	if (!diag_ret)
 		dev_warn_ratelimited(&wl->func->dev,
@@ -1361,6 +1376,7 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
 		u32 whisr = 0, wtsr0 = 0, wtsr1 = 0, rx_len = 0;
 		u16 rx0_len, rx1_len;
+		bool wtsr0_ok = false;
 		int tx_status_ret;
 
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
@@ -1377,10 +1393,22 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		 */
 		tx_status_ret = mt6628_runtime_read32(wl, MT6628_MCR_WTSR0,
 						     &wtsr0);
+		wtsr0_ok = !tx_status_ret;
 		if (!tx_status_ret)
 			tx_status_ret = mt6628_runtime_read32(wl,
 						MT6628_MCR_WTSR1, &wtsr1);
 		if (tx_status_ret) {
+			/*
+			 * WTSR is read-and-consume, so a value that was read
+			 * successfully is gone from the hardware whether or not
+			 * the tracker as a whole succeeded.  Discarding wtsr0
+			 * because wtsr1's read failed therefore loses those
+			 * credits for good, and enough of that turns into a
+			 * transmit stall with nothing in the registers to show
+			 * for it.  Account for whatever did come back.
+			 */
+			if (wtsr0_ok)
+				mt6628_runtime_tx_release(wl, wtsr0, 0);
 			wtsr0 = 0;
 			wtsr1 = 0;
 			dev_warn_ratelimited(&wl->func->dev,
