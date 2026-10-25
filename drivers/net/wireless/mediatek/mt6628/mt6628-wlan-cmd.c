@@ -112,15 +112,16 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 
 	packet_len = MT6628_WIFI_CMD_HEADER_LEN + payload_len;
 	/*
-	 * Commands are the one case downstream pads to a DWORD before sending,
-	 * and the byte count it declares is the padded length:
-	 * u2OverallBufferLength = TFCB_FRAME_PAD_TO_DW(info buf len), then
-	 * u2TxByteCount_UserPriority = u2OverallBufferLength (nic_tx.c:1794,
-	 * 1798-1800).  Data and management frames are not padded this way
-	 * (nic_tx.c:1404-1408), which is why only this path aligns.
+	 * Pad the transfer to a DWORD, as the link was proven to work with, but
+	 * leave the declared byte count alone.  Pad the byte count too and the
+	 * adapter stops passing traffic altogether - every command in the
+	 * connection path fails, so the handshake never completes.  Downstream
+	 * does declare the padded length (nic_tx.c:1794-1800), but its command
+	 * packet is a full TX_HDR_SIZE HIF header; ours is
+	 * MT6628_WIFI_CMD_HEADER_LEN, so the two are not equivalent and the
+	 * vendor's padding rule cannot be transplanted onto this layout.
 	 */
-	packet_len = ALIGN(packet_len, 4);
-	xfer_len = mt6628_sdio_xfer_len(packet_len);
+	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
@@ -129,7 +130,8 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 
 	cmd = (struct mt6628_wifi_cmd_hdr *)buf;
 	/*
-	 * The HIF byte count is the DWORD-padded length, matching downstream.
+	 * The HIF byte count describes the actual command packet; the DWORD
+	 * padding below belongs to the transfer only.
 	 */
 	cmd->tx_byte_count_user_priority = cpu_to_le16(packet_len);
 	cmd->resource_pkt_type_csflags =

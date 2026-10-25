@@ -984,22 +984,22 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	}
 
 	/*
-	 * Reproduce the transfer length the downstream host driver produces.
+	 * Pad to a DWORD and round to the SDIO block size, as downstream does.
 	 *
 	 * kalDevPortWrite() splits the buffer into whole blocks and, when there
 	 * is a remainder behind at least one full block, rounds the transfer up
 	 * to a block boundary: it sends "cur_blksize * bNum", not the length it
 	 * was given (sdio.c:1206-1228).  Below one block it sends the length
-	 * as-is.  mt6628_sdio_xfer_len() is exactly that rule.
+	 * as-is.  mt6628_sdio_xfer_len() is exactly that rule, and the inner
+	 * ALIGN is the DWORD padding HAL_WRITE_TX_PORT() expects.
 	 *
-	 * The block rounding is also what delivers the "single dword of zero as
-	 * TX-aggregation termination" that HAL_WRITE_TX_PORT() writes at
-	 * ALIGN_4(len) (hal.h:300-315): the DWORD is part of the transfer only
-	 * when rounding made the transfer longer than the packet.  kzalloc()
-	 * supplies it.  Reserving an extra DWORD on top, as this driver used to,
-	 * sends four bytes that the HIF byte count does not claim.
+	 * The "single dword of zero as TX-aggregation termination" that the
+	 * macro writes at ALIGN_4(len) (hal.h:300-315) rides along with this
+	 * padding: kzalloc() supplies it, and the rounding brings it into the
+	 * transfer.  Reserving an extra DWORD on top of it does not help - that
+	 * was tried and it sends four bytes the byte count does not claim.
 	 */
-	xfer_len = mt6628_sdio_xfer_len(packet_len);
+	xfer_len = mt6628_sdio_xfer_len(ALIGN(packet_len, 4));
 	buf = kzalloc(xfer_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
