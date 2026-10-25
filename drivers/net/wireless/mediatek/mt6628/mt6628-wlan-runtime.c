@@ -1403,13 +1403,18 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 	if (loops == MT6628_RUNTIME_RX_LOOPS && READ_ONCE(wl->runtime_started))
 		schedule_work(&wl->irq_work);
 
-	if (wl->runtime_started) {
-		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
-					    MT6628_INT_EN_SET);
-		if (ret)
-			dev_err_ratelimited(&wl->func->dev,
-				"failed to re-enable SDIO interrupts: %d\n", ret);
-	}
+	/*
+	 * Always re-enable, even if teardown cleared runtime_started while this
+	 * ran.  Leaving the interrupt masked is not recoverable from anywhere
+	 * else: nothing else writes INT_EN_SET except runtime_start(), and that
+	 * only runs on a restart.  A masked line with the chip still live is
+	 * exactly "the link holds its address and nothing moves, with nothing
+	 * in dmesg".
+	 */
+	ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
+	if (ret)
+		dev_err_ratelimited(&wl->func->dev,
+			"failed to re-enable SDIO interrupts: %d\n", ret);
 	sdio_release_host(wl->func);
 
 	if (!skb_queue_empty(&wl->event_queue))
@@ -2018,8 +2023,15 @@ static void mt6628_runtime_irq_retry_work(struct work_struct *work)
 		container_of(to_delayed_work(work), struct mt6628_wlan,
 			     irq_retry_work);
 
-	if (READ_ONCE(wl->runtime_started))
-		schedule_work(&wl->irq_work);
+	if (!READ_ONCE(wl->runtime_started))
+		return;
+
+	/*
+	 * The retry exists because irq_work could not reclaim the chip and so
+	 * returned without re-enabling the interrupt.  Running irq_work again
+	 * is what re-enables it, so this must not be a bare reschedule.
+	 */
+	schedule_work(&wl->irq_work);
 }
 
 static void mt6628_runtime_pm_work(struct work_struct *work)
