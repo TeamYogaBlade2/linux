@@ -872,13 +872,26 @@ static int mt6320_hp_power_up(struct mt6320_codec_priv *priv)
 	if (ret)
 		return ret;
 
-	/* HP L/R mux: DAC. */
+	/*
+	 * HP L/R mux: MUX_AUDIO, i.e. the DAC.
+	 *
+	 * The fields are four bits wide, not three: the vendor's
+	 * AnalogSetMux() writes DEVICE_OUT_HEADSETL with mask 0x000001e0
+	 * (bits [8:5]) and DEVICE_OUT_HEADSETR with mask 0x00001e00
+	 * (bits [12:9]), so bit 8 and bit 12 are part of each L/R mux
+	 * select.  These were GENMASK(7,5)/GENMASK(11,9) here, which left
+	 * those two bits at whatever the common-mux write above (or the
+	 * previous path) left in them.  MUX_AUDIO is 4, so the *value* is
+	 * unaffected - but a stale bit 8 or 12 makes the field read 4|8 =
+	 * 12, MUX_IV_BUFFER, which for this board is a different source
+	 * entirely.  Use the vendor's masks so the field is written whole.
+	 */
 	ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
-				 GENMASK(7, 5), 4 << 5);
+				 GENMASK(8, 5), 4 << 5);
 	if (ret)
 		return ret;
 	return regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
-				  GENMASK(11, 9), 4 << 9);
+				  GENMASK(12, 9), 4 << 9);
 }
 
 static int mt6320_hp_power_down(struct mt6320_codec_priv *priv)
