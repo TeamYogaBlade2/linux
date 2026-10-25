@@ -128,20 +128,28 @@
  * puts "IMAGE_NUM_MB" at 31:16 -- which the table itself does not define.  The
  * width it would have to hold does not fit either: pitch_width_div16 is an 8-bit
  * field with a documented maximum of 128 (i.e. 2048 pixels), so a 1920-pixel
- * picture is 120 and IMAGE_NUM_MB would be 120 MBs per row -- but 31:16 of _0 is
- * documented as VENC_ENCODER_INFO_7[31:16] on the diagram for _1 and is not a
- * field of this register at all.  Believing the bit table and ignoring the
- * stray label is the only self-consistent reading, so this driver programs the
- * two fields the table defines and does not invent a third.
+ * picture is 120 and IMAGE_NUM_MB would be 120 MBs per row -- and IMAGE_INFO_0
+ * is only ten registers past HW_MODE_SEL, so a 31:16 field there belongs to the
+ * neighbour at 0x020 rather than to this register.  Believing the bit table and
+ * ignoring the stray label is the only self-consistent reading, so this driver
+ * programs the two fields the table defines and does not invent a third.
  *
- * The addresses are also worth a warning: the per-register sections in the
- * data sheet print the address of the NEXT section's register rather than their
- * own, so the section titled "VIDEO_IMAGE_INFO_0 Register" is labelled
- * 17002024, which the chapter-60 summary table (draft/ds/venc.txt:760976-761075)
- * gives as VENC_ENCODER_INFO_7.  The summary table is self-consistent across all
- * 40-odd registers and is what this header follows, here and elsewhere.
+ * The addresses needed checking against the summary table's *column alignment*,
+ * not just its labels.  The per-register sections print their own address above
+ * the next register's name, so the section titled "VIDEO_IMAGE_INFO_0 Register"
+ * carries the address 17002024 - and 17002024 is the address of IMAGE_INFO_0,
+ * not ENCODER_INFO_7.  The summary table lists ten addresses (17002000..17002024)
+ * against ten names (HW_MODE_SEL, ENCODER_INFO_0..7, IMAGE_INFO_0), so counting
+ * them off one-for-one gives:
+ *
+ *   0x000 HW_MODE_SEL   0x004..0x020 ENCODER_INFO_0..7   0x024 IMAGE_INFO_0
+ *
+ * and the next section starts at 0x028 with IMAGE_INFO_1.  So IMAGE_INFO_0 is
+ * 0x024.  An earlier revision of this header used 0x020 - the ENCODER_INFO_7
+ * slot - which meant the picture geometry was written into the wrong register
+ * and never took effect at all.
  */
-#define VENC_IMAGE_INFO_0		0x020
+#define VENC_IMAGE_INFO_0		0x024
 #define VENC_IMAGE_WIDTH_DIV16_SHIFT	0
 #define VENC_IMAGE_WIDTH_DIV16_MASK	GENMASK(7, 0)
 #define VENC_IMAGE_HEIGHT_DIV16_SHIFT	8
