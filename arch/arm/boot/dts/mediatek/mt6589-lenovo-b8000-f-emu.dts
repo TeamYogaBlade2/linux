@@ -49,7 +49,33 @@
  * (the kernel's reported command line showed no lpj=).
  */
 &{/chosen} {
-	bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+	/*
+	 * `console=ttyS0` alone does not survive on this SoC. univ8250_console_init
+	 * is a console_initcall, so it registers the ttyS console before any
+	 * DT-discovered 8250 port exists; with nothing to match it, the console is
+	 * never registered and printk stops as soon as the earlycon is replaced.
+	 *
+	 * The mmio form below is the documented escape: univ8250_console_match()
+	 * explicitly handles
+	 *
+	 *     console=uart8250,mmio32,<addr>
+	 *
+	 * which lets the console bind by address instead of by ttyS index. Both are
+	 * given: ttyS0 for the normal case and the mmio form for the case where the
+	 * port is only discovered later.
+	 *
+	 * Measured without it: printk ends at 4.341801 s while the PC sampler shows
+	 * the kernel still executing at vt=14 s.
+	 *
+	 * ORDER MATTERS, and the measurement contradicts the obvious guess.
+	 * __add_preferred_console() sets preferred_console to the LAST console= on
+	 * the command line, so putting the address form last should make it
+	 * preferred - but "uart8250" is not a name any driver registers, so that
+	 * ordering only reached 3.261907 s, WORSE than ttyS0 alone. Keeping
+	 * `console=ttyS0` last reaches 4.613663 s, which is the best measured so
+	 * far. So the address form helps as a supplement, not as the preference.
+	 */
+	bootargs = "console=ttyS0,115200n8 console=uart8250,mmio32,0x11006000 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
 	/*
 	 * `console=ttyS0` above is not enough on its own: when the 8250 driver
 	 * unbinds and rebinds ttyS0 during probe, the kernel drops the boot console
