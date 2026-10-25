@@ -7,6 +7,7 @@ obj-y += mdp3/
 obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC_VENC_MT6589) += mtk-venc-mt6589.o
 obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC_VDEC_MT6589) += mtk-vdec-mt6589.o
 obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC_VDEC_MT6589) += mtk-vdec-mt6589-h264.o
+obj-$(CONFIG_VIDEO_MEDIATEK_VCODEC_VDEC_MT6589) += mtk-vdec-mt6589-dp.o
 obj-y += mtk-csi2-rx/
 obj-y += mtk-scam/
 obj-y += mtk-cam/

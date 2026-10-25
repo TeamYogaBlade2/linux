@@ -23,6 +23,7 @@
 #include "mtk-vdec-mt6589-h264.h"
 
 struct mtk_vdec_dev;
+struct mtk_vdec_dp;
 
 /*
  * Decoder picture geometry.
@@ -46,16 +47,14 @@ struct mtk_vdec_dev;
 /*
  * Per-instance decoder state.
  *
- * Deliberately small, and that is the point rather than an omission.  Unlike the
- * encoder, this driver owns no decoder buffers at all: the reference, current,
- * post-process and 4 MiB bitstream FIFO planes all have to exist before a frame can
- * be decoded (see the VP8 note in mtk-vcodec-mt6589-reg.h), but they belong to the
- * datapath, and there is no datapath here to point them at.  Allocating several
- * picture-sized planes per open that nothing ever reads or writes would be tens of
- * megabytes of untouched memory presented as if it were working state.
+ * The picture buffers this driver needs -- reference planes, current, post-process
+ * and a 4 MiB bitstream FIFO -- are NOT here.  They belong to the datapath rather
+ * than to an open file: only one frame can be in flight on the block, job_ready()
+ * enforces that, and the same DRAM serves whichever context is decoding.  They
+ * live in struct mtk_vdec_dp on the device.  See mtk-vdec-mt6589-dp.h.
  *
- * What IS per-instance is the negotiated format, because that is what the node
- * exposes to userspace and what makes the node usable for negotiation at all.
+ * What IS per-instance is the negotiated format and the parsed stream state,
+ * because two clients can have the node open at once with different streams.
  */
 struct mtk_vdec_ctx {
 	/* First member, for the same file2dectx() reason as the encoder's fh. */
@@ -92,6 +91,30 @@ struct mtk_vdec_ctx {
 
 	/* Last slice header parsed, for the register programming step. */
 	struct mtk_h264_slice		slice;
+
+	/*
+	 * Frame in flight, for the completion path.
+	 *
+	 * pending is set by device_run() when it starts the hardware and cleared by
+	 * whichever of the frame-end interrupt, the watchdog or job_abort() retires
+	 * the job first.  It is the exactly-once claim on the buffers and on the
+	 * runtime-PM reference: two paths that both find it set cannot both return
+	 * the same pair of buffers.
+	 *
+	 * Guarded by dev->state_lock, which is a spinlock because the interrupt
+	 * handler takes it.
+	 */
+	bool				pending;
+
+	/*
+	 * The decoded-and-written picture count and the picture order count of the
+	 * last frame, which is what the reference list is built from.  Decoder-side
+	 * DPB bookkeeping, not hardware state: MT6589 has no DPB register, the
+	 * driver fills the reference list itself.
+	 */
+	u32				frame_num;
+	s32				last_poc;
+
 };
 
 #endif /* _MTK_VDEC_MT6589_H_ */

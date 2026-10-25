@@ -871,6 +871,8 @@
 #define VDEC_VLD_PROC			0x08C
 #define VDEC_VLD_PROC_INIFET		BIT(20)
 #define VDEC_VLD_PROC_INIBR		BIT(23)
+/* VLD_ABRT: stop the parser.  Shared VLD block, vdec_hw_common.h:239. */
+#define VDEC_VLD_PROC_ABRT		BIT(18)
 #define VDEC_VLD_RPTR			0x0B0
 #define VDEC_VLD_RPTR_STRIDE		0x400	/* << 10 per barrel-shifter instance */
 #define VDEC_VLD_WPTR			0x110
@@ -879,6 +881,145 @@
 #define VDEC_VLD_ASYNC			0x0D0
 #define VDEC_VLD_ASYNC_WR_ENABLE	BIT(18)
 #define VDEC_VLD_SRST			0x108
+
+/*
+ * ---------------------------------------------------------------------------
+ * The DRAM bitstream FIFO, and the barrel-shifter priming handshake.
+ * ---------------------------------------------------------------------------
+ * Source: hal/vdec_hw_h264.c:245-411 (fgH264VLDInitBarrelShifter) and
+ * hal/vdec_hw_common.c:553-557 (vVDecSetVLDVFIFO).  Every offset below is from
+ * hal/vdec_hw_common.h.
+ *
+ * ADDRESS UNITS ARE NOT UNIFORM, and that is the single most dangerous thing in
+ * this block.  Three different encodings are used for the same physical buffer:
+ *
+ *   RW_VLD_VSTART / RW_VLD_VEND   physical address >> 6   (vVDecSetVLDVFIFO)
+ *   RW_VLD_RPTR / WO_VLD_WPTR     physical address, raw
+ *   RW_AVLD_PRED_ADDR             physical address, raw
+ *   RW_MC_PP_Y_ADDR               physical address >> 9   (iDecStart)
+ *   RW_MC_PP_C_ADDR               physical address >> 8   (iDecStart)
+ *   RW_AMV_WR_ADDR                (physical >> 4) + field distance  (iDecStart)
+ *
+ * Writing a raw address into a ">> 6" register does not fail, it aims the parser
+ * at a buffer 64 times too far into DRAM, which reads back as plausible
+ * bitstream until the frame decodes to noise.
+ */
+#define VDEC_VLD_VSTART			0x0B4	/* fifo start, >> 6 */
+#define VDEC_VLD_VEND			0x0B8	/* fifo end, >> 6 */
+#define VDEC_VLD_FETCHOK		0x0E8	/* RO, VLD_FETCH_OK = BIT(0) */
+#define VDEC_VLD_FETCH_OK		BIT(0)
+#define VDEC_VLD_SRAMCTRL		0x0F4	/* RO, PROCESS_FLAG = BIT(15) */
+#define VDEC_VLD_SRAMCTRL_PROCESS_FLAG	BIT(15)
+#define VDEC_VLD_VRPTR			0x0FC	/* RO, DRAM read pointer, raw */
+
+/*
+ * Scratch ("prediction") buffer for the parser's CAVLC/CABAC neighbour data.
+ * RW_AVLD_PRED_ADDR, raw physical address, 0 allowed (the harness writes
+ * `u4PredSa ? PHYSICAL(u4PredSa) : 0`, vdec_hw_h264.c:458).  The verify harness
+ * sizes its buffer at 64 KiB (verify/vdec_verify_mm_map.h:126).
+ */
+#define VDEC_AVC_PRED_SIZE		(64 * 1024)
+
+/*
+ * AVC_VLD motion-vector block, VDEC_AVC_MV_BASE + offset.  Sources:
+ * hal/vdec_hw_common.h:1040-1052 and hal/vdec_hal_if_h264.c:1311ff.
+ *
+ * Three of the four are ambiguous in the harness and are reproduced rather than
+ * understood (see the VDEC datapath note in NOTEs.md):
+ *
+ *   - RW_AMV_WR_ADDR is programmed as `PHYSICAL(MvStartAddr) >> 4` with no
+ *     comment, so its unit is "16 bytes" but the stride the hardware uses is not
+ *     recoverable from any source here.  This driver passes the end of the luma
+ *     plane, which is within one allocation of where the harness's separate
+ *     buffer sits, and is the one choice that cannot point outside the DPB.
+ *   - RW_AMV_CURR_POC holds a picture order count masked to 18 bits, but only the
+ *     field's width is documented.  A stream whose POC exceeds 0x3ffff will be
+ *     mis-ordered on screen; it does not corrupt the decode.
+ *   - RW_AMV_P_REF_PARA packs a field count, a long/short-term flag, a flag whose
+ *     meaning is not stated anywhere, and the forward field parameters, in a
+ *     layout that is only visible as the arithmetic in
+ *     vVDEC_HAL_H264_SetPRefPicListReg().  The driver writes the same arithmetic.
+ */
+#define VDEC_AVC_MV_WR_ADDR		0x20C	/* >> 4 */
+#define VDEC_AVC_MV_CURR_POC		0x200	/* 18 bits */
+#define VDEC_AVC_MV_CURR_TFLD_POC	0x204	/* 18 bits */
+#define VDEC_AVC_MV_CURR_BFLD_POC	0x208	/* 18 bits */
+#define VDEC_AVC_MV_P_REF_PARA		0x000	/* 8 words, one per ref index */
+
+/*
+ * ---- MC block registers DecStart() programs ----
+ *
+ * Source: hal/vdec_hw_common.h:549-930, sequence from
+ * hal/vdec_hal_if_h264.c:1311-1765.  The plane-address registers
+ * (MC_UMV_PIC_WIDTH/HEIGHT, MC_PP_*) are the same offsets recorded earlier in
+ * this file for VP8, and are now actually written; the rest are new here.
+ */
+#define VDEC_MC_PP_DBLK_Y		BIT(1)
+#define VDEC_MC_PP_DBLK_C		BIT(0)
+#define VDEC_MC_P_LIST0			0x3DC	/* 32 words; +0x7C is out of the block */
+#define VDEC_MC_P_LIST0_COUNT		31	/* words 0x3DC..0x454 */
+/* Which lists are field-coded.  0 = none, which is this driver's only case. */
+#define VDEC_AMC_P_LIST0_FLD		0x564
+/* NBM (address-swap) control; @addrswap mode goes in bits 2:0. */
+#define VDEC_MC_NBM_CTRL		0x768
+
+/*
+ * Address-swap mode, MC_ADDRSWAP (0x90).  Values from vdec_hw_common.h:590-598,
+ * written by iDecStart at vdec_hal_if_h264.c:1394.
+ *
+ * ADDRSWAP_OFF is what the verify harness uses: VDEC_DDR3_SUPPORT is not defined
+ * anywhere in the harness, so `_u2AddressSwapMode = ADDRSWAP_OFF` is the branch
+ * that is compiled (verify/vdec_verify_main.c:415-419).  The DDR3 alternative
+ * changes both the plane layout and the DPB stride; it is not implemented.
+ */
+#define VDEC_MC_ADDRSWAP		0x090
+#define VDEC_MC_ADDRSWAP_OFF		(0x2u << 1)
+
+/*
+ * The prediction/PP wrapper work buffers.
+ *
+ * These two are programmed unconditionally by iDecStart
+ * (vdec_hal_if_h264.c:1657-1660) and again by the WMV path
+ * (verify/vdec_verify_vdecode.c:1631-1632) with `PHYSICAL(...)` of a work area
+ * the harness allocates and never describes further.  Their sizes are in
+ * verify/vdec_verify_mm_map.h:126-148 (VLD_PRED_SZ = 64 KiB, PP_WRAPY_SZ = 64
+ * KiB, VLD_WRAP_SZ = 15 pages, PP_WRAP_SZ = 30 pages).  What the hardware does
+ * with the contents is not documented in any source available here.
+ *
+ * They are allocated and programmed because DecStart does so on every path; if
+ * the decode produces garbage, an alternative worth testing is leaving them at
+ * zero.  Recorded in NOTEs.md rather than decided here.
+ */
+#define VDEC_MC_VLD_WRAPPER		0xA20
+#define VDEC_MC_PP_WRAPPER		0xA24
+#define VDEC_VLD_WRAPPER_SIZE		(15 * 4096)
+#define VDEC_PP_WRAPPER_SIZE		(30 * 4096)
+
+/*
+ * MC_MODE_CTL.  The harness programs it only under CONFIG_DRV_FPGA_BOARD
+ * (vdec_hal_if_h264.c:1478), and that macro IS set in this harness
+ * (include/vdec_info_common.h:20).  The bits select the MC's DRAM request
+ * merging, QIU bank width and MV merge; a real ASIC may not want the FPGA's
+ * choices, and no source here says what production uses.
+ *
+ * Deliberately NOT written: this is tuning, not function.  If the MC stalls on
+ * DRAM, this is the first thing to try.
+ */
+#define VDEC_MC_MODE_CTL		0x5E4
+
+/* AVC parser status/error registers used to decide a frame's fate. */
+#define VDEC_AVC_VLD_TIMEOUT_THD	0x268	/* RO on this path, harness writes it */
+#define VDEC_AVC_VLD_ERR_MASK		0x280
+#define VDEC_AVC_VLD_ERR_MSG		0x270
+#define VDEC_AVC_VLD_ERR_ACCUM		0x284
+#define VDEC_AVC_VLD_MC_BUSY_THD	0x290
+/*
+ * Mask written by the non-verify MT6589 path (vdec_hal_if_h264.c:1421):
+ * `~(AVLD_MB_END_CHK | AVLD_4BLOCKS_SKIP_CHK)`
+ * = ~(BIT(14) | BIT(21)).  With the harness's own CONFIG_DRV_VERIFY_SUPPORT set
+ * the same expression is used (:1424), so the two agree.
+ */
+#define VDEC_AVC_ERR_MASK_VAL		(~(BIT(14) | BIT(21)))
 
 /*
  * MC_OPBUF (VDEC_MC_BASE + 0x24).  The harness writes 6 unconditionally during

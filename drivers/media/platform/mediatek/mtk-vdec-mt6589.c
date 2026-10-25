@@ -11,54 +11,49 @@
  * = SPI 136, the vdecsys clock controller against vencsys, and the VDE power domain
  * against VEN.  The encoder half lives in mtk-venc-mt6589.c.
  *
- * WHY THIS SECTION IS WHAT IT IS
- * ==============================
- * What is here is the V4L2 plumbing and the resource layer, and nothing else: one
- * video_device with its own v4l2_device and m2m_dev, the format negotiation the node
- * needs to be usable at all, the frame-end interrupt acknowledgement, and a
- * device_run() that refuses every job it is given.
+ * WHAT THIS DRIVER DOES NOW
+ * =========================
+ * One V4L2 mem-to-mem node, and a real H.264 datapath behind it: a frame handed
+ * to device_run() is parsed, loaded into the bitstream FIFO, and started on the
+ * VDEC, and the frame-end interrupt retires it with the picture in the CAPTURE
+ * buffer.
  *
- * The refusal is the substantive part, and it is deliberate.  The vendor stack
- * programs the VDEC datapath from userspace, not from the kernel: the driver
- * walks a WRITE_REG_CMD queue that closed libraries assemble
- * (videocodec_kernel_driver.c:1758, hal_api.h:33-41).  There is therefore no
- * kernel-side register sequence to reproduce here, and inventing one from the
- * LDVT harness -- which is configured for MT8580, not this chip -- would produce
- * a driver that appears to decode and does not.
+ * The datapath is transcribed from the vendor LDVT harness
+ * (mediatek/platform/mt6589/kernel/drivers/ldvt/vdec/), which is the only
+ * register documentation that exists for this block: data sheet chapter 59 has
+ * no register section at all.  The harness is *compiled* as MT8580
+ * (include/vdec_info_common.h:125, CONFIG_CHIP_VER_CURR 80) while running on
+ * MT6589, so every sequence taken from it records which side of which
+ * `#if CONFIG_CHIP_VER_*` it came from, and the MT6589 branch is preferred
+ * wherever the harness distinguishes them.  Those citations are in the register
+ * map and at each function.
  *
- *   The vendor kernel driver (videocodec_kernel_driver.c, 2391 lines) touches the
- *   decoder only to power it up and to acknowledge the frame-end interrupt
- *   (:300-301); it never writes a datapath register.  Userspace does, by
- *   assembling a queue of WRITE_REG_CMD records (hal_api.h:33-41, :107-124) and
- *   shipping it over the MFV_SET_CMD_CMD ioctl, where the driver's only job is to
- *   walk it:
+ * WHAT IS NOT DONE, and is refused rather than approximated:
  *
- *       case WRITE_REG_CMD:
- *           VDO_HW_WRITE(cmd_queue->address + cmd_queue->offset,
- *                        cmd_queue->value);   (videocodec_kernel_driver.c:1758)
+ *   - CABAC.  The slice-header alignment and the context-initialisation stroke
+ *     are not implemented, and a CABAC frame decoded without them is garbage.  A
+ *     CABAC stream is rejected at submit.
+ *   - Multi-slice pictures.  Only first_mb_in_slice == 0 is accepted; a picture
+ *     whose second slice was silently dropped would be correct at the top and
+ *     stale at the bottom.
+ *   - Field/MBAFF coding.  frame_mbs_only_flag == 0 is refused.
+ *   - Weighted prediction.  The harness only raises a handshake for the weight
+ *     table and never writes a coefficient, so there is nothing to program.
+ *   - A full H.264 sliding-window DPB.  The reference list is "every previously
+ *     decoded picture, most recent first", which is right for num_ref_frames == 0
+ *     and for IPPPPP and wrong for multi-reference reordering.  See
+ *     mtk_vdec_h264_ref_list().
  *
- *   The decode sequence therefore lives in the closed userspace libraries
- *   (libvp8dec_sa.ca7.so and siblings), which are stripped and partly encrypted
- *   blobs.  Porting it is a userspace reverse-engineering project, not a kernel
- *   one, so the kernel-side scope is what it is here: clocks, reset, the interrupt,
- *   and a node that is honest about the rest.
+ * NOT VERIFIED ON HARDWARE.  What has been verified is the parser, on the host,
+ * against real x264 and ffmpeg output - which is how the missing
+ * dec_ref_pic_marking step below was found, and it was rejecting valid streams.
+ * The register sequences have not been run on silicon; the report that
+ * accompanied this work lists what to check first when they are.
  *
- * Two further reasons a decoder datapath could not be written from what is
- * available, both documented where they arise: the only readable register map is
- * the LDVT register-test harness, which is configured for MT8580 rather than
- * MT6589; and VP8 additionally requires its probability tables pushed bit-by-bit
- * into parser SRAM before any frame can decode.  See the VP8 note at the end of
- * mtk-vcodec-mt6589-reg.h.
- *
- * device_run() saying exactly that, at the point where a caller finds out,
- * instead of leaving a node that accepts buffers and silently never fills them,
- * is the point.  The rest of the node is real: a client can open it, query its
- * capabilities, negotiate formats and inspect them.  What it cannot do is
- * decode, and it says so.
- *
- * Giving the decoder its own driver, its own power domain and its own DT node does
- * not change any of that.  A resource layer that attaches correctly is not a
- * datapath.
+ * The vendor's own kernel driver (videocodec_kernel_driver.c:1758) is not a model
+ * for this: it walks a WRITE_REG_CMD queue that closed userspace libraries
+ * assemble, so the decode sequence on a stock ROM lives in userspace, not in the
+ * kernel.  This driver is the mainline equivalent of what those libraries do.
  */
 
 #include <linux/clk.h>
@@ -79,6 +74,7 @@
 #include <media/videobuf2-dma-contig.h>
 
 #include "mtk-vdec-mt6589.h"
+#include "mtk-vdec-mt6589-dp.h"
 #include "mtk-vcodec-mt6589-reg.h"
 
 #define MTK_VDEC_DRIVER_NAME	"mtk-vdec-mt6589"
@@ -121,8 +117,8 @@ struct mtk_vdec_dev {
 	 * separate open() lifecycles and separate format negotiation, and sharing
 	 * would make a decoder client hold the encoder's file operations.
 	 *
-	 * Its device_run() refuses every job; see the file header for why that is the
-	 * honest answer rather than a stub.
+	 * Its device_run() starts one H.264 frame; see the file header for what is
+	 * refused and why.
 	 */
 	struct video_device		vfd;
 	struct v4l2_m2m_dev		*m2m_dev;
@@ -134,6 +130,57 @@ struct mtk_vdec_dev {
 	 * a graph that was never built would corrupt the media device.
 	 */
 	bool				mc_registered;
+
+	/*
+	 * The datapath's DRAM: bitstream FIFO, prediction scratch, reference
+	 * pictures, MV and wrapper work areas.  Allocated on the first frame and
+	 * held until remove(), because it is not per-open: only one frame can be in
+	 * flight on the block, and job_ready() enforces that by reporting busy
+	 * until the previous frame retires.
+	 */
+	struct mtk_vdec_dp		dp;
+
+	/*
+	 * Serialises frame-in-flight bookkeeping between the submit path, the
+	 * frame-end interrupt and the watchdog.  A spinlock rather than a mutex
+	 * because the interrupt handler takes it; the same shape the encoder half
+	 * of this driver uses, and for the same reason.
+	 */
+	spinlock_t			state_lock;
+
+	/* The context whose frame is decoding, or NULL.  Under state_lock. */
+	struct mtk_vdec_ctx		*active;
+
+	/*
+	 * The deferred completion and its bounded watchdog.
+	 *
+	 * The interrupt handler cannot return vb2 buffers to the framework itself:
+	 * v4l2_m2m_buf_done_and_job_finish() takes a spinlock and can schedule the
+	 * next job, neither of which is legal in hard IRQ context.  So the ISR
+	 * records that the frame ended and hands the work here.
+	 *
+	 * The watchdog exists because the frame-end interrupt is the only thing that
+	 * can retire a frame, and this driver's entire knowledge of it comes from a
+	 * vendor harness: an engine that never signals would otherwise leave the job
+	 * and the runtime-PM reference stuck forever, and STREAMOFF would hang in
+	 * v4l2_m2m_cancel_job()'s wait_event().
+	 */
+	struct work_struct		complete_work;
+	struct delayed_work		timeout_work;
+
+	/* Whether the interrupt handler saw the frame end.  Under state_lock. */
+	bool				frame_done;
+	/* Whether the runtime-PM reference for the active frame is held. */
+	bool				dp_pm_held;
+
+	/* Set when the hardware reported a decode error for the frame. */
+	bool				frame_error;
+	u32				frame_err_reg;
+
+	unsigned long			timeout_count;
+
+	/* Decoded and written picture count, for the reference list. */
+	u32				pic_count;
 };
 
 static inline void mtk_vdec_write(struct mtk_vdec_dev *vdec, u32 off, u32 val)
@@ -170,9 +217,11 @@ static void mtk_vdec_power_off(struct mtk_vdec_dev *vdec)
 }
 
 /*
- * Decoder interrupt.  There is no status/ack register pair: frame end is bit 16
- * of MISC word 41, and the interrupt is cleared by setting bits 0 and 4 and
- * then driving bit 4 low again, a two-step sequence on the same word.
+ * Decoder interrupt.
+ *
+ * There is no status/ack register pair: frame end is bit 16 of MISC word 41, and
+ * the interrupt is cleared by setting bits 0 and 4 and then driving bit 4 low
+ * again, a two-step sequence on the same word.
  *
  * The second write RE-READS the register and clears bit 4.  This follows the
  * production driver, videocodec_kernel_driver.c:300-301:
@@ -182,50 +231,73 @@ static void mtk_vdec_power_off(struct mtk_vdec_dev *vdec)
  *     VDO_HW_WRITE(VDEC_MISC_BASE + 41*4,
  *                  VDO_HW_READ(VDEC_MISC_BASE + 41*4) & ~0x10);
  *
- * An earlier revision of this driver wrote the value SAVED BEFORE the first write
- * instead, which is what the LDVT harness does at vdec_hal_if_avs.c:1105-1106
- * (u4VDEC_HAL_AVS_VDec_ClearInt writes back u4Reg).  The two vendor sources
- * genuinely disagree; the driver's form is used here because that is the code
- * whose behaviour was observed on silicon.  See the frame-end comment in
- * mtk-vcodec-mt6589-reg.h, which records both.
+ * The LDVT harness instead writes back the value SAVED BEFORE the first write
+ * (vdec_hal_if_avs.c:1105-1106).  The two vendor sources genuinely disagree; the
+ * production driver's form is used here because that is the code whose behaviour
+ * was observed on real silicon.  mtk-vcodec-mt6589-reg.h records both.
  *
- * The decoder datapath itself is not programmed by this driver; see the file
- * header.  The interrupt is still handled because the block can and does raise
- * it -- the register window and its clocks exist whether or not this driver
- * starts anything -- and an unacknowledged level-high interrupt would wedge the
- * line permanently.
+ * The acknowledge is unconditional on the way in - it has to be, or a level-high
+ * line stays asserted - but the *completion* is only claimed if the frame-end bit
+ * was actually set and a frame is in flight.
+ *
+ * What this handler does not do is retire the frame.  v4l2_m2m_buf_done_and_job_finish()
+ * takes a spinlock and can schedule the next job, neither legal here, so the work
+ * is handed to mtk_vdec_complete_work().  What it does do is record the error
+ * state, because the error registers are only meaningful now: they accumulate
+ * during the frame and say nothing after the next one starts.
  */
 static irqreturn_t mtk_vdec_isr(int irq, void *data)
 {
 	struct platform_device *pdev = data;
 	struct mtk_vdec_dev *vdec = dev_get_drvdata(&pdev->dev);
-	u32 val;
+	unsigned long flags;
+	u32 val, err;
+
+	val = mtk_vdec_read(vdec, VDEC_MISC_FRAME_END);
 
 	/*
-	 * Deliberately no runtime-PM reference here, and deliberately no put
-	 * either.  There is no decoder submit path in this driver to take a matching
-	 * reference -- see the file header, the decoder datapath is not programmed at
-	 * all -- so there is nothing to balance against and a put here would decrement
-	 * a count this ISR never incremented.  Taking a reference is not an option
-	 * either: the resume path enables clocks, which is not permitted from
-	 * interrupt context without pm_runtime_irq_safe(), and this device is not so
-	 * marked because doing so would not be true of its resume path.
-	 *
-	 * The access is safe anyway: an interrupt from the block means its clock is
-	 * already running.
+	 * No runtime-PM reference is taken here.  The submit path took one and
+	 * mtk_vdec_complete() is what drops it, from process context; the access
+	 * below is safe anyway because an interrupt from the block means its
+	 * clock is already running.
 	 */
-	val = mtk_vdec_read(vdec, VDEC_MISC_FRAME_END);
-	if (val & VDEC_FRAME_END_BIT) {
-		mtk_vdec_write(vdec, VDEC_MISC_FRAME_END, val |
-			       VDEC_FRAME_END_SET | VDEC_FRAME_END_ACK);
-		mtk_vdec_write(vdec, VDEC_MISC_FRAME_END,
-			       mtk_vdec_read(vdec, VDEC_MISC_FRAME_END) &
-			       ~VDEC_FRAME_END_ACK_CLR);
-		vdec->irq_count++;
+	if (!(val & VDEC_FRAME_END_BIT))
+		return IRQ_NONE;
+
+	mtk_vdec_write(vdec, VDEC_MISC_FRAME_END,
+		       val | VDEC_FRAME_END_SET | VDEC_FRAME_END_ACK);
+	mtk_vdec_write(vdec, VDEC_MISC_FRAME_END,
+		       mtk_vdec_read(vdec, VDEC_MISC_FRAME_END) &
+		       ~VDEC_FRAME_END_ACK_CLR);
+
+	vdec->irq_count++;
+
+	/*
+	 * A non-zero error accumulator means the parser rejected part of the
+	 * bitstream.  The frame still completed, so its buffers are still
+	 * written - but what was written is not trustworthy, and reporting it as
+	 * DONE is how a decode bug becomes an "image looks weird" bug report.
+	 */
+	err = mtk_vdec_read(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_ERR_ACCUM);
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	if (vdec->active && !vdec->frame_done) {
+		vdec->frame_done = true;
+		if (err) {
+			vdec->frame_error = true;
+			vdec->frame_err_reg = err;
+		}
+		schedule_work(&vdec->complete_work);
 	}
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	if (err)
+		dev_warn_ratelimited(&pdev->dev,
+				     "AVC parser reported errors 0x%08x\n", err);
 
 	return IRQ_HANDLED;
 }
+
 /* The decoder's accessor, for the same v4l2_fh reason as file2ctx() above. */
 #define file2dectx(f)							\
 	container_of(file_to_v4l2_fh(f), struct mtk_vdec_ctx, fh)
@@ -241,15 +313,18 @@ static irqreturn_t mtk_vdec_isr(int irq, void *data)
  * OUTPUT queue carries the compressed bitstream that goes IN, and the CAPTURE
  * queue carries the raw picture that comes OUT.
  *
- * One codec is declared, VP8, and the declaration is deliberately narrow.  The
- * hardware block is multi-standard -- the vendor harness carries per-codec
- * tables for MPEG-1/2, MPEG-4, H.263, H.264, WMV, VC-1, RM, VP6, VP8 and AVS --
- * but every one of those needs a bitstream parser bring-up this driver does not
- * have, so advertising the whole list would advertise nine codecs of which none
- * can decode.  VP8 is named because it is the one whose register map and buffer
- * requirements have been read closely enough to document in
- * mtk-vdec-mt6589-reg.h; naming it is a statement about available
- * documentation, not about working decode.
+ * One codec is declared, H.264, because one codec has a datapath.  The hardware
+ * block is multi-standard -- the vendor harness carries per-codec tables for
+ * MPEG-1/2, MPEG-4, H.263, H.264, WMV, VC-1, RM, VP6, VP8 and AVS -- but the
+ * others need a bitstream front end this driver does not have.  In particular VP8
+ * is NOT decodable here and is no longer advertised: the block's VP8 path needs
+ * probability tables pushed bit-by-bit into parser SRAM before a frame can start,
+ * and the retail device decodes VP8 in software (libvp8dec_sa.ca7.so calls
+ * vpx_codec_decode()), so there is nothing to gain by pretending.  See the VP8
+ * note at the end of mtk-vcodec-mt6589-reg.h.
+ *
+ * H.264 is declared at V4L2_PIX_FMT_H264, which is what a client must negotiate
+ * on the OUTPUT queue for device_run() to accept the stream.
  */
 
 /*
@@ -328,8 +403,8 @@ static int mtk_vdec_enum_fmt_out(struct file *file, void *priv,
 		return -EINVAL;
 
 	d->flags = V4L2_FMT_FLAG_COMPRESSED;
-	strscpy(d->description, "VP8 bitstream", sizeof(d->description));
-	d->pixelformat = V4L2_PIX_FMT_VP8;
+	strscpy(d->description, "H.264 bitstream", sizeof(d->description));
+	d->pixelformat = V4L2_PIX_FMT_H264;
 	return 0;
 }
 
@@ -403,7 +478,7 @@ static int mtk_vdec_try_fmt_out(struct file *file, void *priv,
 
 	f->fmt.pix.width = 0;
 	f->fmt.pix.height = 0;
-	f->fmt.pix.pixelformat = V4L2_PIX_FMT_VP8;
+	f->fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
 	f->fmt.pix.field = V4L2_FIELD_NONE;
 
 	return 0;
@@ -483,33 +558,6 @@ static int mtk_vdec_queue_setup(struct vb2_queue *vq,
 	return 0;
 }
 
-/*
- * device_run - this driver cannot decode.
- *
- * Refusing the job is the whole point of this node and is not a placeholder.  It is
- * reported at the moment a client actually asks for a picture, which is the only
- * place a caller can be told the truth, and it is accompanied by a message
- * naming the reason so the failure is diagnosable from dmesg alone.
- *
- * What has deliberately NOT been done here, and would have been the alternative:
- *
- *   - Populating the VP8 motion-compensation registers.  Their offsets are known and
- *     are recorded in mtk-vdec-mt6589-reg.h, but they come from the LDVT
- *     register-test harness, which is built as CONFIG_CHIP_VER_CURR 80 == MT8580
- *     (vdec_info_common.h:125, :130) -- a different SoC -- and a wrong offset written
- *     to a decoder does not fail loudly, it corrupts the block's state.
- *   - Loading the VP8 probability tables.  Required before any frame can decode, and
- *     they are only present in the harness as several hundred literal constants
- *     pushed through an SRAM port (vdec_hal_if_vp8.c:1891ff).  One wrong entry yields a
- *     decoder that emits plausible garbage.
- *   - Allocating the decoder's planes.  Three reference planes plus current,
- *     post-process and a 4 MiB bitstream FIFO (vdec_drv_fileio.h:23), all of which are
- *     only meaningful to a datapath that does not exist here.
- *
- * Rather than any of those, device_run() refuses the job instead: it hands the buffers
- * back as failed and reports, in dmesg, that there is no datapath.  See the VP8 note at
- * the end of mtk-vdec-mt6589-reg.h for the full argument.
- */
 /*
  * Program the AVC parser with a parsed SPS.
  *
@@ -660,6 +708,7 @@ static int mtk_vdec_h264_load_stream(struct mtk_vdec_ctx *ctx,
 			if (have_slice)
 				break;
 			ret = mtk_h264_parse_slice(nal + 1, nal_len - 1, type,
+						   (nal[0] >> 5) & 0x3,
 						   &ctx->ps, &slice);
 			if (ret)
 				return ret;
@@ -720,17 +769,10 @@ static int mtk_vdec_h264_program(struct mtk_vdec_ctx *ctx)
  *   3. The prediction/scratch address, or 0 when the caller has none.
  *   4. Reset the AVC VLD sum, a two-write strobe.
  *
- * Deliberately NOT done here, because they need state this driver does not own
- * yet:
- *   - the bitstream VFIFO addresses (VLD_WPTR/RPTR plus the FIFO base).  Without
- *     a DRAM FIFO the parser has nothing to read, so this leaves the block
- *     enabled but idle.
- *   - the barrel-shifter priming handshake (VLD_PROC INIFET/INIBR, then spin on
- *     RO_VLD_VBAR and step the shifter 8 bits at a time).  That is interactive
- *     and its success depends on there being valid data behind the read pointer.
- *
- * Returns 0 once the registers are written; it does not mean a picture can be
- * decoded, and the caller must not report one.
+ * pred_addr is a raw device address (RW_AVLD_PRED_ADDR takes no shift), and 0 is
+ * accepted: the harness writes 0 when it has no scratch buffer
+ * (vdec_hw_h264.c:458).  This driver always has one, but the parameter keeps the
+ * "no buffer" case expressible rather than silently passing a bogus address.
  */
 static int mtk_vdec_h264_bring_up(struct mtk_vdec_dev *vdec, u32 pred_addr)
 {
@@ -760,26 +802,631 @@ static int mtk_vdec_h264_bring_up(struct mtk_vdec_dev *vdec, u32 pred_addr)
 	return 0;
 }
 
+/* Busy-wait helpers.  Values from the harness; see each call site. */
+#define MTK_VDEC_FETCH_SPIN		0x1000	/* fgVDecWaitVldFetchOk's bound */
+#define MTK_VDEC_VBAR_SPIN		0x10000
+#define MTK_VDEC_REF_SPIN		0x10000
+
+/*
+ * Priming the barrel shifter, which is how the parser is told where the frame's
+ * bitstream begins.
+ *
+ * Transcribed from fgH264VLDInitBarrelShifter(), hal/vdec_hw_h264.c:245-411,
+ * taking the MT6589 branches:
+ *
+ *   - the `#else //for 6589` arm of the byte-alignment loop (:376), NOT the
+ *     MT8580 arm above it.  The two differ in the u4TgtByteAddr/i bookkeeping
+ *     around the emulation-prevention check, and the 6589 arm is the simpler of
+ *     the two: step 8 bits per byte, and consume an extra byte when
+ *     RW_AVLD_RM03R reports that the current 3-byte window is 00 00 03.
+ *   - the `< MT8580` arm of the VBAR wait (:311-345), which on this chip's
+ *     version constants means `& 0x03000003 == 0x01000001` with
+ *     MEM_PAUSE_SUPPORT defined (vdec_hw_common.h:28).
+ *   - RW_VLD_ASYNC's write-enable (:274), which is `< MT8580` only.  VLD_ASYNC
+ *     is a *shared* VLD register, not an AVC_VLD one, so it is written at
+ *     VDEC_VLD_BASE + offset like the harness does.
+ *
+ * The retry loop is the harness's too, and it is not decoration: priming fails
+ * when the FIFO's read pointer is not yet backed by valid data, and the harness
+ * retries the whole thing up to five times rather than giving up.
+ *
+ * Returns 0 on success, -ETIMEDOUT if the fetch never completes.  A timeout here
+ * is the honest answer to "the parser cannot see the bitstream", and is much
+ * better than starting a decode that will produce nothing.
+ */
+static int mtk_vdec_h264_prime_barrel_shifter(struct mtk_vdec_dev *vdec,
+					      dma_addr_t fifo_sa,
+					      dma_addr_t rd_ptr,
+					      dma_addr_t wr_ptr)
+{
+	void __iomem *avc = vdec->regs + VDEC_AVC_VLD_BASE;
+	void __iomem *vld = vdec->regs + VDEC_VLD_BASE;
+	unsigned int attempt, spin;
+	u32 v;
+
+	for (attempt = 0; attempt < 5; attempt++) {
+		/* WO_VLD_WPTR bit 0: clear the process state. */
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_WPTR,
+			       readl(vld + VDEC_VLD_WPTR) |
+			       VDEC_VLD_WPTR_CLEAR);
+
+		/* Twice, exactly as the harness does (:268-269). */
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_RPTR,
+			       (u32)rd_ptr);
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_RPTR,
+			       (u32)rd_ptr);
+
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_WPTR,
+			       (u32)wr_ptr);
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_ASYNC,
+			       readl(vld + VDEC_VLD_ASYNC) |
+			       VDEC_VLD_ASYNC_WR_ENABLE);
+
+		/*
+		 * The FIFO's own bounds, in >> 6 units.  The harness sets these
+		 * once at bring-up (vVDecSetVLDVFIFO, vdec_hw_common.c:553);
+		 * repeating them here costs two writes and makes the priming
+		 * self-contained, which matters because the retry loop re-primes
+		 * a block whose FIFO may have been reset.
+		 */
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_VSTART,
+			       (u32)(fifo_sa >> 6));
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_VEND,
+			       (u32)((fifo_sa + VDEC_VFIFO_SIZE) >> 6));
+
+		mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_RESET_SUM,
+			       VDEC_AVC_RESET_SUM_ON);
+
+		/* Start the fetch and wait for it, with the harness's bound. */
+		mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_PROC,
+			       VDEC_VLD_PROC_INIFET);
+		for (spin = 0; spin < MTK_VDEC_FETCH_SPIN; spin++) {
+			if (readl(vld + VDEC_VLD_FETCHOK) & VDEC_VLD_FETCH_OK)
+				break;
+			cpu_relax();
+		}
+		if (spin == MTK_VDEC_FETCH_SPIN)
+			continue;	/* retry the whole handshake */
+		break;
+	}
+
+	if (attempt == 5) {
+		dev_err(&vdec->pdev->dev,
+			"barrel shifter never reported a completed fetch\n");
+		return -ETIMEDOUT;
+	}
+
+	mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_PROC,
+		       VDEC_VLD_PROC_INIBR);
+
+	/*
+	 * HW workaround, quoted as such by the harness (:305-306): the sum reset
+	 * cannot be released until the barrel shifter has finished initialising,
+	 * so this waits for VBAR before dropping RESET_SUM.
+	 */
+	for (spin = 0; spin < MTK_VDEC_VBAR_SPIN; spin++) {
+		v = readl(vld + VDEC_VLD_VBAR);
+		if ((v & 0x03000003) == 0x01000001)
+			break;
+		cpu_relax();
+	}
+	if (spin == MTK_VDEC_VBAR_SPIN)
+		dev_warn(&vdec->pdev->dev,
+			 "barrel shifter VBAR never matched (0x%08x)\n",
+			 readl(vld + VDEC_VLD_VBAR));
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_RESET_SUM,
+		       VDEC_AVC_RESET_SUM_OFF);
+
+	/*
+	 * Byte-align: step the shifter 8 bits at a time over however many bytes
+	 * the read pointer is past the 16-byte boundary it starts on.
+	 *
+	 * The emulation-prevention adjustment is the harness's: whenever
+	 * RW_AVLD_RM03R says the current window is 00 00 03 (:381), step one more
+	 * byte, so the shifter lands after the escape rather than inside it.
+	 * Without it every following bit is shifted by 8 for the rest of the
+	 * frame.
+	 */
+	v = (u32)rd_ptr & 0xf;
+	while (v) {
+		v--;
+		if ((readl(avc + VDEC_AVC_VLD_RM03R) &
+		     VDEC_AVC_RM03R_FIND_03) && v)
+			v--;
+
+		/* Step 8 bits: AVC_VLD's shifter window is RO_AVLD_BARL + 8*4. */
+		(void)readl(avc + 8 * 4);
+	}
+
+	dev_dbg(&vdec->pdev->dev,
+		"barrel shifter primed: rd=%pad wr=%pad window=0x%08x\n",
+		&rd_ptr, &wr_ptr, readl(avc));
+	return 0;
+}
+
+/*
+ * Build the reference picture list.
+ *
+ * MT6589 has no DPB register: the driver fills MC_P_LIST0 (the plane address of
+ * each reference) and AVC_VLD_REORD_P0_RPL (its PicNum) itself, having first reset
+ * the list and declared how many frame numbers the stream uses.
+ *
+ * Transcribed from vVDEC_HAL_H264_InitPRefList() and
+ * vVDEC_HAL_H264_SetPRefPicListReg(), hal/vdec_hal_if_h264.c:662-826.
+ *
+ * What is deliberately NOT reproduced, and why:
+ *
+ *   - The full sliding-window DPB of H.264 8.2.5.  The harness implements it in
+ *     its *verify* layer (verify/vdec_verify_vparser_h264.c), not in the HAL, and
+ *     the HAL only consumes the resulting list.  This driver keeps the simplest
+ *     correct rule instead: every previously decoded picture is a reference, most
+ *     recent first.  That is exactly right for a stream with num_ref_frames == 0
+ *     (no references at all, which is what baseline x264 emits) and for
+ *     IPPPPP with one reference; it is wrong for streams that use several
+ *     references with non-trivial reordering.  Saying so is better than pretending
+ *     otherwise - see the report and NOTEs.md.
+ *   - B lists, field pictures and long-term references.  Not reachable through
+ *     this driver's parser: it accepts frame pictures only, and it has no
+ *     long-term bookkeeping.
+ *
+ * cur_pic_num is the current picture's PicNum, which for a frame picture is just
+ * its frame_num (vdec_verify_vparser_h264.c:396).
+ */
+static void mtk_vdec_h264_ref_list(struct mtk_vdec_dev *vdec,
+				   struct mtk_vdec_ctx *ctx,
+				   const struct mtk_h264_sps *sps,
+				   u32 cur_pic_num)
+{
+	void __iomem *avc = vdec->regs + VDEC_AVC_VLD_BASE;
+	u32 max_frame_num = 1u << (sps->log2_max_frame_num_minus4 + 4);
+	unsigned int i, nrefs;
+	u32 spin;
+
+	/* No B lists: this driver only decodes frame pictures from one list. */
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_AMC_P_LIST0_FLD, 0);
+
+	/* Reset the list, then wait for the hardware to acknowledge. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_RESET_PIC_NUM,
+		       VDEC_AVC_RESET_PIC_NUM);
+	for (spin = 0; spin < MTK_VDEC_REF_SPIN; spin++) {
+		if (!(readl(avc + VDEC_AVC_VLD_RESET_PIC_NUM) & 0x1))
+			break;
+		cpu_relax();
+	}
+
+	/* MAX_PIC_NUM takes the frame count doubled for non-frame pictures. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_MAX_PIC_NUM,
+		       max_frame_num);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_CUR_PIC_NUM,
+		       cur_pic_num);
+
+	/*
+	 * Fill the list.  Slot 0 is the most recent picture.  A slot's two halves
+	 * are:
+	 *
+	 *   MC_P_LIST0[i]        the reference plane's luma address
+	 *   AVC_VLD_REORD_P0_RPL the reference's PicNum, with bit 19 selecting
+	 *                        long-term (0 here: no long-term support)
+	 *
+	 * Both are written even when there is no reference, so a stale entry from a
+	 * previous frame at the same geometry cannot be used by mistake.  With no
+	 * reference the address is the current picture's own plane and the count is
+	 * zero, which is what an IDR frame needs: nothing in it refers to another
+	 * picture.
+	 */
+	nrefs = (vdec->pic_count < MTK_VDEC_REF_PICS) ? vdec->pic_count
+						      : MTK_VDEC_REF_PICS;
+
+	for (i = 0; i < VDEC_MC_P_LIST0_COUNT; i++) {
+		u32 picnum = 0;
+		dma_addr_t addr;
+
+		if (i < nrefs) {
+			/* Most recent first: pic_count-1, -2, ... */
+			unsigned int idx = (vdec->pic_count - 1 - i) %
+					   MTK_VDEC_REF_PICS;
+
+			addr = mtk_vdec_dp_ref_dma(&vdec->dp, idx);
+			/*
+			 * Each stored picture's PicNum is its own frame_num.  The
+			 * driver does not keep a per-slot frame_num table, so the
+			 * numbers are derived from the current one by counting
+			 * backwards, which is correct only for the simple case
+			 * this driver supports - see the note above.
+			 */
+			picnum = (cur_pic_num + max_frame_num - (i + 1) % max_frame_num) %
+				 max_frame_num;
+		} else {
+			addr = mtk_vdec_dp_ref_dma(&vdec->dp,
+						   vdec->pic_count %
+						   MTK_VDEC_REF_PICS);
+		}
+
+		mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_P_LIST0 + i * 4,
+			       (u32)addr);
+		/* Bit 19 clear: short-term reference. */
+		mtk_vdec_write(vdec,
+			       VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_REORD_P0_RPL + i * 4,
+			       picnum & 0x7ffff);
+	}
+
+	dev_dbg(&vdec->pdev->dev,
+		"ref list: cur_pic_num=%u max_frame_num=%u refs=%u\n",
+		cur_pic_num, max_frame_num, nrefs);
+}
+
+/*
+ * Program the MC/PP planes for the picture about to be decoded and write the
+ * output into the CAPTURE buffer.
+ *
+ * Sources, one per register:
+ *
+ *   MC_UMV_PIC_WIDTH/HEIGHT  pixels, full frame height even for a field
+ *                            (vdec_hal_if_h264.c:1408-1410, u4PicW/u4PicH from
+ *                            vdec_verify_vparser_h264.c:325-326)
+ *   MC_PP_ENABLE             1 enables post-processing
+ *   MC_PP_Y_ADDR             destination luma >> 9      (vdec_hal_if_h264.c:1450)
+ *   MC_PP_C_ADDR             destination chroma >> 8    (vdec_hal_if_h264.c:1451)
+ *   MC_PP_WB_BY_POST         1: write the picture back   (:1452)
+ *   MC_PP_DBLK_MODE          DBLK_Y | DBLK_C             (:1453)
+ *   MC_PP_X/Y_RANGE          MB extent minus one         (:1454-1455)
+ *   MC_PP_MB_WIDTH           MB width                    (:1456)
+ *   MC_ADDRSWAP              ADDRSWAP_OFF                (:1394)
+ *
+ * The two >> shifts are the harness's and are not interchangeable: 512 for luma
+ * and 256 for chroma.  Using one for the other aims the writeback at the wrong
+ * plane, which reads back as a picture that is half correct and half the previous
+ * frame.
+ *
+ * The in-loop deblocking filter is always enabled.  Turning it off is a
+ * bitstream decision (disable_deblocking_filter_idc == 1) that the harness has
+ * commented out at :1440-1443; the driver follows the harness and lets the
+ * hardware apply the slice's own parameters, which it reads from the bitstream.
+ */
+static void mtk_vdec_h264_set_planes(struct mtk_vdec_dev *vdec,
+				     const struct mtk_h264_sps *sps,
+				     dma_addr_t dst_y, dma_addr_t dst_c)
+{
+	unsigned int mbx = sps->pic_width_in_mbs_minus1 + 1;
+	unsigned int mby = sps->pic_height_in_map_units_minus1 + 1;
+
+	/* Non-frame-coded streams get a doubled height; this driver refuses
+	 * those, so the simple form is the one that applies.
+	 */
+	if (!sps->frame_mbs_only_flag)
+		mby *= 2;
+
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_UMV_PIC_WIDTH, mbx * 16);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_UMV_PIC_HEIGHT, mby * 16);
+
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_ENABLE, 1);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_Y_ADDR,
+		       (u32)(dst_y >> 9));
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_C_ADDR,
+		       (u32)(dst_c >> 8));
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_WB_BY_POST, 1);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_DBLK_MODE,
+		       VDEC_MC_PP_DBLK_Y | VDEC_MC_PP_DBLK_C);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_X_RANGE, mbx - 1);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_Y_RANGE, mby - 1);
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_MB_WIDTH, mbx);
+
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_ADDRSWAP,
+		       VDEC_MC_ADDRSWAP_OFF);
+
+	/*
+	 * The two wrapper work areas.  DecStart programs both unconditionally
+	 * (:1657-1660) and their contents are not documented anywhere available
+	 * here; they are allocated and pointed at because the harness always does.
+	 * If this driver decodes to garbage, leaving them at zero is one of the
+	 * first alternatives to test.
+	 */
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_VLD_WRAPPER,
+		       (u32)mtk_vdec_dp_vld_wrap_dma(&vdec->dp));
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_PP_WRAPPER,
+		       (u32)mtk_vdec_dp_pp_wrap_dma(&vdec->dp));
+
+	/* Where the MC writes motion vectors for this picture (>> 4). */
+	mtk_vdec_write(vdec, VDEC_AVC_MV_BASE + VDEC_AVC_MV_WR_ADDR,
+		       (u32)(mtk_vdec_dp_mv_dma(&vdec->dp) >> 4) +
+		       vdec->pic_count % MTK_VDEC_REF_PICS);
+}
+
+/*
+ * Write the slice-header word 2.
+ *
+ * Packing from hal/vdec_hal_if_h264.c:1524-1541:
+ *
+ *   [6:0]   slice_qp_delta, 7 bits signed
+ *   [8:7]   disable_deblocking_filter_idc, 2 bits
+ *   [12:9]  slice_alpha_c0_offset_div2, 4 bits
+ *   [16:13] slice_beta_offset_div2, 4 bits
+ *   [18:17] nal_ref_idc, 2 bits
+ *   [19]    IdrPicFlag
+ *   [21:20] cabac_init_idc, 2 bits
+ *
+ * The AVC_VLD block decodes the slice data itself, but the deblocking and CABAC
+ * parameters come from the header, which it is handed - so all of them have to be
+ * in this word.
+ */
+static void mtk_vdec_h264_set_slice2(struct mtk_vdec_dev *vdec,
+				     const struct mtk_h264_slice *slice)
+{
+	u32 v = (u32)slice->slice_qp_delta & 0x7f;
+
+	v |= FIELD_PREP(GENMASK(8, 7), slice->disable_deblocking_filter_idc);
+	v |= FIELD_PREP(GENMASK(12, 9),
+			(u32)slice->slice_alpha_c0_offset_div2 & 0xf);
+	v |= FIELD_PREP(GENMASK(16, 13),
+			(u32)slice->slice_beta_offset_div2 & 0xf);
+	v |= FIELD_PREP(GENMASK(18, 17), slice->nal_ref_idc & 0x3);
+	v |= (u32)(slice->nal_type == MTK_H264_NAL_IDR) << 19;
+	v |= FIELD_PREP(GENMASK(21, 20), slice->cabac_init_idc & 0x3);
+
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_SHDR_2, v);
+
+	/*
+	 * CABAC only: the harness strokes INIT_CTX_SRAM once the header is
+	 * written (:1543-1546).  This driver refuses CABAC at submit, so the
+	 * write cannot fire today - it is here so that removing that refusal
+	 * does not silently leave the context initialisation out.
+	 */
+	if (slice->cabac_init_idc) {
+		mtk_vdec_write(vdec,
+			       VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_INIT_CTX_SRAM, 1);
+	}
+}
+
+/* Longest a frame may take before the watchdog declares the engine wedged. */
+#define MTK_VDEC_TIMEOUT_MS	1000
+
+/*
+ * Start the pipeline for one frame.
+ *
+ * Order matters and comes from i4VDEC_HAL_H264_DecStart()
+ * (vdec_hal_if_h264.c:1311-1765), with the pieces that are specific to
+ * MT8580 removed and the pieces that are MT6589's kept:
+ *
+ *   1. MC thresholds and picture geometry (:1398-1410).
+ *   2. AVC error mask (:1421), which decides which bitstream defects are fatal
+ *      and which are concealed.
+ *   3. Wrapper switch off for 4:2:0 (:1435) - the `MC_WRAPPER_SWITCH` write is
+ *      under `< MT8560`, so it applies here.
+ *   4. PP planes and the writeback target (:1445-1465).
+ *   5. NBM address-swap mode (:1571), also `>= MT8550`, so it applies.
+ *   6. MC bug threshold and the SHDR2 word (:1518, :1541).
+ *   7. The stall wait (:1548) before the trigger.
+ *   8. AVC_VLD_PROC = 1 (:1763), the trigger.
+ *
+ * Deliberately skipped, each for a stated reason:
+ *
+ *   - RW_AVLD_RM03R's "turn off find start code" write (:1489).  The harness
+ *     clears BIT(5) (or BIT(9) without MEM_PAUSE_SUPPORT) of a register the
+ *     driver has not otherwise established; the same register's BIT(11) is the
+ *     00 00 03 detector the barrel-shifter priming reads, so clearing bits in it
+ *     blind could disable the very check the priming depends on.
+ *   - MC_MODE_CTL (:1478).  FPGA-board tuning, no production value known.
+ *   - The DV bank's latency-buffer bypass for narrow pictures (:1580).  VP8/AVS
+ *     territory, and the register's meaning is not established for H.264.
+ */
+static int mtk_vdec_h264_start(struct mtk_vdec_dev *vdec,
+			       struct mtk_vdec_ctx *ctx,
+			       const struct mtk_h264_sps *sps,
+			       const struct mtk_h264_pps *pps,
+			       dma_addr_t dst_y, dma_addr_t dst_c)
+{
+	void __iomem *avc = vdec->regs + VDEC_AVC_VLD_BASE;
+	u32 spin, cur_pic_num;
+	unsigned int mbx = sps->pic_width_in_mbs_minus1 + 1;
+	unsigned int mby = sps->pic_height_in_map_units_minus1 + 1;
+
+	if (!sps->frame_mbs_only_flag) {
+		/*
+		 * Field-coded streams need the doubled height, MBAFF and the
+		 * field reference list.  None of that is implemented, and
+		 * starting one anyway would decode a picture into the wrong
+		 * geometry rather than failing.
+		 */
+		return -EOPNOTSUPP;
+	}
+
+	/* 1. Thresholds and geometry. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_MC_BUSY_THD,
+		       0x8000);
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_TIMEOUT_THD,
+		       0xffffffff);
+
+	/* 2. Error mask. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_ERR_MASK,
+		       VDEC_AVC_ERR_MASK_VAL);
+
+	/* 3. Mono wrapper switch: 0 for 4:2:0. */
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_WRAPPER_SWITCH,
+		       sps->chroma_format_idc == 0 ? 1 : 0);
+
+	/* 4. Planes and writeback. */
+	mtk_vdec_h264_set_planes(vdec, sps, dst_y, dst_c);
+
+	/* 5. Address swap. */
+	mtk_vdec_write(vdec, VDEC_MC_BASE + VDEC_MC_NBM_CTRL,
+		       VDEC_MC_ADDRSWAP_OFF);
+
+	/* 6. Reference list, then SHDR2. */
+	cur_pic_num = ctx->slice.frame_num;
+	mtk_vdec_h264_ref_list(vdec, ctx, sps, cur_pic_num);
+	mtk_vdec_h264_set_slice2(vdec, &ctx->slice);
+
+	/* 7. Wait for the parser to be unstalled before triggering it. */
+	for (spin = 0; spin < MTK_VDEC_VBAR_SPIN; spin++) {
+		if (!(readl(avc + VDEC_AVC_VLD_STATUS) & VDEC_AVC_STATUS_STALL))
+			break;
+		cpu_relax();
+	}
+	if (spin == MTK_VDEC_VBAR_SPIN) {
+		dev_err(&vdec->pdev->dev,
+			"AVC parser stalled before the frame could start\n");
+		return -EBUSY;
+	}
+
+	/* 8. Trigger. */
+	mtk_vdec_write(vdec, VDEC_AVC_VLD_BASE + VDEC_AVC_VLD_PROC, 0x1);
+
+	dev_dbg(&vdec->pdev->dev, "frame started: %ux%u mb=%ux%u dst=%pad\n",
+		mbx * 16, mby * 16, mbx, mby, &dst_y);
+	return 0;
+}
+
+/*
+ * Retire one frame.
+ *
+ * The single place a frame's buffers are returned and its runtime-PM reference
+ * dropped.  Reached from three directions -- the deferred interrupt work, the
+ * watchdog, and job_abort() on STREAMOFF -- and the claim on ->active under
+ * state_lock is what makes it happen exactly once: whichever caller finds
+ * ->active NULL returns without touching the buffers.
+ *
+ * @state is VB2_BUF_STATE_DONE for a frame the hardware completed without
+ * reporting a decode error, and ERROR otherwise.  ERROR reaches userspace as
+ * V4L2_BUF_FLAG_ERROR on DQBUF, which is how a client tells a failed frame from
+ * a black one - the CAPTURE buffer would otherwise look like a successfully
+ * decoded picture that happens to be garbage.
+ *
+ * Process context only, and not for style reasons: v4l2_m2m_buf_done_and_job_finish()
+ * takes m2m_dev->job_spinlock and can schedule the next job.  That is why the ISR
+ * hands off to a work item instead of calling this.
+ */
+static void mtk_vdec_complete(struct mtk_vdec_dev *vdec,
+			      struct mtk_vdec_ctx *ctx,
+			      enum vb2_buffer_state state,
+			      bool from_timeout)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	if (vdec->active != ctx) {
+		spin_unlock_irqrestore(&vdec->state_lock, flags);
+		return;
+	}
+	vdec->active = NULL;
+	ctx->pending = false;
+	vdec->frame_done = false;
+
+	if (!from_timeout) {
+		/*
+		 * Cancel the watchdog unless this call IS the watchdog:
+		 * cancel_delayed_work_sync() from inside the work item would wait
+		 * on its own completion and never return.
+		 */
+		spin_unlock_irqrestore(&vdec->state_lock, flags);
+		cancel_delayed_work_sync(&vdec->timeout_work);
+		spin_lock_irqsave(&vdec->state_lock, flags);
+	}
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	if (state == VB2_BUF_STATE_DONE) {
+		/*
+		 * The picture is in the CAPTURE buffer, so this is the one point
+		 * where the reference store's contents have to be made visible to
+		 * the CPU - because the *next* frame may be decoded from this
+		 * buffer's plane as a reference, and the cache invalidation that
+		 * has to happen before the hardware reads it is the one below.
+		 */
+		mtk_vdec_dp_sync_to_cpu(&vdec->dp,
+					vdec->dp.ref_off,
+					vdec->dp.ref_pic_sz * MTK_VDEC_REF_PICS);
+		vdec->pic_count++;
+	}
+
+	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m, state);
+
+	if (vdec->dp_pm_held) {
+		vdec->dp_pm_held = false;
+		pm_runtime_put_autosuspend(&vdec->pdev->dev);
+	}
+}
+
+/* Deferred completion: the ISR decided a frame ended, this retires it. */
+static void mtk_vdec_complete_work(struct work_struct *w)
+{
+	struct mtk_vdec_dev *vdec =
+		container_of(w, struct mtk_vdec_dev, complete_work);
+	struct mtk_vdec_ctx *ctx;
+	enum vb2_buffer_state state;
+	unsigned long flags;
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	ctx = vdec->active;
+	state = vdec->frame_error ? VB2_BUF_STATE_ERROR : VB2_BUF_STATE_DONE;
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	if (ctx)
+		mtk_vdec_complete(vdec, ctx, state, false);
+}
+
+static void mtk_vdec_timeout(struct work_struct *w)
+{
+	struct mtk_vdec_dev *vdec =
+		container_of(to_delayed_work(w), struct mtk_vdec_dev,
+			     timeout_work);
+	struct mtk_vdec_ctx *ctx;
+	unsigned long flags;
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	ctx = vdec->active;
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	if (!ctx)
+		return;
+
+	vdec->timeout_count++;
+	v4l2_err(&vdec->v4l2_dev,
+		 "decoder did not signal frame end within %u ms; failing the frame\n",
+		 MTK_VDEC_TIMEOUT_MS);
+	mtk_vdec_complete(vdec, ctx, VB2_BUF_STATE_ERROR, true);
+}
+
+/*
+ * device_run - start one H.264 frame.
+ *
+ * The job is only started, not finished: the buffers stay on their ready lists
+ * and are returned by mtk_vdec_complete() when the frame-end interrupt arrives.
+ * That is why every failure path below still ends in a v4l2_m2m_buf_done_and_job_finish()
+ * with ERROR - leaving TRANS_RUNNING set would hang STREAMOFF in
+ * v4l2_m2m_cancel_job()'s wait_event().
+ */
 static void mtk_vdec_device_run(void *priv)
 {
 	struct mtk_vdec_ctx *ctx = priv;
 	struct mtk_vdec_dev *vdec = ctx->dev;
 	struct vb2_v4l2_buffer *src_buf, *dst_buf;
+	const struct mtk_h264_pps *pps;
+	const struct mtk_h264_sps *sps;
 	const u8 *data;
+	size_t data_off, data_len;
+	unsigned int data_bits;
+	dma_addr_t rd_ptr, wr_ptr, dst_y, dst_c;
+	unsigned long flags;
 	size_t len;
 	int ret;
 
-	/*
-	 * PEEK both buffers and leave them on their ready lists.
-	 * v4l2_m2m_buf_done_and_job_finish() removes them itself and warns if
-	 * either is missing, which would leave TRANS_RUNNING set and hang
-	 * STREAMOFF in v4l2_m2m_cancel_job()'s wait_event().  The encoder's
-	 * device_run() documents the same convention.
-	 */
 	src_buf = v4l2_m2m_next_src_buf(ctx->m2m);
 	dst_buf = v4l2_m2m_next_dst_buf(ctx->m2m);
 	if (!src_buf || !dst_buf) {
 		v4l2_err(&vdec->v4l2_dev, "device_run without a buffer pair\n");
+		goto fail;
+	}
+
+	/*
+	 * Only H.264 has a datapath.  Checking here as well as at S_FMT is not
+	 * redundant: the format can be changed between S_FMT and QBUF, and a VP8
+	 * buffer parsed as H.264 finds no start code and fails - which is safe but
+	 * reports the wrong reason, so the reason is stated directly.
+	 */
+	if (ctx->src_fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_H264) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "only H.264 is decoded by this driver (got '%4s')\n",
+			 (const char *)&ctx->src_fmt.fmt.pix.pixelformat);
 		goto fail;
 	}
 
@@ -793,16 +1440,100 @@ static void mtk_vdec_device_run(void *priv)
 	ret = mtk_vdec_h264_load_stream(ctx, data, len);
 	if (ret) {
 		/*
-		 * A buffer with no slice yet is not an error: clients commonly
-		 * send SPS/PPS in one buffer and the first slice in the next.
-		 * Anything else is reported, because a silently dropped frame is
-		 * how a parse bug becomes an inexplicable stall.
+		 * A buffer carrying only parameter sets is not an error: clients
+		 * commonly send SPS/PPS separately from the first slice.  Anything
+		 * else is reported, because a silently dropped frame is how a
+		 * parse bug becomes an inexplicable stall.
 		 */
 		if (ret != -ENODATA)
 			v4l2_err(&vdec->v4l2_dev,
 				 "bitstream parse failed: %d\n", ret);
 		goto fail;
 	}
+
+	pps = &ctx->ps.pps[ctx->slice.pps_id];
+	sps = &ctx->ps.sps[pps->sps_id];
+
+	if (!pps->valid || !sps->valid || !ctx->slice.valid) {
+		v4l2_err(&vdec->v4l2_dev, "no usable parameter sets\n");
+		goto fail;
+	}
+
+	/*
+	 * CABAC is refused rather than attempted.  The slice-header alignment
+	 * and the context initialisation are not implemented (see
+	 * mtk_vdec_h264_set_slice2()), and a CABAC frame decoded without them
+	 * produces garbage that looks like a hardware fault rather than like a
+	 * missing feature.  Baseline streams do not use CABAC.
+	 */
+	if (pps->entropy_coding_mode_flag) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "CABAC streams are not supported yet; use a CAVLC stream\n");
+		goto fail;
+	}
+
+	/*
+	 * Only one slice per picture.  A multi-slice picture needs the second
+	 * slice's registers programmed against the same reference list and the
+	 * same output plane, which this driver does not do; decoding only the
+	 * first slice would produce a picture with a correct top and a stale
+	 * remainder, so the driver refuses instead.
+	 */
+	if (ctx->slice.first_mb_in_slice) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "multi-slice pictures are not supported yet (first_mb=%u)\n",
+			 ctx->slice.first_mb_in_slice);
+		goto fail;
+	}
+
+	/*
+	 * Locate slice_data.  The hardware decodes it off the FIFO, so the driver
+	 * has to hand it a byte range and a bit count.
+	 */
+	ret = mtk_h264_slice_data_bits(data, len, ctx->slice.nal_type,
+					    &ctx->ps, &ctx->slice,
+					    &data_off, &data_len, &data_bits);
+	if (ret) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "cannot find slice data (len=%zu): %d\n", len, ret);
+		goto fail;
+	}
+
+	/* Where the hardware writes the picture: the CAPTURE buffer, NV12. */
+	dst_y = vb2_dma_contig_plane_dma_addr(&dst_buf->vb2_buf, 0);
+	dst_c = dst_y + (dma_addr_t)round_up(sps->width, MTK_VDEC_MB_SIZE) *
+			 round_up(sps->height, MTK_VDEC_MB_SIZE);
+
+	if (vb2_plane_size(&dst_buf->vb2_buf, 0) <
+	    (unsigned long)round_up(sps->width, MTK_VDEC_MB_SIZE) *
+			    round_up(sps->height, MTK_VDEC_MB_SIZE) * 3 / 2) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "capture buffer too small for a %ux%u picture\n",
+			 sps->width, sps->height);
+		goto fail;
+	}
+
+	if (mtk_vdec_dp_alloc(&vdec->pdev->dev, &vdec->dp)) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "cannot allocate the decoder's DRAM\n");
+		goto fail;
+	}
+
+	ret = mtk_vdec_dp_fifo_push(&vdec->dp, data + data_off, data_len,
+				    &rd_ptr, &wr_ptr);
+	if (ret) {
+		v4l2_err(&vdec->v4l2_dev,
+			 "slice does not fit in the bitstream FIFO: %d\n", ret);
+		goto fail;
+	}
+
+	mtk_vdec_h264_bring_up(vdec, (u32)mtk_vdec_dp_pred_dma(&vdec->dp));
+
+	ret = mtk_vdec_h264_prime_barrel_shifter(vdec,
+						 mtk_vdec_dp_fifo_dma(&vdec->dp),
+						 rd_ptr, wr_ptr);
+	if (ret)
+		goto fail;
 
 	ret = mtk_vdec_h264_program(ctx);
 	if (ret) {
@@ -812,22 +1543,34 @@ static void mtk_vdec_device_run(void *priv)
 	}
 
 	/*
-	 * Bring the parser up after the parameter sets are in place.  No
-	 * prediction/scratch buffer is allocated yet, so the address is 0 -
-	 * which the harness explicitly allows ("u4PredSa ? PHYSICAL(u4PredSa) :
-	 * 0") for streams that do not need one.
+	 * Publish the job before starting the hardware, so an interrupt that
+	 * arrives immediately cannot find nothing to retire.
 	 */
-	mtk_vdec_h264_bring_up(vdec, 0);
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	ctx->pending = true;
+	vdec->active = ctx;
+	vdec->frame_done = false;
+	vdec->frame_error = false;
+	vdec->dp_pm_held = true;
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
 
-	/*
-	 * This is as far as the datapath goes today.  The parser is enabled and
-	 * loaded, but the VLD/MC/PP pipeline is not started: that needs a DRAM
-	 * bitstream FIFO, the barrel-shifter priming handshake and a reference
-	 * picture list, none of which exist here yet.  The buffers are returned
-	 * as failed rather than as a picture, which is the honest answer.
-	 */
-	v4l2_m2m_buf_done_and_job_finish(vdec->m2m_dev, ctx->m2m,
-					 VB2_BUF_STATE_ERROR);
+	ret = mtk_vdec_h264_start(vdec, ctx, sps, pps, dst_y, dst_c);
+	if (ret) {
+		spin_lock_irqsave(&vdec->state_lock, flags);
+		vdec->active = NULL;
+		ctx->pending = false;
+		vdec->dp_pm_held = false;
+		spin_unlock_irqrestore(&vdec->state_lock, flags);
+		v4l2_err(&vdec->v4l2_dev, "cannot start the pipeline: %d\n", ret);
+		goto fail;
+	}
+
+	schedule_delayed_work(&vdec->timeout_work,
+			      msecs_to_jiffies(MTK_VDEC_TIMEOUT_MS));
+
+	dev_dbg(&vdec->pdev->dev,
+		"submitted: %ux%u slice_data %zu bytes + %u bits\n",
+		sps->width, sps->height, data_len, data_bits);
 	return;
 
 fail:
@@ -836,26 +1579,67 @@ fail:
 }
 
 /*
- * job_ready - never.
+ * job_ready - is there a frame that can be started, and is the block free?
  *
- * Reporting 0 unconditionally is what stops the framework calling device_run() at
- * all, so the refusal in device_run() above is a backstop rather than the normal
- * outcome.  A client that fills both queues and waits for a picture blocks here,
- * which is the intended and documented behaviour of this node.
+ * Two conditions, and both matter:
+ *
+ *   - a buffer pair on the ready lists, which is the framework's own question;
+ *   - no frame already in flight.  The hardware has one parser, one MC and one
+ *     DPB, and this driver allocates a single set of them, so a second
+ *     concurrent job would overwrite the first's reference store and its plane
+ *     addresses while the first was still being decoded.
+ *
+ * Returning 0 while a frame is in flight is what makes the m2m core defer the
+ * next job until mtk_vdec_complete() clears ->active and calls
+ * v4l2_m2m_buf_done_and_job_finish(), which retries the queue.
  */
 static int mtk_vdec_job_ready(void *priv)
 {
-	return 0;
+	struct mtk_vdec_ctx *ctx = priv;
+	struct mtk_vdec_dev *vdec = ctx->dev;
+	unsigned long flags;
+	bool busy;
+
+	if (!v4l2_m2m_num_src_bufs_ready(ctx->m2m) ||
+	    !v4l2_m2m_num_dst_bufs_ready(ctx->m2m))
+		return 0;
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	busy = vdec->active != NULL;
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	return busy ? 0 : 1;
 }
 
 /*
- * job_abort - STREAMOFF with buffers still queued.
+ * job_abort - STREAMOFF while a frame is in flight.
  *
- * Nothing is in flight and no hardware was started, so there is nothing to abandon.
- * The buffers are the framework's to reclaim.
+ * The block is still running, so it cannot simply be forgotten: the parser would
+ * carry on writing into a CAPTURE buffer that vb2 is about to give back to
+ * userspace.  The engine is disabled first, then the job is retired as failed.
  */
 static void mtk_vdec_job_abort(void *priv)
 {
+	struct mtk_vdec_ctx *ctx = priv;
+	struct mtk_vdec_dev *vdec = ctx->dev;
+	unsigned long flags;
+	bool active;
+
+	spin_lock_irqsave(&vdec->state_lock, flags);
+	active = vdec->active == ctx;
+	spin_unlock_irqrestore(&vdec->state_lock, flags);
+
+	if (!active)
+		return;
+
+	/*
+	 * Stop the parser before the buffers go away.  PROC's abort bit is the
+	 * only quiesce the harness offers (VLD_ABRT, vdec_hw_common.h:239 - a
+	 * shared VLD register, so it is at VDEC_VLD_BASE + offset).
+	 */
+	mtk_vdec_write(vdec, VDEC_VLD_BASE + VDEC_VLD_PROC, VDEC_VLD_PROC_ABRT);
+
+	mtk_vdec_complete(vdec, ctx, VB2_BUF_STATE_ERROR, false);
 }
 
 static int mtk_vdec_start_streaming(struct vb2_queue *q,
@@ -967,7 +1751,8 @@ static int mtk_vdec_queue_init(void *priv, struct vb2_queue *src_vq,
  *
  * The per-instance context is created here and torn down in release().  It holds
  * the negotiated formats and nothing else: unlike the encoder there are no
- * driver-owned planes, because there is no datapath that would read or write them.
+ * driver-owned planes: they belong to the datapath and are allocated by
+ * mtk_vdec_dp_alloc(), not per open.
  */
 static int mtk_vdec_open(struct file *file)
 {
@@ -989,7 +1774,7 @@ static int mtk_vdec_open(struct file *file)
 	 */
 	fmt = &ctx->src_fmt;
 	fmt->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_VP8;
+	fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
 	fmt->fmt.pix.sizeimage = MTK_VDEC_BS_SIZE_DEFAULT;
 
 	fmt = &ctx->dst_fmt;
@@ -1282,7 +2067,11 @@ static int mtk_vdec_probe(struct platform_device *pdev)
 
 	mutex_init(&vdec->node_lock);
 	mutex_init(&vdec->vdec_lock);
+	spin_lock_init(&vdec->state_lock);
 	atomic_set(&vdec->dec_users, 0);
+
+	INIT_WORK(&vdec->complete_work, mtk_vdec_complete_work);
+	INIT_DELAYED_WORK(&vdec->timeout_work, mtk_vdec_timeout);
 
 	/*
 	 * One register window, one domain, one pair of clocks, one IRQ -- which is
@@ -1318,9 +2107,9 @@ static int mtk_vdec_probe(struct platform_device *pdev)
 	/*
 	 * Register the V4L2 node last, once every resource it depends on is in
 	 * place.  A /dev/videoX that exists while its clocks or IRQ are missing
-	 * would let userspace open a decoder that cannot decode -- which, given that
-	 * device_run() refuses every job anyway, would be a node offering nothing at
-	 * all while appearing healthy.
+	 * would let userspace open a decoder that cannot decode while appearing
+	 * healthy, and the datapath's first symptom would be a hung job rather than
+	 * a probe failure.
 	 */
 	ret = mtk_vdec_vf_init(vdec);
 	if (ret)
@@ -1343,14 +2132,20 @@ static void mtk_vdec_remove(struct platform_device *pdev)
 {
 	struct mtk_vdec_dev *vdec = dev_get_drvdata(&pdev->dev);
 
-	/*
-	 * There is no watchdog or completion work to settle here, unlike the
-	 * encoder: no frame is ever started, so no work item can be holding a
-	 * pointer into this driver.
-	 */
 	mtk_vdec_vf_deinit(vdec);
 
+	/*
+	 * Settle the completion machinery before the DRAM goes away, and in this
+	 * order: cancel the watchdog and wait for any queued completion first, so
+	 * neither can be running while the buffers and the reference store are
+	 * freed underneath them.
+	 */
+	cancel_delayed_work_sync(&vdec->timeout_work);
+	cancel_work_sync(&vdec->complete_work);
+
 	pm_runtime_disable(&pdev->dev);
+
+	mtk_vdec_dp_free(&pdev->dev, &vdec->dp);
 }
 
 static const struct dev_pm_ops mtk_vdec_pm_ops = {
