@@ -731,8 +731,6 @@ static int __mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
 	u8 broadcast[ETH_ALEN];
-	u8 response[4];
-	size_t response_len;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -813,10 +811,24 @@ static int __mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	if (params->seq_len)
 		memcpy(cmd.key_rsc, params->seq, params->seq_len);
 
+	/*
+	 * Do not wait for a CMD_RESULT here.
+	 *
+	 * The firmware answers only the commands that carry a request for
+	 * data: downstream sets fgNeedResp = TRUE for exactly one command
+	 * (CMD_ID_TEST_MODE, wlan_oid.c:8346) and FALSE for every other set
+	 * command, including this one (wlan_oid.c:3102).  nic_rx.c:1616
+	 * asserts that invariant - a set command may only deliver a
+	 * CMD_RESULT when it asked for one - so a key install produces no
+	 * response at all and waiting for it can only time out.
+	 *
+	 * Completion is the transfer itself: the firmware has the command
+	 * once sdio_writesb() returns, and it continues acknowledging it
+	 * through the TX-credit release that the TX_DONE handling watches.
+	 */
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
-				   &cmd, sizeof(cmd), response, sizeof(response),
-				   &response_len,
-				   MT6628_EVENT_ID_CMD_RESULT, 1000);
+				   &cmd, sizeof(cmd), NULL, 0, NULL,
+				   MT6628_EVENT_ID_CMD_RESULT, 0);
 	if (ret)
 		return ret;
 
@@ -893,8 +905,6 @@ mt6628_wlan_program_wep_key(struct mt6628_wlan *wl, u8 key_index,
 			    const struct mt6628_wep_key *key, bool tx_key)
 {
 	struct mt6628_cmd_add_remove_key cmd = {};
-	u8 response[4];
-	size_t response_len;
 
 	if (!key->valid || !key->key_len ||
 	    key->key_len > sizeof(key->key))
@@ -925,10 +935,10 @@ mt6628_wlan_program_wep_key(struct mt6628_wlan *wl, u8 key_index,
 	cmd.key_len = key->key_len;
 	memcpy(cmd.key_material, key->key, key->key_len);
 
+	/* No CMD_RESULT for a set command; see __mt6628_wlan_add_key(). */
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
-				    &cmd, sizeof(cmd), response,
-				    sizeof(response), &response_len,
-				    MT6628_EVENT_ID_CMD_RESULT, 1000);
+				    &cmd, sizeof(cmd), NULL, 0, NULL,
+				    MT6628_EVENT_ID_CMD_RESULT, 0);
 }
 
 static int __mt6628_wlan_set_default_key(struct mt6628_wlan *wl,
@@ -1040,8 +1050,6 @@ static int __mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 	struct mt6628_cmd_add_remove_key cmd = {};
 	const u8 *peer;
 	u8 broadcast[ETH_ALEN];
-	u8 response[4];
-	size_t response_len;
 	int ret;
 
 	/*
@@ -1070,10 +1078,10 @@ static int __mt6628_wlan_del_key(struct mt6628_wlan *wl, u8 key_index,
 	cmd.net_type_index = 0;
 	cmd.key_id = key_index;
 
+	/* No CMD_RESULT for a set command; see __mt6628_wlan_add_key(). */
 	ret = mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_ADD_REMOVE_KEY, 1,
-				   &cmd, sizeof(cmd), response, sizeof(response),
-				   &response_len,
-				   MT6628_EVENT_ID_CMD_RESULT, 1000);
+				   &cmd, sizeof(cmd), NULL, 0, NULL,
+				   MT6628_EVENT_ID_CMD_RESULT, 0);
 	if (!ret) {
 		mutex_lock(&wl->cfg_mutex);
 		if (pairwise)
@@ -1184,15 +1192,14 @@ int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
 		.ps_profile = enabled ? MT6628_PS_PROFILE_FAST_PSP :
 			MT6628_PS_PROFILE_CAM,
 	};
-	u8 response[4];
-	size_t response_len;
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
 
+	/* No CMD_RESULT for a set command; see __mt6628_wlan_add_key(). */
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_POWER_SAVE_MODE, 1,
-					&cmd, sizeof(cmd), response, sizeof(response),
-					&response_len, MT6628_EVENT_ID_CMD_RESULT, 1000);
+					&cmd, sizeof(cmd), NULL, 0, NULL,
+					MT6628_EVENT_ID_CMD_RESULT, 0);
 }
 
 int mt6628_wlan_get_sta_statistics(struct mt6628_wlan *wl,
