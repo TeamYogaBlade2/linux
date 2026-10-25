@@ -198,6 +198,15 @@
  */
 #define MT6320_E1_CID			0x1020
 #define MT6320_E2_CID			0x2020
+/*
+ * External speaker amplifier timing, from the vendor kernel's SN2145B
+ * support (mediatek/custom/common/kernel/sound/amp_sn2145b/
+ * yusu_android_speaker.c): Sound_Speaker_Turnon() waits out the remainder of
+ * an 80 ms shutdown window before raising GPIO73, then warms up for 40 ms
+ * before audio is allowed through.
+ */
+#define MT6320_AMP_SHUTDOWN_MS		80
+#define MT6320_AMP_WARMUP_MS		40
 #define MT6320_EFUSE_DOUT_176_191	0x01ca
 #define MT6320_SPK_TRIM_DEFAULT		0x0010
 /*
@@ -523,19 +532,19 @@ static int mt6320_analog_event(struct snd_soc_dapm_widget *w,
 		usleep_range(900, 1100);
 
 		/*
-		 * Unmute.  AFUNC_AUD_CON2 bit 7 is a mute, not an enable: the
-		 * stock driver asserts it while it configures a path and
-		 * clears it once the configuration is done
-		 * (AudioMachineDevice: SetAnalogReg(AFUNC_AUD_CON2, mute << 7),
-		 * set to 0x0080 on open and 0x0000 once configured). Leaving
-		 * it set keeps the output muted for as long as the path is
-		 * powered, i.e. for as long as it is playing.
+		 * The mute asserted at the top of this branch stays asserted.
+		 *
+		 * This used to unmute here, which is far too early: DAPM runs
+		 * this supply at up_seq 3, three ordering groups before the
+		 * DAC (8) and nine before the output drivers (12), so the
+		 * analog output stage was released into an unpowered DAC and
+		 * the resulting transient is the click heard when playback
+		 * starts.  The vendor brackets its whole AnalogOpen() with
+		 * this mute - set on the first line, cleared on the last - so
+		 * the unmute now happens at the end of the headphone power-up
+		 * (mt6320_hp_event(), POST_PMU), once the buffers and their
+		 * output muxes are programmed.
 		 */
-		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
-					 BIT(7), 0);
-		if (ret)
-			return ret;
-
 		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
@@ -735,9 +744,22 @@ static int mt6320_dac_event(struct snd_soc_dapm_widget *w,
 		 * there is no power-sequence state on this register to restore.
 		 */
 		ret = regmap_write(priv->regmap, MT6320_AUDDAC_CON0, 0x0003);
-		if (!ret)
-			priv->analog_output_active = true;
-		return ret;
+		if (ret)
+			return ret;
+
+		priv->analog_output_active = true;
+
+		/*
+		 * The analog mute stays asserted here.  The DAC cores are the
+		 * middle of the power-up, not the end of it: the HP buffers
+		 * (out_drv, up_seq 12) and the output muxes still have to be
+		 * programmed after this, and the vendor only releases the mute
+		 * on the last line of its AnalogOpen().  Unmuting here - or
+		 * earlier, from the "Analog" supply, which is where it used to
+		 * happen - lets the transient out.  mt6320_hp_event() clears it
+		 * at POST_PMU instead.
+		 */
+		return 0;
 
 	case SND_SOC_DAPM_POST_PMD:
 		/*
@@ -859,6 +881,45 @@ static int mt6320_hp_power_up(struct mt6320_codec_priv *priv)
 				  GENMASK(11, 9), 4 << 9);
 }
 
+static int mt6320_hp_power_down(struct mt6320_codec_priv *priv)
+{
+	int ret;
+
+	/*
+	 * The vendor does write ZCD_CON2 0x0c0c here (AnalogClose,
+	 * DEVICE_OUT_HEADSET*), but that register is the headphone volume
+	 * control's own register: bits [3:0] and [11:8] are the left and
+	 * right volume indexes, which the "Headphone Volume" control and
+	 * the mixer read and write.  Forcing index 12 on every power-down
+	 * throws the user's volume away, and it is exactly the bug this
+	 * file already fixed once on the power-*up* side (commit
+	 * "stop power-up from overwriting the headphone volume").
+	 *
+	 * Park the volume at 0 dB instead - index 8, which is what the
+	 * probe-time baseline in mt6320_codec_init[] uses and what
+	 * GetAnalogGain() reports as volume 0 - and leave the control's
+	 * own value otherwise alone.  Powering the amplifier down is what
+	 * silences it; the index is what it comes back at.
+	 */
+	ret = regmap_update_bits(priv->regmap, MT6320_ZCD_CON2,
+				 MT6320_ZCD_CON2_VOL_MASK,
+				 ZCD_GAIN_REG(ZCD_GAIN_0DB));
+	if (ret)
+		return ret;
+	ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+				 GENMASK(12, 5), 0x0880);
+	if (ret)
+		return ret;
+	ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
+				 GENMASK(2, 0), 0x0000);
+	if (ret)
+		return ret;
+	ret = regmap_write(priv->regmap, MT6320_IBIASDIST_CFG0, 0x1552);
+	if (ret)
+		return ret;
+	return regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG1, BIT(8), 0);
+}
+
 static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 			   struct snd_kcontrol *kcontrol, int event)
 {
@@ -868,49 +929,45 @@ static int mt6320_hp_event(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		/*
+		 * The mute asserted at the top of mt6320_analog_event() is
+		 * still held across this: the buffers below are programmed and
+		 * only then released.
+		 */
 		ret = mt6320_hp_power_up(priv);
 		if (ret)
 			return ret;
 		return 0;
 
+	case SND_SOC_DAPM_POST_PMU:
+		/*
+		 * Release the analog mute last, once the HP buffers and their
+		 * output muxes are programmed and settled.  This is the
+		 * vendor's ordering: AudioMachineDevice::AnalogOpen() asserts
+		 * AFUNC_AUD_CON2 bit 7 on its first line and clears it on its
+		 * last, after every buffer, mux and gain write in between.
+		 *
+		 * Unmuting before the buffers settle is what produced the
+		 * click at the start of playback.  This widget is up_seq 12
+		 * (out_drv), so POST_PMU here is the last write of the analog
+		 * power-up on the headphone path; on ext-amp speaker playback
+		 * the external amplifier is still gated off until the "Speaker"
+		 * widget's POST_PMU (up_seq 13), so the mute is released into a
+		 * settled, silent amplifier and then unmuted by the amp itself.
+		 */
+		return regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					  BIT(7), 0);
+
 	case SND_SOC_DAPM_POST_PMD:
 		/*
-		 * The vendor does write ZCD_CON2 0x0c0c here (AnalogClose,
-		 * DEVICE_OUT_HEADSET*), but that register is the headphone volume
-		 * control's own register: bits [3:0] and [11:8] are the left and
-		 * right volume indexes, which the "Headphone Volume" control and
-		 * the mixer read and write.  Forcing index 12 on every power-down
-		 * throws the user's volume away, and it is exactly the bug this
-		 * file already fixed once on the power-*up* side (commit
-		 * "stop power-up from overwriting the headphone volume").
-		 *
-		 * Park the volume at 0 dB instead - index 8, which is what the
-		 * probe-time baseline in mt6320_codec_init[] uses and what
-		 * GetAnalogGain() reports as volume 0 - and leave the control's
-		 * own value otherwise alone.  Powering the amplifier down is what
-		 * silences it; the index is what it comes back at.
+		 * Re-assert the mute before the buffers come down, so the
+		 * power-down transient stays inside the analog block.
 		 */
-		ret = regmap_update_bits(priv->regmap, MT6320_ZCD_CON2,
-					 MT6320_ZCD_CON2_VOL_MASK,
-					 ZCD_GAIN_REG(ZCD_GAIN_0DB));
+		ret = regmap_update_bits(priv->regmap, MT6320_AFUNC_AUD_CON2,
+					 BIT(7), BIT(7));
 		if (ret)
 			return ret;
-		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
-					 GENMASK(12, 5), 0x0880);
-		if (ret)
-			return ret;
-		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG0,
-					 GENMASK(2, 0), 0x0000);
-		if (ret)
-			return ret;
-		ret = regmap_write(priv->regmap, MT6320_IBIASDIST_CFG0, 0x1552);
-		if (ret)
-			return ret;
-		ret = regmap_update_bits(priv->regmap, MT6320_AUDBUF_CFG1,
-					 BIT(8), 0);
-		if (ret)
-			return ret;
-		return 0;
+		return mt6320_hp_power_down(priv);
 	}
 	return 0;
 }
@@ -1022,7 +1079,27 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 			ret = mt6320_hp_power_up(priv);
 			if (ret)
 				return ret;
-			goto amp_enable;
+
+			/*
+			 * Release the analog mute, as the headphone path
+			 * does at its own POST_PMU.
+			 *
+			 * On an ext-amp board the "HP Driver" widget does not
+			 * power during speaker playback: its only connected
+			 * sink there is the headphones, so DAPM leaves it off
+			 * and its POST_PMU - where the unmute lives - never
+			 * runs.  This branch is the analogue of that step.
+			 *
+			 * Ordering still holds: this is Speaker Driver's
+			 * PRE_PMU (out_drv, up_seq 12) and the amplifier is
+			 * not enabled until the "Speaker" widget's POST_PMU
+			 * (up_seq 13), so the mute is released into a settled
+			 * but silent amplifier and the amplifier is what
+			 * unmutes.
+			 */
+			return regmap_update_bits(priv->regmap,
+						  MT6320_AFUNC_AUD_CON2,
+						  BIT(7), 0);
 		}
 
 		/*
@@ -1139,65 +1216,42 @@ static int mt6320_speaker_event(struct snd_soc_dapm_widget *w,
 			return ret;
 
 		/*
-		 * Bring up the board's external amplifier last, after the PMIC
-		 * analogue path has settled, and let it warm up before audio
-		 * starts.  The Blade's speaker is driven by an SN2145B wired to
-		 * GPIO73, not by the PMIC Class-D output: the vendor kernel's
-		 * Sound_Speaker_Turnon() (Speaker_Init() configures GPIO73 and
-		 * GPIO142 as outputs) sets that pin and then waits.  40 ms is
-		 * the figure the working B8000-H port uses
-		 * (lenovo-b8000h-linux mt6589_audio.c), and the vendor waits
-		 * 40-80 ms depending on how long the pin has been off.
+		 * Release the analog mute, as the headphone path does at
+		 * its own POST_PMU.
 		 *
-		 * On a board without the amp this is a no-op, so the DAPM path
-		 * still works where the PMIC drives the speaker directly.
+		 * The "Speaker Driver" widget has no connected sink on an
+		 * ext-amp board, so "HP Driver" stays off during speaker
+		 * playback and the unmute that lives in its POST_PMU never
+		 * runs; the Class-D branch below has the same problem, since
+		 * that path does not power "HP Driver" either.  This is the
+		 * unmute for both.
 		 *
-		 * The vendor's Sound_Speaker_Turnon() (@ c0467388) also refuses
-		 * to re-enable an amplifier that was switched off less than
-		 * 80 ms ago: it sleeps out the remainder of that window before
-		 * raising the pin, so a rapid stop/start cannot click.  Reproduce
-		 * that here, since DAPM can gate and ungate the widget quickly.
-		 *
-		 * Both routes converge here: the amplifier enable is the only
-		 * part common to the PMIC Class-D path and the external-amp one.
+		 * Ordering still holds: this is Speaker Driver's PRE_PMU
+		 * (out_drv, up_seq 12).  On ext-amp boards the amplifier is
+		 * not enabled until the "Speaker" widget's POST_PMU
+		 * (up_seq 13), so the mute is released into a settled but
+		 * silent amplifier and the amplifier is what unmutes.  The
+		 * external amplifier itself is gated on that widget, not here
+		 * - it used to be switched on here, which was wrong twice
+		 * over: this is an out_drv handler, so it ran before the HP
+		 * buffers it feeds had settled, and it could not gate the amp
+		 * off on plug-in.  See mt6320_spk_amp_event().
 		 */
-amp_enable:
-		if (priv->amp_en_gpio) {
-			unsigned long elapsed;
-
-			if (!priv->amp_on && priv->amp_off_jiffies) {
-				elapsed = jiffies - priv->amp_off_jiffies;
-				if (elapsed < msecs_to_jiffies(80))
-					msleep(jiffies_to_msecs(
-						msecs_to_jiffies(80) - elapsed));
-			}
-			gpiod_set_value_cansleep(priv->amp_en_gpio, 1);
-			msleep(40);
-			priv->amp_on = true;
-		}
-
-		return 0;
+		return regmap_update_bits(priv->regmap,
+					  MT6320_AFUNC_AUD_CON2, BIT(7), 0);
 
 	case SND_SOC_DAPM_POST_PMD:
-		/* Mute the amplifier before the PMIC path collapses, so the
-		 * shutdown transient is not audible.
+		/*
+		 * On an ext-amp board the PMIC Class-D stage was never
+		 * powered and the amplifier is gated on the "Speaker"
+		 * widget, so there is nothing to unwind here.  Reaching this
+		 * point with an amp configured means the speaker sequence did
+		 * not take the ext-amp branch above, which would be a bug;
+		 * leave the Class-D registers alone rather than half-clearing
+		 * state this board never set.
 		 */
-		if (priv->amp_en_gpio) {
-			gpiod_set_value_cansleep(priv->amp_en_gpio, 0);
-			priv->amp_on = false;
-			priv->amp_off_jiffies = jiffies;
-
-			/*
-			 * Nothing to unwind here: this board's speaker path is
-			 * the headphone one, and the HP driver widget owns its
-			 * own power-down (the route added in
-			 * mt6320_component_probe() is what makes it run).
-			 * Touching the Class-D registers anyway would be
-			 * harmless but would also clear state that this board
-			 * never set.
-			 */
+		if (priv->amp_en_gpio)
 			return 0;
-		}
 
 		ret = regmap_write(priv->regmap, MT6320_SPK_CON11, 0x0000);
 		if (ret)
@@ -1210,6 +1264,66 @@ amp_enable:
 			return ret;
 
 		return regmap_clear_bits(priv->regmap, MT6320_AUD_IV_CFG0, BIT(0));
+	}
+
+	return 0;
+}
+
+/*
+ * External speaker amplifier gate (the "Speaker" widget).
+ *
+ * This is deliberately not folded into mt6320_speaker_event().  Two reasons:
+ *
+ *  - Ordering.  The "Speaker" widget is snd_soc_dapm_spk, which DAPM powers
+ *    up at up_seq 13 and down at down_seq 4, i.e. *after* every out_drv
+ *    (up 12) and *before* them on the way out (down 5).  That is exactly the
+ *    vendor's contract for the SN2145B: Sound_Speaker_Turnon() runs after
+ *    the analog path is configured, and Sound_Speaker_Turnoff() runs before
+ *    it collapses.  Gating inside the out_drv handler instead would enable
+ *    the amp while the HP buffers were still being programmed.
+ *
+ *  - Exclusivity.  "Speaker" sits behind the inverted Speaker jack pin, so
+ *    DAPM powers this widget down - and therefore drives GPIO73 low - the
+ *    moment headphones are reported, while the "HP Driver" the headphones
+ *    actually use stays up through its own route.  That is what makes the
+ *    speaker yield to the headphones.  The out_drv widget is shared by both
+ *    paths and cannot express that.
+ *
+ * The vendor's Sound_Speaker_Turnon() (@ c0467388) refuses to re-enable an
+ * amplifier that was switched off less than 80 ms ago: it sleeps out the
+ * remainder of that window before raising the pin, so a rapid stop/start
+ * cannot click.  The 40 ms warm-up afterwards is the figure the working
+ * B8000-H port uses (lenovo-b8000h-linux mt6589_audio.c).  Reproduce both.
+ */
+static int mt6320_spk_amp_event(struct snd_soc_dapm_widget *w,
+				struct snd_kcontrol *kcontrol, int event)
+{
+	struct mt6320_codec_priv *priv =
+		snd_soc_component_get_drvdata(snd_soc_dapm_to_component(w->dapm));
+	unsigned long elapsed;
+
+	if (!priv->amp_en_gpio)
+		return 0;
+
+	switch (event) {
+	case SND_SOC_DAPM_POST_PMU:
+		if (!priv->amp_on && priv->amp_off_jiffies) {
+			elapsed = jiffies - priv->amp_off_jiffies;
+			if (elapsed < msecs_to_jiffies(MT6320_AMP_SHUTDOWN_MS))
+				msleep(jiffies_to_msecs(
+					msecs_to_jiffies(MT6320_AMP_SHUTDOWN_MS) -
+					elapsed));
+		}
+		gpiod_set_value_cansleep(priv->amp_en_gpio, 1);
+		msleep(MT6320_AMP_WARMUP_MS);
+		priv->amp_on = true;
+		return 0;
+
+	case SND_SOC_DAPM_PRE_PMD:
+		gpiod_set_value_cansleep(priv->amp_en_gpio, 0);
+		priv->amp_on = false;
+		priv->amp_off_jiffies = jiffies;
+		return 0;
 	}
 
 	return 0;
@@ -1468,7 +1582,8 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUT_DRV_E("HP Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
 			       mt6320_hp_event,
-			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+			       SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUT_DRV_E("Speaker Driver", SND_SOC_NOPM, 0, 0, NULL, 0,
 			       mt6320_speaker_event,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
@@ -1490,7 +1605,13 @@ static const struct snd_soc_dapm_widget mt6320_dapm_widgets[] = {
 			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_INPUT("Mic Bias"),
 	SND_SOC_DAPM_OUTPUT("Headphone"),
-	SND_SOC_DAPM_SPK("Speaker", NULL),
+	/*
+	 * The external amplifier gate.  SND_SOC_DAPM_SPK gives it
+	 * POST_PMU/PRE_PMD, which is the ordering the amp needs; see
+	 * mt6320_spk_amp_event().  Boards without amp-en-gpios leave the
+	 * handler a no-op.
+	 */
+	SND_SOC_DAPM_SPK("Speaker", mt6320_spk_amp_event),
 };
 
 static const struct snd_soc_dapm_route mt6320_dapm_routes[] = {
@@ -1549,14 +1670,23 @@ static const struct snd_kcontrol_new mt6320_snd_controls[] = {
  * playback too.  Their "Speaker Driver" widget runs the headphone sequence -
  * see mt6320_speaker_event() - but the HP driver is a separate DAPM widget,
  * and the static route table cannot express "power this one only when the
- * other one is in use".  Adding the route here keeps one route per widget, so
- * the HP driver still powers down exactly once when the speaker stops.
+ * other one is in use".  Adding the route here gives "Speaker Driver" a sink
+ * so DAPM keeps it (and therefore the headphone block it programs) powered
+ * while the speaker plays.
+ *
+ * This route is deliberately left as it is.  Its obvious failure mode is
+ * that "Speaker Driver" now powers whenever the speaker does; the reason
+ * that used to make the speaker play *over* the headphones was not this
+ * route but that the speaker amplifier was never switched off, because the
+ * headset jack never reported a plug-in at all (see mt6320-accdet.c).  The
+ * amplifier gate now lives on the "Speaker" widget
+ * (mt6320_spk_amp_event()), which the inverted Speaker jack pin disables as
+ * soon as headphones are reported, so the SN2145B goes quiet while the PMIC
+ * buffers keep running for the headphones.
  */
 static const struct snd_soc_dapm_route mt6320_extamp_routes[] = {
 	{ "HP Driver", NULL, "Speaker Driver" },
-};
-
-static int mt6320_component_probe(struct snd_soc_component *component)
+};static int mt6320_component_probe(struct snd_soc_component *component)
 {
 	struct mt6320_codec_priv *priv = snd_soc_component_get_drvdata(component);
 	int ret;
