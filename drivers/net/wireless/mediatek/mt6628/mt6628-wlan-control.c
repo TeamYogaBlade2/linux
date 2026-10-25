@@ -792,7 +792,24 @@ static int __mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	}
 	cmd.key_id = key_index;
 	cmd.key_len = params->key_len;
-	memcpy(cmd.key_material, params->key, params->key_len);
+	/*
+	 * TKIP's 32-byte key material is (TK 16 || TX Michael 8 || RX Michael 8),
+	 * but the firmware expects the two Michael keys the other way round:
+	 * downstream swaps the last two 8-byte halves before handing the key to
+	 * nicCmdEventSetAddKey (gl_cfg80211.c, the params->key_len == 32 branch).
+	 * Copying it verbatim installs a group key whose Michael keys are
+	 * reversed, so the AP's frames fail the integrity check and get dropped,
+	 * and the handshake stalls in exactly the state where a station thinks
+	 * it is associated but receives nothing.
+	 */
+	if (params->cipher == WLAN_CIPHER_SUITE_TKIP &&
+	    params->key_len == 32) {
+		memcpy(cmd.key_material, params->key, 16);
+		memcpy(cmd.key_material + 16, params->key + 24, 8);
+		memcpy(cmd.key_material + 24, params->key + 16, 8);
+	} else {
+		memcpy(cmd.key_material, params->key, params->key_len);
+	}
 	if (params->seq_len)
 		memcpy(cmd.key_rsc, params->seq, params->seq_len);
 
