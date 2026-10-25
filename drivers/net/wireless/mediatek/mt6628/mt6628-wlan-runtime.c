@@ -1101,15 +1101,24 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			 */
 			WRITE_ONCE(wl->tx_work_running, false);
 			/*
-			 * tx_frame() stopped the queue when it found no credit
-			 * for this TC.  Nothing else restarts it from this
-			 * path, so a frame that ran out of credits left the
-			 * stack unable to queue another one - which looks
-			 * exactly like "the link has an address but nothing
-			 * is transmitted".  Wake it as soon as any credit is
-			 * back; the retry below then drains what is queued.
+			 * The queue can be stopped for two different reasons and
+			 * this path has to be able to restart both:
+			 *
+			 *  - tx_frame() stopped it because this frame's TC had
+			 *    no credit, so wake once a release has been seen;
+			 *  - ndo_start_xmit() stopped it because tx_queue hit
+			 *    MT6628_TX_QUEUE_LIMIT.  That has nothing to do with
+			 *    credits, and gating the wake on a release left it
+			 *    stopped for ever once the backlog drained - which
+			 *    is what a multi-megabyte transfer eventually hits.
+			 *
+			 * Waking on "the queue is below the limit" covers both
+			 * and is always safe: the credit check in tx_frame() and
+			 * the length check in ndo_start_xmit() still apply.
 			 */
-			if (released_any && wl->netdev)
+			if (wl->netdev &&
+			    (released_any ||
+			     skb_queue_len(&wl->tx_queue) < MT6628_TX_QUEUE_LIMIT))
 				netif_wake_queue(wl->netdev);
 			if (wait) {
 				/* This frame's credit arrived: retry at once. */
@@ -1157,10 +1166,17 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 	 * while nothing can accept it - the transmit path wedges with an address
 	 * configured and no traffic.  A dropped frame is recovered by TCP; a
 	 * wedged queue is not.
+	 *
+	 * Kick the drain as well.  Without it this branch could stop the queue
+	 * while nothing was running to empty it: the frames already queued had
+	 * no owner, and the wake at the end of tx_work - the only thing that
+	 * restarts the queue - was never reached.  That is a multi-megabyte
+	 * transfer stopping dead a few seconds in.
 	 */
 	if (skb_queue_len(&wl->tx_queue) >= MT6628_TX_QUEUE_LIMIT) {
 		netif_stop_queue(ndev);
 		dev_kfree_skb(skb);
+		mod_delayed_work(system_wq, &wl->tx_work, 0);
 		return NETDEV_TX_OK;
 	}
 
