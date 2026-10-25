@@ -1781,9 +1781,18 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	/*
 	 * Pending traffic means the firmware still wants the host to run.
 	 * Keep ownership and let the caller try again later.
+	 *
+	 * rx_queue is excluded on purpose.  It is drained by napi_poll(),
+	 * which needs the driver to hold the chip to refill it, so treating a
+	 * non-empty rx_queue as "busy" makes the hand-off refuse itself: the
+	 * queue can only be emptied by running NAPI, and the countdown that
+	 * reached this line runs again before NAPI is guaranteed to have
+	 * run.  The downstream block count is an explicit
+	 * increment/decrement around an operation (pwr_mgt.h:121-129), not a
+	 * test of "is any received frame still queued" - frames already
+	 * handed to the host are the driver's to deliver.
 	 */
-	if (!skb_queue_empty(&wl->rx_queue) ||
-	    !skb_queue_empty(&wl->event_queue) ||
+	if (!skb_queue_empty(&wl->event_queue) ||
 	    !skb_queue_empty(&wl->async_event_queue) ||
 	    !skb_queue_empty(&wl->mgmt_queue) ||
 		!skb_queue_empty(&wl->tx_queue))
@@ -1973,19 +1982,33 @@ static void mt6628_runtime_pm_work(struct work_struct *work)
 	 */
 	if (!READ_ONCE(wlan->fw_sleepy)) {
 		/*
-		 * Nothing to hand over yet.
+		 * Nothing to hand over yet - but a reclaim may still be owed.
 		 *
-		 * This used to reschedule every 200 ms for as long as the link
-		 * was up, which is a permanent 5 Hz wakeup for no work.  Bound
-		 * it - but only while there is nothing owed.  If a reclaim is
-		 * outstanding (pm_idle set) this timer is the only thing that
-		 * retries it, so abandoning it there would leave every later
-		 * access failing with -EAGAIN for ever.
+		 * pm_idle means the firmware owns the chip and this driver owes
+		 * a reclaim before it can touch any register.  Until that
+		 * succeeds every access returns -EAGAIN from pm_busy(), and
+		 * this is the only context that can retry it: the transfer
+		 * path cannot, because the transfer is what got refused.  So
+		 * the retry must happen here regardless of fw_sleepy, or the
+		 * chip stays with the firmware for ever and the link stops
+		 * working completely.
 		 */
-		if (READ_ONCE(wlan->pm_idle) ||
-		    wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
-			if (!READ_ONCE(wlan->pm_idle))
-				wlan->pm_idle_polls++;
+		if (READ_ONCE(wlan->pm_idle)) {
+			wlan->pm_idle_polls = 0;
+			if (mt6628_wlan_pm_resume(wlan))
+				schedule_delayed_work(&wlan->pm_work,
+					msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
+			return;
+		}
+
+		/*
+		 * Otherwise this is just the idle countdown waiting for the
+		 * firmware's SLEEPY_NOTIFY.  Bound it: it used to reschedule
+		 * every 200 ms for as long as the link was up, which is a
+		 * permanent 5 Hz wakeup for no work.
+		 */
+		if (wlan->pm_idle_polls < MT6628_PM_IDLE_MAX_POLLS) {
+			wlan->pm_idle_polls++;
 			schedule_delayed_work(&wlan->pm_work,
 				msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
 		}
