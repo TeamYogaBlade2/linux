@@ -363,9 +363,21 @@ static void mt6628_runtime_mgmt_work(struct work_struct *work)
 static bool mt6628_control_port_allows(struct mt6628_wlan *wl,
 				       const struct sk_buff *skb)
 {
-	return !READ_ONCE(wl->control_port) ||
-	       READ_ONCE(wl->port_authorized) ||
-	       skb->protocol == htons(ETH_P_PAE);
+	if (!READ_ONCE(wl->control_port) ||
+	    READ_ONCE(wl->port_authorized) ||
+	    skb->protocol == htons(ETH_P_PAE))
+		return true;
+
+	/*
+	 * This drops every non-EAPOL frame while the 802.1X port is closed.
+	 * With an address configured and nothing able to pass, that is
+	 * indistinguishable from a dead link, so say so rather than discarding
+	 * silently.  Ratelimited because it fires per frame.
+	 */
+	dev_warn_ratelimited(&wl->func->dev,
+			     "802.1X port closed, dropping frame proto=%#06x\n",
+			     ntohs(skb->protocol));
+	return false;
 }
 
 static int mt6628_napi_poll(struct napi_struct *napi, int budget)
@@ -715,7 +727,18 @@ static void mt6628_runtime_tx_release(struct mt6628_wlan *wl,
 		if (wl->netdev)
 			netif_wake_queue(wl->netdev);
 
-		if (!skb_queue_empty(&wl->tx_queue))
+		/*
+		 * Only kick the worker from contexts that are not the
+		 * worker.  tx_release() is reachable from tx_work itself,
+		 * through poll_tx_status(), and re-queueing the work item
+		 * from inside its own run re-enters the drain loop with the
+		 * frame that is still at the head - the same skb gets pushed
+		 * back and picked up again, and the queue never makes
+		 * progress.  The drain loop already loops on its own, so
+		 * nothing is lost by staying quiet here.
+		 */
+		if (!wl->tx_work_running &&
+		    !skb_queue_empty(&wl->tx_queue))
 			mod_delayed_work(system_wq, &wl->tx_work, 0);
 	}
 }
@@ -1010,6 +1033,8 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 	unsigned long flags;
 	u32 wtsr0 = 0, wtsr1 = 0;
 
+	WRITE_ONCE(wl->tx_work_running, true);
+
 	while ((skb = skb_dequeue(&wl->tx_queue))) {
 		int ret;
 
@@ -1041,6 +1066,24 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 			}
 
 			skb_queue_head(&wl->tx_queue, skb);
+			/*
+			 * Clear before re-queueing: the flag exists so that
+			 * tx_release() does not re-enter this loop, and this
+			 * path is a deliberate reschedule rather than a
+			 * re-entrant one.
+			 */
+			WRITE_ONCE(wl->tx_work_running, false);
+			/*
+			 * tx_frame() stopped the queue when it found no credit
+			 * for this TC.  Nothing else restarts it from this
+			 * path, so a frame that ran out of credits left the
+			 * stack unable to queue another one - which looks
+			 * exactly like "the link has an address but nothing
+			 * is transmitted".  Wake it as soon as the credit is
+			 * back; the retry below then drains what is queued.
+			 */
+			if (wait && wl->netdev)
+				netif_wake_queue(wl->netdev);
 			if (wait) {
 				/* A credit arrived: retry at once. */
 				mod_delayed_work(system_wq, &wl->tx_work, 0);
@@ -1053,6 +1096,8 @@ static void mt6628_runtime_tx_work(struct work_struct *work)
 		if (ret)
 			dev_kfree_skb_any(skb);
 	}
+
+	WRITE_ONCE(wl->tx_work_running, false);
 
 	if (wl->netdev && skb_queue_len(&wl->tx_queue) < MT6628_TX_QUEUE_LIMIT)
 		netif_wake_queue(wl->netdev);
@@ -1078,9 +1123,18 @@ static netdev_tx_t mt6628_ndo_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 
+	/*
+	 * Queue full.  Dropping the frame and returning NETDEV_TX_OK is
+	 * deliberate: NETDEV_TX_BUSY must not be returned when the queue was
+	 * stopped in the same call, because the stack then retries the same skb
+	 * while nothing can accept it - the transmit path wedges with an address
+	 * configured and no traffic.  A dropped frame is recovered by TCP; a
+	 * wedged queue is not.
+	 */
 	if (skb_queue_len(&wl->tx_queue) >= MT6628_TX_QUEUE_LIMIT) {
 		netif_stop_queue(ndev);
-		return NETDEV_TX_BUSY;
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
 	}
 
 	skb_queue_tail(&wl->tx_queue, skb);

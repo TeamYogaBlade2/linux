@@ -94,6 +94,13 @@ struct mt6628_wlan {
 	 */
 	bool fw_sleepy;
 	struct delayed_work pm_work;
+	/*
+	 * Set while mt6628_runtime_tx_work() is draining.  tx_release() can be
+	 * reached from inside that worker (through poll_tx_status()), and
+	 * re-queueing the work item from its own run re-enters the loop with a
+	 * frame that is still at the head.
+	 */
+	bool tx_work_running;
 	/* Remain-on-channel state, including the request we granted it with. */
 	/* Keep the sequence across runtime stop/start so old cookies stay stale. */
 	u64 roc_cookie_next;
