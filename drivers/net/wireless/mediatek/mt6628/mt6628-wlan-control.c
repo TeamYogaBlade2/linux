@@ -625,9 +625,18 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	if (!ether_addr_equal(event.mac_addr, bssid) ||
 	    event.sta_rec_idx != wl->sta_rec_idx ||
 	    event.network_type_index != 0 ||
-	    event.is_qos != cmd.is_qos || !event.is_ap) {
+	    event.is_qos != cmd.is_qos || event.is_ap) {
+		/*
+		 * This record describes the AP as a peer of a station, so the
+		 * firmware must report is_ap == 0.  Downstream derives the same
+		 * flag as "eStaType & STA_TYPE_AP_MASK" (que_mgt.c:797), and our
+		 * eStaType is STA_TYPE_LEGACY_CLIENT, which has no AP bit set:
+		 * a non-zero is_ap would mean the firmware built a record for a
+		 * station it believes is acting as an AP, which is the condition
+		 * that made it refuse our auth frames.
+		 */
 		dev_err(&wl->func->dev,
-			"STA-REC activation mismatch: peer=%pM index=%u bss=%u qos=%u ap=%u; expected peer=%pM index=%u bss=0 qos=%u ap=1\n",
+			"STA-REC activation mismatch: peer=%pM index=%u bss=%u qos=%u ap=%u; expected peer=%pM index=%u bss=0 qos=%u ap=0\n",
 			event.mac_addr, event.sta_rec_idx, event.network_type_index,
 			event.is_qos, event.is_ap,
 			bssid, wl->sta_rec_idx, cmd.is_qos);
