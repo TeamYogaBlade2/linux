@@ -193,6 +193,16 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 		spin_unlock_irqrestore(&wl->cmd_lock, flags);
 		goto err_resource;
 	}
+	/*
+	 * Remember what went out last.  A firmware assert reports only opaque
+	 * mailbox values, so without this there is no way to tell which
+	 * operation it was unhappy about.
+	 */
+	spin_lock_irqsave(&wl->cmd_lock, flags);
+	wl->cmd_last_id = cid;
+	wl->cmd_last_seq = wl->cmd_seq_num;
+	wl->cmd_sent_count++;
+	spin_unlock_irqrestore(&wl->cmd_lock, flags);
 
 	if (!response && !response_len) {
 		ret = 0;

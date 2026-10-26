@@ -1514,8 +1514,11 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 
 			if (!sw_ret)
 				dev_err_ratelimited(&wl->func->dev,
-					"firmware assert: D2HRM0=%#x D2HRM1=%#x D2HRM2=%#x\n",
-					d2hrm0, d2hrm1, d2hrm2);
+					"firmware assert: D2HRM0=%#x D2HRM1=%#x D2HRM2=%#x (last cmd id=%u seq=%u, sent=%u, connected=%u)\n",
+					d2hrm0, d2hrm1, d2hrm2,
+					wl->cmd_last_id, wl->cmd_last_seq,
+					wl->cmd_sent_count,
+					(unsigned int)READ_ONCE(wl->connected));
 			else
 				dev_err_ratelimited(&wl->func->dev,
 					"firmware assert: failed to read D2H mailbox: %d\n",

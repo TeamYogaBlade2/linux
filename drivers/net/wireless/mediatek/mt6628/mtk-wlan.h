@@ -271,6 +271,14 @@ struct mt6628_wlan {
 	u8 cmd_pending_id;
 	u8 cmd_pending_eid;
 	u8 cmd_pending_token;
+	/*
+	 * Last command actually written to the firmware, kept after completion so
+	 * a later firmware assert can be attributed to the operation that
+	 * preceded it.  The assert mailbox itself carries no useful identity.
+	 */
+	u8 cmd_last_id;
+	u8 cmd_last_seq;
+	unsigned int cmd_sent_count;
 	u8 *cmd_response;
 	size_t cmd_response_len;
 	size_t cmd_response_capacity;
