@@ -293,6 +293,7 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	 *                                  host side of it is not implemented)
 	 *   HostClock               = host time at power-up
 	 */
+	atomic_set(&pv->cache_control, 0);	/* a fresh uKernel: nothing pending */
 	memset(pv->hostctl, 0, sizeof(*pv->hostctl));
 	{
 		unsigned long core_hz = pv->clk_core ? clk_get_rate(pv->clk_core) : 0;

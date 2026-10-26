@@ -231,7 +231,8 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 	cmd->service_address =
 		cpu_to_le32(PRISMRV_UKERNEL_VADDR +
 			    prismrv_hostkick_instr[type] * 8);
-	cmd->cache_control = 0;
+	/* hand the pending BIF invalidations to the uKernel (vendor: ui32CacheControl) */
+	cmd->cache_control = cpu_to_le32(atomic_xchg(&pv->cache_control, 0));
 	memcpy(cmd->data, data, sizeof(cmd->data));
 
 	/*

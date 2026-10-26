@@ -44,6 +44,10 @@
 #define PRISMRV_CCB_VADDR	0x00400000u	/* slot 0x4d */
 #define PRISMRV_HWRTDATA_VADDR	0x00a00000u	/* slot 0xad (TA), 3D follows */
 
+/* ui32CacheControl bits of a CCB command (SGXMKIF_CC_INVAL_BIF_*) */
+#define PRISMRV_CC_INVAL_BIF_PT	BIT(0)	/* page-table cache */
+#define PRISMRV_CC_INVAL_BIF_PD	BIT(1)	/* directory cache */
+
 /* kernel CCB: array of commands plus control block (sgx_mkif_km.h) */
 struct prismrv_ccb_cmd {
 	__le32 service_address;	/* USE handler address inside uKernel */
@@ -238,6 +242,8 @@ struct prismrv_device {
 	 * mmu_lock.
 	 */
 	struct mutex mmu_lock;
+	/* BIF cache invalidations waiting for the next CCB command (vendor ui32CacheControl) */
+	atomic_t cache_control;
 
 	/*
 	 * All live prismrv_bo objects, protected by bo_list_lock.

@@ -33,6 +33,23 @@ static void prismrv_mmu_invalidate(struct prismrv_device *pv)
 {
 	u32 v;
 
+	/*
+	 * Once the uKernel runs the vendor driver never touches the BIF
+	 * control register for this: it records SGXMKIF_CC_INVAL_BIF_PT/PD in
+	 * psDevInfo->ui32CacheControl and the uKernel performs the
+	 * invalidation, for every core, before it executes the next command
+	 * (sgxutils.c SGXScheduleCCBCommand()).  The BIF_CTRL window used
+	 * below is bank 0, not the per-core banks of the MP GPU, so it can
+	 * not reach the cores' caches.  The direct sequence stays for the
+	 * phase where no uKernel is running (init, errata buffers, recovery).
+	 */
+	if (READ_ONCE(pv->hw_ready)) {
+		atomic_or(PRISMRV_CC_INVAL_BIF_PT | PRISMRV_CC_INVAL_BIF_PD,
+			  &pv->cache_control);
+		return;
+	}
+
+
 	writel(EUR_CR_BIF_CTRL_INVALDC_MASK | EUR_CR_BIF_CTRL_FLUSH_MASK,
 	       pv->regs + EUR_CR_BIF_CTRL);
 	readl(pv->regs + EUR_CR_BIF_CTRL);
