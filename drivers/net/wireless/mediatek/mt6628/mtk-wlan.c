@@ -222,13 +222,19 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 
 	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
 			     MT6628_FW_OWN_REQ_CLR);
-	if (ret)
+	if (ret) {
+		/* INT_EN_CLR above must not outlive this failure; see below. */
+		mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
 		return ret;
+	}
 
 	while (time_before(jiffies, timeout)) {
 		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
-		if (ret)
+		if (ret) {
+			mt6628_write8(wl, MT6628_MCR_WHLPCR,
+				      MT6628_INT_EN_SET);
 			return ret;
+		}
 
 		if (val & MT6628_IS_DRIVER_OWN) {
 			dev_dbg(&wl->func->dev,
@@ -268,8 +274,11 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 		if (tries && !(tries & 0xff)) {
 			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
 					     MT6628_FW_OWN_REQ_CLR);
-			if (ret)
+			if (ret) {
+				mt6628_write8(wl, MT6628_MCR_WHLPCR,
+					      MT6628_INT_EN_SET);
 				return ret;
+			}
 		}
 
 		tries++;
@@ -279,6 +288,19 @@ static int mt6628_driver_own(struct mt6628_wlan *wl)
 	dev_err(&wl->func->dev,
 		"timed out waiting for driver ownership: "
 		"WCIR=%#010x WHLPCR=%#010x\n", wcir, val);
+	/*
+	 * Put the interrupt enable back before failing.
+	 *
+	 * INT_EN_CLR was written above to quiet the line while the ownership
+	 * transition is in flight, and every path out of here has to undo it.
+	 * Returning with it still clear leaves the SDIO interrupt disabled for
+	 * good: nothing else writes INT_EN_SET except a successful reclaim or a
+	 * full restart, and the failure path is exactly the one a recovery
+	 * retry goes through.  The chip then stays alive and owned by the
+	 * firmware with the host deaf to it - the interface keeps its address
+	 * and stops carrying traffic, with an empty dmesg.
+	 */
+	mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
 	return -ETIMEDOUT;
 }
 
