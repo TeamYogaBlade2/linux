@@ -1705,12 +1705,27 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	sent = wl->tx_sent;
 
 	/*
-	 * "Busy" is any traffic the driver still owes: frames queued to send, or
-	 * received frames waiting to be handed up.  An honestly idle link has
-	 * neither, and reporting on that alone would be noise.
+	 * Also report a link that is connected and transmitting but receiving
+	 * nothing.
+	 *
+	 * The queue-based test below catches a driver that has work it cannot
+	 * move.  It cannot catch the other shape: every frame is accepted and
+	 * sent, the queues stay empty, and nothing ever comes back - a link that
+	 * holds an address from DHCP and passes no traffic at all, with an empty
+	 * dmesg.  Sending without receiving for a whole interval is not a normal
+	 * idle link, so it is worth saying so.
 	 */
 	busy = !skb_queue_empty(&wl->tx_queue) ||
 	       !skb_queue_empty(&wl->rx_queue);
+
+	if (READ_ONCE(wl->connected) && wl->netdev &&
+	    netif_carrier_ok(wl->netdev) && sent != wl->tx_sent_last &&
+	    rxs == wl->rx_seen_last)
+		dev_warn(&wl->func->dev,
+			 "TX only, no RX: sent=%u (was %u) rx=%u irq=%u authorized=%u ctrl_port=%u\n",
+			 sent, wl->tx_sent_last, rxs, irqs,
+			 (unsigned int)READ_ONCE(wl->port_authorized),
+			 (unsigned int)READ_ONCE(wl->control_port));
 
 	if (busy && irqs == wl->irq_seen_last && rxs == wl->rx_seen_last &&
 	    sent == wl->tx_sent_last)
