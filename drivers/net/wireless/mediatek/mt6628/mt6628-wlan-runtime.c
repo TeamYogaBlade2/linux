@@ -1689,6 +1689,41 @@ static void mt6628_runtime_irq_retry_work(struct work_struct *work);
  * diagnostic - the interface keeps its address and simply carries nothing, with
  * an empty dmesg.  This runs on its own timer for that reason.
  */
+/*
+ * Dump the state that decides a stall, from a context that is guaranteed to be
+ * running.  The counters alone say which side stopped; the registers say whether
+ * the firmware still considers the link up and whether it is holding anything
+ * back.  Reported through a single call so every stall site logs the same set.
+ */
+static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
+					const char *reason)
+{
+	u32 whisr = 0, wrplr = 0, whlpcr = 0, whier = 0, wasr = 0;
+	int ret;
+
+	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
+	if (!ret)
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WRPLR, &wrplr);
+	if (!ret)
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHLPCR, &whlpcr);
+	if (!ret)
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHIER, &whier);
+	if (!ret)
+		ret = mt6628_runtime_read32(wl, MT6628_MCR_WASR, &wasr);
+
+	dev_warn(&wl->func->dev,
+		 "%s: sent=%u/%u rx=%u/%u irq=%u/%u connected=%u pm_idle=%u owned=%u%s%#x (WHISR=%#010x WRPLR=%#010x WHLPCR=%#010x WHIER=%#010x WASR=%#010x)\n",
+		 reason,
+		 wl->tx_sent, wl->tx_sent_last,
+		 wl->rx_seen, wl->rx_seen_last,
+		 wl->irq_seen, wl->irq_seen_last,
+		 (unsigned int)READ_ONCE(wl->connected),
+		 (unsigned int)READ_ONCE(wl->pm_idle),
+		 (unsigned int)READ_ONCE(wl->driver_owned),
+		 ret ? " regread_err=" : " ret=", ret ? (unsigned int)ret : 0,
+		 whisr, wrplr, whlpcr, whier, wasr);
+}
+
 static void mt6628_runtime_stall_check_work(struct work_struct *work)
 {
 	struct mt6628_wlan *wl =
@@ -1721,11 +1756,7 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	if (READ_ONCE(wl->connected) && wl->netdev &&
 	    netif_carrier_ok(wl->netdev) && sent != wl->tx_sent_last &&
 	    rxs == wl->rx_seen_last)
-		dev_warn(&wl->func->dev,
-			 "TX only, no RX: sent=%u (was %u) rx=%u irq=%u authorized=%u ctrl_port=%u\n",
-			 sent, wl->tx_sent_last, rxs, irqs,
-			 (unsigned int)READ_ONCE(wl->port_authorized),
-			 (unsigned int)READ_ONCE(wl->control_port));
+		mt6628_runtime_report_stall(wl, "TX only, no RX");
 
 	if (busy && irqs == wl->irq_seen_last && rxs == wl->rx_seen_last &&
 	    sent == wl->tx_sent_last)
