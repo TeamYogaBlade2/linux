@@ -1347,6 +1347,26 @@ static void msdc_request_done(struct msdc_host *host, struct mmc_request *mrq)
 	 */
 	hsq_req_done = host->hsq_en ? mmc_hsq_finalize_request(mmc, mrq) : false;
 	if (hsq_req_done) {
+		/*
+		 * Drop our reference to the completed request.
+		 *
+		 * hsq->mrq is cleared by mmc_hsq_post_request(), but host->mrq
+		 * was never cleared on this path, so it kept pointing at a
+		 * request whose completion has already run and whose owner may
+		 * free it.  Anything that reaches msdc_request_done() again
+		 * before msdc_ops_request() overwrites host->mrq - a spurious
+		 * interrupt completing an already-finished request, for
+		 * instance - then finalizes that stale pointer a second time,
+		 * which is a use-after-free inside mmc_hsq_finalize_request()
+		 * that the core reports as a bad PC value.
+		 *
+		 * Only clear it when it still refers to this request, so a
+		 * newer one that was already submitted is left alone.
+		 */
+		spin_lock_irqsave(&host->lock, flags);
+		if (host->mrq == mrq)
+			host->mrq = NULL;
+		spin_unlock_irqrestore(&host->lock, flags);
 		if (host->error)
 			msdc_reset_hw(host);
 		return;
