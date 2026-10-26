@@ -1508,15 +1508,7 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 	}
 
 	sdio_claim_host(wl->func);
-	/*
-	 * The TX port follows the TC, not the packet type: downstream sends
-	 * everything except TC4 out of HIF TX0 (nic_tx.c:1660, "if (ucTC !=
-	 * TC4_INDEX) ucPortIdx = 0").  Management frames are TC1, so they
-	 * belong on WTDR0 along with the data path - writing them to WTDR1
-	 * hands the firmware a TC index that does not match the port it
-	 * arrived on.
-	 */
-	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR0, buf, xfer_len);
+	ret = sdio_writesb(wl->func, MT6628_MCR_WTDR1, buf, xfer_len);
 	sdio_release_host(wl->func);
 	mutex_unlock(&wl->cmd_mutex);
 	kfree(buf);

@@ -94,17 +94,7 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_HIF_TX_PKT_TYPE_CMD	1
 #define MT6628_HIF_TX_PKT_TYPE_MANAGEMENT	3
 #define MT6628_TX_TC_CMD		4
-/*
- * Management frames go to TC1, not TC4.
- *
- * Downstream keeps TC4 for exactly "Command or 802.1x packets"
- * (nic_tx.c:854) and leaves ucTC at TC1 for everything else, management
- * included (que_mgt.c:1271). Giving management its own TC4 collided with
- * commands: TC4 has only 4 credits and a connection issues commands and
- * auth/assoc frames at the same time, so the two starved each other exactly
- * while the link was being established. TC1 has 20.
- */
-#define MT6628_TX_TC_MGMT		1
+#define MT6628_TX_TC_MGMT		4
 #define MT6628_HIF_TX_80211_FORMAT	BIT(7)
 #define MT6628_HIF_TX_1X_FRAME		BIT(6)
 #define MT6628_HIF_TX_NEED_ACK	BIT(0)
