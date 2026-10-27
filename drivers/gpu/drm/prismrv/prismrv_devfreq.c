@@ -119,14 +119,33 @@ static void prismrv_devfreq_update_utilization(struct prismrv_device *pv)
 static int prismrv_devfreq_target(struct device *dev, unsigned long *freq,
 				  u32 flags)
 {
+	struct prismrv_device *pv = dev_get_drvdata(dev);
 	struct dev_pm_opp *opp;
+	int ret;
 
 	opp = devfreq_recommended_opp(dev, freq, flags);
 	if (IS_ERR(opp))
 		return PTR_ERR(opp);
 	dev_pm_opp_put(opp);
 
-	return dev_pm_opp_set_rate(dev, *freq);
+	ret = dev_pm_opp_set_rate(dev, *freq);
+	if (ret)
+		return ret;
+
+	/*
+	 * The uKernel derives its timer period from HostCtl.uKernelTimerClock
+	 * (= core clock / uKernelFreq, set at init).  The vendor driver
+	 * refreshes it after every clock change (SGXUpdateTimingInfo()); a
+	 * stale value would make the 1 kHz uKernel tick, and with it the
+	 * lockup detection, run at the wrong rate.  devfreq is suspended
+	 * around every hw_fini()/hw_init(), so hostctl is valid here.
+	 */
+	if (pv && READ_ONCE(pv->hw_ready) && pv->hostctl)
+		WRITE_ONCE(pv->hostctl->ui32uKernelTimerClock,
+			   cpu_to_le32(clk_get_rate(pv->clk_core) /
+				       PRISMRV_UKERNEL_FREQ_HZ));
+
+	return 0;
 }
 
 static int prismrv_devfreq_get_dev_status(struct device *dev,
