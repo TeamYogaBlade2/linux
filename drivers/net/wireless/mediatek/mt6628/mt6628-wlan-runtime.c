@@ -1795,6 +1795,31 @@ static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
 		 (unsigned int)READ_ONCE(wl->driver_owned),
 		 ret ? " regread_err=" : " ret=", ret ? (unsigned int)ret : 0,
 		 whisr, wrplr, whlpcr, whier, wasr);
+
+	/*
+	 * Ask the firmware how the transmissions actually went.
+	 *
+	 * The registers cannot distinguish "the AP never acknowledged anything"
+	 * from "the firmware never tried". tx_fail_count and
+	 * tx_life_timeout_count can: if they climb while tx_count does, the
+	 * frames are going out and coming back unacknowledged, which means the
+	 * peer is rejecting them rather than the driver failing to send.
+	 */
+	if (READ_ONCE(wl->connected)) {
+		struct mt6628_event_sta_statistics stats;
+
+		if (mt6628_wlan_get_sta_statistics(wl, &stats) == 0)
+			dev_warn(&wl->func->dev,
+				 "%s: fw stats tx=%u fail=%u timeout=%u per=%u%% rcpi=%u speed=%u\n",
+				 reason, le32_to_cpu(stats.tx_count),
+				 le32_to_cpu(stats.tx_fail_count),
+				 le32_to_cpu(stats.tx_life_timeout_count),
+				 stats.per, stats.rcpi,
+				 le16_to_cpu(stats.link_speed));
+		else
+			dev_warn(&wl->func->dev,
+				 "%s: fw stats unavailable\n", reason);
+	}
 }
 
 static void mt6628_runtime_stall_check_work(struct work_struct *work)
