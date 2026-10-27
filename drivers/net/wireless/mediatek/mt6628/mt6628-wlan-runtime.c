@@ -1134,7 +1134,21 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	 */
 	hdr.forwarding_type_session_id_reserved = MT6628_HIF_TX_BURST_END;
 	hdr.wlan_header_length = ETH_HLEN;
-	hdr.sta_rec_idx = wl->sta_rec_idx;
+	/*
+	 * Group-addressed frames carry the broadcast index, not the AP's record.
+	 *
+	 * Downstream sets ucStaRecIndex to STA_REC_INDEX_BMCAST whenever the
+	 * destination is a group address and leaves the firmware to send it
+	 * (que_mgt.c:1486-1489). Sending the AP's record instead left the
+	 * firmware unable to route the frame: it accepted it into TC5, never
+	 * transmitted it, and therefore never released TC5's single credit. One
+	 * broadcast - the first ARP - used up ALL multicast capacity for the life
+	 * of the connection, after which no ARP could be resolved, which is why
+	 * new destinations (DNS, apk) failed while an already-resolved ping kept
+	 * working.
+	 */
+	hdr.sta_rec_idx = is_multicast_ether_addr(eth_hdr(skb)->h_dest) ?
+			 MT6628_STA_REC_INDEX_BMCAST : wl->sta_rec_idx;
 	hdr.seq_no = 0;
 	if (skb->protocol == htons(ETH_P_PAE)) {
 		hdr.pkt_format_id_flags |= MT6628_HIF_TX_1X_FRAME;

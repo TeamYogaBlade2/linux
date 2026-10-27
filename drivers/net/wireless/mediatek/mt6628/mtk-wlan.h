@@ -21,6 +21,13 @@
 
 #define MT6628_WLAN_TX_TC_NUM		6
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
+/*
+ * Broadcast/multicast frames carry this index instead of the AP's record.
+ * Downstream sets it for every frame whose destination is a group address
+ * (que_mgt.c:1486-1489) and notes that the firmware, not the host, decides how
+ * to send it.
+ */
+#define MT6628_STA_REC_INDEX_BMCAST	0xff
 
 /* ENUM_CH_REQ_TYPE_T from the downstream connection manager. */
 #define MT6628_CH_REQ_TYPE_JOIN		0
