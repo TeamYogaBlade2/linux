@@ -130,6 +130,9 @@ struct mt6628_wlan {
 	 */
 	unsigned int tx_data;
 	unsigned int rx_data;
+	/* Frames the firmware asked us to put back in order. */
+	unsigned int rx_reorder_seen;
+	unsigned int rx_bar_frame;
 	bool data_path_reported;
 	unsigned int stats_poll_count;
 	unsigned int tx_sent_last;

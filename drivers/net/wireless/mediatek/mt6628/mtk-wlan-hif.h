@@ -272,6 +272,20 @@ struct mt6628_hif_rx_hdr {
 
 static_assert(sizeof(struct mt6628_hif_rx_hdr) == MT6628_HIF_RX_HEADER_LEN);
 
+/*
+ * Reorder information carried by every received frame.
+ *
+ * Downstream defines these in include/nic/hif_rx.h:99-110 and decodes them in
+ * nic_rx.c:1093-1107. The firmware fills them in for us already - the driver
+ * has simply never looked at the two header bytes that carry them.
+ */
+#define MT6628_HIF_RX_80211_HEADER_FORMAT	BIT(0)
+#define MT6628_HIF_RX_DO_REORDER		BIT(1)
+#define MT6628_HIF_RX_SEQ_NO_MASK		GENMASK(11, 0)
+#define MT6628_HIF_RX_TID_MASK			GENMASK(14, 12)
+#define MT6628_HIF_RX_TID_OFFSET		12
+#define MT6628_HIF_RX_BAR_FRAME			BIT(15)
+
 /* WCIR */
 #define MT6628_WCIR_CHIP_ID		GENMASK(15, 0)
 #define MT6628_WCIR_WLAN_READY		BIT(21)

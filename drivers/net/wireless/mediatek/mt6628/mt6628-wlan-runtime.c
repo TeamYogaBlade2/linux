@@ -637,6 +637,36 @@ int ret;
 			goto bad_packet;
 		wl->rx_data++;
 
+		/*
+		 * The firmware tags each received frame with whether the host is
+		 * expected to put it back in order, and with the 802.11 sequence
+		 * number and TID to do it with (hif_rx.h:99-110, decoded by
+		 * nic_rx.c:1093-1107). Those two header bytes have always been
+		 * there; this driver has never looked at them.
+		 *
+		 * Record what the firmware actually asks for before acting on
+		 * it. DO_REORDER is per frame, so a link that never negotiates
+		 * Block Ack will simply never set it.
+		 */
+		if (rx_hdr->reorder_pal_tcl & MT6628_HIF_RX_DO_REORDER) {
+			u16 seq_no_tid = le16_to_cpu(rx_hdr->seq_no_tid);
+
+			wl->rx_reorder_seen++;
+			if (seq_no_tid & MT6628_HIF_RX_BAR_FRAME)
+				wl->rx_bar_frame++;
+			if (wl->rx_reorder_seen <= 4)
+				dev_info(&wl->func->dev,
+					 "RX reorder: seq=%u tid=%u bar=%u fmt80211=%u\n",
+					 (unsigned int)(seq_no_tid &
+						MT6628_HIF_RX_SEQ_NO_MASK),
+					 (unsigned int)((seq_no_tid &
+						MT6628_HIF_RX_TID_MASK) >>
+						MT6628_HIF_RX_TID_OFFSET),
+					 !!(seq_no_tid & MT6628_HIF_RX_BAR_FRAME),
+					 !!(rx_hdr->reorder_pal_tcl &
+					    MT6628_HIF_RX_80211_HEADER_FORMAT));
+		}
+
 		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
 			header_offset;
 		if (payload_len < ETH_HLEN)
