@@ -890,10 +890,15 @@ int mt6628_wlan_poll_tx_status(struct mt6628_wlan *wl,
 		dev_warn_ratelimited(&wl->func->dev,
 			"TX poll registers: WHLPCR=%#010x WHCR=%#010x "
 			"WHIER=%#010x WRPLR=%#010x WTSR0=%#010x "
-			"WTSR1=%#010x polls=%u sent=%u txq=%u\n",
+			"WTSR1=%#010x polls=%u sent=%u txq=%u "
+			"free=%u/%u/%u/%u/%u/%u max=%u/%u/%u/%u/%u/%u\n",
 			whlpcr, whcr, whier, wrplr, wtsr0, wtsr1,
 			wl->tx_poll_count, wl->tx_sent,
-			skb_queue_len(&wl->tx_queue));
+			skb_queue_len(&wl->tx_queue),
+			wl->tx_free[0], wl->tx_free[1], wl->tx_free[2],
+			wl->tx_free[3], wl->tx_free[4], wl->tx_free[5],
+			wl->tx_max[0], wl->tx_max[1], wl->tx_max[2],
+			wl->tx_max[3], wl->tx_max[4], wl->tx_max[5]);
 	} else {
 		dev_warn_ratelimited(&wl->func->dev,
 			"failed to read TX poll diagnostic registers: %d\n",
