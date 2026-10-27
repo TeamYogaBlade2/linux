@@ -581,23 +581,7 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 					       MT6628_HT_CAP_SUP_WIDTH_20_40);
 	if (state == MT6628_STA_STATE_3) {
 		mt6628_wlan_parse_peer_caps(wl, &caps);
-		/*
-		 * Tell the firmware this peer is not QoS.
-		 *
-		 * Downstream keeps per-station, per-TID receive reorder state
-		 * (qmAddRxBaEntry, que_mgt.c:3468) filled from
-		 * EVENT_ID_RX_ADDBA and consumed by
-		 * qmProcessPktWithReordering (que_mgt.c:2795). This port has no
-		 * such reader, so when QoS is negotiated the firmware opens a
-		 * Block Ack session whose receive window nothing on the host is
-		 * tracking - and after a few hundred frames, which is the point
-		 * where a download dies, delivery stops with WHISR and WRPLR both
-		 * zero and the chip still owned.
-		 *
-		 * Declining QoS avoids the whole reorder path until the receive
-		 * side is implemented. It costs aggregation, not correctness.
-		 */
-		cmd.is_qos = false;
+		cmd.is_qos = caps.is_qos;
 		cmd.is_uapsd_supported = caps.uapsd;
 		cmd.desired_phy_type_set = caps.has_ht ?
 			(wl->conn_band == NL80211_BAND_2GHZ ?
