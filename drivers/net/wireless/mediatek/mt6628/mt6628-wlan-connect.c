@@ -1612,6 +1612,22 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	if (ret)
 		goto err_reset;
 
+	/*
+	 * Activate the BSS before programming anything else, as downstream does:
+	 * nicActivateNetwork() is the "sync with firmware" step at the start of a
+	 * connection attempt (ais_fsm.c:1848-1853), and nicUpdateBss() - the BSS
+	 * info - only follows after the association completes (assoc.c:3346).
+	 *
+	 * Doing it at the end instead, after set_bss_info(), left management
+	 * frames being submitted against a BSS the firmware still considered
+	 * inactive; it queued them and then discarded them, which the TX_DONE
+	 * report calls TX_RESULT_FLUSHED.
+	 */
+	failure_stage = "activate BSS";
+	ret = mt6628_wlan_activate_bss(wl, true);
+	if (ret)
+		goto err_reset;
+
 	wl->sta_rec_idx = 0;
 	failure_stage = "update STA-REC state 1";
 	ret = mt6628_wlan_update_sta_record(wl, MT6628_STA_STATE_1, 0,
@@ -1625,11 +1641,6 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 	failure_stage = "set BSS info";
 	ret = mt6628_wlan_set_bss_info(wl, wl->conn_channel, wl->conn_ssid,
 					wl->conn_ssid_len, wl->conn_bssid, false);
-	if (ret)
-		goto err_reset;
-
-	failure_stage = "activate BSS";
-	ret = mt6628_wlan_activate_bss(wl, true);
 	if (ret)
 		goto err_reset;
 
