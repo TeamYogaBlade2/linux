@@ -2351,8 +2351,12 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	 * command slot. This can run in event_work, so trylock must not wait
 	 * for a command whose response this same worker may need to consume.
 	 */
-	if (!mutex_trylock(&wl->cmd_mutex))
+	if (!mutex_trylock(&wl->cmd_mutex)) {
+		if (net_ratelimit())
+			dev_info(&wl->func->dev,
+				 "give fw own refused: command slot busy\n");
 		return -EBUSY;
+	}
 	if (!wl->runtime_started || !wl->fw_running) {
 		ret = -ENODEV;
 		goto out_unlock_cmd;
@@ -2415,6 +2419,10 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 		   MT6628_WHISR_RX1_DONE | MT6628_WHISR_ABNORMAL |
 		   MT6628_WHISR_FW_OWN_BACK |
 		   MT6628_WHISR_D2H_SW)) {
+		if (net_ratelimit())
+			dev_info(&wl->func->dev,
+				 "give fw own refused: WHISR=%#x still latched\n",
+				 val);
 		/*
 		 * Remembered and dispatched after the SDIO host is released:
 		 * irq_work claims the same host, so queueing it here would
@@ -2462,6 +2470,10 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 		mt6628_runtime_write32(wl, MT6628_MCR_WHLPCR,
 					MT6628_FW_OWN_REQ_CLR |
 					MT6628_INT_EN_SET);
+		if (net_ratelimit())
+			dev_info(&wl->func->dev,
+				 "give fw own refused: FW_OWN_REQ_SET did not take (WHISR=%#x)\n",
+				 val);
 		ret = -EBUSY;
 		goto out_release;
 	}
