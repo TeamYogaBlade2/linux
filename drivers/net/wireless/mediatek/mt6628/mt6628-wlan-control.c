@@ -266,6 +266,13 @@ static_assert(sizeof(struct mt6628_cmd_ch_privilege) == 20);
 static_assert(sizeof(struct mt6628_event_ch_privilege) == 12);
 static_assert(sizeof(struct mt6628_cmd_set_bss_rlm_param) == 16);
 static_assert(sizeof(struct mt6628_cmd_set_bss_info) == 80);
+/*
+ * Management frames are three-address.  struct ieee80211_hdr is the
+ * four-address form here and is 30 bytes, so using it to describe the MAC
+ * header tells the firmware to look for the frame body six bytes further along
+ * than it really is.
+ */
+static_assert(sizeof(struct ieee80211_hdr_3addr) == 24);
 static_assert(sizeof(struct mt6628_cmd_update_sta_record) == 40);
 static_assert(sizeof(struct mt6628_event_activate_sta_rec) == 12);
 static_assert(sizeof(struct mt6628_cmd_bss_activate_ctrl) == 4);
@@ -1435,7 +1442,14 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
-	if (!frame || frame_len < sizeof(struct ieee80211_hdr))
+	/*
+	 * sizeof(struct ieee80211_hdr) is 30 in this tree: it is the four-address
+	 * (WDS) form, with addr4 and aligned(2).  Management frames are
+	 * three-address, 24 bytes, and that is what has to reach the firmware -
+	 * both as the minimum length here and as the MAC header length and
+	 * EtherType offset it is told below.
+	 */
+	if (!frame || frame_len < sizeof(struct ieee80211_hdr_3addr))
 		return -EINVAL;
 	if (frame_len > 4095 - MT6628_HIF_TX_HEADER_LEN)
 		return -EMSGSIZE;
@@ -1492,12 +1506,12 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 
 	hdr.tx_byte_count_user_priority = cpu_to_le16(packet_len);
 	hdr.ether_type_offset = (MT6628_HIF_TX_HEADER_LEN +
-					 sizeof(struct ieee80211_hdr)) >> 1;
+					 sizeof(struct ieee80211_hdr_3addr)) >> 1;
 	hdr.resource_pkt_type_csflags =
 		(MT6628_TX_TC_MGMT << MT6628_HIF_TX_RESOURCE_OFFSET) |
 		(MT6628_HIF_TX_PKT_TYPE_MANAGEMENT <<
 		 MT6628_HIF_TX_PACKET_TYPE_OFFSET);
-	hdr.wlan_header_length = sizeof(struct ieee80211_hdr);
+	hdr.wlan_header_length = sizeof(struct ieee80211_hdr_3addr);
 	hdr.pkt_format_id_flags = MT6628_HIF_TX_80211_FORMAT;
 	hdr.seq_no = 0;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
