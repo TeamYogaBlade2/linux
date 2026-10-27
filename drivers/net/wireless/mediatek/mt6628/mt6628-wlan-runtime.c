@@ -31,6 +31,12 @@
 #define MT6628_RUNTIME_QUEUE_LIMIT	256
 #define MT6628_RUNTIME_EVENT_RESERVED	16
 #define MT6628_TX_QUEUE_LIMIT		128
+/*
+ * Transmit volume that makes "sent but nothing received" a fault rather than an
+ * idle link: a handful of frames over one watchdog period is ordinary traffic,
+ * a sustained run with no reply at all is not.
+ */
+#define MT6628_STALL_MIN_TX		16
 
 /*
  * How long the driver may stay idle before handing the chip to the
@@ -1814,8 +1820,18 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	busy = !skb_queue_empty(&wl->tx_queue) ||
 	       !skb_queue_empty(&wl->rx_queue);
 
+	/*
+	 * Require a meaningful amount of transmit before calling it a stall.
+	 *
+	 * An idle link still emits the occasional frame - a DHCP retry, an ARP -
+	 * and having one of those go unanswered for six seconds is ordinary, not
+	 * a fault. Reporting on a single frame produced false alarms on an idle
+	 * but perfectly working link, which is worse than saying nothing: it
+	 * sends the search after a stall that is not there.
+	 */
 	if (READ_ONCE(wl->connected) && wl->netdev &&
-	    netif_carrier_ok(wl->netdev) && sent != wl->tx_sent_last &&
+	    netif_carrier_ok(wl->netdev) &&
+	    sent - wl->tx_sent_last >= MT6628_STALL_MIN_TX &&
 	    rxs == wl->rx_seen_last)
 		mt6628_runtime_report_stall(wl, "TX only, no RX");
 

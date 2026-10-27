@@ -1905,6 +1905,22 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 	cancel_delayed_work(&wl->conn_timeout_work);
 	wl->connected = true;
 	wl->conn_state = MT6628_CONN_CONNECTED;
+	/*
+	 * Tell the firmware to stay awake while associated.
+	 *
+	 * Nothing in this driver ever sends CMD_ID_POWER_SAVE_MODE, so the
+	 * firmware has been running on whatever profile it defaults to. If that
+	 * is a power-save profile, the firmware dozes after an idle period and
+	 * stops receiving - no interrupt, WHISR and WRPLR both zero, the chip
+	 * still owned by us - which matches a link that works and then goes
+	 * quiet exactly while nothing is being sent. Downstream configures this
+	 * explicitly at init from its module parameter (wlan_lib.c:1771)
+	 * instead of leaving it at the default.
+	 *
+	 * CAM means no power save. cfg80211 set_power_mgmt can still turn it on
+	 * later if userspace asks for it.
+	 */
+	mt6628_wlan_set_power_mgmt(wl, false);
 	/* A working link earns a fresh roam budget for the next loss. */
 	wl->roam_count = 0;
 	if (wl->netdev) {
