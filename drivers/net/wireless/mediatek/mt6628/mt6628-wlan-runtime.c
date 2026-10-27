@@ -1758,6 +1758,19 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	    rxs == wl->rx_seen_last)
 		mt6628_runtime_report_stall(wl, "TX only, no RX");
 
+	/*
+	 * The same check while a connection is in progress.
+	 *
+	 * connected stays clear until the handshake finishes, so the test above
+	 * cannot see a stall during it - and that is exactly when auth/assoc
+	 * frames are sent and their replies never arrive. Without this the
+	 * failure is completely silent again, just at a different stage.
+	 */
+	if (wl->conn_state != MT6628_CONN_DISCONNECTED &&
+	    !READ_ONCE(wl->connected) && sent != wl->tx_sent_last &&
+	    rxs == wl->rx_seen_last)
+		mt6628_runtime_report_stall(wl, "TX only, no RX while connecting");
+
 	if (busy && irqs == wl->irq_seen_last && rxs == wl->rx_seen_last &&
 	    sent == wl->tx_sent_last)
 		dev_warn(&wl->func->dev,
@@ -1841,6 +1854,8 @@ int mt6628_wlan_runtime_start(struct mt6628_wlan *wl)
 	wl->conn_cleanup_pending = 0;
 	wl->runtime_initialized = true;
 	wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
+	/* A freshly started firmware holds no records of ours. */
+	wl->sta_rec_programmed = false;
 	wl->event_handler = mt6628_cfg80211_event_handler;
 	wl->mgmt_handler = mt6628_cfg80211_mgmt_handler;
 

@@ -176,6 +176,14 @@ struct mt6628_wlan {
 	u8 sta_rec_idx;
 	u8 conn_state;
 	u8 conn_bssid[ETH_ALEN];
+	/*
+	 * The BSSID the firmware STA-REC was actually programmed with.  Kept
+	 * apart from conn_bssid because a new connect() overwrites that one
+	 * while the old record is still in the firmware, and teardown has to
+	 * remove the record it created, not the one being connected to.
+	 */
+	u8 sta_rec_bssid[ETH_ALEN];
+	bool sta_rec_programmed;
 	u8 conn_ssid[IEEE80211_MAX_SSID_LEN];
 	u8 conn_ssid_len;
 	u8 conn_band;

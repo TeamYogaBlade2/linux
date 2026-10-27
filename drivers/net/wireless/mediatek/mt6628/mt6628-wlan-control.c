@@ -551,6 +551,15 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	cmd.index = wl->sta_rec_idx;
 	cmd.sta_type = MT6628_STA_TYPE_LEGACY_CLIENT;
 	ether_addr_copy(cmd.mac_addr, bssid);
+	/*
+	 * Remember which peer this record describes.  A later connect() to a
+	 * different BSS overwrites conn_bssid while this record is still in the
+	 * firmware, so teardown must not use conn_bssid to remove it - it would
+	 * name the new BSS and leave this one behind, which is how two STA-REC
+	 * activations for different MACs end up sharing index 0.
+	 */
+	ether_addr_copy(wl->sta_rec_bssid, bssid);
+	wl->sta_rec_programmed = true;
 	cmd.assoc_id = cpu_to_le16(assoc_id);
 	cmd.listen_interval = cpu_to_le16(10);
 	cmd.net_type_index = 0;

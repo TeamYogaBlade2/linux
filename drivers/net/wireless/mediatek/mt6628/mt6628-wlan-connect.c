@@ -158,13 +158,20 @@ static void mt6628_conn_fw_teardown_locked(struct mt6628_wlan *wl)
 				 "failed to deactivate BSS during cleanup: %d\n",
 				 ret);
 
-		ret = mt6628_wlan_remove_sta_record(wl, wl->conn_bssid);
+		/*
+		 * Remove the record by the peer it was programmed with, not by
+		 * whoever we are connecting to now.
+		 */
+		ret = mt6628_wlan_remove_sta_record(wl,
+				wl->sta_rec_programmed ?
+					wl->sta_rec_bssid : wl->conn_bssid);
 		if (ret) {
 			dev_warn(&wl->func->dev,
 				 "failed to remove STA-REC %u: %d\n",
 				 wl->sta_rec_idx, ret);
 		} else {
 			wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
+			wl->sta_rec_programmed = false;
 		}
 	}
 
@@ -1611,6 +1618,7 @@ int mt6628_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 					    wl->conn_bssid);
 	if (ret) {
 		wl->sta_rec_idx = MT6628_STA_REC_INDEX_NOT_FOUND;
+		wl->sta_rec_programmed = false;
 		goto err_reset;
 	}
 
