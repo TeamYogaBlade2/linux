@@ -1507,6 +1507,20 @@ int mt6628_wlan_mgmt_tx_status(struct mt6628_wlan *wl, const u8 *frame,
 	if (need_ack)
 		hdr.ack_bip_basic_rate |= MT6628_HIF_TX_NEED_ACK;
 
+	/*
+	 * Every field the firmware uses to route and transmit this frame, so a
+	 * TX_DONE result can be tied to what was actually submitted.
+	 */
+	dev_info(&wl->func->dev,
+		 "mgmt TX: seq=%u len=%zu bc=%#x eto=%u rsrc=%#x hdrlen=%u fmt=%#x fwd=%#x ack=%#x sta_rec=%u fc=%#x\n",
+		 (unsigned int)packet_seq, frame_len,
+		 le16_to_cpu(hdr.tx_byte_count_user_priority),
+		 hdr.ether_type_offset, hdr.resource_pkt_type_csflags,
+		 hdr.wlan_header_length, hdr.pkt_format_id_flags,
+		 hdr.forwarding_type_session_id_reserved,
+		 hdr.ack_bip_basic_rate, hdr.sta_rec_idx,
+		 le16_to_cpu(((const struct ieee80211_hdr *)frame)->frame_control));
+
 	memcpy(buf, &hdr, sizeof(hdr));
 	memcpy(buf + sizeof(hdr), frame, frame_len);
 

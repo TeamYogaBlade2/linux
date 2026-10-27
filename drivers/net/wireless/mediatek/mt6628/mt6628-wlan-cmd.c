@@ -204,6 +204,23 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 	wl->cmd_sent_count++;
 	spin_unlock_irqrestore(&wl->cmd_lock, flags);
 
+	/*
+	 * Log the connection-critical commands as they go out.
+	 *
+	 * A firmware-side failure such as TX_RESULT_FLUSHED says nothing about
+	 * what the firmware had been told just before, and the reply-carrying
+	 * commands are only a few of them.  Having the order in the log is what
+	 * makes it possible to tell "the frame was rejected" from "the frame
+	 * arrived before the state it needs was established".
+	 */
+	if (cid == MT6628_CMD_ID_BSS_ACTIVATE_CTRL ||
+	    cid == MT6628_CMD_ID_SET_BSS_INFO ||
+	    cid == MT6628_CMD_ID_UPDATE_STA_RECORD ||
+	    cid == MT6628_CMD_ID_ADD_REMOVE_KEY)
+		dev_info(&wl->func->dev,
+			 "cmd sent: id=%#x seq=%u len=%zu\n",
+			 cid, wl->cmd_seq_num, packet_len);
+
 	if (!response && !response_len) {
 		ret = 0;
 		goto out_unlock;
