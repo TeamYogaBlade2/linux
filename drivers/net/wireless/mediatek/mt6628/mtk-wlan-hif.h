@@ -70,6 +70,8 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_WHISR_ABNORMAL		BIT(3)
 #define MT6628_WHISR_FW_OWN_BACK	BIT(4)
 #define MT6628_WHISR_D2H_SW_ASSERT_INFO	BIT(31)
+/* Firmware-to-host software interrupt field: bits 8..31 (WHISR_D2H_SW_INT). */
+#define MT6628_WHISR_D2H_SW		GENMASK(31, 8)
 
 /* WHIER */
 #define MT6628_WHIER_TX_DONE		BIT(0)
@@ -78,12 +80,21 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_WHIER_ABNORMAL		BIT(3)
 #define MT6628_WHIER_FW_OWN_BACK	BIT(4)
 #define MT6628_WHIER_D2H_SW_ASSERT_INFO	BIT(31)
+/*
+ * The firmware-to-host software interrupt field is the whole of bits 8..31, not
+ * just the assert bit at 31.  Downstream enables all of it
+ * (WHIER_D2H_SW_INT = BITS(8,31) in mt6628_reg.h, used by WHIER_DEFAULT); this
+ * driver had only bit 31 enabled, which leaves every other firmware-to-host
+ * notification masked.  A masked notification is never delivered, so whatever
+ * the firmware wanted to tell us simply never arrives.
+ */
+#define MT6628_WHIER_D2H_SW		GENMASK(31, 8)
 
 #define MT6628_WHIER_RUNTIME		(MT6628_WHIER_TX_DONE | \
 					 MT6628_WHIER_RX0_DONE | \
 					 MT6628_WHIER_RX1_DONE | \
 					 MT6628_WHIER_ABNORMAL | \
-					 MT6628_WHIER_D2H_SW_ASSERT_INFO)
+					 MT6628_WHIER_D2H_SW)
 
 /* Runtime command/event protocol. */
 #define MT6628_WIFI_CMD_HEADER_LEN	8

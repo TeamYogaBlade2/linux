@@ -1589,6 +1589,26 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 						     "abnormal WLAN status %#x\n", wasr);
 		}
 
+		/*
+		 * Bits 8..30 of WHISR are firmware-to-host software interrupts
+		 * other than the assert report at bit 31. Downstream enables all
+		 * of them - WHIER_DEFAULT is built with WHIER_D2H_SW_INT, which
+		 * is BITS(8,31) in mt6628_reg.h - while this driver had every one
+		 * but bit 31 masked. A masked notification is never delivered, so
+		 * anything the firmware wanted to say through them was dropped on
+		 * the floor. Record the first few now that they are enabled, so we
+		 * can see which ones this firmware actually uses.
+		 */
+		if ((whisr & MT6628_WHISR_D2H_SW) &&
+		    !(whisr & MT6628_WHISR_D2H_SW_ASSERT_INFO)) {
+			static atomic_t d2h_sw_seen = ATOMIC_INIT(0);
+
+			if (atomic_inc_return(&d2h_sw_seen) <= 8)
+				dev_info(&wl->func->dev,
+					 "D2H SW interrupt: WHISR=%#x\n",
+					 whisr);
+		}
+
 		if (whisr & MT6628_WHISR_D2H_SW_ASSERT_INFO) {
 			u32 d2hrm0, d2hrm1, d2hrm2;
 			int sw_ret;
@@ -2420,7 +2440,7 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	if (val & (MT6628_WHISR_TX_DONE | MT6628_WHISR_RX0_DONE |
 		   MT6628_WHISR_RX1_DONE | MT6628_WHISR_ABNORMAL |
 		   MT6628_WHISR_FW_OWN_BACK |
-		   MT6628_WHISR_D2H_SW_ASSERT_INFO)) {
+		   MT6628_WHISR_D2H_SW)) {
 		/*
 		 * Remembered and dispatched after the SDIO host is released:
 		 * irq_work claims the same host, so queueing it here would
