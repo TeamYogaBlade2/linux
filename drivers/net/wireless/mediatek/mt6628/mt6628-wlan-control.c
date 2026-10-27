@@ -656,20 +656,7 @@ int mt6628_wlan_set_bss_info(struct mt6628_wlan *wl, u8 channel,
 		mt6628_wlan_parse_peer_caps(wl, &caps);
 
 	cmd.net_type_index = 0;
-	/*
-	 * The firmware's connection state is ENUM_PARAM_MEDIA_STATE_T, where
-	 * CONNECTED is 0 and DISCONNECTED is 1 (wlan_oid.h:373-377), and
-	 * downstream sends eConnectionState straight through (nic.c:2151).
-	 *
-	 * Sending the boolean put a 1 - "disconnected" - into this field for the
-	 * whole life of the connection. With the BSS marked disconnected the
-	 * firmware does not deliver data frames to the host: management frames
-	 * still arrive, receive lengths for data never appear, and transmitted
-	 * frames are accepted but never reach the air. Every register looks
-	 * healthy throughout.
-	 */
-	cmd.connection_state = connected ? MT6628_MEDIA_STATE_CONNECTED :
-					   MT6628_MEDIA_STATE_DISCONNECTED;
+	cmd.connection_state = connected;
 	cmd.current_op_mode = 0;
 	cmd.is_qbss = connected && caps.is_qos;
 	cmd.ssid_len = ssid_len;
