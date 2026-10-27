@@ -397,11 +397,40 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 	int work_done = 0;
 
 	while (work_done < budget && (skb = skb_dequeue(&wl->rx_queue))) {
-		if (!netif_carrier_ok(wl->netdev) ||
-		    !READ_ONCE(wl->connected)) {
-			dev_kfree_skb_any(skb);
-			work_done++;
-			continue;
+		/*
+		 * Keep delivering while a connection is in progress, not only
+		 * once it is established.
+		 *
+		 * connected is set only after the association handler has sent
+		 * the BSS info and waited for the firmware to activate the STA
+		 * record - a handful of milliseconds after the AP's association
+		 * response. The AP sends its first 4-way handshake frame in that
+		 * window, so dropping everything until connected is set threw
+		 * away the frame the handshake starts from, and it then stalled
+		 * with nothing logged.
+		 *
+		 * Frames are still filtered by mt6628_control_port_allows()
+		 * below, which is what should decide this: it admits EAPOL
+		 * while the 802.1X port is closed and nothing else.
+		 */
+		if (!READ_ONCE(wl->connected) &&
+		    !netif_carrier_ok(wl->netdev)) {
+			/*
+			 * Not established yet.  Admit only EAPOL, and only while
+			 * a connection attempt is actually in progress; anything
+			 * else at this point is a frame the stack has no link to
+			 * deliver it on.
+			 */
+			bool eapol = eth_hdr(skb)->h_proto ==
+				     htons(ETH_P_PAE);
+
+			if (!eapol ||
+			    READ_ONCE(wl->conn_state) ==
+					MT6628_CONN_DISCONNECTED) {
+				dev_kfree_skb_any(skb);
+				work_done++;
+				continue;
+			}
 		}
 
 		skb->dev = wl->netdev;
@@ -612,7 +641,15 @@ int ret;
 				(buf + MT6628_HIF_RX_HEADER_LEN + header_offset);
 
 			if (eth->h_proto == cpu_to_be16(ETH_P_PAE))
-				dev_dbg_ratelimited(&wl->func->dev,
+				/*
+				 * EAPOL decides whether the 4-way handshake can
+				 * finish, and it is a handful of frames per
+				 * connection, so report it at info level: a
+				 * handshake that stalls with no output at all is
+				 * otherwise indistinguishable from one whose
+				 * replies never arrived.
+				 */
+				dev_info(&wl->func->dev,
 					"RX EAPOL data: len=%u src=%pM dst=%pM "
 					"sta_rec=%u conn_state=%u\n",
 					payload_len, eth->h_source, eth->h_dest,
@@ -1085,8 +1122,20 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 	hdr.wlan_header_length = ETH_HLEN;
 	hdr.sta_rec_idx = wl->sta_rec_idx;
 	hdr.seq_no = 0;
-	if (skb->protocol == htons(ETH_P_PAE))
+	if (skb->protocol == htons(ETH_P_PAE)) {
 		hdr.pkt_format_id_flags |= MT6628_HIF_TX_1X_FRAME;
+		/*
+		 * The 4-way handshake runs entirely over these frames, and they
+		 * go out through the data path rather than mgmt_tx, so without
+		 * this they leave no trace at all.
+		 */
+		dev_info(&wl->func->dev,
+			 "TX EAPOL data: len=%u tc=%u port=%s sta_rec=%u connected=%u\n",
+			 skb->len, tc,
+			 port == MT6628_MCR_WTDR1 ? "WTDR1" : "WTDR0",
+			 hdr.sta_rec_idx,
+			 (unsigned int)READ_ONCE(wl->connected));
+	}
 
 	memcpy(buf, &hdr, sizeof(hdr));
 	memcpy(buf + sizeof(hdr), skb->data, skb->len);
