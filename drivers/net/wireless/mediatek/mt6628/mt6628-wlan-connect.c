@@ -1894,6 +1894,22 @@ static void mt6628_connect_assoc_result_locked(struct mt6628_wlan *wl,
 	cancel_delayed_work(&wl->conn_timeout_work);
 	wl->connected = true;
 	wl->conn_state = MT6628_CONN_CONNECTED;
+	/*
+	 * Keep the firmware awake while associated.
+	 *
+	 * Nothing else in this driver sends CMD_ID_POWER_SAVE_MODE, so the
+	 * firmware runs on whatever profile it defaults to. The observed failure
+	 * fits a dozing firmware exactly: data flows both ways for a while, then
+	 * after an idle period only RX stops - TX keeps being accepted and
+	 * completed, interrupts keep arriving, and WHISR/WRPLR are both zero with
+	 * the chip still owned by the driver. That is a firmware that told the AP
+	 * it is asleep, so the AP buffers instead of delivering.
+	 *
+	 * Downstream configures this explicitly rather than leaving it at the
+	 * default (wlan_lib.c:1771). CAM means no power save; cfg80211
+	 * set_power_mgmt can still enable it if userspace asks.
+	 */
+	mt6628_wlan_set_power_mgmt(wl, false);
 	/* A working link earns a fresh roam budget for the next loss. */
 	wl->roam_count = 0;
 	if (wl->netdev) {

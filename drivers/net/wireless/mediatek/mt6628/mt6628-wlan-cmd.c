@@ -213,7 +213,8 @@ int mt6628_wlan_send_cmd(struct mt6628_wlan *wl, u8 cid, u8 set_query,
 	 * makes it possible to tell "the frame was rejected" from "the frame
 	 * arrived before the state it needs was established".
 	 */
-	if (cid == MT6628_CMD_ID_BSS_ACTIVATE_CTRL ||
+	if (cid == MT6628_CMD_ID_POWER_SAVE_MODE ||
+	    cid == MT6628_CMD_ID_BSS_ACTIVATE_CTRL ||
 	    cid == MT6628_CMD_ID_SET_BSS_INFO ||
 	    cid == MT6628_CMD_ID_UPDATE_STA_RECORD ||
 	    cid == MT6628_CMD_ID_ADD_REMOVE_KEY)

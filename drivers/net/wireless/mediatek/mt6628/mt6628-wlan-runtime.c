@@ -36,7 +36,7 @@
  * idle link: a handful of frames over one watchdog period is ordinary traffic,
  * a sustained run with no reply at all is not.
  */
-#define MT6628_STALL_MIN_TX		16
+#define MT6628_STALL_MIN_TX		4
 /* Data frames one side has to try before "no data at all" is worth reporting. */
 #define MT6628_DATA_PATH_MIN_TX		4
 
