@@ -2251,23 +2251,6 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
-	/*
-	 * Keep the chip awake for the life of a connection.
-	 *
-	 * Handing Driver Own back lets the firmware sleep, and a sleeping
-	 * firmware makes the AP buffer instead of deliver. Sparse traffic shows
-	 * it plainly - multi-second ping round trips and heavy loss while the
-	 * chip is still ours, interrupts are enabled, and WHISR and WRPLR are
-	 * empty - because every quiet 200 ms puts the chip back to sleep between
-	 * packets. Bulk transfers hide it by never leaving a gap.
-	 *
-	 * This is the single point every hand-off goes through: the idle
-	 * countdown and the firmware's own sleepy notification both end up
-	 * here. Refusing while associated is the honest trade to establish
-	 * whether this is the cause; it costs power.
-	 */
-	if (READ_ONCE(wl->connected))
-		return -EBUSY;
 	if (atomic_read(&wl->recovery_pending))
 		return -EBUSY;
 	if (wl->pm_idle || !wl->driver_owned)
@@ -2666,19 +2649,9 @@ void mt6628_wlan_pm_idle(struct mt6628_wlan *wl)
 	if (wl->pm_idle)
 		mt6628_wlan_pm_resume(wl);
 
-	/*
-	 * Do not arm the hand-off.
-	 *
-	 * Handing the chip to the firmware after 200 ms of quiet makes the
-	 * firmware sleep, and a sleeping firmware means the AP buffers instead
-	 * of delivering: sparse traffic such as ping then shows multi-second
-	 * round trips and heavy loss while every register looks healthy - the
-	 * chip owned by us, interrupts enabled, WHISR and WRPLR empty.
-	 *
-	 * Bulk transfers hid this because they never leave a 200 ms gap; an
-	 * idle link exposes it immediately. Keeping Driver Own for the life of
-	 * the connection costs power and is the honest trade to make while
-	 * establishing whether this is the cause.
-	 */
+	/* A transfer happened, so the idle countdown starts fresh. */
 	wl->pm_idle_polls = 0;
+
+	schedule_delayed_work(&wl->pm_work,
+			      msecs_to_jiffies(MT6628_PM_IDLE_DELAY_MS));
 }
