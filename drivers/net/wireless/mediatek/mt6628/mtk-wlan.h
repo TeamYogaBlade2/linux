@@ -193,6 +193,8 @@ struct mt6628_wlan {
 	 */
 	u8 sta_rec_bssid[ETH_ALEN];
 	bool sta_rec_programmed;
+	/* Experiment switch: refuse QoS so the firmware opens no Block Ack session. */
+	bool force_no_qos;
 	u8 conn_ssid[IEEE80211_MAX_SSID_LEN];
 	u8 conn_ssid_len;
 	u8 conn_band;

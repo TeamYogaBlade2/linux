@@ -582,6 +582,27 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 	if (state == MT6628_STA_STATE_3) {
 		mt6628_wlan_parse_peer_caps(wl, &caps);
 		cmd.is_qos = caps.is_qos;
+		/*
+		 * Experiment: refuse QoS so no Block Ack session is opened.
+		 *
+		 * The stall reports disagree with each other in a way that changes
+		 * what the fault is. Sometimes reception stops entirely, but
+		 * sometimes rx climbs to thousands while data_rx stays in the
+		 * tens - the SDIO receive path is fine and the firmware has simply
+		 * stopped handing up data frames, while beacons keep arriving.
+		 * That points at the firmware's receive data path, and downstream
+		 * keeps per-station, per-TID reorder state for exactly that
+		 * (qmAddRxBaEntry, que_mgt.c:3468, consumed by
+		 * qmProcessPktWithReordering, que_mgt.c:2795). This port only
+		 * counts the ADDBA events and tracks no window.
+		 *
+		 * The earlier attempt at this is not evidence: it ran before the
+		 * firmware-to-host interrupt field was enabled, so the link was
+		 * failing for a second reason at the same time. Repeat it now that
+		 * only this variable differs.
+		 */
+		if (wl->force_no_qos)
+			cmd.is_qos = false;
 		cmd.is_uapsd_supported = caps.uapsd;
 		cmd.desired_phy_type_set = caps.has_ht ?
 			(wl->conn_band == NL80211_BAND_2GHZ ?

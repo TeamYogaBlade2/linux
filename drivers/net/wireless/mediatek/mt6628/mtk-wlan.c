@@ -39,6 +39,16 @@
 #include "mtk-wlan-hif.h"
 #include "mtk-wlan.h"
 
+/*
+ * Experiment switch, readable at runtime through
+ * /sys/module/mtk_wlan/parameters/no_qos so the two configurations can be
+ * compared without rebuilding.
+ */
+static bool no_qos = true;
+module_param(no_qos, bool, 0644);
+MODULE_PARM_DESC(no_qos,
+		 "Refuse QoS so the firmware opens no Block Ack session (experiment)");
+
 #define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
 #define MT6628_FW_DL_CHUNK		2048
 /* CFG_FW_LOAD_ADDRESS of the downstream config.h */
@@ -760,6 +770,7 @@ static int mt6628_wlan_sdio_probe(struct sdio_func *func,
 		return -ENOMEM;
 
 	wl->func = func;
+	wl->force_no_qos = no_qos;
 	sdio_set_drvdata(func, wl);
 
 	/* enable the SDIO function; MMC core does not do it for us */
