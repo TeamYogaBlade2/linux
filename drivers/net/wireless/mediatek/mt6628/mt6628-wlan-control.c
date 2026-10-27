@@ -28,17 +28,7 @@
 #define MT6628_CH_MAX_INTERVAL_MS	5000
 
 #define MT6628_STA_REC_INDEX_NOT_FOUND	0xfe
-/*
- * ENUM_STA_TYPE_T is a merge of network type and STA role:
- * (1 << NETWORK_TYPE_*) | (1 << STA_ROLE_*), with STA_ROLE_BASE_INDEX == 4
- * (wlan_def.h:533-540, 764-770).  A station associating to an AP is
- * STA_TYPE_LEGACY_CLIENT = (1 << 0) | (1 << 5) = 0x21.  0x41 is
- * STA_TYPE_LEGACY_AP, which tells the firmware this record describes an AP,
- * and it then refuses to transmit our auth frame - TX_DONE reports
- * TX_RESULT_MPDU_ERROR (3) and the connection dies at the first management
- * frame with nothing else in the log.
- */
-#define MT6628_STA_TYPE_LEGACY_CLIENT	0x21
+#define MT6628_STA_TYPE_LEGACY_AP	0x41
 
 #define MT6628_PHY_TYPE_SET_11BG	0x03
 #define MT6628_PHY_TYPE_SET_11BGN	0x0b
@@ -556,7 +546,7 @@ int mt6628_wlan_update_sta_record(struct mt6628_wlan *wl,
 		return -EINVAL;
 
 	cmd.index = wl->sta_rec_idx;
-	cmd.sta_type = MT6628_STA_TYPE_LEGACY_CLIENT;
+	cmd.sta_type = MT6628_STA_TYPE_LEGACY_AP;
 	ether_addr_copy(cmd.mac_addr, bssid);
 	/*
 	 * Remember which peer this record describes.  A later connect() to a
