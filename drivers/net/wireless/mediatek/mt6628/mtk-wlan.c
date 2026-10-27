@@ -44,7 +44,7 @@
  * /sys/module/mtk_wlan/parameters/no_qos so the two configurations can be
  * compared without rebuilding.
  */
-static bool no_qos = true;
+static bool no_qos;
 module_param(no_qos, bool, 0644);
 MODULE_PARM_DESC(no_qos,
 		 "Refuse QoS so the firmware opens no Block Ack session (experiment)");
