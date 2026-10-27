@@ -123,6 +123,13 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_CMD_ID_BASIC_CONFIG	0xc1
 
 #define MT6628_AUTH_MODE_OPEN		0
+/*
+ * ENUM_PARAM_MEDIA_STATE_T (wlan_oid.h:373-377).  These are not a boolean:
+ * CONNECTED is 0 and DISCONNECTED is 1, and the value goes to the firmware
+ * verbatim in CMD_SET_BSS_INFO's ucConnectionState.
+ */
+#define MT6628_MEDIA_STATE_CONNECTED	0
+#define MT6628_MEDIA_STATE_DISCONNECTED	1
 #define MT6628_AUTH_MODE_SHARED		1
 #define MT6628_AUTH_MODE_AUTO_SWITCH	2
 #define MT6628_AUTH_MODE_WPA		3
