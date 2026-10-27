@@ -926,6 +926,20 @@ int mt6628_wlan_add_key(struct mt6628_wlan *wl, u8 key_index,
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
 
+	/*
+	 * Log what userspace asks for.  The handshake installs several keys and
+	 * a link that drops right afterwards is otherwise impossible to
+	 * attribute - the cipher, length and index are the things that decide
+	 * whether the firmware accepts them.
+	 */
+	dev_info(&wl->func->dev,
+		 "add_key: idx=%u pairwise=%u tx=%u cipher=%#x key_len=%d seq_len=%d peer=%pM\n",
+		 key_index, pairwise, tx_key,
+		 params ? params->cipher : 0,
+		 params ? params->key_len : -1,
+		 params ? params->seq_len : -1,
+		 mac_addr ? mac_addr : wl->conn_bssid);
+
 	mutex_lock(&wl->key_mutex);
 	mutex_lock(&wl->cfg_mutex);
 	if (wl->conn_cleanup_pending)

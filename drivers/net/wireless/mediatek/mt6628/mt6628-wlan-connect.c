@@ -253,6 +253,16 @@ static void mt6628_conn_fw_cleanup_locked(struct mt6628_wlan *wl)
 
 static void mt6628_conn_set_disconnected(struct mt6628_wlan *wl)
 {
+	/*
+	 * Report the transition out of a live link, with the caller, so a link
+	 * that drops right after the handshake can be attributed.  Teardown
+	 * has several initiators and they are otherwise indistinguishable.
+	 */
+	if (wl->connected)
+		dev_info(&wl->func->dev,
+			 "link down: from state=%u by %pS\n",
+			 wl->conn_state, __builtin_return_address(0));
+
 	wl->conn_state = MT6628_CONN_DISCONNECTED;
 	wl->connected = false;
 	wl->conn_secure = false;
