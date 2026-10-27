@@ -133,6 +133,14 @@ struct mt6628_wlan {
 	/* Frames the firmware asked us to put back in order. */
 	unsigned int rx_reorder_seen;
 	unsigned int rx_bar_frame;
+	/*
+	 * Receive path split, so "the host stopped reading" and "the firmware
+	 * stopped handing frames up" can be told apart from a stall report.
+	 */
+	unsigned int rx_sdio_reads;	/* transfers taken off the SDIO port */
+	unsigned int rx_queue_full;	/* frames read then dropped: queue full */
+	unsigned int napi_runs;
+	unsigned int napi_work;		/* frames NAPI delivered, summed */
 	bool data_path_reported;
 	unsigned int stats_poll_count;
 	unsigned int tx_sent_last;

@@ -456,6 +456,9 @@ static int mt6628_napi_poll(struct napi_struct *napi, int budget)
 	if (work_done < budget)
 		napi_complete_done(napi, work_done);
 
+	wl->napi_runs++;
+	wl->napi_work += work_done;
+
 	return work_done;
 }
 
@@ -613,6 +616,7 @@ int ret;
 			  xfer_len);
 	if (ret)
 		goto out_free;
+	wl->rx_sdio_reads++;
 
 	rx_hdr = (struct mt6628_hif_rx_hdr *)buf;
 	if (le16_to_cpu(rx_hdr->packet_len) != packet_len) {
@@ -695,8 +699,16 @@ int ret;
 					rx_hdr->sta_rec_idx,
 					READ_ONCE(wl->conn_state));
 		}
-		if (skb_queue_len(&wl->rx_queue) >= MT6628_RUNTIME_QUEUE_LIMIT)
+		if (skb_queue_len(&wl->rx_queue) >= MT6628_RUNTIME_QUEUE_LIMIT) {
+			/*
+			 * The frame has already been taken off the SDIO port, so
+			 * dropping it here loses it for good. Counting the drops
+			 * separates "the host is not keeping up" from "the
+			 * firmware is not handing anything up".
+			 */
+			wl->rx_queue_full++;
 			goto drop_packet;
+		}
 
 		skb = netdev_alloc_skb_ip_align(wl->netdev, payload_len);
 		if (!skb) {
@@ -1868,6 +1880,21 @@ static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
 		 (unsigned int)READ_ONCE(wl->driver_owned),
 		 ret ? " regread_err=" : " ret=", ret ? (unsigned int)ret : 0,
 		 whisr, wrplr, whlpcr, whier, wasr);
+
+	/*
+	 * Which half of the receive path stopped.
+	 *
+	 * sdio_reads is how many transfers were taken off the port at all, and
+	 * napi_work how many of those reached the stack. If sdio_reads is frozen
+	 * the driver stopped asking - the interrupts are not arriving, or the
+	 * worker is not running. If sdio_reads keeps climbing while nothing
+	 * reaches the stack, the frames are being taken and thrown away, and
+	 * queue_full says whether that is the reason.
+	 */
+	dev_warn(&wl->func->dev,
+		 "%s: rx path: sdio_reads=%u napi_runs=%u napi_work=%u queue_full=%u rxq=%u\n",
+		 reason, wl->rx_sdio_reads, wl->napi_runs, wl->napi_work,
+		 wl->rx_queue_full, skb_queue_len(&wl->rx_queue));
 
 	/*
 	 * Ask the firmware how the transmissions actually went.
