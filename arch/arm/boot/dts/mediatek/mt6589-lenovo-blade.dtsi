@@ -955,8 +955,7 @@
 	 */
 	vqmmc-supply = <&mt6320_ldo_vemc_1v8>;
 
-	/* Temporary MT6628 diagnostic: isolate initial SDIO communication. */
-	bus-width = <1>;
+	bus-width = <4>;
 	cap-sdio-irq;
 	non-removable;
 	no-mmc;
