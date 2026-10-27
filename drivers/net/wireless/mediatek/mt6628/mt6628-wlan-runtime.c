@@ -36,7 +36,7 @@
  * idle link: a handful of frames over one watchdog period is ordinary traffic,
  * a sustained run with no reply at all is not.
  */
-#define MT6628_STALL_MIN_TX		4
+#define MT6628_STALL_MIN_TX		16
 /* Data frames one side has to try before "no data at all" is worth reporting. */
 #define MT6628_DATA_PATH_MIN_TX		4
 
@@ -1501,6 +1501,13 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		return;
 
 	sdio_claim_host(wl->func);
+	/*
+	 * Mask the line first: the interrupt handler no longer does it, and the
+	 * card re-asserts until it is masked.  Everything below runs with the
+	 * host held, and the matching INT_EN_SET is the last thing this worker
+	 * does.
+	 */
+	mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
 		u32 whisr = 0, wtsr0 = 0, wtsr1 = 0, rx_len = 0;
 		u16 rx0_len, rx1_len;
@@ -1707,35 +1714,25 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 		(unsigned int)wl->pm_idle, (unsigned int)wl->driver_owned);
 
 	/*
-	 * Mask the interrupt here, before deferring the work.
+	 * This runs in hard IRQ context and must do no bus I/O at all.
 	 *
-	 * This callback runs from sdio_irq_work, which claims the host before
-	 * dispatching (sdio_irq.c:114-121), so bus access from here is legal -
-	 * it is not hard IRQ context, and it may sleep.
+	 * Masking the interrupt used to happen here, through
+	 * mt6628_runtime_write8() - which calls mt6628_wlan_pm_busy() (it
+	 * polls the LP engine with usleep_range and can take seconds) and then
+	 * sdio_writeb(), which issues an MMC request that needs the host to be
+	 * claimed.  Sleeping in hard IRQ, and submitting a request without
+	 * holding the host, corrupts the MMC request state; the visible damage
+	 * lands in whatever ran next rather than here.
 	 *
-	 * The mask has to happen before irq_work() runs, not inside it: the
-	 * card keeps the line asserted until it is masked, so deferring the
-	 * mask lets the interrupt re-fire for the whole duration of the work
-	 * handler, which contends with that handler for the host and delays
-	 * the receive path.  irq_work() re-arms the interrupt as its last act.
-	 *
-	 * If a reclaim is still owed the firmware owns the chip, so this driver
-	 * must not write to it at all; the masking write is skipped and
-	 * irq_work() establishes the same state after it reclaims.
+	 * irq_work() masks the interrupt as its first act after taking the host
+	 * and then re-arms it at the end, so the line is masked by the same
+	 * code as every other path.  Until it runs the card may re-assert, which
+	 * costs spurious interrupts but cannot corrupt anything.
 	 */
 	ret = mt6628_wlan_pm_busy_irq(wl);
-	if (!ret) {
-		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
-					    MT6628_INT_EN_CLR);
-		if (ret)
-			dev_warn_ratelimited(&wl->func->dev,
-				"failed to mask SDIO interrupts in callback: %d\n",
-				ret);
-	} else {
-		dev_warn_ratelimited(&wl->func->dev,
-			"failed to acquire driver ownership in SDIO IRQ: %d\n",
-			ret);
-	}
+	if (ret)
+		dev_dbg_ratelimited(&wl->func->dev,
+			"SDIO IRQ with a reclaim still owed: %d\n", ret);
 	schedule_work(&wl->irq_work);
 }
 
