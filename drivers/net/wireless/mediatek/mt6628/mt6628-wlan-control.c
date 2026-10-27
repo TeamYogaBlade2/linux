@@ -1240,37 +1240,14 @@ out_unlock:
 
 int mt6628_wlan_set_power_mgmt(struct mt6628_wlan *wl, bool enabled)
 {
-	static bool ps_refused;
 	struct mt6628_cmd_ps_profile cmd = {
 		.net_type_index = 0,
-		/*
-		 * Always CAM.
-		 *
-		 * The firmware's power save is built on the Firmware Own
-		 * handshake: the host hands the chip over, the firmware sleeps
-		 * until the next DTIM, and the host takes it back on the next
-		 * interrupt. This driver does not do that handshake while the
-		 * link is up - mt6628_wlan_give_firmware_own() refuses while
-		 * connected, so the stall report always shows pm_idle=0 owned=1.
-		 *
-		 * Asking for FAST_PSP on top of that tells the firmware to sleep
-		 * on a schedule the host is not participating in. The end of
-		 * that is exactly what the logs show: reception stops while
-		 * transmission keeps working, and the firmware eventually
-		 * reports a beacon timeout of its own because it slept through
-		 * the AP. Stay in CAM until the handover is implemented.
-		 */
-		.ps_profile = MT6628_PS_PROFILE_CAM,
+		.ps_profile = enabled ? MT6628_PS_PROFILE_FAST_PSP :
+			MT6628_PS_PROFILE_CAM,
 	};
 
 	if (!wl->runtime_started || !wl->fw_running)
 		return -ENODEV;
-
-	if (enabled && !ps_refused) {
-		ps_refused = true;
-		dev_info_ratelimited(&wl->func->dev,
-				     "power save requested but the firmware own handshake is not implemented; staying in CAM\n");
-	}
 
 	/* No CMD_RESULT for a set command; see __mt6628_wlan_add_key(). */
 	return mt6628_wlan_send_cmd(wl, MT6628_CMD_ID_POWER_SAVE_MODE, 1,
