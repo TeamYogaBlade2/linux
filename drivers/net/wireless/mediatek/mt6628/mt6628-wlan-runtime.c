@@ -2393,7 +2393,11 @@ EXPORT_SYMBOL_GPL(mt6628_wlan_runtime_stop);
 int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 {
 	u32 val;
+	unsigned long flags;
+	bool mgmt_tx_pending;
+	bool tx_pending = false;
 	bool service_pending = false;
+	unsigned int i;
 	int ret;
 
 	if (!wl->runtime_started || !wl->fw_running)
@@ -2424,21 +2428,43 @@ int mt6628_wlan_give_firmware_own(struct mt6628_wlan *wl)
 	}
 
 	/*
-	 * Hand the chip over unless the firmware has something waiting for us.
+	 * Pending traffic means the firmware still wants the host to run.
+	 * Keep ownership and let the caller try again later.
 	 *
-	 * Downstream does not gate this on queue state, transmit credits or an
-	 * outstanding management frame: nicpmSetFWOwn() (nic_pwr_mgt.c:265-301)
-	 * services the pending interrupt and refuses only if something is still
-	 * latched afterwards. Doing more than that is not harmless. Transmit
-	 * credits are only returned when the firmware reports completion, so a
-	 * single credit the firmware never returns makes "all credits idle"
-	 * false for ever, which means the hand-over never happens, which means
-	 * the firmware never gets to run on its own at all. That is why every
-	 * stall report printed pm_idle=0 owned=1: the host held the chip from
-	 * boot to the moment reception stopped.
-	 *
-	 * So follow the vendor: service what is latched, then hand over.
+	 * rx_queue is excluded on purpose.  It is drained by napi_poll(),
+	 * which needs the driver to hold the chip to refill it, so treating a
+	 * non-empty rx_queue as "busy" makes the hand-off refuse itself: the
+	 * queue can only be emptied by running NAPI, and the countdown that
+	 * reached this line runs again before NAPI is guaranteed to have
+	 * run.  The downstream block count is an explicit
+	 * increment/decrement around an operation (pwr_mgt.h:121-129), not a
+	 * test of "is any received frame still queued" - frames already
+	 * handed to the host are the driver's to deliver.
 	 */
+	if (!skb_queue_empty(&wl->event_queue) ||
+	    !skb_queue_empty(&wl->async_event_queue) ||
+	    !skb_queue_empty(&wl->mgmt_queue) ||
+		!skb_queue_empty(&wl->tx_queue))
+		goto out_busy;
+
+	/* TX credits stay consumed until firmware reports completion in WTSR. */
+	spin_lock_irqsave(&wl->tx_lock, flags);
+	for (i = 0; i < MT6628_WLAN_TX_TC_NUM; i++) {
+		if (wl->tx_free[i] < wl->tx_max[i]) {
+			tx_pending = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&wl->tx_lock, flags);
+	if (tx_pending)
+		goto out_busy;
+
+	/* A TX_DONE waiter is still using the firmware's completion path. */
+	spin_lock_irqsave(&wl->mgmt_tx_lock, flags);
+	mgmt_tx_pending = wl->mgmt_tx_pending;
+	spin_unlock_irqrestore(&wl->mgmt_tx_lock, flags);
+	if (mgmt_tx_pending)
+		goto out_busy;
 
 	sdio_claim_host(wl->func);
 	/*
@@ -2553,6 +2579,8 @@ out_release:
 
 	return ret;
 
+out_busy:
+	ret = -EBUSY;
 out_unlock_cmd:
 	mutex_unlock(&wl->cmd_mutex);
 	return ret;
