@@ -1029,8 +1029,26 @@ static unsigned int mt6628_runtime_tc_from_skb(struct sk_buff *skb)
 	if (skb->protocol == htons(ETH_P_PAE))
 		return MT6628_TX_TC_CMD;
 
+	/*
+	 * Group-addressed traffic goes out on TC1 with everything else.
+	 *
+	 * Downstream gives it its own class, TC5, which holds exactly one credit
+	 * (NIC_TX_BUFF_COUNT_TC5). The credit report shows that class stuck at
+	 * zero from the first poll after association and never recovering, so a
+	 * single broadcast - one IPv6 router solicitation or the first ARP -
+	 * consumes all group-transmit capacity for the life of the connection.
+	 * After that no ARP can be sent: neighbours already resolved keep working,
+	 * so ping answers, while every new destination fails to resolve, which is
+	 * exactly the DNS failure seen with apk.
+	 *
+	 * In infrastructure mode a station sends group frames to the AP and the AP
+	 * rebroadcasts them; downstream's own note says as much ("BMCAST frames
+	 * shall be sent to the AP, FW shall take care of this",
+	 * que_mgt.c:1486-1489). TC1 carries them with 20 credits and is the class
+	 * whose releases are demonstrably working.
+	 */
 	if (is_multicast_ether_addr(eth_hdr(skb)->h_dest))
-		return 5;
+		return MT6628_TX_TC_DATA;
 
 	switch (skb->priority & 0x7) {
 	case 1:

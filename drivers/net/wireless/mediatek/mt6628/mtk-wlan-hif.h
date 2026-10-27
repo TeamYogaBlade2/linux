@@ -94,6 +94,8 @@ size_t mt6628_sdio_xfer_len(size_t len);
 #define MT6628_HIF_TX_PKT_TYPE_CMD	1
 #define MT6628_HIF_TX_PKT_TYPE_MANAGEMENT	3
 #define MT6628_TX_TC_CMD		4
+/* Best-effort class: 20 credits, used by unicast and (see the note there) group. */
+#define MT6628_TX_TC_DATA		1
 #define MT6628_TX_TC_MGMT		4
 #define MT6628_HIF_TX_80211_FORMAT	BIT(7)
 #define MT6628_HIF_TX_1X_FRAME		BIT(6)
