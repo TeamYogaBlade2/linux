@@ -1880,6 +1880,32 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	}
 
 	/*
+	 * Sample the firmware's view of the link while it is still healthy.
+	 *
+	 * By the time the stall is reported the transmit credits are gone, and the
+	 * statistics command needs one of its own - which is why it came back
+	 * "unavailable" and told us nothing. Sampling at a slow rate keeps a time
+	 * series of tx_count against the failure counters, so the point where
+	 * acknowledgement stops is visible instead of being the moment we can no
+	 * longer ask.
+	 */
+	if (READ_ONCE(wl->connected) && wl->netdev &&
+	    netif_carrier_ok(wl->netdev) && ++wl->stats_poll_count >= 5) {
+		struct mt6628_event_sta_statistics stats;
+
+		wl->stats_poll_count = 0;
+		if (mt6628_wlan_get_sta_statistics(wl, &stats) == 0)
+			dev_info(&wl->func->dev,
+				 "fw stats: tx=%u fail=%u timeout=%u per=%u%% rcpi=%u speed=%u data_rx=%u\n",
+				 le32_to_cpu(stats.tx_count),
+				 le32_to_cpu(stats.tx_fail_count),
+				 le32_to_cpu(stats.tx_life_timeout_count),
+				 stats.per, stats.rcpi,
+				 le16_to_cpu(stats.link_speed),
+				 wl->rx_data);
+	}
+
+	/*
 	 * The same check while a connection is in progress.
 	 *
 	 * connected stays clear until the handshake finishes, so the test above

@@ -131,6 +131,7 @@ struct mt6628_wlan {
 	unsigned int tx_data;
 	unsigned int rx_data;
 	bool data_path_reported;
+	unsigned int stats_poll_count;
 	unsigned int tx_sent_last;
 	unsigned int irq_seen_last;
 	unsigned int rx_seen_last;
