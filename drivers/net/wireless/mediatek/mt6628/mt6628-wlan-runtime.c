@@ -37,6 +37,8 @@
  * a sustained run with no reply at all is not.
  */
 #define MT6628_STALL_MIN_TX		16
+/* Data frames one side has to try before "no data at all" is worth reporting. */
+#define MT6628_DATA_PATH_MIN_TX		4
 
 /*
  * How long the driver may stay idle before handing the chip to the
@@ -633,6 +635,7 @@ int ret;
 	case MT6628_HIF_RX_PKT_TYPE_DATA:
 		if (packet_len < MT6628_HIF_RX_HEADER_LEN + header_offset)
 			goto bad_packet;
+		wl->rx_data++;
 
 		payload_len = packet_len - MT6628_HIF_RX_HEADER_LEN -
 			header_offset;
@@ -1187,6 +1190,8 @@ static int mt6628_runtime_tx_frame(struct mt6628_wlan *wl,
 		goto err_resource;
 
 	wl->tx_sent++;
+	if (skb->protocol != htons(ETH_P_PAE))
+		wl->tx_data++;
 	dev_consume_skb_any(skb);
 	return 0;
 
@@ -1779,10 +1784,11 @@ static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
 	sdio_release_host(wl->func);
 
 	dev_warn(&wl->func->dev,
-		 "%s: sent=%u/%u rx=%u/%u irq=%u/%u connected=%u pm_idle=%u owned=%u%s%#x (WHISR=%#010x WRPLR=%#010x WHLPCR=%#010x WHIER=%#010x WASR=%#010x)\n",
+		 "%s: sent=%u/%u rx=%u/%u data_tx=%u data_rx=%u irq=%u/%u connected=%u pm_idle=%u owned=%u%s%#x (WHISR=%#010x WRPLR=%#010x WHLPCR=%#010x WHIER=%#010x WASR=%#010x)\n",
 		 reason,
 		 wl->tx_sent, wl->tx_sent_last,
 		 wl->rx_seen, wl->rx_seen_last,
+		 wl->tx_data, wl->rx_data,
 		 wl->irq_seen, wl->irq_seen_last,
 		 (unsigned int)READ_ONCE(wl->connected),
 		 (unsigned int)READ_ONCE(wl->pm_idle),
@@ -1834,6 +1840,19 @@ static void mt6628_runtime_stall_check_work(struct work_struct *work)
 	    sent - wl->tx_sent_last >= MT6628_STALL_MIN_TX &&
 	    rxs == wl->rx_seen_last)
 		mt6628_runtime_report_stall(wl, "TX only, no RX");
+
+	/*
+	 * A link that is up, has keys installed, and has never moved a single
+	 * data frame in either direction.  Reported once, because this is the
+	 * state where "connected but nothing works at all" sits: the volume is
+	 * too low for the interval check above, and every other watchdog needs
+	 * queued work that never forms.
+	 */
+	if (READ_ONCE(wl->connected) && !wl->data_path_reported &&
+	    wl->tx_data >= MT6628_DATA_PATH_MIN_TX && wl->rx_data == 0) {
+		wl->data_path_reported = true;
+		mt6628_runtime_report_stall(wl, "connected, no data either way");
+	}
 
 	/*
 	 * The same check while a connection is in progress.

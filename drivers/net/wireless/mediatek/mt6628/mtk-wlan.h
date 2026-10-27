@@ -123,6 +123,14 @@ struct mt6628_wlan {
 	unsigned int rx_seen;
 	unsigned int tx_poll_count;
 	unsigned int tx_sent;
+	/*
+	 * Data frames only, separate from management and EAPOL.  "ping fails but
+	 * the link is up" needs to distinguish "no data is being sent" from "data
+	 * is sent and nothing comes back", and the combined counters cannot.
+	 */
+	unsigned int tx_data;
+	unsigned int rx_data;
+	bool data_path_reported;
 	unsigned int tx_sent_last;
 	unsigned int irq_seen_last;
 	unsigned int rx_seen_last;
