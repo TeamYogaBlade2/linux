@@ -606,7 +606,7 @@ static int mt6628_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	bool submitted;
 	int ret;
 
-	if (!params->buf || params->len < sizeof(struct ieee80211_hdr_3addr))
+	if (!params->buf || params->len < sizeof(struct ieee80211_hdr))
 		return -EINVAL;
 	if (params->chan) {
 		bool same_channel;
@@ -1181,7 +1181,7 @@ void mt6628_cfg80211_mgmt_handler(struct mt6628_wlan *wl,
 
 	frame_len = le16_to_cpu(hdr->packet_len) -
 		MT6628_HIF_RX_HEADER_LEN - offset;
-	if (frame_len < sizeof(struct ieee80211_hdr_3addr) ||
+	if (frame_len < sizeof(struct ieee80211_hdr) ||
 	    frame_len > skb->len - MT6628_HIF_RX_HEADER_LEN - offset)
 		goto out;
 

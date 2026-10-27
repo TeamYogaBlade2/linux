@@ -1774,7 +1774,7 @@ static bool mt6628_rx_mgmt_frame(struct sk_buff *skb,
 	unsigned int offset;
 	unsigned int len;
 
-	if (skb->len < MT6628_HIF_RX_HEADER_LEN + sizeof(struct ieee80211_hdr_3addr))
+	if (skb->len < MT6628_HIF_RX_HEADER_LEN + sizeof(struct ieee80211_hdr))
 		return false;
 
 	hdr = (const struct mt6628_hif_rx_hdr *)skb->data;
@@ -1785,7 +1785,7 @@ static bool mt6628_rx_mgmt_frame(struct sk_buff *skb,
 
 	len = le16_to_cpu(hdr->packet_len) -
 		MT6628_HIF_RX_HEADER_LEN - offset;
-	if (len < sizeof(struct ieee80211_hdr_3addr) ||
+	if (len < sizeof(struct ieee80211_hdr) ||
 	    len > skb->len - MT6628_HIF_RX_HEADER_LEN - offset)
 		return false;
 
