@@ -1441,6 +1441,13 @@ static void mt6628_runtime_irq_work(struct work_struct *work)
 		return;
 
 	sdio_claim_host(wl->func);
+	/*
+	 * Mask the line first: the interrupt handler no longer does it, and the
+	 * card re-asserts until it is masked.  Everything below runs with the
+	 * host held, and the matching INT_EN_SET is the last thing this worker
+	 * does.
+	 */
+	mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
 	for (loops = 0; loops < MT6628_RUNTIME_RX_LOOPS; loops++) {
 		u32 whisr = 0, wtsr0 = 0, wtsr1 = 0, rx_len = 0;
 		u16 rx0_len, rx1_len;
@@ -1647,33 +1654,25 @@ static void mt6628_runtime_irq(struct sdio_func *func)
 		(unsigned int)wl->pm_idle, (unsigned int)wl->driver_owned);
 
 	/*
-	 * This runs in hard IRQ context, so it must not sleep.  Reclaiming
-	 * Driver Own polls for the LP engine and can take seconds, so that
-	 * is deferred to the work handler.  Mask the interrupt first so the
-	 * ownership transition and the register reads that follow in the
-	 * work handler are not re-entered.
+	 * This runs in hard IRQ context and must do no bus I/O at all.
 	 *
-	 * If a reclaim is still owed the firmware owns the chip, so this
-	 * driver must not write to it at all -- and it could not reclaim
-	 * ownership here even if it wanted to, since that call sleeps.  The
-	 * masking write is therefore skipped rather than forced through.
-	 * irq_work re-arms the interrupt as the last thing it does after the
-	 * reclaim succeeds, so the chip still ends up masked by exactly the
-	 * same code as in every other path.
+	 * Masking the interrupt used to happen here, through
+	 * mt6628_runtime_write8() - which calls mt6628_wlan_pm_busy() (it
+	 * polls the LP engine with usleep_range and can take seconds) and then
+	 * sdio_writeb(), which issues an MMC request that needs the host to be
+	 * claimed.  Sleeping in hard IRQ, and submitting a request without
+	 * holding the host, corrupts the MMC request state; the visible damage
+	 * lands in whatever ran next rather than here.
+	 *
+	 * irq_work() masks the interrupt as its first act after taking the host
+	 * and then re-arms it at the end, so the line is masked by the same
+	 * code as every other path.  Until it runs the card may re-assert, which
+	 * costs spurious interrupts but cannot corrupt anything.
 	 */
 	ret = mt6628_wlan_pm_busy_irq(wl);
-	if (!ret) {
-		ret = mt6628_runtime_write8(wl, MT6628_MCR_WHLPCR,
-					    MT6628_INT_EN_CLR);
-		if (ret)
-			dev_warn_ratelimited(&wl->func->dev,
-				"failed to mask SDIO interrupts in callback: %d\n",
-				ret);
-	} else {
-		dev_warn_ratelimited(&wl->func->dev,
-			"failed to acquire driver ownership in SDIO IRQ: %d\n",
-			ret);
-	}
+	if (ret)
+		dev_dbg_ratelimited(&wl->func->dev,
+			"SDIO IRQ with a reclaim still owed: %d\n", ret);
 	schedule_work(&wl->irq_work);
 }
 
@@ -1701,6 +1700,18 @@ static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
 	u32 whisr = 0, wrplr = 0, whlpcr = 0, whier = 0, wasr = 0;
 	int ret;
 
+	/*
+	 * Claim the SDIO host for these reads.
+	 *
+	 * mt6628_runtime_read32() does not claim it for us: it is written for
+	 * callers that already hold it (the IRQ worker, runtime start/stop).
+	 * This one runs from the watchdog timer, which does not, and
+	 * sdio_readl() transfers through func->tmpbuf - a single shared buffer.
+	 * Reading registers from here without the host therefore races any
+	 * other user of the bus and corrupts the MMC request state along with
+	 * it, which surfaces later as a fault in an unrelated process.
+	 */
+	sdio_claim_host(wl->func);
 	ret = mt6628_runtime_read32(wl, MT6628_MCR_WHISR, &whisr);
 	if (!ret)
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WRPLR, &wrplr);
@@ -1710,6 +1721,7 @@ static void mt6628_runtime_report_stall(struct mt6628_wlan *wl,
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WHIER, &whier);
 	if (!ret)
 		ret = mt6628_runtime_read32(wl, MT6628_MCR_WASR, &wasr);
+	sdio_release_host(wl->func);
 
 	dev_warn(&wl->func->dev,
 		 "%s: sent=%u/%u rx=%u/%u irq=%u/%u connected=%u pm_idle=%u owned=%u%s%#x (WHISR=%#010x WRPLR=%#010x WHLPCR=%#010x WHIER=%#010x WASR=%#010x)\n",
