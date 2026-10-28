@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Bring-up profile with the microSD slot enabled. Internal eMMC (Android)
+ * stays disabled, so nothing on the tablet's own storage can be touched.
+ */
+
+#include "mt6589-lenovo-b8000-h.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 B8000-H (SD bring-up)";
+};
+
+&mmc0 {
+	status = "disabled";
+};
+
+&mmc1 {
+	/* Conservative first run: no UHS, card detect by polling. */
+	/delete-property/ cd-gpios;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-ddr50;
+	/delete-property/ cap-sd-highspeed;
+	broken-cd;
+	max-frequency = <400000>;
+};

@@ -11,6 +11,7 @@ dtb-$(CONFIG_ARCH_MEDIATEK) += \
 	mt6589-lenovo-b8000-f.dtb \
 	mt6589-lenovo-b8000-h.dtb \
 	mt6589-lenovo-b8000-h-safe.dtb \
+	mt6589-lenovo-b8000-h-sd.dtb \
 	mt6592-evb.dtb \
 	mt7623a-rfb-emmc.dtb \
 	mt7623a-rfb-nand.dtb \
