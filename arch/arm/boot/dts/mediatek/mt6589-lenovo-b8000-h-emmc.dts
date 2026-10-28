@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Internal-storage profile.  The existing Android USRDATA logical partition
+ * is /dev/mmcblk0p20; the partition table and identity partitions stay intact.
+ */
+
+#include "mt6589-lenovo-b8000-h.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 B8000-H (eMMC root)";
+
+	chosen {
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 rdinit=/init console=tty0 loglevel=8 ignore_loglevel root=/dev/mmcblk0p20";
+	};
+};
+
+&mmc0 {
+	status = "okay";
+};
+
+/* Keep device numbering deterministic while validating the internal root. */
+&mmc1 {
+	status = "disabled";
+};
