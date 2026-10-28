@@ -155,3 +155,115 @@
 		};
 	};
 };
+<<<<<<< ours
+=======
+
+/*
+ * B8000-H touch: the vendor S7300 driver (mediatek/custom/common/kernel/
+ * touchpanel/S7300) powers the panel from VGP5 at 2.8 V, not VGP4.
+ * Keep VGP4 on as well until the real rail is confirmed.
+ */
+&mt6320_ldo_vgp5 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6320_ldo_vgp4 {
+	regulator-always-on;
+};
+
+&i2c0 {
+	touchscreen@38 {
+		vdd-supply = <&mt6320_ldo_vgp5>;
+	};
+};
+
+/*
+ * The ID pin polarity in the shared blade description has not been verified
+ * on B8000-H; with correct GPIO input readback it selects host mode and the
+ * USB console disappears. Force device mode for bring-up.
+ */
+&usb0 {
+	dr_mode = "peripheral";
+};
+
+/*
+ * The MediaTek musb glue only enables vusb from the OTG role-switch path.
+ * With dr_mode = "peripheral" nobody holds it and regulator late cleanup
+ * turns the USB PHY supply off ~30 s after boot. Keep it on.
+ */
+&mt6320_ldo_vusb {
+	regulator-always-on;
+};
+
+/*
+ * The fuel gauge IRQ line (EINT16/GPIO16, marked "?" in the shared blade
+ * description) is configured as an output on B8000-H and the IRQ request
+ * fails, taking the whole gauge down. Poll it instead.
+ */
+&bq27541 {
+	/delete-property/ interrupts;
+	/delete-property/ interrupt-parent;
+};
+
+
+/*
+ * mediatek-gpt-tick: the arch timer comparator dies after the 32-bit counter
+ * wrap (~330 s at 13 MHz). Tick, keep time and sched_clock from the MediaTek
+ * GPT (timer@10008000) as the vendor 3.4 kernel does.
+ */
+&{/timer} {
+	status = "disabled";
+};
+
+/*
+ * Vendor DCT (lenovo89_tb_x10_jb2 cust_eint.h): CUST_EINT_MT6320_PMIC_NUM 3,
+ * level, active high, on the dedicated EINT3 pad (GPIO37). EINT43 from
+ * mt6320.dtsi is pad 9 = eMMC DAT1 on this SoC.
+ */
+&pmic {
+	interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+/* SGX544 sits in the MFG power domain; needed by any GPU driver. */
+&gpu {
+	power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
+};
+
+/*
+ * MT6628 Wi-Fi/BT/GPS/FM combo (vendor lenovo89_tb_x10_jb2 DCT/board.c):
+ * Wi-Fi on SDIO MSDC3, PMU_EN = GPIO14, RST = GPIO225, WIFI EINT9 = GPIO128.
+ * Vendor order: PMU_EN high, wait, RST high, wait. PMU_EN is modelled as the
+ * SDIO slot supply, RST as the pwrseq reset. Never use vemc (eMMC rails) here.
+ */
+/ {
+	mt6628_pmu_en: regulator-mt6628-pmu {
+		compatible = "regulator-fixed";
+		regulator-name = "mt6628-pmu-en";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&pio 14 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <100000>;
+	};
+
+	mt6628_pwrseq: pwrseq-mt6628 {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <100>;
+		power-off-delay-us = <10000>;
+	};
+};
+
+&mmc3 {
+	status = "okay";
+	/delete-property/ vqmmc-supply;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-ddr50;
+	vmmc-supply = <&mt6628_pmu_en>;
+	mmc-pwrseq = <&mt6628_pwrseq>;
+	max-frequency = <25000000>;
+	keep-power-in-suspend;
+};
+>>>>>>> theirs
