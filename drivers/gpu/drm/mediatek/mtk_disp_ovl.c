@@ -165,6 +165,8 @@ struct mtk_disp_ovl {
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
+	/* MT6589: vblank comes from RDMA; the OVL interrupt is LK's leftover */
+	bool				lk_irq_only;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -173,6 +175,11 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 
 	/* Clear frame completion interrupt */
 	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
+
+	if (priv->lk_irq_only) {
+		writel(0x0, priv->regs + DISP_REG_OVL_INTEN);
+		return IRQ_HANDLED;
+	}
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
@@ -647,6 +654,7 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 #endif
 
 	priv->data = of_device_get_match_data(dev);
+	priv->lk_irq_only = of_machine_is_compatible("mediatek,mt6589");
 	platform_set_drvdata(pdev, priv);
 
 	ret = devm_request_irq(dev, irq, mtk_disp_ovl_irq_handler,
