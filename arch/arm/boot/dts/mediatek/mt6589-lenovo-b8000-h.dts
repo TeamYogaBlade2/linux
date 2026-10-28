@@ -197,13 +197,24 @@
 };
 
 /*
- * The fuel gauge IRQ line (EINT16/GPIO16, marked "?" in the shared blade
- * description) is configured as an output on B8000-H and the IRQ request
- * fails, taking the whole gauge down. Poll it instead.
+ * Battery: the vendor kernel registers the BQ27541 fuel gauge on I2C bus 6
+ * (BQ24196_BUSNUM 6, 0xAA >> 1), next to the BQ24196 charger, not on i2c4 as
+ * the shared blade description guesses.  Polled (EINT16 is an output here).
+ * The charger's own "battery" (no capacity) made Phosh show 0 %: omit it.
  */
-&bq27541 {
-	/delete-property/ interrupts;
-	/delete-property/ interrupt-parent;
+&i2c4 {
+	/delete-node/ fuel-gauge@55;
+};
+
+&i2c6 {
+	charger@6b {
+		omit-battery-class;
+	};
+
+	fuel-gauge@55 {
+		compatible = "ti,bq27541";
+		reg = <0x55>;
+	};
 };
 
 
