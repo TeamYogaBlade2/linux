@@ -113,7 +113,13 @@ static const struct mtk_pin_desc mtk_pins_mt6589[] = {
 	),
 	MTK_PIN(
 		9, "MSDC0_DAT1",
-		MTK_EINT_FUNCTION(2, 43),
+		/*
+		 * B8000: mt6320 PMIC asks for EINT43. Muxing this pad to EINT
+		 * (mode 2) takes eMMC DAT1 away from MSDC0: every write fails
+		 * with a data CRC error and the level IRQ storms on DAT1. Keep
+		 * the pad in MSDC0 mode when the EINT is requested.
+		 */
+		MTK_EINT_FUNCTION(1, 43),
 		DRV_GRP4,
 		MTK_FUNCTION(0, "GPIO9"),
 		MTK_FUNCTION(1, "MSDC0_DAT1"),
