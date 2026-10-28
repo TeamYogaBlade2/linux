@@ -14,7 +14,11 @@
 #include <linux/soc/mediatek/mtk-mmsys.h>
 
 #include "mtk-mmsys.h"
+<<<<<<< ours
 #include "mt6589-dispsys.h"
+=======
+#include "mt6589-mmsys.h"
+>>>>>>> theirs
 #include "mt8167-mmsys.h"
 #include "mt8173-mmsys.h"
 #include "mt8183-mmsys.h"
@@ -25,6 +29,12 @@
 #include "mt8365-mmsys.h"
 
 #define MMSYS_SW_RESET_PER_REG 32
+
+static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
+	.clk_driver = "clk-mt6589-disp",
+	.routes = mt6589_mmsys_routing_table,
+	.num_routes = ARRAY_SIZE(mt6589_mmsys_routing_table),
+};
 
 static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {
 	.clk_driver = "clk-mt2701-mm",
@@ -468,6 +478,7 @@ static void mtk_mmsys_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id of_match_mtk_mmsys[] = {
+	{ .compatible = "mediatek,mt6589-mmsys", .data = &mt6589_mmsys_driver_data },
 	{ .compatible = "mediatek,mt2701-mmsys", .data = &mt2701_mmsys_driver_data },
 	{ .compatible = "mediatek,mt2712-mmsys", .data = &mt2712_mmsys_driver_data },
 	{ .compatible = "mediatek,mt6589-dispsys", .data = &mt6589_dispsys_driver_data },

@@ -5762,6 +5762,39 @@ static struct platform_driver panel_simple_platform_driver = {
 	.shutdown = panel_simple_platform_shutdown,
 };
 
+/*
+ * Lenovo YOGA Tablet 10 (B8000) 1280x800 DSI video panel "cm_hx8896a01".
+ * Initialised by the bootloader; timings read back from the LK-programmed
+ * MT6589 DSI registers (4 lanes, RGB888, sync-event, 60.09 Hz).
+ */
+static const struct drm_display_mode lenovo_b8000_mode = {
+	.clock = 76130,
+	.hdisplay = 1280,
+	.hsync_start = 1280 + 186,
+	.hsync_end = 1280 + 186 + 10,
+	.htotal = 1280 + 186 + 10 + 45,
+	.vdisplay = 800,
+	.vsync_start = 800 + 21,
+	.vsync_end = 800 + 21 + 2,
+	.vtotal = 800 + 21 + 2 + 10,
+};
+
+static const struct panel_desc_dsi lenovo_b8000_panel = {
+	.desc = {
+		.modes = &lenovo_b8000_mode,
+		.num_modes = 1,
+		.bpc = 8,
+		.size = {
+			.width = 217,
+			.height = 136,
+		},
+		.connector_type = DRM_MODE_CONNECTOR_DSI,
+	},
+	.flags = MIPI_DSI_MODE_VIDEO,
+	.format = MIPI_DSI_FMT_RGB888,
+	.lanes = 4,
+};
+
 static const struct drm_display_mode auo_b080uan01_mode = {
 	.clock = 154500,
 	.hdisplay = 1200,
@@ -5998,6 +6031,9 @@ static const struct panel_desc_dsi osd101t2045_53ts = {
 
 static const struct of_device_id dsi_of_match[] = {
 	{
+		.compatible = "lenovo,b8000-panel",
+		.data = &lenovo_b8000_panel,
+	}, {
 		.compatible = "auo,b080uan01",
 		.data = &auo_b080uan01
 	}, {

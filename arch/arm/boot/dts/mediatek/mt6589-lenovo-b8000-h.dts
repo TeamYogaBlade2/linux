@@ -282,3 +282,77 @@
 	keep-power-in-suspend;
 };
 >>>>>>> theirs
+
+/*
+ * Display: mediatek-drm on the path the bootloader uses,
+ * OVL -> BLS -> RDMA0 -> DSI (+ MIPI-TX), instead of simpledrm.
+ */
+&dispsys {
+	compatible = "mediatek,mt6589-mmsys", "syscon";
+	#clock-cells = <1>;
+	power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+};
+
+/ {
+	soc {
+		disp_ovl: ovl@14003000 {
+			compatible = "mediatek,mt6589-disp-ovl", "mediatek,mt2701-disp-ovl";
+			reg = <0x14003000 0x1000>;
+			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		disp_rdma0: rdma@14006000 {
+			compatible = "mediatek,mt6589-disp-rdma", "mediatek,mt2701-disp-rdma";
+			reg = <0x14006000 0x1000>;
+			interrupts = <GIC_SPI 166 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA0_ENGINE>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		disp_bls: bls@14008000 {
+			compatible = "mediatek,mt6589-disp-bls";
+			reg = <0x14008000 0x1000>;
+			interrupts = <GIC_SPI 168 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_BLS>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		disp_mutex: mutex@14011000 {
+			compatible = "mediatek,mt6589-disp-mutex";
+			reg = <0x14011000 0x1000>;
+			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		mipi_tx0: dsi-phy@10012000 {
+			compatible = "mediatek,mt6589-mipi-tx", "mediatek,mt2701-mipi-tx";
+			reg = <0x10012000 0x90>;
+			clocks = <&clk26m>;
+			clock-output-names = "mipi_tx0_pll";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
+		dsi0: dsi@1400d000 {
+			compatible = "mediatek,mt6589-dsi", "mediatek,mt2701-dsi";
+			reg = <0x1400d000 0x1000>;
+			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP1_DSI_ENGINE>,
+				 <&dispsys CLK_DISP1_DSI_DIGITAL>,
+				 <&mipi_tx0>;
+			clock-names = "engine", "digital", "hs";
+			phys = <&mipi_tx0>;
+			phy-names = "dphy";
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			panel@0 {
+				compatible = "lenovo,b8000-panel";
+				reg = <0>;
+			};
+		};
+	};
+};
