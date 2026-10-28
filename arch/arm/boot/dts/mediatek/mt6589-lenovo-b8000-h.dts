@@ -237,6 +237,24 @@
  * pwrseq: MMC power-off would reset the whole combo chip after WMT setup.
  */
 &pio {
+	/* MSDC3 (MT6628 SDIO): vendor pulls CMD/DAT up, CLK down (PUPD R1=1). */
+	mt6628_msdc3_pins: mt6628-msdc3-pins {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO226__FUNC_MSDC3_DAT2>,
+				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
+				 <MT6589_GPIO228__FUNC_MSDC3_CMD>,
+				 <MT6589_GPIO230__FUNC_MSDC3_DAT1>,
+				 <MT6589_GPIO231__FUNC_MSDC3_DAT0>;
+			input-enable;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+	};
+
 	mt6628_uart3_pins: mt6628-uart3-pins {
 		pins-rx {
 			pinmux = <MT6589_GPIO219__FUNC_URXD3>;
@@ -254,6 +272,16 @@
  * The combo UART is vendor UART3 = /dev/ttyMT2 = 0x11008000, i.e. upstream
  * &uart2 (upstream labels count from 0).  Pins GPIO219/220 URXD3/UTXD3.
  */
+/ {
+	mt6628_sdio_vmmc: regulator-mt6628-sdio {
+		compatible = "regulator-fixed";
+		regulator-name = "mt6628-sdio";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+};
+
 &uart2 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -279,8 +307,13 @@
 	/delete-property/ sd-uhs-sdr104;
 	/delete-property/ sd-uhs-sdr50;
 	/delete-property/ sd-uhs-ddr50;
-	/delete-property/ vmmc-supply;
 	/delete-property/ mmc-pwrseq;
+	/* Chip power is owned by WMT; this only gives the host a 3.3 V OCR. */
+	vmmc-supply = <&mt6628_sdio_vmmc>;
+	/* mtk-sd requires both states */
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mt6628_msdc3_pins>;
+	pinctrl-1 = <&mt6628_msdc3_pins>;
 	max-frequency = <25000000>;
 	keep-power-in-suspend;
 };
