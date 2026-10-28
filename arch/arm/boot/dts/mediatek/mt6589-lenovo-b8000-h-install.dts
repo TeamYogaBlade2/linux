@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* SD-rooted installer profile: expose eMMC and microSD at the same time. */
+
+#include "mt6589-lenovo-b8000-h.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 B8000-H (SD to eMMC installer)";
+
+	chosen {
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 rdinit=/init console=tty0 loglevel=8 ignore_loglevel root=/dev/mmcblk0p1";
+	};
+};
+
+&mmc0 {
+	status = "okay";
+};
+
+&mmc1 {
+	/* Retain the known-stable conservative setting for the installer. */
+	/delete-property/ cd-gpios;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-ddr50;
+	/delete-property/ cap-sd-highspeed;
+	broken-cd;
+	max-frequency = <400000>;
+};
