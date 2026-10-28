@@ -507,6 +507,7 @@ struct msdc_host {
 	unsigned char timing;
 	bool vqmmc_enabled;
 	u32 latch_ck;
+	bool sample_falling;	/* sample cmd/rdata/wdata on falling edge */
 	u32 hs400_ds_delay;
 	u32 hs400_ds_dly3;
 	u32 hs200_cmd_int_delay; /* cmd internal delay for HS200/SDR104 */
@@ -1503,8 +1504,33 @@ static void msdc_cmd_next(struct msdc_host *host,
 		msdc_start_data(host, cmd, cmd->data);
 }
 
+/* B8K debug: force MSDC_IOCON (sampling edges) at runtime, -1 = off */
+static int b8k_iocon = -1;
+module_param(b8k_iocon, int, 0644);
+
 static void msdc_ops_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
+	if (b8k_iocon >= 0) {
+		struct msdc_host *h = mmc_priv(mmc);
+
+		if (h->internal_cd == false && readl(h->base + MSDC_IOCON) != (u32)b8k_iocon)
+			writel(b8k_iocon, h->base + MSDC_IOCON);
+	}
+	/* B8K_REQDBG: histogram of data commands */
+	static atomic_t b8k_rq, b8k_single, b8k_multi, b8k_sbc;
+	if (mrq->data) {
+		int n = atomic_inc_return(&b8k_rq);
+		if (mrq->data->blocks == 1)
+			atomic_inc(&b8k_single);
+		else
+			atomic_inc(&b8k_multi);
+		if (mrq->sbc)
+			atomic_inc(&b8k_sbc);
+		if (n % 5000 == 0)
+			pr_info("B8K_REQDBG rq=%d single=%d multi=%d sbc=%d last op=%u blocks=%u blksz=%u\n",
+				n, atomic_read(&b8k_single), atomic_read(&b8k_multi), atomic_read(&b8k_sbc),
+				mrq->cmd->opcode, mrq->data->blocks, mrq->data->blksz);
+	}
 	struct msdc_host *host = mmc_priv(mmc);
 
 	host->error = 0;
@@ -1604,12 +1630,12 @@ static void msdc_data_xfer_done(struct msdc_host *host, u32 events,
 		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CTRL, val,
 						!(val & MSDC_DMA_CTRL_STOP), 1, 20000);
 		if (ret)
-			dev_dbg(host->dev, "DMA stop timed out\n");
+			dev_info(host->dev, "B8K DMA stop timed out\n");
 
 		ret = readl_poll_timeout_atomic(host->base + MSDC_DMA_CFG, val,
 						!(val & MSDC_DMA_CFG_STS), 1, 20000);
 		if (ret)
-			dev_dbg(host->dev, "DMA inactive timed out\n");
+			dev_info(host->dev, "B8K DMA inactive timed out\n");
 
 		sdr_clr_bits(host->base + MSDC_INTEN, data_ints_mask);
 		dev_dbg(host->dev, "DMA stop\n");
@@ -1617,7 +1643,9 @@ static void msdc_data_xfer_done(struct msdc_host *host, u32 events,
 		if ((events & MSDC_INT_XFER_COMPL) && (!stop || !stop->error)) {
 			data->bytes_xfered = data->blocks * data->blksz;
 		} else {
-			dev_dbg(host->dev, "interrupt events: %x\n", events);
+			dev_info_ratelimited(host->dev, "B8K_DATERR events=%x cmd=%u blocks=%u sbc=%d stop=%d dma_cfg=%x\n",
+				 events, mrq->cmd->opcode, data->blocks, !!mrq->sbc, stop ? stop->error : 0,
+				 readl(host->base + MSDC_DMA_CFG));
 			msdc_reset_hw(host);
 			host->error |= REQ_DAT_ERR;
 			data->bytes_xfered = 0;
@@ -1812,6 +1840,25 @@ static irqreturn_t msdc_irq(int irq, void *dev_id)
 {
 	struct msdc_host *host = (struct msdc_host *) dev_id;
 	struct mmc_host *mmc = mmc_from_priv(host);
+	/* B8K_IRQDBG: count calls, empty calls and event bits */
+	static atomic_t b8k_calls, b8k_empty, b8k_bits[32];
+	{
+		u32 ev = readl(host->base + MSDC_INT) & readl(host->base + MSDC_INTEN);
+		int i, n = atomic_inc_return(&b8k_calls);
+
+		if (!ev)
+			atomic_inc(&b8k_empty);
+		for (i = 0; i < 32; i++)
+			if (ev & BIT(i))
+				atomic_inc(&b8k_bits[i]);
+		if (n % 20000 == 0) {
+			dev_info(host->dev, "B8K_IRQDBG calls=%d empty=%d INT=%08x INTEN=%08x b12=%d b13=%d b8=%d b3=%d b6=%d\n",
+				 n, atomic_read(&b8k_empty), readl(host->base + MSDC_INT),
+				 readl(host->base + MSDC_INTEN), atomic_read(&b8k_bits[12]),
+				 atomic_read(&b8k_bits[13]), atomic_read(&b8k_bits[8]),
+				 atomic_read(&b8k_bits[3]), atomic_read(&b8k_bits[6]));
+		}
+	}
 
 	while (true) {
 		struct mmc_request *mrq;
@@ -1926,6 +1973,9 @@ static void msdc_init_hw(struct msdc_host *host)
 	}
 	writel(0, host->base + MSDC_IOCON);
 	sdr_set_field(host->base + MSDC_IOCON, MSDC_IOCON_DDLSEL, 0);
+	if (host->sample_falling)
+		sdr_set_bits(host->base + MSDC_IOCON, MSDC_IOCON_RSPL |
+			     MSDC_IOCON_DSPL | MSDC_IOCON_W_DSPL);
 
 	/*
 	 * Patch bit 0 and 1 are completely rewritten, but for patch bit 2
@@ -2890,6 +2940,9 @@ static void msdc_of_property_parse(struct platform_device *pdev,
 {
 	struct mmc_host *mmc = mmc_from_priv(host);
 
+	/* Vendor B8000 msdc0_hw: cmd/rdata/wdata edge = MSDC_SMPL_FALLING */
+	host->sample_falling = of_property_read_bool(pdev->dev.of_node,
+						    "mediatek,sample-falling-edge");
 	of_property_read_u32(pdev->dev.of_node, "mediatek,latch-ck",
 			     &host->latch_ck);
 
