@@ -304,3 +304,7 @@ CONFIG_MODULE_FORCE_UNLOAD=y
 # Vibration motor (regulator-haptic on VIBR)
 CONFIG_INPUT_FF_MEMLESS=y
 CONFIG_INPUT_REGULATOR_HAPTIC=y
+# Each CPU has its own arch timer again (patch 0041): no periodic tick on
+# idle CPUs, and timers finer than the 1 ms tick.
+CONFIG_NO_HZ_IDLE=y
+CONFIG_HIGH_RES_TIMERS=y
