@@ -39,6 +39,13 @@
  * TODO: Needs update: this header is missing a bunch of member descriptions.
  */
 struct mtk_crtc {
+	/*
+	 * MT6589: DSI runs in the bootloader's video mode setup, which this
+	 * driver cannot re-program; tearing the OVL/RDMA path down on DPMS off
+	 * starves DSI and it never resyncs.  Keep the path running and only
+	 * drop the planes (the panel turns the backlight off).
+	 */
+	bool				hw_kept_on;
 	struct drm_crtc			base;
 	bool				enabled;
 
@@ -811,6 +818,12 @@ static void mtk_crtc_atomic_enable(struct drm_crtc *crtc,
 
 	drm_dbg_driver(dev, "%s %d\n", __func__, crtc->base.id);
 
+	if (mtk_crtc->hw_kept_on) {
+		drm_crtc_vblank_on(crtc);
+		mtk_crtc->enabled = true;
+		return;
+	}
+
 	ret = mtk_ddp_comp_power_on(comp);
 	if (ret < 0) {
 		DRM_DEV_ERROR(comp->dev, "Failed to enable power domain: %d\n", ret);
@@ -864,6 +877,11 @@ static void mtk_crtc_atomic_disable(struct drm_crtc *crtc,
 	drm_crtc_wait_one_vblank(crtc);
 
 	drm_crtc_vblank_off(crtc);
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		mtk_crtc->hw_kept_on = true;
+		mtk_crtc->enabled = false;
+		return;
+	}
 	mtk_crtc_ddp_hw_fini(mtk_crtc);
 	mtk_ddp_comp_power_off(comp);
 
