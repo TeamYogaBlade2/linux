@@ -666,6 +666,23 @@ static int mtk_crtc_enable_vblank(struct drm_crtc *crtc)
 {
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
+	unsigned int i;
+
+	/*
+	 * MT6589's OVL frame-complete IRQ is not periodic in the bootloader
+	 * handover pipeline.  RDMA0 frame-end is the real scanout boundary;
+	 * use it for DRM vblank or atomic commits wait ten seconds and Phosh
+	 * appears to stutter even when the composition work itself is cheap.
+	 */
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
+			comp = mtk_crtc->ddp_comp[i];
+			if (mtk_ddp_comp_get_type(comp->id) == MTK_DISP_RDMA) {
+				mtk_ddp_comp_enable_vblank(comp);
+				return 0;
+			}
+		}
+	}
 
 	mtk_ddp_comp_enable_vblank(comp);
 
@@ -676,6 +693,17 @@ static void mtk_crtc_disable_vblank(struct drm_crtc *crtc)
 {
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
+	unsigned int i;
+
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
+			comp = mtk_crtc->ddp_comp[i];
+			if (mtk_ddp_comp_get_type(comp->id) == MTK_DISP_RDMA) {
+				mtk_ddp_comp_disable_vblank(comp);
+				return;
+			}
+		}
+	}
 
 	mtk_ddp_comp_disable_vblank(comp);
 }
