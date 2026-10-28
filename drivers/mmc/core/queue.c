@@ -295,6 +295,12 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	if (!(req->rq_flags & RQF_DONTPREP)) {
 		req_to_mmc_queue_req(req)->retries = 0;
+		/*
+		 * The mmc_queue_req is reused per tag: clear the single-block
+		 * recovery flag left by a failed request, or every later
+		 * request on this tag is split into 512-byte transfers.
+		 */
+		req_to_mmc_queue_req(req)->flags = 0;
 		req->rq_flags |= RQF_DONTPREP;
 	}
 
