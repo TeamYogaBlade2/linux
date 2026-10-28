@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Lenovo YOGA Tablet 10 B8000-H (60047 / 3G data)
+ * Initial bring-up based on live B8000-H Android partition geometry.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include "mt6589-lenovo-b8000.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (3G data)";
+	compatible = "lenovo,b8000-h", "mediatek,mt6589";
+
+	chosen {
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 rdinit=/init console=tty0 loglevel=8 ignore_loglevel";
+	};
+};
+
+/*
+ * The B8000-H partition offsets differ from the B8000-F offsets currently
+ * present in mt6589-lenovo-blade.dtsi. Keep every Android partition read-only
+ * during initial mainline bring-up.
+ */
+&mmc0 {
+	/delete-node/ card@0;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			partition@0 {
+				label = "MBR";
+				reg = <0x0 0x00000000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@80000 {
+				label = "EBR1";
+				reg = <0x0 0x00080000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@100000 {
+				label = "__NODL_PMT";
+				reg = <0x0 0x00100000 0x0 0x00400000>;
+				read-only;
+			};
+
+			partition@500000 {
+				label = "__NODL_PRO_INFO";
+				reg = <0x0 0x00500000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@800000 {
+				label = "__NODL_NVRAM";
+				reg = <0x0 0x00800000 0x0 0x00500000>;
+				read-only;
+			};
+
+			partition@d00000 {
+				label = "__NODL_PROTECT_F";
+				reg = <0x0 0x00d00000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@1700000 {
+				label = "__NODL_PROTECT_S";
+				reg = <0x0 0x01700000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@2100000 {
+				label = "__NODL_SECCFG";
+				reg = <0x0 0x02100000 0x0 0x00020000>;
+				read-only;
+			};
+
+			partition@2120000 {
+				label = "UBOOT";
+				reg = <0x0 0x02120000 0x0 0x00060000>;
+				read-only;
+			};
+
+			partition@2180000 {
+				label = "BOOTIMG";
+				reg = <0x0 0x02180000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2780000 {
+				label = "RECOVERY";
+				reg = <0x0 0x02780000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2d80000 {
+				label = "SEC_RO";
+				reg = <0x0 0x02d80000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@3380000 {
+				label = "__NODL_MISC";
+				reg = <0x0 0x03380000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3400000 {
+				label = "LOGO";
+				reg = <0x0 0x03400000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@3700000 {
+				label = "EBR2";
+				reg = <0x0 0x03700000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3780000 {
+				label = "__NODL_EXPDB";
+				reg = <0x0 0x03780000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@4180000 {
+				label = "FAC";
+				reg = <0x0 0x04180000 0x0 0x0c800000>;
+				read-only;
+			};
+
+			partition@10980000 {
+				label = "ANDROID";
+				reg = <0x0 0x10980000 0x0 0x40000000>;
+				read-only;
+			};
+
+			partition@50980000 {
+				label = "CACHE";
+				reg = <0x0 0x50980000 0x0 0x07e00000>;
+				read-only;
+			};
+
+			partition@58780000 {
+				label = "USRDATA";
+				reg = <0x0 0x58780000 0x3 0x49fa0000>;
+				read-only;
+			};
+		};
+	};
+};

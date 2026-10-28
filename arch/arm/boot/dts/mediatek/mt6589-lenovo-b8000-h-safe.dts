@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* First-boot profile: do not probe internal eMMC or removable SD storage. */
+
+#include "mt6589-lenovo-b8000-h.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 B8000-H (safe bring-up)";
+};
+
+&mmc0 {
+	status = "disabled";
+};
+
+&mmc1 {
+	status = "disabled";
+};
