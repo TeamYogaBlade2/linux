@@ -5790,7 +5790,8 @@ static const struct panel_desc_dsi lenovo_b8000_panel = {
 		},
 		.connector_type = DRM_MODE_CONNECTOR_DSI,
 	},
-	.flags = MIPI_DSI_MODE_VIDEO,
+	/* LK: TXRX_CTRL HSTX_CKLP_EN set, i.e. non-continuous HS clock */
+	.flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS,
 	.format = MIPI_DSI_FMT_RGB888,
 	.lanes = 4,
 };
