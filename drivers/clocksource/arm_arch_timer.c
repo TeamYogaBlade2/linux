@@ -19,6 +19,7 @@
 #include <linux/clocksource_ids.h>
 #include <linux/interrupt.h>
 #include <linux/kstrtox.h>
+#include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
 #include <linux/io.h>
@@ -79,9 +80,22 @@ early_param("clocksource.arm_arch_timer.evtstrm", early_evtstrm_cfg);
  *
  * See 'ARM DDI 0487G.a D11.1.2 ("The system counter")' for more details.
  */
+/* MT6589: 32-bit system counter, program events through TVAL (see below). */
+static bool arch_timer_counter_32bit;
+
 static int arch_counter_get_width(void)
 {
 	u64 min_cycles = MIN_ROLLOVER_SECS * arch_timer_rate;
+
+	/*
+	 * MT6589/MT8389: only the low 32 bits of the system counter count.
+	 * At 13 MHz it wraps after 2^32 / 13e6 = 330 s; treating it as 56-bit
+	 * freezes timekeeping at that point and the watchdog resets the SoC.
+	 */
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		arch_timer_counter_32bit = true;
+		return 32;
+	}
 
 	/* guarantee the returned width is within the valid range */
 	return clamp_val(ilog2(min_cycles - 1) + 1, 56, 64);
@@ -628,6 +642,25 @@ static __always_inline void set_next_event(const int access, unsigned long evt,
 	else
 		cnt = __arch_counter_get_cntvct();
 
+#ifdef CONFIG_ARM
+	/*
+	 * With a counter that only has 32 working bits, CVAL = cnt + evt
+	 * computed in 64 bits lands beyond the wrap and never fires; the tick
+	 * stops ~330 s after boot and the SoC watchdog resets. TVAL is relative,
+	 * so the timer compares against its own counter.
+	 */
+	if (arch_timer_counter_32bit) {
+		u32 tval = evt;
+
+		if (access == ARCH_TIMER_PHYS_ACCESS)
+			asm volatile("mcr p15, 0, %0, c14, c2, 0" : : "r" (tval));
+		else
+			asm volatile("mcr p15, 0, %0, c14, c3, 0" : : "r" (tval));
+		isb();
+		arch_timer_reg_write_cp15(access, ARCH_TIMER_REG_CTRL, ctrl);
+		return;
+	}
+#endif
 	arch_timer_reg_write_cp15(access, ARCH_TIMER_REG_CVAL, evt + cnt);
 	arch_timer_reg_write_cp15(access, ARCH_TIMER_REG_CTRL, ctrl);
 }
@@ -668,6 +701,8 @@ static u64 __arch_timer_check_delta(void)
 		return CLOCKSOURCE_MASK(31);
 	}
 #endif
+	if (arch_counter_get_width() == 32)
+		return CLOCKSOURCE_MASK(31);	/* TVAL is signed 32-bit */
 	return CLOCKSOURCE_MASK(arch_counter_get_width());
 }
 
