@@ -433,11 +433,33 @@ static int prismrv_runtime_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	/* release the G3D block from reset (vendor EnableSGXClocks order) */
+	/*
+	 * Reset pulse of the vendor driver (EnableSGXClocks -> MFGReset(),
+	 * sysutils_linux.c), done on EVERY power-up so the G3D block never
+	 * depends on the state the reset line was left in:
+	 *   RESET=1; clocks on; 1us; clocks off; 1us; RESET=0; clocks on; 1us
+	 * i.e. the reset is released while the clock gates are stopped and the
+	 * clocks come back afterwards.  (The MFG power domain itself - SPM
+	 * MFG_PWR_CON isolation/reset and the INFRA way_en bus protection - is
+	 * sequenced by the MediaTek power-domain driver.)
+	 */
+	ret = reset_control_assert(pv->rstc);
+	if (ret) {
+		dev_err(dev, "cannot assert the GPU reset (%d)\n", ret);
+		prismrv_clks_off(pv, pv->nr_clocks);
+		return ret;
+	}
+	udelay(1);
+	prismrv_clks_off(pv, pv->nr_clocks);
+	udelay(1);
 	ret = reset_control_deassert(pv->rstc);
 	if (ret) {
 		dev_err(dev, "cannot release the GPU from reset (%d)\n", ret);
-		prismrv_clks_off(pv, pv->nr_clocks);
+		return ret;		/* clocks are already off */
+	}
+	ret = prismrv_clks_on(pv);
+	if (ret) {
+		reset_control_assert(pv->rstc);
 		return ret;
 	}
 	udelay(2);
