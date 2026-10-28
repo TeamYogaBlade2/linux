@@ -155,11 +155,6 @@
 		};
 	};
 };
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
 
 /*
  * B8000-H touch: the vendor S7300 driver (mediatek/custom/common/kernel/
@@ -182,12 +177,14 @@
 };
 
 /*
- * The ID pin polarity in the shared blade description has not been verified
- * on B8000-H; with correct GPIO input readback it selects host mode and the
- * USB console disappears. Force device mode for bring-up.
+ * The ID pin of the shared blade description (GPIO57) reads 1 whatever is
+ * in the socket, and the connector driver took that for an adapter: host
+ * mode, no USB console. No connector here; the glue starts as a device and
+ * userspace switches the role (b8k-usb).
  */
 &usb0 {
-	dr_mode = "peripheral";
+	dr_mode = "otg";
+	/delete-node/ connector;
 };
 
 /*
@@ -200,7 +197,6 @@
 };
 
 /*
-<<<<<<< ours
  * Battery: B8000-H has no BQ27541 (vendor MTK_BQ27541_SUPPORT=no, nothing
  * answers at 0x55); the vendor computes the charge from MT6320 AUXADC
  * (docs/battery-mt6320-plan.md).  The charger's own capacity-less "battery"
@@ -215,25 +211,27 @@
 		omit-battery-class;
 	};
 
-=======
- * The fuel gauge IRQ line (EINT16/GPIO16, marked "?" in the shared blade
- * description) is configured as an output on B8000-H and the IRQ request
- * fails, taking the whole gauge down. Poll it instead.
+};
+
+/*
+ * Vendor cust_acc direction=3; this is the same orientation previously
+ * supplied to iio-sensor-proxy by 61-b8000h-accel.rules.
  */
-&bq27541 {
-	/delete-property/ interrupts;
-	/delete-property/ interrupt-parent;
->>>>>>> theirs
+&i2c3 {
+	accelerometer@11 {
+		mount-matrix = "0", "-1", "0", "1", "0", "0", "0", "0", "1";
+	};
 };
 
 
 /*
- * mediatek-gpt-tick: the arch timer comparator dies after the 32-bit counter
- * wrap (~330 s at 13 MHz). Tick, keep time and sched_clock from the MediaTek
- * GPT (timer@10008000) as the vendor 3.4 kernel does.
+ * The arch timer gives each CPU its own tick (patch 0041); time and
+ * sched_clock come from the MediaTek GPT (timer@10008000), because CNTPCT's
+ * high word lags GPT6 until GPT6 is read. The GPT also stays the broadcast
+ * device.
  */
 &{/timer} {
-	status = "disabled";
+	status = "okay";
 };
 
 /*
@@ -252,7 +250,6 @@
 
 /*
  * MT6628 Wi-Fi/BT/GPS/FM combo (vendor lenovo89_tb_x10_jb2 DCT/board.c):
-<<<<<<< ours
  * WMT/STP uses UART3; WMT owns PMU_EN and RST and enables the Wi-Fi function
  * before asking MSDC3 to rescan. Never give these GPIOs to an MMC regulator or
  * pwrseq: MMC power-off would reset the whole combo chip after WMT setup.
@@ -294,6 +291,20 @@
  * &uart2 (upstream labels count from 0).  Pins GPIO219/220 URXD3/UTXD3.
  */
 / {
+	/* 5 V for a USB keyboard in host mode: the bq24190 OTG boost. */
+	usb-otg-vbus-output {
+		compatible = "regulator-output";
+		vout-supply = <&usb_otg_vbus>;
+	};
+
+	/* Vibration motor on the MT6320 VIBR LDO. */
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6320_ldo_vibr>;
+		min-microvolt = <2800000>;
+		max-microvolt = <2800000>;
+	};
+
 	mt6628_sdio_vmmc: regulator-mt6628-sdio {
 		compatible = "regulator-fixed";
 		regulator-name = "mt6628-sdio";
@@ -319,28 +330,6 @@
 		mediatek,off-stable-ms = <10>;
 		mediatek,reset-stable-ms = <30>;
 		mediatek,on-stable-ms = <100>;
-=======
- * Wi-Fi on SDIO MSDC3, PMU_EN = GPIO14, RST = GPIO225, WIFI EINT9 = GPIO128.
- * Vendor order: PMU_EN high, wait, RST high, wait. PMU_EN is modelled as the
- * SDIO slot supply, RST as the pwrseq reset. Never use vemc (eMMC rails) here.
- */
-/ {
-	mt6628_pmu_en: regulator-mt6628-pmu {
-		compatible = "regulator-fixed";
-		regulator-name = "mt6628-pmu-en";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		gpio = <&pio 14 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-		startup-delay-us = <100000>;
-	};
-
-	mt6628_pwrseq: pwrseq-mt6628 {
-		compatible = "mmc-pwrseq-simple";
-		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
-		post-power-on-delay-ms = <100>;
-		power-off-delay-us = <10000>;
->>>>>>> theirs
 	};
 };
 
@@ -350,7 +339,6 @@
 	/delete-property/ sd-uhs-sdr104;
 	/delete-property/ sd-uhs-sdr50;
 	/delete-property/ sd-uhs-ddr50;
-<<<<<<< ours
 	/delete-property/ mmc-pwrseq;
 	/* Chip power is owned by WMT; this only gives the host a 3.3 V OCR. */
 	vmmc-supply = <&mt6628_sdio_vmmc>;
@@ -361,7 +349,6 @@
 	max-frequency = <25000000>;
 	keep-power-in-suspend;
 };
->>>>>>> theirs
 
 /*
  * Display: mediatek-drm on the path the bootloader uses,
@@ -463,10 +450,111 @@
 		};
 	};
 };
-=======
-	vmmc-supply = <&mt6628_pmu_en>;
-	mmc-pwrseq = <&mt6628_pwrseq>;
-	max-frequency = <25000000>;
-	keep-power-in-suspend;
+
+/*
+ * Front camera (device-lenovo-b8000h#17, docs/camera-front.md): OmniVision
+ * OV9760 on I2C 1 at 0x10, one CSI-2 lane. Supplies, pins and the order
+ * follow the stock kdCISModulePowerOn: VCAMA 2.8 V, VGP2 1.8 V, RST GPIO32
+ * and PDN GPIO31, both active low. The stock code also names VGP5, which is
+ * the touch panel's 2.8 V rail and stays with it. MCLK (24 MHz) comes from
+ * SENINF TG1, which the receiver driver of stage 2 will also drive.
+ */
+&mt6320_ldo_vcama {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
 };
->>>>>>> theirs
+
+&mt6320_ldo_vgp2 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+};
+
+&pio {
+	camera_mclk_pins: camera-mclk-default {
+		pin-mclk {
+			pinmux = <MT6589_GPIO210__FUNC_CMMCLK>;
+		};
+	};
+
+	/*
+	 * The CSI1 lanes share pads with the parallel camera interface
+	 * (CMDAT0..9, CMHSYNC, CMVSYNC: pins 197-208): GPIO mode with the
+	 * input buffers off, as the stock initTg2CSI2 leaves them (IES 0x1C0
+	 * bits 5..15, 0x1D0 bit 0).
+	 */
+	camera_csi1_pins: camera-csi1-default {
+		pins-csi1 {
+			pinmux = <MT6589_GPIO197__FUNC_GPIO197>,
+				 <MT6589_GPIO198__FUNC_GPIO198>,
+				 <MT6589_GPIO199__FUNC_GPIO199>,
+				 <MT6589_GPIO200__FUNC_GPIO200>,
+				 <MT6589_GPIO201__FUNC_GPIO201>,
+				 <MT6589_GPIO202__FUNC_GPIO202>,
+				 <MT6589_GPIO203__FUNC_GPIO203>,
+				 <MT6589_GPIO204__FUNC_GPIO204>,
+				 <MT6589_GPIO205__FUNC_GPIO205>,
+				 <MT6589_GPIO206__FUNC_GPIO206>,
+				 <MT6589_GPIO207__FUNC_GPIO207>,
+				 <MT6589_GPIO208__FUNC_GPIO208>;
+			input-disable;
+		};
+	};
+};
+
+&{/soc} {
+	/*
+	 * SENINF with the parts of the camera block the receive path uses:
+	 * ISP pass 1 (TG2, IMGO), MIPI-RX analog (CSI0/CSI1, after the DSI PHY
+	 * at 0x10012000) and MIPI-RX calibration. The ISP interrupt is GIC SPI
+	 * 151, level low, as in the stock camera_isp.c.
+	 */
+	seninf: camera-interface@15008000 {
+		compatible = "mediatek,mt6589-seninf";
+		reg = <0x15008000 0x1000>,
+		      <0x15004000 0x1000>,
+		      <0x10012800 0x30>,
+		      <0x1500c000 0x100>;
+		reg-names = "seninf", "isp", "mipi-rx", "mipi-rx-cal";
+		interrupts = <GIC_SPI 151 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&imgsys CLK_IMAGE_CAM_CAM>,
+			 <&imgsys CLK_IMAGE_SEN_TG>,
+			 <&imgsys CLK_IMAGE_SEN_CAM>,
+			 <&imgsys CLK_IMAGE_CAM_SMI>,
+			 <&imgsys CLK_IMAGE_LARB4_SMI>,
+			 <&imgsys CLK_IMAGE_COMMON_SMI>;
+		clock-names = "cam", "tg", "sen", "cam-smi", "larb", "smi";
+		power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&camera_mclk_pins>, <&camera_csi1_pins>;
+		#clock-cells = <0>;
+
+		port {
+			seninf_in: endpoint {
+				remote-endpoint = <&ov9760_out>;
+				data-lanes = <1>;
+			};
+		};
+	};
+};
+
+&i2c1 {
+	camera@10 {
+		compatible = "ovti,ov9760";
+		reg = <0x10>;
+		clocks = <&seninf>;
+		avdd-supply = <&mt6320_ldo_vcama>;
+		dovdd-supply = <&mt6320_ldo_vgp2>;
+		reset-gpios = <&pio 32 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&pio 31 GPIO_ACTIVE_LOW>;
+		orientation = <0>;	/* front */
+		rotation = <0>;		/* mounted along the landscape panel */
+
+		port {
+			ov9760_out: endpoint {
+				remote-endpoint = <&seninf_in>;
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <300000000>;
+			};
+		};
+	};
+};

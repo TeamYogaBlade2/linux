@@ -538,10 +538,23 @@ static int mtk_musb_probe(struct platform_device *pdev)
 		glue->phy_mode = PHY_MODE_USB_DEVICE;
 		glue->role = USB_ROLE_DEVICE;
 		break;
-	case USB_DR_MODE_OTG:
+	case USB_DR_MODE_OTG: {
+		struct device_node *conn __free(device_node) =
+			of_get_child_by_name(np, "connector");
+
+		/*
+		 * Without a connector nothing sets a role: stay a device
+		 * until userspace asks for host.
+		 */
+		if (!conn) {
+			glue->phy_mode = PHY_MODE_USB_DEVICE;
+			glue->role = USB_ROLE_DEVICE;
+			break;
+		}
 		glue->phy_mode = PHY_MODE_USB_OTG;
 		glue->role = USB_ROLE_NONE;
 		break;
+	}
 	default:
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				"Error 'dr_mode' property\n");

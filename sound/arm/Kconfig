@@ -12,6 +12,14 @@ menuconfig SND_ARM
 
 if SND_ARM
 
+config SND_MT6589_B8000
+	tristate "Lenovo B8000-H MT6589/MT6320 audio"
+	depends on ARCH_MEDIATEK && GPIOLIB
+	select SND_PCM
+	help
+	  Minimal driver for the MT6589 AFE and MT6320 codec of the Lenovo
+	  YOGA Tablet 10 B8000-H: speaker playback and microphone capture.
+
 config SND_ARMAACI
 	tristate "ARM PrimeCell PL041 AC Link support"
 	depends on ARM_AMBA

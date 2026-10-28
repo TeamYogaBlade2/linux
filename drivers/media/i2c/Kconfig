@@ -725,6 +725,17 @@ config VIDEO_OV9650
 	  This is a V4L2 sensor driver for the Omnivision
 	  OV9650 and OV9652 camera sensors.
 
+config VIDEO_OV9760
+	tristate "OmniVision OV9760 sensor support"
+	depends on OF && GPIOLIB
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the OmniVision OV9760
+	  1.6 Mpixel RAW10 camera with one MIPI CSI-2 lane.
+
+	  To compile this driver as a module, choose M here: the
+	  module's name is ov9760.
+
 config VIDEO_OV9734
 	tristate "OmniVision OV9734 sensor support"
 	depends on ACPI || COMPILE_TEST

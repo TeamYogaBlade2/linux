@@ -410,11 +410,9 @@ static void add_hash_entries(struct snd_card *card,
 	struct snd_ctl_elem_id id = kcontrol->id;
 	int i;
 
-	/* Keep snd.ko loadable on the already-running B8000 kernel, whose
-	 * exported XArray API predates xa_store_range(). */
-	for (i = 0; i < kcontrol->count; i++)
-		xa_store(&card->ctl_numids, kcontrol->id.numid + i,
-			 kcontrol, GFP_KERNEL);
+	xa_store_range(&card->ctl_numids, kcontrol->id.numid,
+		       kcontrol->id.numid + kcontrol->count - 1,
+		       kcontrol, GFP_KERNEL);
 
 	for (i = 0; i < kcontrol->count; i++) {
 		id.index = kcontrol->id.index + i;
