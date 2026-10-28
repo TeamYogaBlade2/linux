@@ -246,11 +246,8 @@ static const unsigned int mt8195_mtk_ddp_ext[] = {
 static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
 	.main_path = mt6589_mtk_ddp_main,
 	.main_len = ARRAY_SIZE(mt6589_mtk_ddp_main),
-<<<<<<< ours
 	.shadow_register = true,
 	.mmsys_dev_num = 1,
-=======
->>>>>>> theirs
 };
 
 static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {

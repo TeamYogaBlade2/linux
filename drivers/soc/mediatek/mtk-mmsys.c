@@ -14,10 +14,8 @@
 #include <linux/soc/mediatek/mtk-mmsys.h>
 
 #include "mtk-mmsys.h"
-<<<<<<< ours
 #include "mt6589-dispsys.h"
-=======
->>>>>>> theirs
+#include "mt6589-mmsys.h"
 #include "mt6589-mmsys.h"
 #include "mt8167-mmsys.h"
 #include "mt8173-mmsys.h"

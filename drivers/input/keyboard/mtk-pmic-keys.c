@@ -73,12 +73,9 @@ static const struct mtk_pmic_regs mt6320_regs = {
 		0x10, MT6320_INT_RSV, 0x8, MTK_PMIC_HOMEKEY_RST),
 	.pmic_rst_reg = MT6320_TOP_RST_MISC,
 	.rst_lprst_mask = MTK_PMIC_RST_DU_MASK,
-<<<<<<< ours
 	.homekey_puen_reg = MT6320_GPIO_SMT_CON3,
 	.homekey_puen_mask = BIT(8),
-=======
 	.settle_ms = 50,
->>>>>>> theirs
 };
 
 static const struct mtk_pmic_regs mt6397_regs = {

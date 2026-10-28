@@ -177,7 +177,6 @@
 };
 
 /*
-<<<<<<< ours
  * The ID pin of the shared blade description (GPIO57) reads 1 whatever is
  * in the socket, and the connector driver took that for an adapter: host
  * mode, no USB console. No connector here; the glue starts as a device and
@@ -186,14 +185,6 @@
 &usb0 {
 	dr_mode = "otg";
 	/delete-node/ connector;
-=======
- * The ID pin polarity in the shared blade description has not been verified
- * on B8000-H; with correct GPIO input readback it selects host mode and the
- * USB console disappears. Force device mode for bring-up.
- */
-&usb0 {
-	dr_mode = "peripheral";
->>>>>>> theirs
 };
 
 /*
@@ -206,7 +197,6 @@
 };
 
 /*
-<<<<<<< ours
  * Battery: B8000-H has no BQ27541 (vendor MTK_BQ27541_SUPPORT=no, nothing
  * answers at 0x55); the vendor computes the charge from MT6320 AUXADC
  * (docs/battery-mt6320-plan.md).  The charger's own capacity-less "battery"
@@ -231,20 +221,10 @@
 	accelerometer@11 {
 		mount-matrix = "0", "-1", "0", "1", "0", "0", "0", "0", "1";
 	};
-=======
- * The fuel gauge IRQ line (EINT16/GPIO16, marked "?" in the shared blade
- * description) is configured as an output on B8000-H and the IRQ request
- * fails, taking the whole gauge down. Poll it instead.
- */
-&bq27541 {
-	/delete-property/ interrupts;
-	/delete-property/ interrupt-parent;
->>>>>>> theirs
 };
 
 
 /*
-<<<<<<< ours
  * The arch timer gives each CPU its own tick (patch 0041); time and
  * sched_clock come from the MediaTek GPT (timer@10008000), because CNTPCT's
  * high word lags GPT6 until GPT6 is read. The GPT also stays the broadcast
@@ -252,14 +232,6 @@
  */
 &{/timer} {
 	status = "okay";
-=======
- * mediatek-gpt-tick: the arch timer comparator dies after the 32-bit counter
- * wrap (~330 s at 13 MHz). Tick, keep time and sched_clock from the MediaTek
- * GPT (timer@10008000) as the vendor 3.4 kernel does.
- */
-&{/timer} {
-	status = "disabled";
->>>>>>> theirs
 };
 
 /*
@@ -278,7 +250,6 @@
 
 /*
  * MT6628 Wi-Fi/BT/GPS/FM combo (vendor lenovo89_tb_x10_jb2 DCT/board.c):
-<<<<<<< ours
  * WMT/STP uses UART3; WMT owns PMU_EN and RST and enables the Wi-Fi function
  * before asking MSDC3 to rescan. Never give these GPIOs to an MMC regulator or
  * pwrseq: MMC power-off would reset the whole combo chip after WMT setup.
@@ -359,28 +330,6 @@
 		mediatek,off-stable-ms = <10>;
 		mediatek,reset-stable-ms = <30>;
 		mediatek,on-stable-ms = <100>;
-=======
- * Wi-Fi on SDIO MSDC3, PMU_EN = GPIO14, RST = GPIO225, WIFI EINT9 = GPIO128.
- * Vendor order: PMU_EN high, wait, RST high, wait. PMU_EN is modelled as the
- * SDIO slot supply, RST as the pwrseq reset. Never use vemc (eMMC rails) here.
- */
-/ {
-	mt6628_pmu_en: regulator-mt6628-pmu {
-		compatible = "regulator-fixed";
-		regulator-name = "mt6628-pmu-en";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		gpio = <&pio 14 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-		startup-delay-us = <100000>;
-	};
-
-	mt6628_pwrseq: pwrseq-mt6628 {
-		compatible = "mmc-pwrseq-simple";
-		reset-gpios = <&pio 225 GPIO_ACTIVE_LOW>;
-		post-power-on-delay-ms = <100>;
-		power-off-delay-us = <10000>;
->>>>>>> theirs
 	};
 };
 
@@ -390,7 +339,6 @@
 	/delete-property/ sd-uhs-sdr104;
 	/delete-property/ sd-uhs-sdr50;
 	/delete-property/ sd-uhs-ddr50;
-<<<<<<< ours
 	/delete-property/ mmc-pwrseq;
 	/* Chip power is owned by WMT; this only gives the host a 3.3 V OCR. */
 	vmmc-supply = <&mt6628_sdio_vmmc>;
@@ -610,10 +558,3 @@
 		};
 	};
 };
-=======
-	vmmc-supply = <&mt6628_pmu_en>;
-	mmc-pwrseq = <&mt6628_pwrseq>;
-	max-frequency = <25000000>;
-	keep-power-in-suspend;
-};
->>>>>>> theirs
