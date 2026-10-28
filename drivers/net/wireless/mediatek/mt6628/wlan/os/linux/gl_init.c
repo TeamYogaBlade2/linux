@@ -644,6 +644,8 @@
 #include "gl_cfg80211.h"
 #include "precomp.h"
 #include "mt6628.h"
+#include <linux/etherdevice.h>
+#include <linux/hex.h>
 
 /*******************************************************************************
 *                              C O N S T A N T S
@@ -726,6 +728,13 @@ static const struct kernel_param_ops mt6628_debug_ops = {
 
 module_param_cb(debug, &mt6628_debug_ops, &debug, 0644);
 MODULE_PARM_DESC(debug, "gen2 DBG class mask for every module (0..255)");
+
+/* Without the Android NVRAM file the driver builds the MAC from the
+ * timer tick, so it changed on every load and DHCP gave a new address
+ * each boot. A fixed MAC can be passed in instead. */
+static char *mac;
+module_param(mac, charp, 0444);
+MODULE_PARM_DESC(mac, "station MAC address, aa:bb:cc:dd:ee:ff");
 
 static bool wmt_on;
 
@@ -2213,6 +2222,16 @@ wlanNetCreate(
     prGlueInfo->eParamMediaStateIndicated = PARAM_MEDIA_STATE_DISCONNECTED;
     prGlueInfo->ePowerState = ParamDeviceStateD0;
     prGlueInfo->fgIsMacAddrOverride = FALSE;
+    if (mac && *mac) {
+        u8 addr[ETH_ALEN];
+
+        if (mac_pton(mac, addr) && is_valid_ether_addr(addr)) {
+            COPY_MAC_ADDR(prGlueInfo->rMacAddrOverride, addr);
+            prGlueInfo->fgIsMacAddrOverride = TRUE;
+        } else {
+            pr_warn("wlan_mt6628: ignoring invalid mac=%s\n", mac);
+        }
+    }
     prGlueInfo->fgIsRegistered = FALSE;
     prGlueInfo->prScanRequest = NULL;
 
