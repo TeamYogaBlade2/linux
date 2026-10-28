@@ -250,7 +250,11 @@
 	};
 };
 
-&uart3 {
+/*
+ * The combo UART is vendor UART3 = /dev/ttyMT2 = 0x11008000, i.e. upstream
+ * &uart2 (upstream labels count from 0).  Pins GPIO219/220 URXD3/UTXD3.
+ */
+&uart2 {
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mt6628_uart3_pins>;
@@ -259,8 +263,7 @@
 		compatible = "mediatek,mt6628-wmt";
 		pmu-en-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&pio 225 GPIO_ACTIVE_HIGH>;
-		interrupt-parent = <&pio>;
-		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
+		/* BGF EINT omitted: EINT8 resolves to pin 90 (modem BPI bus) and hangs the SoC. */
 		mediatek,mmc-host = <&mmc3>;
 		mediatek,operational-speed = <2000000>;
 		mediatek,rtc-stable-ms = <100>;
