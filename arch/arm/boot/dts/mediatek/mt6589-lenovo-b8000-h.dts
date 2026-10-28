@@ -352,6 +352,26 @@
 			panel@0 {
 				compatible = "lenovo,b8000-panel";
 				reg = <0>;
+
+				port {
+					panel_in: endpoint {
+						remote-endpoint = <&dsi0_out>;
+					};
+				};
+			};
+
+			/* mtk_dsi looks the panel up through the OF graph (port 1). */
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@1 {
+					reg = <1>;
+
+					dsi0_out: endpoint {
+						remote-endpoint = <&panel_in>;
+					};
+				};
 			};
 		};
 	};
