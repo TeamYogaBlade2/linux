@@ -319,6 +319,12 @@
 			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
 		};
 
+		/* LCD backlight: BLS PWM duty 0..255 (vendor cust_leds CUST_BLS_PWM). */
+		backlight: backlight {
+			compatible = "mediatek,mt6589-bls-backlight";
+			mediatek,bls = <&disp_bls>;
+		};
+
 		disp_mutex: mutex@14011000 {
 			compatible = "mediatek,mt6589-disp-mutex";
 			reg = <0x14011000 0x1000>;
@@ -352,6 +358,7 @@
 			panel@0 {
 				compatible = "lenovo,b8000-panel";
 				reg = <0>;
+				backlight = <&backlight>;
 
 				port {
 					panel_in: endpoint {
