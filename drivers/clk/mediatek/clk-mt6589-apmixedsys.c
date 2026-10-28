@@ -193,7 +193,11 @@ static const struct mtk_fixed_factor pll_divs[] = {
 
 	FACTOR(CLK_APMIXED_ISPPLL_208M, "isppll_208m", "isppll", 1, 8),
 
-	FACTOR(CLK_APMIXED_MSDCPLL_208M, "msdcpll_208m", "msdcpll", 1, 8),
+	/*
+	 * The MSDC source tap is VCO/8, taken before the /4 post divider
+	 * that "msdcpll" (390 MHz) already includes: msdcpll / 2.
+	 */
+	FACTOR(CLK_APMIXED_MSDCPLL_208M, "msdcpll_208m", "msdcpll", 1, 2),
 
 	FACTOR(CLK_APMIXED_TVDPLL_148P5M, "tvdpll_148p5m", "tvdpll", 1, 16),
 
