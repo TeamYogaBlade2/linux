@@ -1191,7 +1191,8 @@
 		};
 
 		timer: timer@10008000 {
-			compatible = "mediatek,mt6577-timer";
+			compatible = "mediatek,mt6589-timer",
+				     "mediatek,mt6577-timer";
 			reg = <0x10008000 0x80>;
 			interrupts = <GIC_SPI 113 IRQ_TYPE_LEVEL_LOW>;
 			clocks = <&system_clk>, <&rtc_clk>;
