@@ -47,6 +47,46 @@
 #define GPT_CNT_REG(val)        (0x08 + (0x10 * (val)))
 #define GPT_CMP_REG(val)        (0x0C + (0x10 * (val)))
 
+/*
+ * System counter assist.
+ *
+ * The SoC takes the high half of the generic timer's counter from GPT6's latched
+ * high word, and that latch only refreshes when something reads GPT6's low word.
+ * This driver uses GPT1 and GPT2 and never touches GPT6, so the upper half of the
+ * generic timer stopped advancing and the counter looked like it wrapped every
+ * 2^32 ticks - 5.5 minutes at 13 MHz - after which the system hung.
+ *
+ * Downstream calls this the syscnt assist (mt_gpt.c, syscnt_assist_handler): a
+ * GPT3 compare interrupt at 0xffffffff, whose handler reads GPT6 until its high
+ * word catches up. Polling GPT6 instead does the same job without a second
+ * interrupt: slowly while it is far from wrapping, quickly as it approaches.
+ */
+#define MTK_SYSCNT_GPT			6
+#define MTK_SYSCNT_NEAR_WRAP		0xf0000000u
+#define MTK_SYSCNT_NEAR_MS		10
+#define MTK_SYSCNT_FAR_MS		1000
+
+static struct timer_list mtk_syscnt_timer;
+static void __iomem *mtk_syscnt_cnt;
+static unsigned long mtk_syscnt_rate;
+
+static void mtk_syscnt_assist(struct timer_list *t)
+{
+	u32 cnt = readl(mtk_syscnt_cnt);
+	unsigned long delay;
+
+	if (cnt >= MTK_SYSCNT_NEAR_WRAP) {
+		delay = msecs_to_jiffies(MTK_SYSCNT_NEAR_MS);
+	} else {
+		u64 ns = div_u64((u64)(MTK_SYSCNT_NEAR_WRAP - cnt) * NSEC_PER_SEC,
+				 mtk_syscnt_rate);
+
+		delay = nsecs_to_jiffies(ns);
+	}
+
+	mod_timer(&mtk_syscnt_timer, jiffies + max(delay, 1UL));
+}
+
 /* system timer */
 #define SYST_BASE               (0x40)
 
@@ -319,6 +359,14 @@ static int __init mtk_gpt_init(struct device_node *node)
 	ret = timer_of_init(node, &to);
 	if (ret)
 		return ret;
+
+	if (of_device_is_compatible(node, "mediatek,mt6577-timer")) {
+		mtk_syscnt_rate = timer_of_rate(&to);
+		mtk_syscnt_cnt = timer_of_base(&to) + GPT_CNT_REG(MTK_SYSCNT_GPT);
+		timer_setup(&mtk_syscnt_timer, mtk_syscnt_assist, 0);
+		mod_timer(&mtk_syscnt_timer,
+			  jiffies + msecs_to_jiffies(MTK_SYSCNT_FAR_MS));
+	}
 
 	/* Configure clock source */
 	mtk_gpt_setup(&to, TIMER_CLK_SRC, GPT_CTRL_OP_FREERUN);
