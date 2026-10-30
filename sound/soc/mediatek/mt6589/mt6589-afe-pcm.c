@@ -166,8 +166,13 @@
 #define AFE_IRQ_MCU_STATUS_OWNED	(AFE_IRQ_MCU_STATUS_IRQ1 |	\
 					 AFE_IRQ_MCU_STATUS_IRQ2)
 #define AFE_IRQ_MCU_STATUS_LINE	(GENMASK(5, 0) | GENMASK(13, 8))
-#define AFE_IRQ_MCU_CLR_OWNED	AFE_IRQ_MCU_STATUS_OWNED
 #define AFE_IRQ_MCU_CLR_LINE	AFE_IRQ_MCU_STATUS_LINE
+/*
+ * AFE_IRQ_CLR bit 6: "clears the MCU IRQ for AFE while all IRQ statuses are
+ * 0".  The vendor ISR writes this, and only this, when a line arrives whose
+ * status reads back with no bits in [3:0] set (AudDrv_Kernel.c:846-857).
+ */
+#define AFE_IRQ_MCU_CLR_HANDSHAKE	BIT(6)
 #define AFE_IRQ_MCU_CNT1	0x03ac	/* IRQ1 MCU counter */
 #define AFE_IRQ_MCU_CNT2	0x03b0	/* IRQ2 MCU counter */
 
@@ -181,7 +186,10 @@
 #define AFE_I2S_CON1		0x0034
 #define AFE_I2S_CON1_BASE	0x00000008	/* I2S2_FMT: 0=EIAJ, 1=I2S; select I2S */
 #define AFE_I2S_CON1_RATE	GENMASK(11, 8)
+#define AFE_I2S_CON1_UPDATE_WORD GENMASK(28, 24)
 #define AFE_I2S_CON1_ON		BIT(0)
+/* Same value the capture path forces on AFE_I2S_CON2 (LDVT / vendor). */
+#define AFE_I2S_CON1_UPDATE_WORD_8	(8)
 #define AFE_I2S_CON2		0x0038
 #define AFE_I2S_CON2_BUFFER_UPDATE_WORD GENMASK(27, 24)
 #define AFE_I2S_CON2_RATE	GENMASK(11, 8)
@@ -549,6 +557,19 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	if (sparse_code < 0)
 		return -EINVAL;
 
+	/*
+	 * Re-seed the memif read pointer on every start.  hw_params() writes
+	 * it once, but prepare() runs again before each restart, and a
+	 * stopped stream leaves DL1_CUR wherever the memif left it.  Starting
+	 * a fresh stream from a stale cursor makes .pointer() report an
+	 * arbitrary offset into the new buffer, so ALSA's first period is
+	 * mis-counted.  The AFE has no DMA engine to reset it for us.
+	 */
+	ret = regmap_write(afe->regmap, AFE_DL1_CUR,
+			   lower_32_bits(runtime->dma_addr));
+	if (ret)
+		return ret;
+
 	/* IRQ1 rate + per-period frame count (enabled in the trigger) */
 	ret = regmap_update_bits(afe->regmap, AFE_IRQ_MCU_CON,
 				 AFE_IRQ_MCU_CON_IRQ1_RATE,
@@ -587,9 +608,17 @@ static int mt6589_afe_pcm_prepare(struct snd_soc_component *comp,
 	 * on the I2S DAC.  The rate itself goes to the DAC through
 	 * DAC_CON1, which is programmed further down.
 	 */
+	/*
+	 * AI2S_UPDATE_WORD lives in bits [28:24].  Leaving it at 0 is enough
+	 * for the period IRQ counter to run, but the DAC then hands the
+	 * PMIC an empty digital stream.  The vendor LDVT helper and the
+	 * capture-side CON2 path both use 8.
+	 */
 	ret = regmap_write(afe->regmap, AFE_I2S_CON1,
 			   AFE_I2S_CON1_BASE |
-			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code));
+			   FIELD_PREP(AFE_I2S_CON1_RATE, sparse_code) |
+			   FIELD_PREP(AFE_I2S_CON1_UPDATE_WORD,
+				      AFE_I2S_CON1_UPDATE_WORD_8));
 	if (ret)
 		return ret;
 
@@ -809,6 +838,12 @@ static int mt6589_afe_vul_prepare(struct snd_soc_component *comp,
 	 */
 	if (rate_code < 0)
 		return -EINVAL;
+
+	/* Re-seed the capture cursor for the same reason as DL1_CUR above. */
+	ret = regmap_write(afe->regmap, AFE_VUL_CUR,
+			   lower_32_bits(runtime->dma_addr));
+	if (ret)
+		return ret;
 
 	ret = regmap_update_bits(afe->regmap, AFE_DAC_CON1,
 				 AFE_DAC_CON1_VUL_RATE,
@@ -1070,12 +1105,32 @@ static irqreturn_t mt6589_afe_irq(int irq, void *dev_id)
 				    ret);
 
 	owned = status & AFE_IRQ_MCU_STATUS_OWNED;
-	if (!owned)
+	if (!owned) {
+		/*
+		 * The line asserted but no period bit is set.  Both references
+		 * treat this as "ack and stop", not as a period: downstream
+		 * tests `status & 0xf` and, when zero, writes bit 6 of
+		 * AFE_IRQ_CLR and returns (AudDrv_Kernel.c:839-858), and the
+		 * working mt6572-afe-pcm.c does the same with
+		 * AFE_IRQ_MCU_CLR_NOSTATUS (BIT(6)|BIT(1)|BIT(0)).
+		 *
+		 * Bit 6 is the "IRQ MCU clear while all IRQ statuses are 0"
+		 * handshake (data sheet p.2500); a handler that only clears
+		 * bits 0-5 / 8-13 leaves a line held in this state asserted
+		 * and re-enters forever.
+		 *
+		 * Reporting a period here instead is wrong and was tried: it
+		 * makes ALSA advance on an interrupt that carries no data.
+		 */
+		regmap_write(afe->regmap, AFE_IRQ_MCU_CLR,
+			     AFE_IRQ_MCU_CLR_HANDSHAKE);
 		return IRQ_HANDLED;
+	}
 
 	dl1 = READ_ONCE(afe->dl1_substream);
 	vul = READ_ONCE(afe->vul_substream);
 
+	/* Report the period for the direction whose counter fired. */
 	if ((owned & AFE_IRQ_MCU_STATUS_IRQ1) && dl1)
 		snd_pcm_period_elapsed(dl1);
 
