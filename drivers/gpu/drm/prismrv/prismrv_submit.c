@@ -40,18 +40,31 @@
 #define HWRTDATA_SIZE			496
 #define PRISMRV_CCB_DRAIN_TIMEOUT_MS	2000
 #define PRISMRV_MAX_SUBMIT_BOS		256
-/* uKernel service entry index per command type (userspace may only use TA) */
-static const unsigned int prismrv_hostkick_instr[PRISMRV_CMD_COUNT] = {
-	554,  /* TA */
-	523,  /* TRANSFER */
-	486,  /* 2D */
-	397,  /* POWER */
-	427,  /* CONTEXTSUSPEND */
-	75,   /* CLEANUP */
-	1115, /* GETMISCINFO */
-	1017, /* PROCESS_QUEUES */
-	0,    /* DATABREAKPOINT: not implemented in this uKernel */
-	1023, /* SETHWPERFSTATUS */
+/*
+ * HostKickAddr[]: the value the vendor driver stores in the CCB command's
+ * ui32ServiceAddress for each command type (sgxutils.c:
+ * psSGXCommand->ui32ServiceAddress = aui32HostKickAddr[eCmdType]).  The
+ * values come from the stock uKernel's own loader: the DEVINITPART2 capture
+ * carries {0x22a,0x20b,0x1e6,0x18d,0x1ab,0x25b,0x45b,0x3f9,0,0x3ff,0}.
+ * They are uKernel instruction INDICES and are passed through verbatim; an
+ * earlier revision turned them into UKERNEL_VADDR + index * 8, a conversion
+ * the stock uKernel never sees.  Index 5 (CLEANUP) was also entered as 75
+ * (the hex value 0x25b misread as decimal); instruction 75 is an unrelated
+ * routine, 0x25b (603) is the cleanup handler (it tests the cleanup type in
+ * r6).  0 = "not implemented by this uKernel".
+ */
+static const u32 prismrv_hostkick_addr[PRISMRV_CMD_COUNT] = {
+	0x22a,	/* TA */
+	0x20b,	/* TRANSFER */
+	0x1e6,	/* 2D */
+	0x18d,	/* POWER */
+	0x1ab,	/* CONTEXTSUSPEND */
+	0x25b,	/* CLEANUP */
+	0x45b,	/* GETMISCINFO */
+	0x3f9,	/* PROCESS_QUEUES */
+	0,	/* DATABREAKPOINT: not implemented */
+	0x3ff,	/* SETHWPERFSTATUS */
+	0,	/* FLUSHPDCACHE: not implemented (BRN 31620 only) */
 };
 
 #define PRISMRV_MAX_IN_FENCES		64
@@ -228,9 +241,7 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 	slot = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
 	cmd  = &pv->ccb->commands[slot];
 
-	cmd->service_address =
-		cpu_to_le32(PRISMRV_UKERNEL_VADDR +
-			    prismrv_hostkick_instr[type] * 8);
+	cmd->service_address = cpu_to_le32(prismrv_hostkick_addr[type]);
 	/* hand the pending BIF invalidations to the uKernel (vendor: ui32CacheControl) */
 	cmd->cache_control = cpu_to_le32(atomic_xchg(&pv->cache_control, 0));
 	memcpy(cmd->data, data, sizeof(cmd->data));

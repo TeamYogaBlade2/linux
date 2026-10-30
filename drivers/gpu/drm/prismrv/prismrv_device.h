@@ -62,7 +62,7 @@ struct prismrv_ccb {
 };
 
 /* HostKickAddr service entry instruction indices in the uKernel image
- * (analysis/ukernel/SERVICE_ROUTINES.md); service address = index * 8 */
+ * (analysis/ukernel/SERVICE_ROUTINES.md); the CCB service address is the raw index (prismrv_hostkick_addr) */
 enum prismrv_cmd_type {
 	PRISMRV_CMD_TA = 0,
 	PRISMRV_CMD_TRANSFER,
@@ -74,6 +74,7 @@ enum prismrv_cmd_type {
 	PRISMRV_CMD_PROCESS_QUEUES,
 	PRISMRV_CMD_DATABREAKPOINT,
 	PRISMRV_CMD_SETHWPERFSTATUS,
+	PRISMRV_CMD_FLUSHPDCACHE,
 	PRISMRV_CMD_COUNT
 };
 
