@@ -22,6 +22,7 @@
 #include <linux/firmware.h>
 #include <linux/dma-mapping.h>
 #include <linux/of.h>
+#include <linux/array_size.h>
 
 #include "prismrv_device.h"
 
@@ -122,6 +123,48 @@ static void prismrv_fw_check_placeholders(struct prismrv_device *pv,
 			 "uKernel has %u immediates whose upper bits are still 0xDEA (partially patched image)\n", partial);
 }
 
+/*
+ * Immediates the vendor loader writes as plain constants (libsrv_init
+ * PatchMovImm32 call sites; prismrv analysis/UKERNEL_IMMEDIATES.md section 5,
+ * VERIFIED from the loader's disassembly).  Sites that take the address of a
+ * loader-uploaded PDS/USE program are NOT here: they need those programs.
+ */
+static const struct { u16 pad; u16 idx; u32 imm; } prismrv_uk_const_patch[] = {
+	{ 0, 1190,  0x01001000 }, { 0, 1200,  0x00800900 }, { 0, 1216,  0x00000006 },
+	{ 0, 10023, 0x12022207 }, { 0, 10111, 0x2200e105 }, { 0, 10789, 0x02800900 },
+	{ 0, 11290, 0x0a028201 },
+};
+
+static u64 prismrv_mov_imm32_encode(u64 w, u32 imm)
+{
+	w &= ~(0x1fffffULL | (0x1fULL << 36) | (0x3fULL << 44));
+	return w | (imm & 0x1fffff) | ((u64)((imm >> 21) & 0x1f) << 36) |
+	       ((u64)((imm >> 26) & 0x3f) << 44);
+}
+
+static int prismrv_fw_patch_consts(struct prismrv_device *pv, void *data,
+				   size_t size)
+{
+	__le64 *w = data;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(prismrv_uk_const_patch); i++) {
+		u32 idx = prismrv_uk_const_patch[i].idx;
+		u64 v;
+
+		if ((idx + 1) * 8 > size)
+			return -EINVAL;
+		v = le64_to_cpu(w[idx]);
+		if ((v >> 56) != 0xfc || ((v >> 52) & 0xf) != 2) {
+			dev_err(pv->drm.dev, "uKernel instr %u is not a mov-imm32: wrong image\n", idx);
+			return -EINVAL;
+		}
+		w[idx] = cpu_to_le64(prismrv_mov_imm32_encode(v,
+					prismrv_uk_const_patch[i].imm));
+	}
+	return 0;
+}
+
 int prismrv_fw_load(struct prismrv_device *pv)
 {
 	char fw_ukernel[128];
@@ -155,8 +198,6 @@ int prismrv_fw_load(struct prismrv_device *pv)
 		return -EINVAL;
 	}
 
-	prismrv_fw_check_placeholders(pv, fw->data, fw->size);
-
 	pv->ukernel_size = fw->size;
 	pv->ukernel_cpu = dma_alloc_coherent(pv->drm.dev, fw->size,
 					     &pv->ukernel_dma, GFP_KERNEL);
@@ -165,7 +206,16 @@ int prismrv_fw_load(struct prismrv_device *pv)
 		return -ENOMEM;
 	}
 	memcpy(pv->ukernel_cpu, fw->data, fw->size);
+	ret = prismrv_fw_patch_consts(pv, pv->ukernel_cpu, fw->size);
+	if (!ret)
+		prismrv_fw_check_placeholders(pv, pv->ukernel_cpu, fw->size);
 	release_firmware(fw);
+	if (ret) {
+		dma_free_coherent(pv->drm.dev, pv->ukernel_size, pv->ukernel_cpu, pv->ukernel_dma);
+		pv->ukernel_cpu = NULL;
+		pv->ukernel_size = 0;
+		return ret;
+	}
 
 	dev_info(pv->drm.dev, "loaded uKernel image (%zu bytes) from %s\n",
 		 pv->ukernel_size, fw_ukernel);
