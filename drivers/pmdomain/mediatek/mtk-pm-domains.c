@@ -1250,6 +1250,12 @@ static int scpsys_probe(struct platform_device *pdev)
 		return PTR_ERR(scpsys->base);
 	}
 
+	/* PROJECT_CODE magic value and enable bit */
+	ret = regmap_write(scpsys->base, SPM_POWERON_CONFIG_SET,
+			   (SPM_PROJECT_CODE << 16) | BIT(0));
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to enable SPM\n");
+
 	if (of_find_property(np, "access-controllers", NULL))
 		ret = scpsys_get_bus_protection(dev, scpsys);
 	else
