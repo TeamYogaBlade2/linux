@@ -1,5 +1,22 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+config MTK_GDMA
+	tristate "MediaTek AP DMA General DMA controller support"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on RESET_CONTROLLER
+	select DMA_ENGINE
+	help
+	  Enable support for the AP DMA General DMA (G_DMA) engines found on
+	  MediaTek MT6589 SoCs.
+
+	  The AP DMA block holds eighteen engines, but only G_DMA0 and G_DMA1
+	  are generic; the rest are wired to HIF, IrDA, I2C and UART.  These
+	  two have no descriptor ring and no scatter-gather support: a
+	  transfer is programmed straight into the SRC/DST/LEN1/LEN2
+	  registers and completes through a single interrupt flag.
+
+	  If unsure, say N.
+
 config MTK_HSDMA
 	tristate "MediaTek High-Speed DMA controller support"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

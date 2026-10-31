@@ -11,7 +11,17 @@
 
 struct fh_pll_state {
 	void __iomem *base;
+	/* Channel is wired to an FHCTL channel ("clocks" of the fhctl node). */
 	u32 fh_enable;
+	/*
+	 * The FHCTL hop sequence is known to work on this channel, so
+	 * frequency changes go through the hardware rather than being
+	 * written straight into the PCW field.  Independent of @fh_enable:
+	 * being wired up to the FHCTL block does not mean the hop completes.
+	 * Set from mediatek,fhctl-hopping-enabled.
+	 */
+	u32 fh_capable;
+	/* Spread-spectrum modulation depth in percent; 0 disables SSC. */
 	u32 ssc_rate;
 };
 

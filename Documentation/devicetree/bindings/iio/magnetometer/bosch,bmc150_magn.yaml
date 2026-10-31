@@ -27,6 +27,7 @@ properties:
           - bosch,bmc156_magn
           - bosch,bmm150
           - bosch,bmm150_magn
+          - bosch,bmm050
       - items:
           - const: bosch,bmx055-magn
           - const: bosch,bmc150_magn

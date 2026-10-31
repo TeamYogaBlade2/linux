@@ -268,8 +268,19 @@ struct mt6320_comp_desc {
 		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE,	\
 	}
 
+/*
+ * ACCDET source select (TOP_CKCON2[14:13]).  The third entry used to name
+ * "top-accdet" - the clock being registered - which makes the clock its own
+ * parent whenever the register holds 2: __clk_init_parent() resolves the
+ * name after the clock is already in the provider's lookup table, so the
+ * entry resolves back to itself, and clk_core_prepare() then recurses into
+ * the same clock exactly once and returns.  The gate would be enabled
+ * without the tree ever accounting for the prepare.  Nothing selects index
+ * 2 deliberately, so the name is simply dropped: the field is 2 bits wide
+ * and writing 3 is not a documented source either.
+ */
 static const char * const accdet_parents[] = {
-	"rtc32k", "pmu12m", "top-accdet", "aud26m",
+	"rtc32k", "pmu12m", "aud26m",
 };
 static const char * const fgadc_ana_parents[] = {
 	"rtc32k", "aud26m_div64",
@@ -303,7 +314,7 @@ static const struct mt6320_comp_desc mt6320_composites[] = {
 	COMP_MUX(MT6320_TOPCKPDN_ACCDET_CK, "top-accdet",
 		 accdet_parents, ARRAY_SIZE(accdet_parents),
 		 MT6320_TOP_CKPDN, 14,
-		 MT6320_TOP_CKCON1, 13, 2),
+		 MT6320_TOP_CKCON2, 13, 2),
 
 	COMP_MUX(MT6320_TOPCKPDN2_FQMTR, "top2-fqmtr",
 		 fgmtr_parents, ARRAY_SIZE(fgmtr_parents),

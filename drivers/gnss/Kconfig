@@ -16,6 +16,17 @@ if GNSS
 config GNSS_SERIAL
 	tristate
 
+config GNSS_MT6628
+	tristate "MediaTek MT6628 GNSS receiver support"
+	depends on MTK_MT6628_STP
+	help
+	  Say Y here if you have a MediaTek MT6628 combo chip and want to
+	  use its GNSS receiver. The receiver uses the shared BGF/STP
+	  control channel over the selected UART or SDIO transport.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called gnss-mt6628.
+
 config GNSS_MTK_SERIAL
 	tristate "Mediatek GNSS receiver support"
 	depends on SERIAL_DEV_BUS

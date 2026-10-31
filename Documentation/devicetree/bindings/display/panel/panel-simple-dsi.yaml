@@ -31,7 +31,7 @@ properties:
 
         # AU Optronics Corporation 8.0" WUXGA TFT LCD panel
       - auo,b080uan01
-        # BOE Technology 10.1" WXGA panel with Himax HX8896-A01 TCON
+        # BOE Technology 10.1" WXGA panel with Himax HX8896-A01 TCON (BP101WX1-207)
       - boe,hx8896-a01-panel
         # Boe Corporation 8.0" WUXGA TFT LCD panel
       - boe,tv080wum-nl0

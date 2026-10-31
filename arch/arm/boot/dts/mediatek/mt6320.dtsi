@@ -28,7 +28,7 @@
 			#power-domain-cells = <0>;
 		};
 
-		rtc {
+		mt6320_rtc: rtc {
 			compatible = "mediatek,mt6320-rtc",
 				     "mediatek,mt6397-rtc";
 		};
@@ -53,7 +53,7 @@
 			#clock-cells = <1>;
 		};
 
-		audio-codec {
+		mt6320_codec: audio-codec {
 			compatible = "mediatek,mt6320-sound";
 			clocks = <&mt6320clock MT6320_TOPCKPDN_AUD_26M>;
 			clock-names = "top-aud26m";
@@ -68,6 +68,8 @@
 		mt6320_adc: adc {
 			compatible = "mediatek,mt6320-auxadc";
 			#io-channel-cells = <1>;
+			clocks = <&mt6320clock MT6320_TOPCKPDN_AUXADC_CK>;
+			clock-names = "auxadc";
 		};
 
 		/*
@@ -323,6 +325,17 @@
 				regulator-enable-ramp-delay = <216>;
 			};
 		};
+	};
+};
+
+/ {
+	/*
+	 * Expose the PMIC's junction temperature AUXADC channel
+	 * through the generic IIO hwmon bridge.
+	 */
+	pmic-temp {
+		compatible = "iio-hwmon";
+		io-channels = <&mt6320_adc 4>;
 	};
 };
 

@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/panel/lenovo,b6000-panels.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Lenovo YOGA Tablet 8 (B6000) DSI panels
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+description: |
+  The Lenovo YOGA Tablet 8 (B6000) is fitted with one of two 800x1280
+  panels, distinguished by the compatible string:
+
+    nt35521_cmi_080     Novatek NT35521
+    s6d7aa0x04_cpt_080  Samsung S6D7AA0
+
+  Neither can be described as a "simple panel": both need a manufacturer
+  command init sequence before they will display anything.
+
+allOf:
+  - $ref: panel-common.yaml#
+
+properties:
+  compatible:
+    enum:
+      - lenovo,b6000-nt35521-cmi
+      - lenovo,b6000-s6d7aa0x04-cpt
+
+  reg:
+    maxItems: 1
+
+  vdd-supply:
+    description: Main panel supply.
+  vddi-supply:
+    description: I/O supply.
+
+  backlight: true
+  port: true
+  reset-gpios: true
+
+  enable-gpios:
+    description: |
+      Optional enable line driven high before the reset sequence.  The
+      vendor's lcd_power_en() helper was not recovered, so this is modelled
+      from the board wiring rather than copied from it.
+
+required:
+  - compatible
+  - reg
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    dsi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        panel@0 {
+            compatible = "lenovo,b6000-nt35521-cmi";
+            reg = <0>;
+
+            vdd-supply = <&panel_vdd>;
+            vddi-supply = <&panel_vddi>;
+            reset-gpios = <&pio 137 GPIO_ACTIVE_LOW>;
+
+            port {
+                panel_in: endpoint {
+                    remote-endpoint = <&dsi_out>;
+                };
+            };
+        };
+    };
+...

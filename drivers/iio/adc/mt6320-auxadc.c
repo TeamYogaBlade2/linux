@@ -11,6 +11,7 @@
 #include <linux/array_size.h>
 #include <linux/bitfield.h>
 #include <linux/bits.h>
+#include <linux/clk.h>
 #include <linux/cleanup.h>
 #include <linux/delay.h>
 #include <linux/iio/iio.h>
@@ -42,7 +43,17 @@
 #define MT6320_AUXADC_AVG_NUM_VALUE	0x3
 #define MT6320_AUXADC_SPL_NUM_TEMP	0x1e
 
-#define MT6320_ACCDET_AUXADC_ENABLE	0x10b0
+/*
+ * Headset-key ADC switch.  This board is wired for the stock driver's
+ * ACCDET_28V_MODE, where the switch is a plain enable bit in
+ * AUDENCSPARE_CON0 and the word to write is 0x01; the 0x10b0/0x1090 pair
+ * belongs to the 1.9 V encoding of ACCDET_RSV (ACCDET_CON0), which that
+ * build does not use.  Both come from downstream accdet_auxadc_switch(),
+ * whose ACCDET_28V_MODE branch writes 0x01 to that address; the vendor
+ * accdet_custom_def.h for this board is the file that selects that mode.
+ */
+#define MT6320_AUDENCSPARE_CON0		0x0732
+#define MT6320_ACCDET_28V_SWITCH_ON	0x0001
 
 #define MT6320_AUXADC_FULL_SCALE_MV	1200
 #define MT6320_AUXADC_RESOLUTION	1024
@@ -76,7 +87,79 @@ static const struct iio_chan_spec mt6320_auxadc_channels[] = {
 struct mt6320_auxadc {
 	struct regmap *regmap;
 	struct mutex lock;
+	/*
+	 * AUXADC clock gate.  See mt6320_auxadc_probe(): without it the
+	 * conversion never completes and every read times out.
+	 */
+	struct clk *clk;
 };
+
+/*
+ * Register contents saved before mt6320_auxadc_prepare() programs anything,
+ * so the read can put back every bit it changed.
+ *
+ * The downstream driver hard-codes the post-read values instead -
+ * upmu_set_rg_spl_num(0x1), upmu_set_rg_buf_pwd_b(0),
+ * upmu_set_rg_buf_pwd_on(0), upmu_set_baton_tdet_en(0),
+ * upmu_set_rg_vbuf_calen(0) and accdet_auxadc_switch(0)
+ * (mediatek/platform/mt6589/kernel/drivers/power/pmic_mt6320.c:475-499) -
+ * which is only correct because there it is the sole owner of these registers.
+ * On mainline they are shared: the IIO AUXADC and the MT6320 codec both reach
+ * AUXADC_CON0, so restoring a saved value is both safer here and free of
+ * invented constants.
+ *
+ * The one case that really bites is the ISENSE mux in AUXADC_CON14: setting
+ * it is what routes a charge-current read, and with nothing to clear it again
+ * the next "battery voltage" read silently returns charge current instead.
+ */
+#define MT6320_AUXADC_MAX_SAVED	5
+
+struct mt6320_auxadc_saved {
+	struct {
+		unsigned int reg;
+		unsigned int val;
+	} regs[MT6320_AUXADC_MAX_SAVED];
+	unsigned int nr;
+};
+
+static int mt6320_auxadc_save(struct mt6320_auxadc_saved *saved,
+			      struct regmap *map, unsigned int reg)
+{
+	unsigned int i;
+
+	/* A register only needs saving once, before its first write. */
+	for (i = 0; i < saved->nr; i++)
+		if (saved->regs[i].reg == reg)
+			return 0;
+
+	if (saved->nr == MT6320_AUXADC_MAX_SAVED)
+		return -EOVERFLOW;
+
+	if (regmap_read(map, reg, &saved->regs[saved->nr].val))
+		return -EIO;
+
+	saved->nr++;
+	return 0;
+}
+
+static int mt6320_auxadc_restore(struct mt6320_auxadc_saved *saved,
+				 struct regmap *map)
+{
+	unsigned int i;
+	int first_err = 0;
+	int ret;
+
+	/* Unwind in reverse, so the last thing changed is undone first. */
+	for (i = saved->nr; i > 0; i--) {
+		ret = regmap_write(map, saved->regs[i - 1].reg,
+				   saved->regs[i - 1].val);
+		if (ret && !first_err)
+			first_err = ret;
+	}
+
+	saved->nr = 0;
+	return first_err;
+}
 
 static unsigned int mt6320_auxadc_hw_channel(unsigned int channel)
 {
@@ -99,8 +182,18 @@ static unsigned int mt6320_auxadc_result_reg(unsigned int channel)
 	return MT6320_AUXADC_ADC11 + channel * 2;
 }
 
+/*
+ * Program the mux and the per-channel setup for one read.
+ *
+ * Every register written here is saved into "saved" immediately before its
+ * first modification, so mt6320_auxadc_restore() can put it back: this driver
+ * shares these registers with the MT6320 codec, and leaving the ISENSE mux or
+ * the VBUF/buffer-power state asserted would silently corrupt later reads
+ * from either side.
+ */
 static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 				 unsigned int channel,
+				 struct mt6320_auxadc_saved *saved,
 				 unsigned int *hw_channel)
 {
 	struct regmap *map = auxadc->regmap;
@@ -108,7 +201,19 @@ static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 
 	*hw_channel = mt6320_auxadc_hw_channel(channel);
 
+	ret = mt6320_auxadc_save(saved, map, MT6320_AUXADC_CON1);
+	if (ret)
+		return ret;
+
+	ret = mt6320_auxadc_save(saved, map, MT6320_AUXADC_CON0);
+	if (ret)
+		return ret;
+
 	if (channel == MT6320_AUXADC_ISENSE) {
+		ret = mt6320_auxadc_save(saved, map, MT6320_AUXADC_CON14);
+		if (ret)
+			return ret;
+
 		ret = regmap_set_bits(map, MT6320_AUXADC_CON14,
 				      BIT(2) | BIT(0));
 		if (ret)
@@ -131,6 +236,10 @@ static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 
 	switch (channel) {
 	case MT6320_AUXADC_BAT_TEMP:
+		ret = mt6320_auxadc_save(saved, map, MT6320_CHR_CON7);
+		if (ret)
+			return ret;
+
 		ret = regmap_set_bits(map, MT6320_AUXADC_CON0,
 				      MT6320_AUXADC_BUF_PWD_ON |
 				      MT6320_AUXADC_BUF_PWD_B);
@@ -151,6 +260,10 @@ static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 		 * enable VBUF, disable bypass, select the PMIC-temperature
 		 * calibration path and increase the sample count.
 		 */
+		ret = mt6320_auxadc_save(saved, map, MT6320_AUXADC_CON12);
+		if (ret)
+			return ret;
+
 		ret = regmap_update_bits(map, MT6320_AUXADC_CON12,
 					 MT6320_AUXADC_VBUF_EN |
 					 MT6320_AUXADC_VBUF_BYP |
@@ -170,8 +283,12 @@ static int mt6320_auxadc_prepare(struct mt6320_auxadc *auxadc,
 		break;
 
 	case MT6320_AUXADC_ACCDET:
-		ret = regmap_write(map, MT6320_ACCDET_CON0,
-				   MT6320_ACCDET_AUXADC_ENABLE);
+		ret = mt6320_auxadc_save(saved, map, MT6320_AUDENCSPARE_CON0);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(map, MT6320_AUDENCSPARE_CON0,
+				   MT6320_ACCDET_28V_SWITCH_ON);
 		if (ret)
 			return ret;
 		break;
@@ -186,6 +303,7 @@ static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
 {
 	struct mt6320_auxadc *auxadc = iio_priv(indio_dev);
 	struct regmap *map = auxadc->regmap;
+	struct mt6320_auxadc_saved saved = {};
 	unsigned int hw_channel;
 	unsigned int status_reg;
 	unsigned int result_reg;
@@ -212,9 +330,16 @@ static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
 
 	guard(mutex)(&auxadc->lock);
 
-	ret = mt6320_auxadc_prepare(auxadc, chan->channel, &hw_channel);
-	if (ret)
+	ret = mt6320_auxadc_prepare(auxadc, chan->channel, &saved,
+				    &hw_channel);
+	if (ret) {
+		/* prepare() may fail after saving some registers already. */
+		if (mt6320_auxadc_restore(&saved, map))
+			dev_err_ratelimited(&indio_dev->dev,
+					    "failed to restore AUXADC state: %d\n",
+					    ret);
 		return ret;
+	}
 
 	status_reg = MT6320_AUXADC_ADC0 + hw_channel * 2;
 	result_reg = mt6320_auxadc_result_reg(hw_channel);
@@ -231,12 +356,12 @@ static int mt6320_auxadc_read_raw(struct iio_dev *indio_dev,
 	ret = regmap_clear_bits(map, MT6320_AUXADC_CON1,
 				MT6320_AUXADC_START);
 	if (ret)
-		return ret;
+		goto stop;
 
 	ret = regmap_set_bits(map, MT6320_AUXADC_CON1,
 			      MT6320_AUXADC_START);
 	if (ret)
-		return ret;
+		goto stop;
 
 	fsleep(50);
 
@@ -257,9 +382,18 @@ stop:
 	 * Unlike the downstream implementation, clear START when the
 	 * conversion is finished so a failed read cannot leave the
 	 * conversion request asserted indefinitely.
+	 *
+	 * Then put back every register prepare() touched, so the read
+	 * leaves no state behind: without this an ISENSE read would leave
+	 * the charge-current mux selected and the next battery-voltage
+	 * read would return charge current instead.  This runs on every
+	 * exit path, including the timeout above.
 	 */
 	if (regmap_clear_bits(map, MT6320_AUXADC_CON1,
 			      MT6320_AUXADC_START) && !ret)
+		ret = -EIO;
+
+	if (mt6320_auxadc_restore(&saved, map) && !ret)
 		ret = -EIO;
 
 	if (ret)
@@ -291,6 +425,28 @@ static int mt6320_auxadc_probe(struct platform_device *pdev)
 	auxadc = iio_priv(iio);
 	auxadc->regmap = regmap;
 	mutex_init(&auxadc->lock);
+
+	/*
+	 * The converter runs off the PMIC's own AUXADC clock, gated by
+	 * TOP_CKPDN[13].  Nothing else in the kernel claims it - the gate is
+	 * exposed by clk-mt6320.c as "top-auxadc" and no consumer asks for it -
+	 * so it is left at whatever the bootloader programmed.  When it is off,
+	 * START asserts, the ready bit in AUXADC_ADCn.bit15 never rises, and
+	 * every read burns its full poll budget and returns -ETIMEDOUT.
+	 *
+	 * That is what made a temperature read look like a hang: the iio-hwmon
+	 * bridge polls the PMIC junction-temperature channel from the thermal
+	 * core's workqueue, and each sample spent the whole timeout.
+	 *
+	 * Take the gate here and leave it enabled for the life of the device
+	 * rather than around each conversion: the PMIC AUXADC is also read by
+	 * the fuel gauge and the headset-key path, a conversion is only tens of
+	 * microseconds, and the gate is a clock-enable bit, not a power domain.
+	 */
+	auxadc->clk = devm_clk_get_optional_enabled(dev, "auxadc");
+	if (IS_ERR(auxadc->clk))
+		return dev_err_probe(dev, PTR_ERR(auxadc->clk),
+				     "failed to enable AUXADC clock\n");
 
 	iio->name = "mt6320-auxadc";
 	iio->info = &mt6320_auxadc_iio_info;

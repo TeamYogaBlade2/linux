@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
+ */
+
+#include "mt6589-lenovo-b6000.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 8 (B6000)";
+	compatible = "lenovo,b6000", "mediatek,mt6589";
+};
