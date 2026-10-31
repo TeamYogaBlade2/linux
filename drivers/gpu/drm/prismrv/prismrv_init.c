@@ -261,22 +261,14 @@ int prismrv_hw_init(struct prismrv_device *pv)
 	if (ret)
 		goto out_mmu;
 
-	/* upload the uKernel into GPU address space */
-	ret = prismrv_mmu_map(pv, PRISMRV_UKERNEL_VADDR,
-			      pv->ukernel_dma, pv->ukernel_size);
+	/*
+	 * Restore the uKernel, its PDS/USE programs and all kernel data
+	 * objects (CCB, HostCtl, ...) from the firmware container and map
+	 * them at the VAs the vendor loader patched into them.
+	 */
+	ret = prismrv_fw_map_objects(pv);
 	if (ret)
 		goto out_mmu;
-
-	/* shared HostCtl block: allocate once, reuse across hw_init calls */
-	if (!pv->hostctl) {
-		pv->hostctl = dma_alloc_coherent(pv->drm.dev,
-						 sizeof(*pv->hostctl),
-						 &pv->hostctl_dma, GFP_KERNEL);
-		if (!pv->hostctl) {
-			ret = -ENOMEM;
-			goto out_mmu;
-		}
-	}
 
 	ret = prismrv_ccb_init(pv);
 	if (ret)
@@ -344,11 +336,7 @@ out_hostctl:
 		prismrv_hw_irq_quiesce(pv);
 		quiesced = true;
 	}
-	if (pv->hostctl) {
-		dma_free_coherent(pv->drm.dev, sizeof(*pv->hostctl),
-				  pv->hostctl, pv->hostctl_dma);
-		pv->hostctl = NULL;
-	}
+	pv->hostctl = NULL;
 out_mmu:
 	if (!quiesced) {
 		prismrv_hw_irq_quiesce(pv);
@@ -439,12 +427,7 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	}
 
 	prismrv_ccb_fini(pv);
-
-	if (pv->hostctl) {
-		dma_free_coherent(pv->drm.dev, sizeof(*pv->hostctl),
-				  pv->hostctl, pv->hostctl_dma);
-		pv->hostctl = NULL;
-	}
+	pv->hostctl = NULL;	/* the object itself belongs to the fw container */
 
 	prismrv_errata_release(pv);
 	for (i = 0; i < PRISMRV_ERRATA_BUF_COUNT; i++)
@@ -457,8 +440,8 @@ void prismrv_hw_fini(struct prismrv_device *pv)
 	 * expensive (filesystem I/O) and the binary does not change across
 	 * runtime suspend/resume or GPU recovery cycles.  Freeing and
 	 * reloading it in hw_fini/hw_init would:
-	 *  1. Cause hw_init() to call prismrv_mmu_map(pv->ukernel_dma) on
-	 *     a DMA address that was just freed — mapping freed memory into
+	 *  1. Cause hw_init() to call prismrv_fw_map_objects() on
+	 *     DMA buffers that were just freed — mapping freed memory into
 	 *     the GPU MMU and potentially causing memory corruption.
 	 *  2. Make every recovery cycle hit the filesystem unnecessarily.
 	 *

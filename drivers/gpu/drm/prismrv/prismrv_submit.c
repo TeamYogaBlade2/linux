@@ -89,7 +89,16 @@ const struct dma_fence_ops prismrv_fence_ops = {
 
 int prismrv_ccb_init(struct prismrv_device *pv)
 {
+	struct prismrv_uk_obj *cmds = prismrv_uk_find(pv, PRISMRV_UKR_CCB);
+	struct prismrv_uk_obj *ctl = prismrv_uk_find(pv, PRISMRV_UKR_CCBCTL);
+	struct prismrv_uk_obj *hc = prismrv_uk_find(pv, PRISMRV_UKR_HOSTCTL);
 	int ret;
+
+	if (!cmds || !ctl || !hc ||
+	    cmds->size < 256 * sizeof(struct prismrv_ccb_cmd) ||
+	    ctl->size < sizeof(struct prismrv_ccb_ctl) ||
+	    hc->size < sizeof(*pv->hostctl))
+		return -ENODEV;
 
 	spin_lock_init(&pv->ccb_lock);
 	/* a fresh CCB ring restarts the 32-bit command counters */
@@ -98,69 +107,44 @@ int prismrv_ccb_init(struct prismrv_device *pv)
 	pv->ccb_last_read = 0;
 	pv->last_progress = jiffies;
 
-	if (pv->ccb) {
-		memset(pv->ccb, 0, sizeof(*pv->ccb));
-		wmb();
-		return 0;
-	}
+	/*
+	 * CCB, CCBCtl and HostCtl are loader-provided kernel objects: the
+	 * vendor loader allocates them separately and the uKernel was patched
+	 * with their addresses.  They were (re)mapped and restored from the
+	 * firmware container by prismrv_fw_map_objects().
+	 */
+	pv->hostctl = hc->cpu;
+	pv->ccb_ctl = ctl->cpu;
+	pv->ccb = cmds->cpu;
+	memset(pv->ccb, 0, 256 * sizeof(struct prismrv_ccb_cmd));
+	memset(pv->ccb_ctl, 0, sizeof(*pv->ccb_ctl));
+	wmb();
 
-	pv->ccb = dma_alloc_coherent(pv->drm.dev, sizeof(*pv->ccb),
-				     &pv->ccb_dma, GFP_KERNEL);
-	if (!pv->ccb)
-		return -ENOMEM;
-	memset(pv->ccb, 0, sizeof(*pv->ccb));
-
-	pv->hwrt = dma_alloc_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE,
-				      &pv->hwrt_dma, GFP_KERNEL);
 	if (!pv->hwrt) {
-		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
-				  pv->ccb_dma);
-		pv->ccb = NULL;
-		return -ENOMEM;
+		pv->hwrt = dma_alloc_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE,
+					      &pv->hwrt_dma, GFP_KERNEL);
+		if (!pv->hwrt)
+			goto err_nomem;
 	}
-
-	ret = prismrv_mmu_map(pv, PRISMRV_HOSTCTL_VADDR,
-			      pv->hostctl_dma, sizeof(*pv->hostctl));
-	if (ret)
-		goto err_mmu_hostctl;
-
-	ret = prismrv_mmu_map(pv, PRISMRV_CCB_VADDR,
-			      pv->ccb_dma, sizeof(*pv->ccb));
-	if (ret)
-		goto err_mmu_ccb;
 
 	ret = prismrv_mmu_map(pv, PRISMRV_HWRTDATA_VADDR,
 			      pv->hwrt_dma, 2 * HWRTDATA_SIZE);
 	if (ret)
-		goto err_mmu_hwrt;
-
+		return ret;
 	return 0;
 
-err_mmu_hwrt:
-	prismrv_mmu_unmap(pv, PRISMRV_CCB_VADDR, sizeof(*pv->ccb));
-err_mmu_ccb:
-	prismrv_mmu_unmap(pv, PRISMRV_HOSTCTL_VADDR, sizeof(*pv->hostctl));
-err_mmu_hostctl:
-	if (pv->hwrt) {
-		dma_free_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE, pv->hwrt,
-				  pv->hwrt_dma);
-		pv->hwrt = NULL;
-	}
-	if (pv->ccb) {
-		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
-				  pv->ccb_dma);
-		pv->ccb = NULL;
-	}
-	return ret;
+err_nomem:
+	pv->ccb = NULL;
+	pv->ccb_ctl = NULL;
+	pv->hostctl = NULL;
+	return -ENOMEM;
 }
 
 void prismrv_ccb_fini(struct prismrv_device *pv)
 {
-	if (pv->ccb) {
-		dma_free_coherent(pv->drm.dev, sizeof(*pv->ccb), pv->ccb,
-				  pv->ccb_dma);
-		pv->ccb = NULL;
-	}
+	/* the CCB objects belong to the firmware container: only drop views */
+	pv->ccb = NULL;
+	pv->ccb_ctl = NULL;
 	if (pv->hwrt) {
 		dma_free_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE, pv->hwrt,
 				  pv->hwrt_dma);
@@ -238,8 +222,8 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 		return -EBUSY;
 	}
 
-	slot = le32_to_cpu(READ_ONCE(pv->ccb->write_offset)) & 255;
-	cmd  = &pv->ccb->commands[slot];
+	slot = le32_to_cpu(READ_ONCE(pv->ccb_ctl->write_offset)) & 255;
+	cmd  = &pv->ccb[slot];
 
 	cmd->service_address = cpu_to_le32(prismrv_hostkick_addr[type]);
 	/* hand the pending BIF invalidations to the uKernel (vendor: ui32CacheControl) */
@@ -281,7 +265,7 @@ static int prismrv_ccb_schedule(struct prismrv_device *pv,
 		WRITE_ONCE(pv->last_progress, jiffies);
 
 	/* Step 4: now publish — GPU may start executing after this */
-	WRITE_ONCE(pv->ccb->write_offset, cpu_to_le32((slot + 1) & 255));
+	WRITE_ONCE(pv->ccb_ctl->write_offset, cpu_to_le32((slot + 1) & 255));
 
 	spin_unlock(&pv->ccb_lock);
 

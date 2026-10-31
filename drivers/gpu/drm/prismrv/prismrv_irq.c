@@ -97,7 +97,7 @@ void prismrv_request_recovery(struct prismrv_device *pv)
 
 bool prismrv_ccb_sync_locked(struct prismrv_device *pv)
 {
-	u8 read_off = le32_to_cpu(READ_ONCE(pv->ccb->read_offset)) & 255;
+	u8 read_off = le32_to_cpu(READ_ONCE(pv->ccb_ctl->read_offset)) & 255;
 	u8 delta = read_off - pv->ccb_last_read;
 
 	pv->ccb_last_read = read_off;

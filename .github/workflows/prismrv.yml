@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   kbuild-intree:
-    name: in-tree build (lenovo-blade_defconfig)
+    name: in-tree build of drivers/gpu/drm/prismrv (lenovo-blade_defconfig)
     runs-on: ubuntu-24.04
 
     steps:
@@ -61,17 +61,19 @@ jobs:
             exit 1
           }
 
-      - name: Build kernel + driver (clang cross)
+      - name: Build the prismrv driver only (clang cross)
         run: |
+          # Only the prismrv directory is compiled: the full kernel adds
+          # ~30 min and nothing the driver depends on (headers and
+          # generated files come from modules_prepare).
           # set -o pipefail: make the pipeline fail if 'make' fails.
-          # Without this, 'make ... | tee build.log' returns the exit
-          # code of 'tee' (always 0), hiding a real build failure and
-          # producing a false-green CI result.
           set -o pipefail
-          make ARCH=arm \
-               CROSS_COMPILE=arm-linux-gnueabihf- \
-               LLVM=1 LLVM_IAS=1 \
-               -j$(nproc) \
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+               LLVM=1 LLVM_IAS=1 -j$(nproc) modules_prepare \
+               2>&1 | tee prepare.log
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+               LLVM=1 LLVM_IAS=1 -j$(nproc) \
+               drivers/gpu/drm/prismrv/ \
                2>&1 | tee build.log
           # Fail on any compiler warning emitted for prismrv sources
           if grep -E 'drivers/gpu/drm/prismrv/.*warning:' build.log; then

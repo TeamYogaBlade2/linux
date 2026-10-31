@@ -7,6 +7,7 @@
 
 #include <linux/build_bug.h>
 #include <linux/clk.h>
+#include <linux/firmware.h>
 #include <linux/stddef.h>
 #include <linux/platform_device.h>
 #include <linux/devfreq.h>
@@ -29,20 +30,55 @@
 #define PRISMRV_CORE_SGX544	0x0144
 #define PRISMRV_CORE_SGX545	0x0145
 
-/* uKernel upload address inside GPU virtual space */
-#define PRISMRV_UKERNEL_VADDR	0x0c000000u
-/* the stock image is ~105 KiB; leave room for growth, stay below 1 MiB */
-#define PRISMRV_UKERNEL_MAX_SIZE	(1024u * 1024u)
-
 /*
- * Fixed GPU-VA layout for uKernel shared structures.  The base addresses
- * match the values the vendor loader patches into the uKernel image
- * (DEADBEEF slot table): each slot selects the heap base the service
- * routines operate on.
+ * The uKernel and every device object the vendor loader (libsrv_init
+ * SetupuKernel) creates are described by a "PRVUKFW1" firmware container
+ * (mainline-tools/gen_ukernel_fw.py in the prismrv repo): the loader is run
+ * once, offline, against the real SGX544 heap map, so each object arrives
+ * with its final GPU VA and fully patched contents.  The kernel only maps
+ * and copies them; it has no uKernel patch logic of its own.
  */
-#define PRISMRV_HOSTCTL_VADDR	0x00101000u	/* slot 0x0d */
-#define PRISMRV_CCB_VADDR	0x00400000u	/* slot 0x4d */
-#define PRISMRV_HWRTDATA_VADDR	0x00a00000u	/* slot 0xad (TA), 3D follows */
+#define PRISMRV_UKFW_MAGIC	"PRVUKFW1"
+#define PRISMRV_UKFW_MAX_OBJS	64
+
+enum prismrv_uk_role {
+	PRISMRV_UKR_CCB		= 1,	/* 256 x struct prismrv_ccb_cmd */
+	PRISMRV_UKR_CCBCTL	= 2,	/* struct prismrv_ccb_ctl */
+	PRISMRV_UKR_EVENTKICKER	= 3,
+	PRISMRV_UKR_HOSTCTL	= 4,
+	PRISMRV_UKR_TA3DCTL	= 5,
+	PRISMRV_UKR_PTLAWB	= 6,
+	PRISMRV_UKR_MISC	= 7,
+	PRISMRV_UKR_EDMSTATUS	= 8,
+	PRISMRV_UKR_UKERNEL	= 16,	/* master part of the stock uKernel */
+};
+
+struct prismrv_ukfw_hdr {
+	char	magic[8];
+	__le32	version;
+	__le32	nobj;
+} __packed;
+
+struct prismrv_ukfw_obj {
+	__le32	heap_id;
+	__le32	attr;
+	__le32	va;
+	__le32	size;
+	__le32	data_off;
+	__le32	role;
+} __packed;
+
+struct prismrv_uk_obj {
+	u32		va;
+	u32		size;
+	u32		role;
+	u32		data_off;
+	void		*cpu;
+	dma_addr_t	dma;
+};
+
+/* GPU VA of the 2 x HWRTData scratch area (not part of the loader output) */
+#define PRISMRV_HWRTDATA_VADDR	0x00a00000u
 
 /* ui32CacheControl bits of a CCB command (SGXMKIF_CC_INVAL_BIF_*) */
 #define PRISMRV_CC_INVAL_BIF_PT	BIT(0)	/* page-table cache */
@@ -55,8 +91,7 @@ struct prismrv_ccb_cmd {
 	__le32 data[6];
 } __packed;
 
-struct prismrv_ccb {
-	struct prismrv_ccb_cmd commands[256];
+struct prismrv_ccb_ctl {
 	__le32 write_offset;	/* advanced by the kernel */
 	__le32 read_offset;	/* consumed by the uKernel */
 };
@@ -260,10 +295,10 @@ struct prismrv_device {
 	struct mutex va_lock;
 
 	/* uKernel */
-	size_t ukernel_size;
-	dma_addr_t ukernel_dma;
-	void *ukernel_cpu;
-	u32 ukernel_vaddr;
+	size_t ukernel_size;		/* master uKernel object size */
+	const struct firmware *uk_fw;	/* PRVUKFW1 container, kept for restores */
+	struct prismrv_uk_obj *uk_obj;
+	unsigned int uk_nobj;
 	/*
 	 * Init-script firmware name derived at fw_load time from the
 	 * DT "firmware-name" property (or the compile-time default).
@@ -273,12 +308,11 @@ struct prismrv_device {
 	char fw_init_name[128];
 
 	/* shared HostCtl block */
-	dma_addr_t hostctl_dma;
 	struct prismrv_host_ctl *hostctl;
 
 	/* kernel CCB + HWRTData render contexts */
-	dma_addr_t ccb_dma;
-	struct prismrv_ccb *ccb;
+	struct prismrv_ccb_cmd *ccb;	/* role CCB */
+	struct prismrv_ccb_ctl *ccb_ctl;	/* role CCBCTL */
 	spinlock_t ccb_lock;
 	u32 ccb_submitted;	/* commands published; protected by ccb_lock */
 	u32 ccb_completed;	/* commands consumed by the uKernel; event_lock */
@@ -361,6 +395,8 @@ void prismrv_soft_reset(struct prismrv_device *pv, bool hw_recovery);
 void prismrv_init_clocks(struct prismrv_device *pv);
 void prismrv_bif_reset(struct prismrv_device *pv);
 int  prismrv_fw_load(struct prismrv_device *pv);
+int  prismrv_fw_map_objects(struct prismrv_device *pv);
+struct prismrv_uk_obj *prismrv_uk_find(struct prismrv_device *pv, u32 role);
 void prismrv_fw_release(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);
 int prismrv_errata_apply(struct prismrv_device *pv);

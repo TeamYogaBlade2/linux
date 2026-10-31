@@ -473,7 +473,7 @@ static int prismrv_runtime_resume(struct device *dev)
 	mutex_lock(&pv->init_mutex);
 
 	if (!pv->hw_ready) {
-		if (!pv->ukernel_cpu) {
+		if (!pv->uk_obj) {
 			ret = prismrv_fw_load(pv);
 			if (ret) {
 				/*

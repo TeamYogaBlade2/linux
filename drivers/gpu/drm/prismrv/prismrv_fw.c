@@ -10,31 +10,33 @@
  * Firmware file names are selected as follows (in priority order):
  *
  *   1. The Device Tree "firmware-name" property (e.g. for OMAP SGX530,
- *      set  firmware-name = "ti/omap-sgx530-ukernel.bin";  in the DT node).
+ *      set  firmware-name = "ti/omap-sgx530-ukernel.fw";  in the DT node).
  *   2. The compile-time default for the matched SoC
- *      ("mediatek/mt6589-sgx544-{init,ukernel}.bin").
+ *      ("mediatek/mt6589-sgx544-init.bin", "mediatek/mt6589-sgx544-ukernel.fw").
  *
  * The init-script name is derived from the ukernel name by replacing
- * "-ukernel.bin" with "-init.bin".  If "firmware-name" specifies a name
- * that does not end in "-ukernel.bin" the init script is loaded from the
+ * "-ukernel.fw" with "-init.bin".  If "firmware-name" specifies a name
+ * that does not end in "-ukernel.fw" the init script is loaded from the
  * same directory with the stem replaced.
  */
 #include <linux/firmware.h>
 #include <linux/dma-mapping.h>
 #include <linux/of.h>
 #include <linux/array_size.h>
+#include <linux/slab.h>
+#include <linux/sizes.h>
 
 #include "prismrv_device.h"
 
 /* Default firmware paths for the MT6589 / SGX544 */
 #define FW_DEFAULT_INIT		"mediatek/mt6589-sgx544-init.bin"
-#define FW_DEFAULT_UKERNEL	"mediatek/mt6589-sgx544-ukernel.bin"
+#define FW_DEFAULT_UKERNEL	"mediatek/mt6589-sgx544-ukernel.fw"
 
 /*
  * prismrv_fw_names() - resolve the firmware file names.
  *
  * Reads the "firmware-name" DT property; falls back to the hardcoded
- * default.  The init-script name is the ukernel name with "-ukernel.bin"
+ * default.  The init-script name is the ukernel name with "-ukernel.fw"
  * replaced by "-init.bin".
  *
  * @pv:          device
@@ -58,109 +60,133 @@ static void prismrv_fw_names(struct prismrv_device *pv,
 
 	/*
 	 * Derive the init-script name:
-	 *   foo-ukernel.bin -> foo-init.bin
+	 *   foo-ukernel.fw -> foo-init.bin
 	 *   foo.bin         -> foo-init.bin
 	 *   foo             -> foo-init.bin
 	 */
 	strscpy(out_init, out_ukernel, 128);
 	{
-		size_t len = strlen(out_init);
-		static const char uk[] = "-ukernel.bin";
-		static const char bin[] = ".bin";
+		static const char *const sfx[] = { "-ukernel.fw", "-ukernel.bin", ".fw", ".bin" };
+		size_t len = strlen(out_init), sl;
+		unsigned int i;
 
-		if (len > strlen(uk) && !strcmp(out_init + len - strlen(uk), uk))
-			out_init[len - strlen(uk)] = '\0';
-		else if (len > strlen(bin) &&
-			 !strcmp(out_init + len - strlen(bin), bin))
-			out_init[len - strlen(bin)] = '\0';
+		for (i = 0; i < ARRAY_SIZE(sfx); i++) {
+			sl = strlen(sfx[i]);
+			if (len > sl && !strcmp(out_init + len - sl, sfx[i])) {
+				out_init[len - sl] = '\0';
+				break;
+			}
+		}
 		strlcat(out_init, "-init.bin", 128);
 	}
 }
 
 
-/*
- * `mov rN, #imm32` (opcode byte 0xfc, bits [55:52] == 2) scatters its
- * immediate over the 64-bit instruction word:
- *	imm[20:0]  = word[20:0]
- *	imm[25:21] = word[40:36]
- *	imm[31:26] = word[49:44]
- * (solved from 2114 instructions of the stock uKernel against the vendor
- * disassembler; prismrv analysis/UKERNEL_IMMEDIATES.md).  The stock image
- * carries 0xDEADBEEF placeholders that the vendor loader replaces.  A tool
- * that rewrote only the low dword left imm[31:21] at 0xDEA, i.e. values
- * such as 0xDEB01000.  Report what is still placeholder-shaped.
- */
-static u32 prismrv_mov_imm32(u64 w)
+/* find the (first) object with a given role */
+struct prismrv_uk_obj *prismrv_uk_find(struct prismrv_device *pv, u32 role)
 {
-	return (u32)(w & 0x1fffff) | (u32)(((w >> 36) & 0x1f) << 21) |
-	       (u32)(((w >> 44) & 0x3f) << 26);
-}
-
-static void prismrv_fw_check_placeholders(struct prismrv_device *pv,
-					  const void *data, size_t size)
-{
-	const __le64 *w = data;
-	unsigned int raw = 0, partial = 0;
-	size_t i;
-
-	for (i = 0; i < size / 8; i++) {
-		u64 v = le64_to_cpu(w[i]);
-		u32 imm;
-
-		if ((v >> 56) != 0xfc || ((v >> 52) & 0xf) != 2)
-			continue;
-		imm = prismrv_mov_imm32(v);
-		if (imm == 0xdeadbeef)
-			raw++;
-		else if ((imm >> 21) == (0xdea00000u >> 21))
-			partial++;
-	}
-	if (raw)
-		dev_warn(pv->drm.dev,
-			 "uKernel has %u unpatched 0xDEADBEEF immediates; the loader patch step (DEVINITPART2 equivalent) is missing\n", raw);
-	if (partial)
-		dev_warn(pv->drm.dev,
-			 "uKernel has %u immediates whose upper bits are still 0xDEA (partially patched image)\n", partial);
-}
-
-/*
- * Immediates the vendor loader writes as plain constants (libsrv_init
- * PatchMovImm32 call sites; prismrv analysis/UKERNEL_IMMEDIATES.md section 5,
- * VERIFIED from the loader's disassembly).  Sites that take the address of a
- * loader-uploaded PDS/USE program are NOT here: they need those programs.
- */
-static const struct { u16 pad; u16 idx; u32 imm; } prismrv_uk_const_patch[] = {
-	{ 0, 1190,  0x01001000 }, { 0, 1200,  0x00800900 }, { 0, 1216,  0x00000006 },
-	{ 0, 10023, 0x12022207 }, { 0, 10111, 0x2200e105 }, { 0, 10789, 0x02800900 },
-	{ 0, 11290, 0x0a028201 },
-};
-
-static u64 prismrv_mov_imm32_encode(u64 w, u32 imm)
-{
-	w &= ~(0x1fffffULL | (0x1fULL << 36) | (0x3fULL << 44));
-	return w | (imm & 0x1fffff) | ((u64)((imm >> 21) & 0x1f) << 36) |
-	       ((u64)((imm >> 26) & 0x3f) << 44);
-}
-
-static int prismrv_fw_patch_consts(struct prismrv_device *pv, void *data,
-				   size_t size)
-{
-	__le64 *w = data;
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(prismrv_uk_const_patch); i++) {
-		u32 idx = prismrv_uk_const_patch[i].idx;
-		u64 v;
+	for (i = 0; i < pv->uk_nobj; i++)
+		if (pv->uk_obj[i].role == role)
+			return &pv->uk_obj[i];
+	return NULL;
+}
 
-		if ((idx + 1) * 8 > size)
-			return -EINVAL;
-		v = le64_to_cpu(w[idx]);
-		if ((v >> 56) != 0xfc || ((v >> 52) & 0xf) != 2) {
-			dev_err(pv->drm.dev, "uKernel instr %u is not a mov-imm32: wrong image\n", idx);
-			return -EINVAL;
+static void prismrv_uk_free_objs(struct prismrv_device *pv)
+{
+	unsigned int i;
+
+	for (i = 0; i < pv->uk_nobj; i++)
+		if (pv->uk_obj[i].cpu)
+			dma_free_coherent(pv->drm.dev, PAGE_ALIGN(pv->uk_obj[i].size),
+					  pv->uk_obj[i].cpu, pv->uk_obj[i].dma);
+	kfree(pv->uk_obj);
+	pv->uk_obj = NULL;
+	pv->uk_nobj = 0;
+}
+
+/*
+ * Parse and allocate the PRVUKFW1 container.  Contents are copied (again) by
+ * prismrv_fw_map_objects() on every hw_init so a recovery restarts from the
+ * pristine uKernel/PDS/kernel-data state.
+ */
+static int prismrv_uk_parse(struct prismrv_device *pv, const struct firmware *fw)
+{
+	const struct prismrv_ukfw_hdr *h = (const void *)fw->data;
+	const struct prismrv_ukfw_obj *t;
+	unsigned int i, n;
+	int ret;
+
+	if (fw->size < sizeof(*h) || memcmp(h->magic, PRISMRV_UKFW_MAGIC, 8) ||
+	    le32_to_cpu(h->version) != 1) {
+		dev_err(pv->drm.dev, "not a PRVUKFW1 uKernel container\n");
+		return -EINVAL;
+	}
+	n = le32_to_cpu(h->nobj);
+	if (!n || n > PRISMRV_UKFW_MAX_OBJS ||
+	    fw->size < sizeof(*h) + n * sizeof(*t)) {
+		dev_err(pv->drm.dev, "uKernel container: bad object count %u\n", n);
+		return -EINVAL;
+	}
+	t = (const void *)(h + 1);
+
+	pv->uk_obj = kcalloc(n, sizeof(*pv->uk_obj), GFP_KERNEL);
+	if (!pv->uk_obj)
+		return -ENOMEM;
+	pv->uk_nobj = n;
+
+	for (i = 0; i < n; i++) {
+		struct prismrv_uk_obj *o = &pv->uk_obj[i];
+		u32 va = le32_to_cpu(t[i].va), size = le32_to_cpu(t[i].size);
+		u32 off = le32_to_cpu(t[i].data_off);
+
+		if (!size || (va & (PAGE_SIZE - 1)) ||
+		    (u64)va + PAGE_ALIGN(size) > SZ_4G ||
+		    (u64)off + size > fw->size) {
+			dev_err(pv->drm.dev,
+				"uKernel container object %u invalid (va %#x size %#x off %#x)\n",
+				i, va, size, off);
+			ret = -EINVAL;
+			goto err;
 		}
-		w[idx] = cpu_to_le64(prismrv_mov_imm32_encode(v,
-					prismrv_uk_const_patch[i].imm));
+		o->va = va;
+		o->size = size;
+		o->role = le32_to_cpu(t[i].role);
+		o->data_off = off;
+		o->cpu = dma_alloc_coherent(pv->drm.dev, PAGE_ALIGN(size),
+					    &o->dma, GFP_KERNEL);
+		if (!o->cpu) {
+			ret = -ENOMEM;
+			goto err;
+		}
+	}
+	return 0;
+err:
+	prismrv_uk_free_objs(pv);
+	return ret;
+}
+
+/*
+ * Restore every object to its pristine contents and (re)map it at the VA the
+ * vendor loader assigned.  Called from hw_init after prismrv_mmu_init().
+ */
+int prismrv_fw_map_objects(struct prismrv_device *pv)
+{
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < pv->uk_nobj; i++) {
+		struct prismrv_uk_obj *o = &pv->uk_obj[i];
+
+		memset(o->cpu, 0, PAGE_ALIGN(o->size));
+		memcpy(o->cpu, pv->uk_fw->data + o->data_off, o->size);
+		ret = prismrv_mmu_map(pv, o->va, o->dma, PAGE_ALIGN(o->size));
+		if (ret) {
+			dev_err(pv->drm.dev, "mapping uKernel object %u at %#x failed (%d)\n",
+				i, o->va, ret);
+			return ret;
+		}
 	}
 	return 0;
 }
@@ -170,6 +196,7 @@ int prismrv_fw_load(struct prismrv_device *pv)
 	char fw_ukernel[128];
 	char fw_init[128];
 	const struct firmware *fw;
+	struct prismrv_uk_obj *uk;
 	int ret;
 
 	prismrv_fw_names(pv, fw_ukernel, fw_init);
@@ -184,52 +211,35 @@ int prismrv_fw_load(struct prismrv_device *pv)
 		return ret;
 	}
 
-	/*
-	 * Sanity-check the image before it is DMA-mapped into the GPU:
-	 * the uKernel is a stream of 64-bit USSE instructions and must
-	 * fit the region reserved for it in the GPU VA layout (up to the
-	 * next fixed carve-out).
-	 */
-	if (!fw->size || fw->size % 8 || fw->size > PRISMRV_UKERNEL_MAX_SIZE) {
-		dev_err(pv->drm.dev,
-			"%s: bad uKernel size %zu (need non-zero multiple of 8, <= %u)\n",
-			fw_ukernel, fw->size, PRISMRV_UKERNEL_MAX_SIZE);
-		release_firmware(fw);
-		return -EINVAL;
-	}
-
-	pv->ukernel_size = fw->size;
-	pv->ukernel_cpu = dma_alloc_coherent(pv->drm.dev, fw->size,
-					     &pv->ukernel_dma, GFP_KERNEL);
-	if (!pv->ukernel_cpu) {
-		release_firmware(fw);
-		return -ENOMEM;
-	}
-	memcpy(pv->ukernel_cpu, fw->data, fw->size);
-	ret = prismrv_fw_patch_consts(pv, pv->ukernel_cpu, fw->size);
-	if (!ret)
-		prismrv_fw_check_placeholders(pv, pv->ukernel_cpu, fw->size);
-	release_firmware(fw);
+	ret = prismrv_uk_parse(pv, fw);
 	if (ret) {
-		dma_free_coherent(pv->drm.dev, pv->ukernel_size, pv->ukernel_cpu, pv->ukernel_dma);
-		pv->ukernel_cpu = NULL;
-		pv->ukernel_size = 0;
+		release_firmware(fw);
 		return ret;
 	}
+	pv->uk_fw = fw;
 
-	dev_info(pv->drm.dev, "loaded uKernel image (%zu bytes) from %s\n",
-		 pv->ukernel_size, fw_ukernel);
+	uk = prismrv_uk_find(pv, PRISMRV_UKR_UKERNEL);
+	if (!uk || !prismrv_uk_find(pv, PRISMRV_UKR_CCB) ||
+	    !prismrv_uk_find(pv, PRISMRV_UKR_CCBCTL) ||
+	    !prismrv_uk_find(pv, PRISMRV_UKR_HOSTCTL)) {
+		dev_err(pv->drm.dev, "%s: uKernel/CCB/CCBCtl/HostCtl object missing\n",
+			fw_ukernel);
+		prismrv_fw_release(pv);
+		return -EINVAL;
+	}
+	pv->ukernel_size = uk->size;
 
+	dev_info(pv->drm.dev, "loaded %u uKernel objects from %s (uKernel %u bytes at %#x)\n",
+		 pv->uk_nobj, fw_ukernel, uk->size, uk->va);
 	return 0;
 }
 
 void prismrv_fw_release(struct prismrv_device *pv)
 {
-	if (pv->ukernel_cpu) {
-		dma_free_coherent(pv->drm.dev, pv->ukernel_size,
-				  pv->ukernel_cpu, pv->ukernel_dma);
-		pv->ukernel_cpu = NULL;
-		pv->ukernel_size = 0;
-		pv->ukernel_dma  = 0;
+	prismrv_uk_free_objs(pv);
+	if (pv->uk_fw) {
+		release_firmware(pv->uk_fw);
+		pv->uk_fw = NULL;
 	}
+	pv->ukernel_size = 0;
 }
