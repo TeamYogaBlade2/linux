@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Lenovo YOGA Tablet 10 B8000-H (3G data)
+ *
+ * Copyright (c) 2026 Mikhail Nevskiy <trudenboy0@gmail.com>
+ */
+
+#include "mt6589-lenovo-b8000.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (3G data)";
+	compatible = "lenovo,b8000-h", "mediatek,mt6589";
+
+	/* Vibration motor on the MT6320 VIBR LDO. */
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6320_ldo_vibr>;
+		min-microvolt = <2800000>;
+		max-microvolt = <2800000>;
+	};
+};
+
+/*
+ * The B8000-H's eMMC layout starts 0x1e0000 lower than the B8000-F's in
+ * mt6589-lenovo-blade.dtsi (read from a B8000-H's own MBR/EBR). The vendor
+ * partitions stay read-only.
+ */
+&mmc0 {
+	/delete-node/ card@0;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			partition@0 {
+				label = "MBR";
+				reg = <0x0 0x00000000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@80000 {
+				label = "EBR1";
+				reg = <0x0 0x00080000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@100000 {
+				label = "__NODL_PMT";
+				reg = <0x0 0x00100000 0x0 0x00400000>;
+				read-only;
+			};
+
+			partition@500000 {
+				label = "__NODL_PRO_INFO";
+				reg = <0x0 0x00500000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@800000 {
+				label = "__NODL_NVRAM";
+				reg = <0x0 0x00800000 0x0 0x00500000>;
+				read-only;
+			};
+
+			partition@d00000 {
+				label = "__NODL_PROTECT_F";
+				reg = <0x0 0x00d00000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@1700000 {
+				label = "__NODL_PROTECT_S";
+				reg = <0x0 0x01700000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@2100000 {
+				label = "__NODL_SECCFG";
+				reg = <0x0 0x02100000 0x0 0x00020000>;
+				read-only;
+			};
+
+			partition@2120000 {
+				label = "UBOOT";
+				reg = <0x0 0x02120000 0x0 0x00060000>;
+				read-only;
+			};
+
+			partition@2180000 {
+				label = "BOOTIMG";
+				reg = <0x0 0x02180000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2780000 {
+				label = "RECOVERY";
+				reg = <0x0 0x02780000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2d80000 {
+				label = "SEC_RO";
+				reg = <0x0 0x02d80000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@3380000 {
+				label = "__NODL_MISC";
+				reg = <0x0 0x03380000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3400000 {
+				label = "LOGO";
+				reg = <0x0 0x03400000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@3700000 {
+				label = "EBR2";
+				reg = <0x0 0x03700000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3780000 {
+				label = "__NODL_EXPDB";
+				reg = <0x0 0x03780000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@4180000 {
+				label = "FAC";
+				reg = <0x0 0x04180000 0x0 0x0c800000>;
+				read-only;
+			};
+
+			partition@10980000 {
+				label = "ANDROID";
+				reg = <0x0 0x10980000 0x0 0x40000000>;
+				read-only;
+			};
+
+			partition@50980000 {
+				label = "CACHE";
+				reg = <0x0 0x50980000 0x0 0x07e00000>;
+				read-only;
+			};
+
+			partition@58780000 {
+				label = "USRDATA";
+				reg = <0x0 0x58780000 0x3 0x49fa0000>;
+			};
+		};
+	};
+};
+
+/*
+ * Touch: the stock S7300 driver of the B8000-H powers the panel from VGP5 at
+ * 2.8 V. VGP4 stays on as well: it has not been shown that nothing else on
+ * this board needs it.
+ */
+&mt6320_ldo_vgp5 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6320_ldo_vgp4 {
+	regulator-always-on;
+};
+
+&i2c0 {
+	touchscreen@38 {
+		vdd-supply = <&mt6320_ldo_vgp5>;
+	};
+};
+
+/* The stock accelerometer configuration (direction 3) for this board. */
+&i2c3 {
+	accelerometer@11 {
+		mount-matrix = "0", "-1", "0",
+			       "1", "0", "0",
+			       "0", "0", "1";
+	};
+};
+
+/*
+ * No BQ27541 on the B8000-H: the stock build has MTK_BQ27541_SUPPORT=no and
+ * nothing answers at 0x55. The stock kernel computes the charge from the
+ * MT6320 AUXADC. Without a fuel gauge, the charger's own battery supply has
+ * no capacity, so leave it out.
+ */
+&bq27541 {
+	status = "disabled";
+};
+
+&bq24196 {
+	omit-battery-class;
+};
+
