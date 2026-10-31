@@ -6,6 +6,8 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_damage_helper.h>
+#include <drm/drm_fb_dma_helper.h>
 #include <drm/drm_atomic_uapi.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
@@ -210,6 +212,10 @@ static void mtk_plane_atomic_async_update(struct drm_plane *plane,
 	plane->state->dst.x1 = new_state->dst.x1;
 	plane->state->dst.y1 = new_state->dst.y1;
 
+	/* Flush non-coherent buffers (MT6589); whole fb if it changed. */
+	if (plane->state->fb != new_state->fb)
+		new_state->ignore_damage_clips = true;
+	drm_fb_dma_sync_non_coherent(plane->dev, plane->state, new_state);
 	mtk_plane_update_new_state(new_state, new_plane_state);
 	swap(plane->state->fb, new_state->fb);
 	wmb(); /* Make sure the above parameters are set before update */
@@ -279,6 +285,7 @@ static void mtk_plane_atomic_disable(struct drm_plane *plane,
 static void mtk_plane_atomic_update(struct drm_plane *plane,
 				    struct drm_atomic_state *state)
 {
+	struct drm_plane_state *old_state;
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
 									   plane);
 	struct mtk_plane_state *mtk_plane_state = to_mtk_plane_state(new_state);
@@ -291,6 +298,16 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 		return;
 	}
 
+	/*
+	 * No-op unless the buffer is non-coherent (MT6589).  FB_DAMAGE_CLIPS
+	 * are relative to the previously shown fb, but a compositor using
+	 * buffer age also repaints older damage into this fb: flush it all
+	 * when the fb changes, only the clips when the same fb is updated.
+	 */
+	old_state = drm_atomic_get_old_plane_state(state, plane);
+	if (!old_state || old_state->fb != new_state->fb)
+		new_state->ignore_damage_clips = true;
+	drm_fb_dma_sync_non_coherent(plane->dev, old_state, new_state);
 	mtk_plane_update_new_state(new_state, mtk_plane_state);
 	wmb(); /* Make sure the above parameters are set before update */
 	mtk_plane_state->pending.dirty = true;
@@ -360,6 +377,9 @@ int mtk_plane_init(struct drm_device *dev, struct drm_plane *plane,
 		if (err)
 			DRM_ERROR("failed to create property: blend_mode\n");
 	}
+
+	if (of_machine_is_compatible("mediatek,mt6589"))
+		drm_plane_enable_fb_damage_clips(plane);
 
 	drm_plane_helper_add(plane, &mtk_plane_helper_funcs);
 

@@ -162,11 +162,28 @@ static int rmi_i2c_read_block(struct rmi_transport_dev *xport, u16 addr,
 			goto exit;
 	}
 
-	retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
-	if (retval == ARRAY_SIZE(msgs))
-		retval = 0; /* success */
-	else if (retval >= 0)
-		retval = -EIO;
+	if (client->adapter->quirks &&
+	    client->adapter->quirks->max_comb_2nd_msg_len &&
+	    len > client->adapter->quirks->max_comb_2nd_msg_len) {
+		/*
+		 * The adapter cannot read this much in a combined write/read
+		 * transfer (e.g. MT6577/MT6589: 31 bytes). RMI4 keeps the
+		 * register address, so send it and read in two transfers.
+		 */
+		retval = i2c_transfer(client->adapter, &msgs[0], 1);
+		if (retval == 1)
+			retval = i2c_transfer(client->adapter, &msgs[1], 1);
+		if (retval == 1)
+			retval = 0;
+		else if (retval >= 0)
+			retval = -EIO;
+	} else {
+		retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
+		if (retval == ARRAY_SIZE(msgs))
+			retval = 0; /* success */
+		else if (retval >= 0)
+			retval = -EIO;
+	}
 
 exit:
 	rmi_dbg(RMI_DEBUG_XPORT, &client->dev,

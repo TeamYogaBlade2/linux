@@ -220,6 +220,8 @@ struct mtk_dsi {
 	struct mtk_phy_timing phy_timing;
 	int refcount;
 	bool enabled;
+	bool lk_checked;
+	bool lk_handover;
 	bool lanes_ready;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
@@ -697,6 +699,22 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	if (++dsi->refcount != 1)
 		return 0;
 
+	/*
+	 * MT6589 (B8000): the D-PHY/DSI programming that works for this panel
+	 * is only known from the bootloader. If LK left DSI running in video
+	 * mode, take it over as is and never reset or power it down.
+	 */
+	if (!dsi->lk_checked) {
+		dsi->lk_checked = true;
+		if (of_device_is_compatible(dev->of_node, "mediatek,mt6589-dsi") &&
+		    (readl(dsi->regs + DSI_START) & 1)) {
+			dsi->lk_handover = true;
+			dev_info(dev, "keeping bootloader DSI video mode setup\n");
+		}
+	}
+	if (dsi->lk_handover)
+		return 0;
+
 	ret = mipi_dsi_pixel_format_to_bpp(dsi->format);
 	if (ret < 0) {
 		dev_err(dev, "Unknown MIPI DSI format %d\n", dsi->format);
@@ -761,6 +779,9 @@ static void mtk_dsi_poweroff(struct mtk_dsi *dsi)
 	if (--dsi->refcount != 0)
 		return;
 
+	if (dsi->lk_handover)
+		return;
+
 	/*
 	 * mtk_dsi_stop() and mtk_dsi_start() is asymmetric, since
 	 * mtk_dsi_stop() should be called after mtk_crtc_atomic_disable(),
@@ -791,6 +812,11 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 {
 	if (dsi->enabled)
 		return;
+
+	if (dsi->lk_handover) {
+		dsi->enabled = true;
+		return;
+	}
 
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_start(dsi);

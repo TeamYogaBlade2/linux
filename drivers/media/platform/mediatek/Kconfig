@@ -7,3 +7,16 @@ source "drivers/media/platform/mediatek/mdp/Kconfig"
 source "drivers/media/platform/mediatek/vcodec/Kconfig"
 source "drivers/media/platform/mediatek/vpu/Kconfig"
 source "drivers/media/platform/mediatek/mdp3/Kconfig"
+
+config VIDEO_MT6589_SENINF
+	tristate "MediaTek MT6589 SENINF sensor interface"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on VIDEO_DEV && COMMON_CLK && PM
+	select MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	select VIDEOBUF2_DMA_CONTIG
+	help
+	  The camera receive path of the MediaTek MT6589: the sensor master
+	  clock (MCLK), the CSI-2 receiver (SENINF, MIPI-RX) and raw frames
+	  through the ISP pass 1 to memory (IMGO), as a V4L2 video device.

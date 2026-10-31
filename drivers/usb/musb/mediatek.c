@@ -206,6 +206,32 @@ static irqreturn_t generic_interrupt(int irq, void *__hci)
 		musb_writeb(musb->mregs, MUSB_FADDR, 0);
 	}
 
+	{
+		/* B8000H-DBG: trace the first data-endpoint interrupts. */
+		static int dbg_n;
+
+		if ((musb->int_rx || (musb->int_tx & ~1)) && dbg_n < 40) {
+			dbg_n++;
+			pr_info("B8000H-DBG irq#%d usb=%02x tx=%04x rx=%04x txe=%04x rxe=%04x l1s=%08x l1m=%08x\n",
+				dbg_n, musb->int_usb, musb->int_tx, musb->int_rx,
+				musb_readw(musb->mregs, MUSB_INTRTXE),
+				musb_readw(musb->mregs, MUSB_INTRRXE),
+				musb_readl(musb->mregs, USB_L1INTS),
+				musb_readl(musb->mregs, USB_L1INTM));
+		}
+	}
+
+	{
+		extern int b8k_rx_seen;
+		static int dbg3;
+
+		if (b8k_rx_seen && dbg3 < 20) {
+			dbg3++;
+			pr_info("B8000H-DBG3 after-rx irq#%d usb=%02x tx=%04x rx=%04x l1s=%08x\n",
+				dbg3, musb->int_usb, musb->int_tx, musb->int_rx,
+				musb_readl(musb->mregs, USB_L1INTS));
+		}
+	}
 	if (musb->int_usb || musb->int_tx || musb->int_rx)
 		retval = musb_interrupt(musb);
 
@@ -512,10 +538,23 @@ static int mtk_musb_probe(struct platform_device *pdev)
 		glue->phy_mode = PHY_MODE_USB_DEVICE;
 		glue->role = USB_ROLE_DEVICE;
 		break;
-	case USB_DR_MODE_OTG:
+	case USB_DR_MODE_OTG: {
+		struct device_node *conn __free(device_node) =
+			of_get_child_by_name(np, "connector");
+
+		/*
+		 * Without a connector nothing sets a role: stay a device
+		 * until userspace asks for host.
+		 */
+		if (!conn) {
+			glue->phy_mode = PHY_MODE_USB_DEVICE;
+			glue->role = USB_ROLE_DEVICE;
+			break;
+		}
 		glue->phy_mode = PHY_MODE_USB_OTG;
 		glue->role = USB_ROLE_NONE;
 		break;
+	}
 	default:
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				"Error 'dr_mode' property\n");

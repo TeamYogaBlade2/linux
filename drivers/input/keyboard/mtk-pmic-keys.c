@@ -21,6 +21,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/workqueue.h>
 
 #define MTK_PMIC_RST_DU_MASK	GENMASK(9, 8)
 #define MTK_PMIC_PWRKEY_RST	BIT(6)
@@ -59,6 +60,8 @@ struct mtk_pmic_regs {
 	u32 homekey_puen_reg;
 	u32 homekey_puen_mask;
 	bool key_release_irq;
+	/* read the debounced status this long after the last raw-edge IRQ */
+	unsigned int settle_ms;
 };
 
 static const struct mtk_pmic_regs mt6320_regs = {
@@ -72,6 +75,7 @@ static const struct mtk_pmic_regs mt6320_regs = {
 	.rst_lprst_mask = MTK_PMIC_RST_DU_MASK,
 	.homekey_puen_reg = MT6320_GPIO_SMT_CON3,
 	.homekey_puen_mask = BIT(8),
+	.settle_ms = 50,
 };
 
 static const struct mtk_pmic_regs mt6397_regs = {
@@ -157,12 +161,15 @@ struct mtk_pmic_keys_info {
 	int irq;
 	int irq_r; /* optional: release irq if different */
 	bool wakeup:1;
+	bool pressed;
+	struct delayed_work work;
 };
 
 struct mtk_pmic_keys {
 	struct input_dev *input_dev;
 	struct device *dev;
 	struct regmap *regmap;
+	unsigned int settle_ms;
 	struct mtk_pmic_keys_info keys[MTK_PMIC_MAX_KEY_COUNT];
 };
 
@@ -218,10 +225,49 @@ static void mtk_pmic_keys_lp_reset_setup(struct mtk_pmic_keys *keys,
 	regmap_update_bits(keys->regmap, regs->pmic_rst_reg, mask, value);
 }
 
+/*
+ * MT6320 raises the key IRQ on the raw, bouncing edges (about a dozen IRQs
+ * per press) before the debounced status bit follows, so reading the bit in
+ * the IRQ thread loses most presses and can leave the key stuck down. Sample
+ * it once the bouncing has stopped and keep polling while the key is held.
+ */
+static void mtk_pmic_keys_settle_work(struct work_struct *work)
+{
+	struct mtk_pmic_keys_info *info =
+		container_of(to_delayed_work(work), struct mtk_pmic_keys_info, work);
+	unsigned int delay = msecs_to_jiffies(info->keys->settle_ms);
+	u32 key_deb;
+	bool pressed;
+
+	if (regmap_read(info->keys->regmap, info->regs->deb_reg, &key_deb))
+		return;
+	pressed = !(key_deb & info->regs->deb_mask);
+	if (pressed != info->pressed) {
+		info->pressed = pressed;
+		input_report_key(info->keys->input_dev, info->keycode, pressed);
+		input_sync(info->keys->input_dev);
+	}
+	if (pressed)
+		schedule_delayed_work(&info->work, delay);
+}
+
+static void mtk_pmic_keys_cancel_work(void *data)
+{
+	struct mtk_pmic_keys_info *info = data;
+
+	cancel_delayed_work_sync(&info->work);
+}
+
 static irqreturn_t mtk_pmic_keys_irq_handler_thread(int irq, void *data)
 {
 	struct mtk_pmic_keys_info *info = data;
 	u32 key_deb, pressed;
+
+	if (info->keys->settle_ms) {
+		mod_delayed_work(system_wq, &info->work,
+				 msecs_to_jiffies(info->keys->settle_ms));
+		return IRQ_HANDLED;
+	}
 
 	regmap_read(info->keys->regmap, info->regs->deb_reg, &key_deb);
 
@@ -244,6 +290,13 @@ static int mtk_pmic_key_setup(struct mtk_pmic_keys *keys,
 	int ret;
 
 	info->keys = keys;
+	if (keys->settle_ms) {
+		INIT_DELAYED_WORK(&info->work, mtk_pmic_keys_settle_work);
+		ret = devm_add_action_or_reset(keys->dev,
+					       mtk_pmic_keys_cancel_work, info);
+		if (ret)
+			return ret;
+	}
 
 	ret = regmap_update_bits(keys->regmap, info->regs->intsel_reg,
 				 info->regs->intsel_mask,
@@ -362,6 +415,7 @@ static int mtk_pmic_keys_probe(struct platform_device *pdev)
 	keys->dev = &pdev->dev;
 	keys->regmap = pmic_chip->regmap;
 	mtk_pmic_regs = of_id->data;
+	keys->settle_ms = mtk_pmic_regs->settle_ms;
 
 	keys->input_dev = input_dev = devm_input_allocate_device(keys->dev);
 	if (!input_dev) {

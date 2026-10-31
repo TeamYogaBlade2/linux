@@ -3,6 +3,7 @@
  * Copyright (C) Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
+#include <dt-bindings/pinctrl/mt65xx.h>
 #include "pinctrl-paris.h"
 #include "pinctrl-mtk-mt6589.h"
 
@@ -468,32 +469,33 @@ static const struct mtk_pin_field_calc mt6589_pin_drv_range[] = {
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_r0_range[] = {
-	PIN_FIELD_R0(0, 6),
-	PIN_FIELD_R0(1, 5),
-	PIN_FIELD_R0(2, 10),
-	PIN_FIELD_R0(3, 9),
-	PIN_FIELD_R0(4, 8),
-	PIN_FIELD_R0(5, 7),
-	PIN_FIELD_R0(6, 3),
-	PIN_FIELD_R0(7, 2),
-	PIN_FIELD_R0(8, 1),
+	/* sorted by pin: mtk_hw_pin_field_lookup() does a binary search */
 	PIN_FIELD_R0(9, 0),
-	PIN_FIELD_R0(10, 229),
-	PIN_FIELD_R0(11, 228),
-	PIN_FIELD_R0(12, 231),
-	PIN_FIELD_R0(13, 230),
-	PIN_FIELD_R0(14, 226),
-	PIN_FIELD_R0(15, 227),
-	PIN_FIELD_R0(16, 139),
-	PIN_FIELD_R0(17, 141),
+	PIN_FIELD_R0(8, 1),
+	PIN_FIELD_R0(7, 2),
+	PIN_FIELD_R0(6, 3),
+	PIN_FIELD_R0(1, 5),
+	PIN_FIELD_R0(0, 6),
+	PIN_FIELD_R0(5, 7),
+	PIN_FIELD_R0(4, 8),
+	PIN_FIELD_R0(3, 9),
+	PIN_FIELD_R0(2, 10),
 	PIN_FIELD_R0(18, 130),
 	PIN_FIELD_R0(19, 131),
-	PIN_FIELD_R0(20, 138),
-	PIN_FIELD_R0(21, 140),
-	PIN_FIELD_R0(22, 137),
 	PIN_FIELD_R0(23, 134),
 	PIN_FIELD_R0(24, 135),
 	PIN_FIELD_R0(25, 136),
+	PIN_FIELD_R0(22, 137),
+	PIN_FIELD_R0(20, 138),
+	PIN_FIELD_R0(16, 139),
+	PIN_FIELD_R0(21, 140),
+	PIN_FIELD_R0(17, 141),
+	PIN_FIELD_R0(14, 226),
+	PIN_FIELD_R0(15, 227),
+	PIN_FIELD_R0(11, 228),
+	PIN_FIELD_R0(10, 229),
+	PIN_FIELD_R0(13, 230),
+	PIN_FIELD_R0(12, 231),
 };
 
 static const struct mtk_pin_field_calc mt6589_pin_r1_range[] = {
@@ -582,6 +584,19 @@ static const struct mtk_eint_hw mt6589_eint_hw = {
 	.db_time   = debounce_time_mt6795,
 };
 
+/*
+ * MT6589 PUPD polarity is the opposite of the generic PUPD/R1/R0 code:
+ * '1' = pull up (vendor mt_sd.h MSDC*_PUPD_BASE), verified on MSDC3.
+ */
+static int mt6589_bias_set_combo(struct mtk_pinctrl *hw,
+				 const struct mtk_pin_desc *desc,
+				 u32 pullup, u32 arg)
+{
+	if (arg >= MTK_PUPD_SET_R1R0_00 && arg <= MTK_PUPD_SET_R1R0_11)
+		pullup = !pullup;
+	return mtk_pinconf_bias_set_combo(hw, desc, pullup, arg);
+}
+
 static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.reg_cal = mt6589_reg_cals,
 	.pins = mtk_pins_mt6589,
@@ -592,7 +607,7 @@ static const struct mtk_pin_soc mt6589_pinctrl_data = {
 	.gpio_m = 0,
 	.base_names = mt6589_pinctrl_register_base_names,
 	.nbase_names = ARRAY_SIZE(mt6589_pinctrl_register_base_names),
-	.bias_set_combo = mtk_pinconf_bias_set_combo,
+	.bias_set_combo = mt6589_bias_set_combo,
 	.bias_get_combo = mtk_pinconf_bias_get_combo,
 	.drive_set = mtk_pinconf_drive_set_rev1,
 	.drive_get = mtk_pinconf_drive_get_rev1,

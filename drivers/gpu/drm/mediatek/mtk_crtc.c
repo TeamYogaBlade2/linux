@@ -39,6 +39,13 @@
  * TODO: Needs update: this header is missing a bunch of member descriptions.
  */
 struct mtk_crtc {
+	/*
+	 * MT6589: DSI runs in the bootloader's video mode setup, which this
+	 * driver cannot re-program; tearing the OVL/RDMA path down on DPMS off
+	 * starves DSI and it never resyncs.  Keep the path running and only
+	 * drop the planes (the panel turns the backlight off).
+	 */
+	bool				hw_kept_on;
 	struct drm_crtc			base;
 	bool				enabled;
 
@@ -666,6 +673,23 @@ static int mtk_crtc_enable_vblank(struct drm_crtc *crtc)
 {
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
+	unsigned int i;
+
+	/*
+	 * MT6589's OVL frame-complete IRQ is not periodic in the bootloader
+	 * handover pipeline.  RDMA0 frame-end is the real scanout boundary;
+	 * use it for DRM vblank or atomic commits wait ten seconds and Phosh
+	 * appears to stutter even when the composition work itself is cheap.
+	 */
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
+			comp = mtk_crtc->ddp_comp[i];
+			if (mtk_ddp_comp_get_type(comp->id) == MTK_DISP_RDMA) {
+				mtk_ddp_comp_enable_vblank(comp);
+				return 0;
+			}
+		}
+	}
 
 	mtk_ddp_comp_enable_vblank(comp);
 
@@ -676,6 +700,17 @@ static void mtk_crtc_disable_vblank(struct drm_crtc *crtc)
 {
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
+	unsigned int i;
+
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
+			comp = mtk_crtc->ddp_comp[i];
+			if (mtk_ddp_comp_get_type(comp->id) == MTK_DISP_RDMA) {
+				mtk_ddp_comp_disable_vblank(comp);
+				return;
+			}
+		}
+	}
 
 	mtk_ddp_comp_disable_vblank(comp);
 }
@@ -783,6 +818,12 @@ static void mtk_crtc_atomic_enable(struct drm_crtc *crtc,
 
 	drm_dbg_driver(dev, "%s %d\n", __func__, crtc->base.id);
 
+	if (mtk_crtc->hw_kept_on) {
+		drm_crtc_vblank_on(crtc);
+		mtk_crtc->enabled = true;
+		return;
+	}
+
 	ret = mtk_ddp_comp_power_on(comp);
 	if (ret < 0) {
 		DRM_DEV_ERROR(comp->dev, "Failed to enable power domain: %d\n", ret);
@@ -836,6 +877,20 @@ static void mtk_crtc_atomic_disable(struct drm_crtc *crtc,
 	drm_crtc_wait_one_vblank(crtc);
 
 	drm_crtc_vblank_off(crtc);
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		/* hw_kept_on event: complete it like mtk_crtc_ddp_hw_fini() */
+		if (crtc->state->event && !crtc->state->active) {
+			unsigned long flags;
+
+			spin_lock_irqsave(&crtc->dev->event_lock, flags);
+			drm_crtc_send_vblank_event(crtc, crtc->state->event);
+			crtc->state->event = NULL;
+			spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
+		}
+		mtk_crtc->hw_kept_on = true;
+		mtk_crtc->enabled = false;
+		return;
+	}
 	mtk_crtc_ddp_hw_fini(mtk_crtc);
 	mtk_ddp_comp_power_off(comp);
 

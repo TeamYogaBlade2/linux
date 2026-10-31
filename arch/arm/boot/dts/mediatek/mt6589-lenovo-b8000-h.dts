@@ -1,0 +1,560 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Lenovo YOGA Tablet 10 B8000-H (60047 / 3G data)
+ * Initial bring-up based on live B8000-H Android partition geometry.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include "mt6589-lenovo-b8000.dtsi"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (3G data)";
+	compatible = "lenovo,b8000-h", "mediatek,mt6589";
+
+	chosen {
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 rdinit=/init console=tty0 loglevel=8 ignore_loglevel";
+	};
+};
+
+/*
+ * The B8000-H partition offsets differ from the B8000-F offsets currently
+ * present in mt6589-lenovo-blade.dtsi. Keep every Android partition read-only
+ * during initial mainline bring-up.
+ */
+&mmc0 {
+	/delete-node/ card@0;
+
+	card@0 {
+		compatible = "mmc-card";
+		reg = <0>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			partition@0 {
+				label = "MBR";
+				reg = <0x0 0x00000000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@80000 {
+				label = "EBR1";
+				reg = <0x0 0x00080000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@100000 {
+				label = "__NODL_PMT";
+				reg = <0x0 0x00100000 0x0 0x00400000>;
+				read-only;
+			};
+
+			partition@500000 {
+				label = "__NODL_PRO_INFO";
+				reg = <0x0 0x00500000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@800000 {
+				label = "__NODL_NVRAM";
+				reg = <0x0 0x00800000 0x0 0x00500000>;
+				read-only;
+			};
+
+			partition@d00000 {
+				label = "__NODL_PROTECT_F";
+				reg = <0x0 0x00d00000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@1700000 {
+				label = "__NODL_PROTECT_S";
+				reg = <0x0 0x01700000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@2100000 {
+				label = "__NODL_SECCFG";
+				reg = <0x0 0x02100000 0x0 0x00020000>;
+				read-only;
+			};
+
+			partition@2120000 {
+				label = "UBOOT";
+				reg = <0x0 0x02120000 0x0 0x00060000>;
+				read-only;
+			};
+
+			partition@2180000 {
+				label = "BOOTIMG";
+				reg = <0x0 0x02180000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2780000 {
+				label = "RECOVERY";
+				reg = <0x0 0x02780000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@2d80000 {
+				label = "SEC_RO";
+				reg = <0x0 0x02d80000 0x0 0x00600000>;
+				read-only;
+			};
+
+			partition@3380000 {
+				label = "__NODL_MISC";
+				reg = <0x0 0x03380000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3400000 {
+				label = "LOGO";
+				reg = <0x0 0x03400000 0x0 0x00300000>;
+				read-only;
+			};
+
+			partition@3700000 {
+				label = "EBR2";
+				reg = <0x0 0x03700000 0x0 0x00080000>;
+				read-only;
+			};
+
+			partition@3780000 {
+				label = "__NODL_EXPDB";
+				reg = <0x0 0x03780000 0x0 0x00a00000>;
+				read-only;
+			};
+
+			partition@4180000 {
+				label = "FAC";
+				reg = <0x0 0x04180000 0x0 0x0c800000>;
+				read-only;
+			};
+
+			partition@10980000 {
+				label = "ANDROID";
+				reg = <0x0 0x10980000 0x0 0x40000000>;
+				read-only;
+			};
+
+			partition@50980000 {
+				label = "CACHE";
+				reg = <0x0 0x50980000 0x0 0x07e00000>;
+				read-only;
+			};
+
+			partition@58780000 {
+				label = "USRDATA";
+				reg = <0x0 0x58780000 0x3 0x49fa0000>;
+				read-only;
+			};
+		};
+	};
+};
+
+/*
+ * B8000-H touch: the vendor S7300 driver (mediatek/custom/common/kernel/
+ * touchpanel/S7300) powers the panel from VGP5 at 2.8 V, not VGP4.
+ * Keep VGP4 on as well until the real rail is confirmed.
+ */
+&mt6320_ldo_vgp5 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6320_ldo_vgp4 {
+	regulator-always-on;
+};
+
+&i2c0 {
+	touchscreen@38 {
+		vdd-supply = <&mt6320_ldo_vgp5>;
+	};
+};
+
+/*
+ * The ID pin of the shared blade description (GPIO57) reads 1 whatever is
+ * in the socket, and the connector driver took that for an adapter: host
+ * mode, no USB console. No connector here; the glue starts as a device and
+ * userspace switches the role (b8k-usb).
+ */
+&usb0 {
+	dr_mode = "otg";
+	/delete-node/ connector;
+};
+
+/*
+ * The MediaTek musb glue only enables vusb from the OTG role-switch path.
+ * With dr_mode = "peripheral" nobody holds it and regulator late cleanup
+ * turns the USB PHY supply off ~30 s after boot. Keep it on.
+ */
+&mt6320_ldo_vusb {
+	regulator-always-on;
+};
+
+/*
+ * Battery: B8000-H has no BQ27541 (vendor MTK_BQ27541_SUPPORT=no, nothing
+ * answers at 0x55); the vendor computes the charge from MT6320 AUXADC
+ * (docs/battery-mt6320-plan.md).  The charger's own capacity-less "battery"
+ * made Phosh show 0 %: omit it.
+ */
+&i2c4 {
+	/delete-node/ fuel-gauge@55;
+};
+
+&i2c6 {
+	charger@6b {
+		omit-battery-class;
+	};
+
+};
+
+/*
+ * Vendor cust_acc direction=3; this is the same orientation previously
+ * supplied to iio-sensor-proxy by 61-b8000h-accel.rules.
+ */
+&i2c3 {
+	accelerometer@11 {
+		mount-matrix = "0", "-1", "0", "1", "0", "0", "0", "0", "1";
+	};
+};
+
+
+/*
+ * The arch timer gives each CPU its own tick (patch 0041); time and
+ * sched_clock come from the MediaTek GPT (timer@10008000), because CNTPCT's
+ * high word lags GPT6 until GPT6 is read. The GPT also stays the broadcast
+ * device.
+ */
+&{/timer} {
+	status = "okay";
+};
+
+/*
+ * Vendor DCT (lenovo89_tb_x10_jb2 cust_eint.h): CUST_EINT_MT6320_PMIC_NUM 3,
+ * level, active high, on the dedicated EINT3 pad (GPIO37). EINT43 from
+ * mt6320.dtsi is pad 9 = eMMC DAT1 on this SoC.
+ */
+&pmic {
+	interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
+};
+
+/* SGX544 sits in the MFG power domain; needed by any GPU driver. */
+&gpu {
+	power-domains = <&spm MT6589_POWER_DOMAIN_MFG>;
+};
+
+/*
+ * MT6628 Wi-Fi/BT/GPS/FM combo (vendor lenovo89_tb_x10_jb2 DCT/board.c):
+ * WMT/STP uses UART3; WMT owns PMU_EN and RST and enables the Wi-Fi function
+ * before asking MSDC3 to rescan. Never give these GPIOs to an MMC regulator or
+ * pwrseq: MMC power-off would reset the whole combo chip after WMT setup.
+ */
+&pio {
+	/* MSDC3 (MT6628 SDIO): vendor pulls CMD/DAT up, CLK down (PUPD R1=1). */
+	mt6628_msdc3_pins: mt6628-msdc3-pins {
+		pins-cmd-dat {
+			pinmux = <MT6589_GPIO226__FUNC_MSDC3_DAT2>,
+				 <MT6589_GPIO227__FUNC_MSDC3_DAT3>,
+				 <MT6589_GPIO228__FUNC_MSDC3_CMD>,
+				 <MT6589_GPIO230__FUNC_MSDC3_DAT1>,
+				 <MT6589_GPIO231__FUNC_MSDC3_DAT0>;
+			input-enable;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_10>;
+		};
+
+		pins-clk {
+			pinmux = <MT6589_GPIO229__FUNC_MSDC3_CLK>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
+		};
+	};
+
+	mt6628_uart3_pins: mt6628-uart3-pins {
+		pins-rx {
+			pinmux = <MT6589_GPIO219__FUNC_URXD3>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-tx {
+			pinmux = <MT6589_GPIO220__FUNC_UTXD3>;
+		};
+	};
+};
+
+/*
+ * The combo UART is vendor UART3 = /dev/ttyMT2 = 0x11008000, i.e. upstream
+ * &uart2 (upstream labels count from 0).  Pins GPIO219/220 URXD3/UTXD3.
+ */
+/ {
+	/* 5 V for a USB keyboard in host mode: the bq24190 OTG boost. */
+	usb-otg-vbus-output {
+		compatible = "regulator-output";
+		vout-supply = <&usb_otg_vbus>;
+	};
+
+	/* Vibration motor on the MT6320 VIBR LDO. */
+	haptic {
+		compatible = "regulator-haptic";
+		haptic-supply = <&mt6320_ldo_vibr>;
+		min-microvolt = <2800000>;
+		max-microvolt = <2800000>;
+	};
+
+	mt6628_sdio_vmmc: regulator-mt6628-sdio {
+		compatible = "regulator-fixed";
+		regulator-name = "mt6628-sdio";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+};
+
+&uart2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&mt6628_uart3_pins>;
+
+	mt6628 {
+		compatible = "mediatek,mt6628-wmt";
+		pmu-en-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 225 GPIO_ACTIVE_HIGH>;
+		/* BGF EINT omitted: EINT8 resolves to pin 90 (modem BPI bus) and hangs the SoC. */
+		mediatek,mmc-host = <&mmc3>;
+		mediatek,operational-speed = <2000000>;
+		mediatek,rtc-stable-ms = <100>;
+		mediatek,off-stable-ms = <10>;
+		mediatek,reset-stable-ms = <30>;
+		mediatek,on-stable-ms = <100>;
+	};
+};
+
+&mmc3 {
+	status = "okay";
+	/delete-property/ vqmmc-supply;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-ddr50;
+	/delete-property/ mmc-pwrseq;
+	/* Chip power is owned by WMT; this only gives the host a 3.3 V OCR. */
+	vmmc-supply = <&mt6628_sdio_vmmc>;
+	/* mtk-sd requires both states */
+	pinctrl-names = "default", "state_uhs";
+	pinctrl-0 = <&mt6628_msdc3_pins>;
+	pinctrl-1 = <&mt6628_msdc3_pins>;
+	max-frequency = <25000000>;
+	keep-power-in-suspend;
+};
+
+/*
+ * Display: mediatek-drm on the path the bootloader uses,
+ * OVL -> BLS -> RDMA0 -> DSI (+ MIPI-TX), instead of simpledrm.
+ */
+&dispsys {
+	compatible = "mediatek,mt6589-mmsys", "syscon";
+	#clock-cells = <1>;
+	power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+};
+
+/ {
+	soc {
+		disp_ovl: ovl@14003000 {
+			compatible = "mediatek,mt6589-disp-ovl", "mediatek,mt2701-disp-ovl";
+			reg = <0x14003000 0x1000>;
+			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_OVL_ENGINE>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		disp_rdma0: rdma@14006000 {
+			compatible = "mediatek,mt6589-disp-rdma", "mediatek,mt2701-disp-rdma";
+			reg = <0x14006000 0x1000>;
+			interrupts = <GIC_SPI 166 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_RDMA0_ENGINE>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		disp_bls: bls@14008000 {
+			compatible = "mediatek,mt6589-disp-bls";
+			reg = <0x14008000 0x1000>;
+			interrupts = <GIC_SPI 168 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP0_BLS>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		/* LCD backlight: BLS PWM duty 0..255 (vendor cust_leds CUST_BLS_PWM). */
+		backlight: backlight {
+			compatible = "mediatek,mt6589-bls-backlight";
+			mediatek,bls = <&disp_bls>;
+		};
+
+		disp_mutex: mutex@14011000 {
+			compatible = "mediatek,mt6589-disp-mutex";
+			reg = <0x14011000 0x1000>;
+			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_LOW>;
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+		};
+
+		mipi_tx0: dsi-phy@10012000 {
+			compatible = "mediatek,mt6589-mipi-tx", "mediatek,mt2701-mipi-tx";
+			reg = <0x10012000 0x90>;
+			clocks = <&clk26m>;
+			clock-output-names = "mipi_tx0_pll";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
+		dsi0: dsi@1400d000 {
+			compatible = "mediatek,mt6589-dsi", "mediatek,mt2701-dsi";
+			reg = <0x1400d000 0x1000>;
+			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_LOW>;
+			clocks = <&dispsys CLK_DISP1_DSI_ENGINE>,
+				 <&dispsys CLK_DISP1_DSI_DIGITAL>,
+				 <&mipi_tx0>;
+			clock-names = "engine", "digital", "hs";
+			phys = <&mipi_tx0>;
+			phy-names = "dphy";
+			power-domains = <&spm MT6589_POWER_DOMAIN_DIS>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			panel@0 {
+				compatible = "lenovo,b8000-panel";
+				reg = <0>;
+				backlight = <&backlight>;
+
+				port {
+					panel_in: endpoint {
+						remote-endpoint = <&dsi0_out>;
+					};
+				};
+			};
+
+			/* mtk_dsi looks the panel up through the OF graph (port 1). */
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@1 {
+					reg = <1>;
+
+					dsi0_out: endpoint {
+						remote-endpoint = <&panel_in>;
+					};
+				};
+			};
+		};
+	};
+};
+
+/*
+ * Front camera (device-lenovo-b8000h#17, docs/camera-front.md): OmniVision
+ * OV9760 on I2C 1 at 0x10, one CSI-2 lane. Supplies, pins and the order
+ * follow the stock kdCISModulePowerOn: VCAMA 2.8 V, VGP2 1.8 V, RST GPIO32
+ * and PDN GPIO31, both active low. The stock code also names VGP5, which is
+ * the touch panel's 2.8 V rail and stays with it. MCLK (24 MHz) comes from
+ * SENINF TG1, which the receiver driver of stage 2 will also drive.
+ */
+&mt6320_ldo_vcama {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+&mt6320_ldo_vgp2 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+};
+
+&pio {
+	camera_mclk_pins: camera-mclk-default {
+		pin-mclk {
+			pinmux = <MT6589_GPIO210__FUNC_CMMCLK>;
+		};
+	};
+
+	/*
+	 * The CSI1 lanes share pads with the parallel camera interface
+	 * (CMDAT0..9, CMHSYNC, CMVSYNC: pins 197-208): GPIO mode with the
+	 * input buffers off, as the stock initTg2CSI2 leaves them (IES 0x1C0
+	 * bits 5..15, 0x1D0 bit 0).
+	 */
+	camera_csi1_pins: camera-csi1-default {
+		pins-csi1 {
+			pinmux = <MT6589_GPIO197__FUNC_GPIO197>,
+				 <MT6589_GPIO198__FUNC_GPIO198>,
+				 <MT6589_GPIO199__FUNC_GPIO199>,
+				 <MT6589_GPIO200__FUNC_GPIO200>,
+				 <MT6589_GPIO201__FUNC_GPIO201>,
+				 <MT6589_GPIO202__FUNC_GPIO202>,
+				 <MT6589_GPIO203__FUNC_GPIO203>,
+				 <MT6589_GPIO204__FUNC_GPIO204>,
+				 <MT6589_GPIO205__FUNC_GPIO205>,
+				 <MT6589_GPIO206__FUNC_GPIO206>,
+				 <MT6589_GPIO207__FUNC_GPIO207>,
+				 <MT6589_GPIO208__FUNC_GPIO208>;
+			input-disable;
+		};
+	};
+};
+
+&{/soc} {
+	/*
+	 * SENINF with the parts of the camera block the receive path uses:
+	 * ISP pass 1 (TG2, IMGO), MIPI-RX analog (CSI0/CSI1, after the DSI PHY
+	 * at 0x10012000) and MIPI-RX calibration. The ISP interrupt is GIC SPI
+	 * 151, level low, as in the stock camera_isp.c.
+	 */
+	seninf: camera-interface@15008000 {
+		compatible = "mediatek,mt6589-seninf";
+		reg = <0x15008000 0x1000>,
+		      <0x15004000 0x1000>,
+		      <0x10012800 0x30>,
+		      <0x1500c000 0x100>;
+		reg-names = "seninf", "isp", "mipi-rx", "mipi-rx-cal";
+		interrupts = <GIC_SPI 151 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&imgsys CLK_IMAGE_CAM_CAM>,
+			 <&imgsys CLK_IMAGE_SEN_TG>,
+			 <&imgsys CLK_IMAGE_SEN_CAM>,
+			 <&imgsys CLK_IMAGE_CAM_SMI>,
+			 <&imgsys CLK_IMAGE_LARB4_SMI>,
+			 <&imgsys CLK_IMAGE_COMMON_SMI>;
+		clock-names = "cam", "tg", "sen", "cam-smi", "larb", "smi";
+		power-domains = <&spm MT6589_POWER_DOMAIN_ISP>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&camera_mclk_pins>, <&camera_csi1_pins>;
+		#clock-cells = <0>;
+
+		port {
+			seninf_in: endpoint {
+				remote-endpoint = <&ov9760_out>;
+				data-lanes = <1>;
+			};
+		};
+	};
+};
+
+&i2c1 {
+	camera@10 {
+		compatible = "ovti,ov9760";
+		reg = <0x10>;
+		clocks = <&seninf>;
+		avdd-supply = <&mt6320_ldo_vcama>;
+		dovdd-supply = <&mt6320_ldo_vgp2>;
+		reset-gpios = <&pio 32 GPIO_ACTIVE_LOW>;
+		powerdown-gpios = <&pio 31 GPIO_ACTIVE_LOW>;
+		orientation = <0>;	/* front */
+		rotation = <0>;		/* mounted along the landscape panel */
+
+		port {
+			ov9760_out: endpoint {
+				remote-endpoint = <&seninf_in>;
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <300000000>;
+			};
+		};
+	};
+};

@@ -57,6 +57,8 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.ctl_offs = SPM_DIS_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
 		.sram_pdn_ack_bits = GENMASK(15, 12),
+		/* B8000: keep the display that LK set up (DSI/BLS) alive */
+		.caps = MTK_SCPD_ALWAYS_ON,
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},
@@ -64,7 +66,8 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.name = "mfg",
 		.sta_mask = PWR_STATUS_MFG,
 		.ctl_offs = SPM_MFG_PWR_CON,
-		.sram_pdn_bits = BIT(8),
+		/* MT6589 has four independently powered MFG SRAM banks. */
+		.sram_pdn_bits = GENMASK(11, 8),
 		.sram_pdn_ack_bits = BIT(12),
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
 		.bp_cfg = {
@@ -79,7 +82,7 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6589[] = {
 		.sta_mask = PWR_STATUS_ISP,
 		.ctl_offs = SPM_ISP_PWR_CON,
 		.sram_pdn_bits = GENMASK(11, 8),
-		.sram_pdn_ack_bits = GENMASK(15, 12),
+		.sram_pdn_ack_bits = GENMASK(13, 12),
 		.pwr_sta_offs = SPM_PWR_STATUS,
 		.pwr_sta2nd_offs = SPM_PWR_STATUS_2ND,
 	},

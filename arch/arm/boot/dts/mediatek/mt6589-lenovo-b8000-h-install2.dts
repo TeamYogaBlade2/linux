@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Universal BOOT profile: boots the eMMC USRDATA root once installed
+ * (/b8k-installed), otherwise stays in the initramfs as microSD installer. Sees
+ * eMMC and microSD. Only USRDATA and BOOTIMG are writable; the installer
+ * finds devices by partition name / on-card signature, not by mmcblkN number.
+ */
+
+#include "mt6589-lenovo-b8000-h.dts"
+
+/ {
+	/* Settings → О системе shows this name: the daily boot uses this DTB too. */
+	model = "Lenovo YOGA Tablet 10 B8000-H";
+
+	chosen {
+		bootargs = "clk_ignore_unused printk.always_kmsg_dump=1 rdinit=/init console=tty0 loglevel=0 vt.global_cursor_default=0 splash=1 root=PARTNAME=USRDATA";
+	};
+};
+
+&mmc0 {
+	status = "okay";
+
+	card@0 {
+		partitions {
+			partition@2180000 {
+				/delete-property/ read-only;
+			};
+			partition@58780000 {
+				/delete-property/ read-only;
+			};
+		};
+	};
+};
+
+&mmc1 {
+	/delete-property/ cd-gpios;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-ddr50;
+	/delete-property/ cap-sd-highspeed;
+	broken-cd;
+	max-frequency = <400000>;
+};

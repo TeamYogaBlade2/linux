@@ -508,3 +508,19 @@
 &bls {
 	status = "okay";
 };
+
+/* pstore in DRAM (device-lenovo-b8000h#38): the SoC's SRAM one is 7 KiB. */
+/ {
+	reserved-memory {
+		/delete-node/ ramoops@10dc00;
+
+		ramoops@bf500000 {
+			compatible = "ramoops";
+			reg = <0xbf500000 0x100000>;
+			record-size = <0x8000>;
+			console-size = <0x40000>;
+			ecc-size = <16>;
+			no-map;
+		};
+	};
+};

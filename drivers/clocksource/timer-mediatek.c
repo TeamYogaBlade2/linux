@@ -13,6 +13,7 @@
 #include <linux/clocksource.h>
 #include <linux/interrupt.h>
 #include <linux/irqreturn.h>
+#include <linux/of.h>
 #include <linux/sched_clock.h>
 #include <linux/slab.h>
 #include "timer-of.h"
@@ -302,6 +303,32 @@ static int __init mtk_syst_init(struct device_node *node)
 	return 0;
 }
 
+/*
+ * MT6589/MT8389: the ARM arch timer comparator stops working once the
+ * 13 MHz system counter wraps its low 32 bits (~330 s), so, like the vendor
+ * 3.4 kernel, tick from the GPT only.  There is a single GPT interrupt for
+ * all CPUs, so it has to be the broadcast device: give the boot CPU a dummy
+ * local device first, otherwise the GPT becomes CPU0's local timer and the
+ * secondary CPUs (dummy_timer) never get a tick.
+ */
+static struct clock_event_device mtk_gpt_boot_dummy = {
+	.name = "mtk-gpt-dummy",
+	.features = CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT |
+		    CLOCK_EVT_FEAT_DUMMY,
+	.rating = 100,
+};
+
+static void __init mtk_gpt_register_boot_dummy(void)
+{
+	if (!IS_ENABLED(CONFIG_GENERIC_CLOCKEVENTS_BROADCAST) ||
+	    num_possible_cpus() < 2 ||
+	    !of_machine_is_compatible("mediatek,mt6589"))
+		return;
+
+	mtk_gpt_boot_dummy.cpumask = cpumask_of(smp_processor_id());
+	clockevents_register_device(&mtk_gpt_boot_dummy);
+}
+
 static int __init mtk_gpt_init(struct device_node *node)
 {
 	int ret;
@@ -330,6 +357,7 @@ static int __init mtk_gpt_init(struct device_node *node)
 
 	/* Configure clock event */
 	mtk_gpt_setup(&to, TIMER_CLK_EVT, GPT_CTRL_OP_REPEAT);
+	mtk_gpt_register_boot_dummy();
 	clockevents_config_and_register(&to.clkevt, timer_of_rate(&to),
 					TIMER_SYNC_TICKS, 0xffffffff);
 

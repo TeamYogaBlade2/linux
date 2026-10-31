@@ -1165,4 +1165,12 @@ config MACSMC_POWER
 
 	  Say Y or M here if you have an Apple Silicon based Mac.
 
+config BATTERY_B8K
+	tristate "Lenovo B8000-H MT6320 battery gauge"
+	depends on ARCH_MEDIATEK
+	help
+	  Report battery voltage and an OCV-derived capacity estimate using the
+	  MT6320 AUXADC on Lenovo YOGA Tablet 10 B8000-H systems without a
+	  dedicated fuel-gauge IC.
+
 endif # POWER_SUPPLY

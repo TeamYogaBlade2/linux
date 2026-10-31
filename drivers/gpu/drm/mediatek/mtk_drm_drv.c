@@ -21,6 +21,7 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_damage_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_of.h>
@@ -50,6 +51,9 @@ mtk_drm_mode_fb_create(struct drm_device *dev,
 	if (info->num_planes != 1)
 		return ERR_PTR(-EINVAL);
 
+	if (of_machine_is_compatible("mediatek,mt6589"))
+		return drm_gem_fb_create_with_dirty(dev, file, info, cmd);
+
 	return drm_gem_fb_create(dev, file, info, cmd);
 }
 
@@ -57,6 +61,14 @@ static const struct drm_mode_config_funcs mtk_drm_mode_config_funcs = {
 	.fb_create = mtk_drm_mode_fb_create,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
+};
+
+/* MT6589: RDMA0 is the line buffer after BLS, right before DSI. */
+static const unsigned int mt6589_mtk_ddp_main[] = {
+	DDP_COMPONENT_OVL0,
+	DDP_COMPONENT_BLS,
+	DDP_COMPONENT_RDMA0,
+	DDP_COMPONENT_DSI0,
 };
 
 static const unsigned int mt2701_mtk_ddp_main[] = {
@@ -231,6 +243,13 @@ static const unsigned int mt8195_mtk_ddp_ext[] = {
 	DDP_COMPONENT_DP_INTF1,
 };
 
+static const struct mtk_mmsys_driver_data mt6589_mmsys_driver_data = {
+	.main_path = mt6589_mtk_ddp_main,
+	.main_len = ARRAY_SIZE(mt6589_mtk_ddp_main),
+	.shadow_register = true,
+	.mmsys_dev_num = 1,
+};
+
 static const struct mtk_mmsys_driver_data mt2701_mmsys_driver_data = {
 	.main_path = mt2701_mtk_ddp_main,
 	.main_len = ARRAY_SIZE(mt2701_mtk_ddp_main),
@@ -332,6 +351,8 @@ static const struct mtk_mmsys_driver_data mt8365_mmsys_driver_data = {
 };
 
 static const struct of_device_id mtk_drm_of_ids[] = {
+	{ .compatible = "mediatek,mt6589-mmsys",
+	  .data = &mt6589_mmsys_driver_data},
 	{ .compatible = "mediatek,mt2701-mmsys",
 	  .data = &mt2701_mmsys_driver_data},
 	{ .compatible = "mediatek,mt7623-mmsys",
@@ -600,10 +621,30 @@ static void mtk_drm_kms_deinit(struct drm_device *drm)
 
 DEFINE_DRM_GEM_FOPS(mtk_drm_fops);
 
+/*
+ * MT6589 has no GPU: phoc renders with pixman straight into the dumb
+ * buffers.  Write-combined (uncached) buffers make every blend read go to
+ * DRAM and pinned one Cortex-A7 core at 100%.  Use cached buffers and flush
+ * the damaged area before scanout (mtk_plane_atomic_update()).
+ */
+static struct drm_gem_object *mtk_gem_create_object(struct drm_device *dev,
+						    size_t size)
+{
+	struct drm_gem_dma_object *obj;
+
+	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+	if (!obj)
+		return ERR_PTR(-ENOMEM);
+	obj->map_noncoherent = of_machine_is_compatible("mediatek,mt6589");
+
+	return &obj->base;
+}
+
 static const struct drm_driver mtk_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
 
 	DRM_GEM_DMA_DRIVER_OPS,
+	.gem_create_object = mtk_gem_create_object,
 	DRM_FBDEV_DMA_DRIVER_OPS,
 
 	.fops = &mtk_drm_fops,
@@ -738,6 +779,8 @@ static const struct of_device_id mtk_ddp_comp_dt_ids[] = {
 	  .data = (void *)MTK_DISP_GAMMA, },
 	{ .compatible = "mediatek,mt8195-disp-merge",
 	  .data = (void *)MTK_DISP_MERGE },
+	{ .compatible = "mediatek,mt6589-disp-mutex",
+	  .data = (void *)MTK_DISP_MUTEX },
 	{ .compatible = "mediatek,mt2701-disp-mutex",
 	  .data = (void *)MTK_DISP_MUTEX },
 	{ .compatible = "mediatek,mt2712-disp-mutex",
@@ -778,6 +821,8 @@ static const struct of_device_id mtk_ddp_comp_dt_ids[] = {
 	  .data = (void *)MTK_DISP_OVL_2L },
 	{ .compatible = "mediatek,mt8192-disp-postmask",
 	  .data = (void *)MTK_DISP_POSTMASK },
+	{ .compatible = "mediatek,mt6589-disp-bls",
+	  .data = (void *)MTK_DISP_BLS },
 	{ .compatible = "mediatek,mt2701-disp-pwm",
 	  .data = (void *)MTK_DISP_BLS },
 	{ .compatible = "mediatek,mt8167-disp-pwm",

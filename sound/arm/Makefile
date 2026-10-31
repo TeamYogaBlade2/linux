@@ -3,6 +3,8 @@
 # Makefile for ALSA
 #
 
+obj-$(CONFIG_SND_MT6589_B8000)	+= mt6589-b8000.o
+
 obj-$(CONFIG_SND_ARMAACI)	+= snd-aaci.o
 snd-aaci-y			:= aaci.o
 

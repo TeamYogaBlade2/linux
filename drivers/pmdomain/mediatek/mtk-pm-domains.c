@@ -1250,6 +1250,15 @@ static int scpsys_probe(struct platform_device *pdev)
 		return PTR_ERR(scpsys->base);
 	}
 
+	/*
+	 * MT6589 SPM write protection.  Power-control register writes are
+	 * silently ignored until PROJECT_CODE (0xb16) and bit 0 are written
+	 * to POWERON_CONFIG_SET at offset 0.  The vendor mt_spm_mtcmos code
+	 * performs this unlock before touching any MTCMOS domain.
+	 */
+	if (of_device_is_compatible(np, "mediatek,mt6589-power-controller"))
+		regmap_write(scpsys->base, 0, 0x0b160001);
+
 	if (of_find_property(np, "access-controllers", NULL))
 		ret = scpsys_get_bus_protection(dev, scpsys);
 	else

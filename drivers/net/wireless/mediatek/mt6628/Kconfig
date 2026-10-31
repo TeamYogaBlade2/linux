@@ -1,0 +1,18 @@
+config MT6628_WMT
+	tristate "MediaTek MT6628 WMT/STP core"
+	depends on SERIAL_DEV_BUS && GPIOLIB && MMC
+	select FW_LOADER
+	help
+	  Power, UART STP, firmware patch and SDIO-rescan support for the
+	  MediaTek MT6628 connectivity combo used by the Lenovo B8000-H.
+
+config MT6628_WLAN
+	tristate "MediaTek MT6628 WLAN"
+	depends on MT6628_WMT && MMC && CFG80211
+	select FW_LOADER
+	help
+	  Legacy gen2 WLAN driver for the MT6628 SDIO function.  The matching
+	  WMT core and WIFI_RAM_CODE_MT6628 firmware are required.
+
+	  This driver should be built as a module because firmware is supplied
+	  by the root filesystem.

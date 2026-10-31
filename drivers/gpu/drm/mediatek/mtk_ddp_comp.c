@@ -555,6 +555,14 @@ static bool mtk_ddp_path_available(const unsigned int *path,
 	return true;
 }
 
+enum mtk_ddp_comp_type mtk_ddp_comp_get_type(unsigned int comp_id)
+{
+	if (comp_id >= ARRAY_SIZE(mtk_ddp_matches))
+		return MTK_DDP_COMP_TYPE_MAX;
+
+	return mtk_ddp_matches[comp_id].type;
+}
+
 int mtk_ddp_comp_get_id(struct device_node *node,
 			enum mtk_ddp_comp_type comp_type)
 {

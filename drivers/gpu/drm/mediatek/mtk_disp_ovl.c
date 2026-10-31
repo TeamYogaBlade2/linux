@@ -165,6 +165,8 @@ struct mtk_disp_ovl {
 	const struct mtk_disp_ovl_data	*data;
 	void				(*vblank_cb)(void *data);
 	void				*vblank_cb_data;
+	/* MT6589: vblank comes from RDMA; the OVL interrupt is LK's leftover */
+	bool				lk_irq_only;
 };
 
 static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
@@ -173,6 +175,11 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 
 	/* Clear frame completion interrupt */
 	writel(0x0, priv->regs + DISP_REG_OVL_INTSTA);
+
+	if (priv->lk_irq_only) {
+		writel(0x0, priv->regs + DISP_REG_OVL_INTEN);
+		return IRQ_HANDLED;
+	}
 
 	if (!priv->vblank_cb)
 		return IRQ_NONE;
@@ -384,6 +391,15 @@ void mtk_ovl_layer_on(struct device *dev, unsigned int idx,
 	else
 		gmc_value = gmc_thrshd_l | gmc_thrshd_l << 8 |
 			    gmc_thrshd_h << 16 | gmc_thrshd_h << 24;
+	/*
+	 * MT6589 (values the bootloader uses): full per-layer RDMA FIFO and
+	 * lower GMC thresholds; the MT2701 defaults underflow on this SoC.
+	 */
+	if (of_device_is_compatible(dev->of_node, "mediatek,mt6589-disp-ovl")) {
+		mtk_ddp_write(cmdq_pkt, 0x03ff0001, &ovl->cmdq_reg, ovl->regs,
+			      DISP_REG_OVL_RDMA_CTRL(idx));
+		gmc_value = 0x10101010;
+	}
 	mtk_ddp_write(cmdq_pkt, gmc_value,
 		      &ovl->cmdq_reg, ovl->regs, DISP_REG_OVL_RDMA_GMC(idx));
 	mtk_ddp_write_mask(cmdq_pkt, BIT(idx), &ovl->cmdq_reg, ovl->regs,
@@ -638,6 +654,7 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 #endif
 
 	priv->data = of_device_get_match_data(dev);
+	priv->lk_irq_only = of_machine_is_compatible("mediatek,mt6589");
 	platform_set_drvdata(pdev, priv);
 
 	ret = devm_request_irq(dev, irq, mtk_disp_ovl_irq_handler,

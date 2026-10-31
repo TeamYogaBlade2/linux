@@ -516,6 +516,11 @@ void musb_g_tx(struct musb *musb, u8 epnum)
 /*
  * Context: controller locked, IRQs blocked, endpoint selected
  */
+int b8k_rx_seen;
+EXPORT_SYMBOL_GPL(b8k_rx_seen);
+static int b8k_dbg2;
+#define B8K(fmt, ...) do { if (b8k_dbg2 < 60) { b8k_dbg2++; pr_info("B8000H-DBG2 " fmt "\n", ##__VA_ARGS__); } } while (0)
+
 static void rxstate(struct musb *musb, struct musb_request *req)
 {
 	const u8		epnum = req->epnum;
@@ -764,9 +769,11 @@ buffer_aint_mapped:
 			fifo_count = min_t(unsigned int,
 					request->length - request->actual,
 					(unsigned int)fifo_count);
+			B8K("rx ep%d pre-read cnt=%u len=%u csr=%04x", epnum, fifo_count, request->length, musb_readw(epio, MUSB_RXCSR));
 			musb_read_fifo(musb_ep->hw_ep, fifo_count, (u8 *)
 					(request->buf + request->actual));
 			request->actual += fifo_count;
+			B8K("rx ep%d read ok first=%02x csr=%04x", epnum, ((u8 *)request->buf)[0], musb_readw(epio, MUSB_RXCSR));
 
 			/* REVISIT if we left anything in the fifo, flush
 			 * it and report -EOVERFLOW
@@ -776,13 +783,22 @@ buffer_aint_mapped:
 			csr |= MUSB_RXCSR_P_WZC_BITS;
 			csr &= ~MUSB_RXCSR_RXPKTRDY;
 			musb_writew(epio, MUSB_RXCSR, csr);
+			b8k_rx_seen = 1;
+			B8K("rx ep%d acked wrote=%04x now=%04x", epnum, csr, musb_readw(epio, MUSB_RXCSR));
+		} else {
+			B8K("rx ep%d pktrdy but actual=%u>=len=%u", epnum, request->actual, request->length);
 		}
+	} else {
+		B8K("rx ep%d no pktrdy csr=%04x", epnum, csr);
 	}
 
 	/* reach the end or short packet detected */
 	if (request->actual == request->length ||
-	    fifo_count < musb_ep->packet_sz)
+	    fifo_count < musb_ep->packet_sz) {
+		B8K("rx ep%d giveback actual=%u", epnum, request->actual);
 		musb_g_giveback(musb_ep, request, 0);
+		B8K("rx ep%d giveback done", epnum);
+	}
 }
 
 /*
@@ -807,6 +823,18 @@ void musb_g_rx(struct musb *musb, u8 epnum)
 	musb_ep_select(mbase, epnum);
 
 	req = next_request(musb_ep);
+	{
+		/* B8000H-DBG */
+		static int dbg_rx;
+
+		if (dbg_rx < 40) {
+			dbg_rx++;
+			pr_info("B8000H-DBG g_rx#%d ep%d req=%d rxcsr=%04x rxcount=%u\n",
+				dbg_rx, epnum, req ? 1 : 0,
+				musb_readw(epio, MUSB_RXCSR),
+				musb_readw(epio, MUSB_RXCOUNT));
+		}
+	}
 	if (!req)
 		return;
 
