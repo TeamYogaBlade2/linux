@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017 MediaTek Inc.
+ * Copyright (c) 2026 MT6589 adaptation
  */
 
 #include <linux/clk.h>
@@ -8,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 
 #include "mtk_crtc.h"
@@ -16,6 +18,7 @@
 #include "mtk_drm_drv.h"
 
 #define DISP_COLOR_CFG_MAIN			0x0400
+#define DISP_COLOR_WIN_X_MAIN			0x040c
 #define DISP_COLOR_START_MT2701			0x0f00
 #define DISP_COLOR_START_MT8167			0x0400
 #define DISP_COLOR_START_MT8173			0x0c00
@@ -25,16 +28,27 @@
 
 #define COLOR_BYPASS_ALL			BIT(7)
 #define COLOR_SEQ_SEL				BIT(13)
+/* MT6589 specific: main control bit to enable the color module */
+#define COLOR_MAIN_EN				BIT(29)
+
+/* Additional registers needed by MT6589 */
+#define DISP_COLOR_R2Y_EN			(DISP_COLOR_START_MT2701 + 0x60)	/* 0xf60 */
+#define DISP_COLOR_R2Y_MATRIX_BASE		(DISP_COLOR_START_MT2701 + 0x64)	/* 0xf64 */
+
+struct mtk_disp_color *color;
 
 struct mtk_disp_color_data {
 	unsigned int color_offset;
+	bool enable_main_bit29;		/* set BIT(29) in CFG_MAIN */
+	/*
+	 * Set CFG_MAIN.all_bypass (bit 7) instead of only BIT(29), i.e. leave
+	 * COLOR as a pass-through.  See the MT6589 entry for why.
+	 */
+	bool bypass_all;
+	void (*init)(struct mtk_disp_color *color);	/* extra init sequence */
+	bool has_reset;
 };
 
-/*
- * struct mtk_disp_color - DISP_COLOR driver structure
- * @crtc: associated crtc to report irq events to
- * @data: platform colour driver data
- */
 struct mtk_disp_color {
 	struct drm_crtc				*crtc;
 	struct clk				*clk;
@@ -58,22 +72,113 @@ void mtk_color_clk_disable(struct device *dev)
 }
 
 void mtk_color_config(struct device *dev, unsigned int w,
-		      unsigned int h, unsigned int vrefresh,
-		      unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
+			      unsigned int h, unsigned int vrefresh,
+			      unsigned int bpc, struct cmdq_pkt *cmdq_pkt)
 {
 	struct mtk_disp_color *color = dev_get_drvdata(dev);
 
 	mtk_ddp_write(cmdq_pkt, w, &color->cmdq_reg, color->regs, DISP_COLOR_WIDTH(color));
 	mtk_ddp_write(cmdq_pkt, h, &color->cmdq_reg, color->regs, DISP_COLOR_HEIGHT(color));
+
+	/* The MT6589 COLOR wrapper processes from x=0 to x=0xffff. */
+	if (color->data->enable_main_bit29)
+		mtk_ddp_write(cmdq_pkt, 0xffff0000, &color->cmdq_reg,
+			      color->regs, DISP_COLOR_WIN_X_MAIN);
+}
+
+/*
+ * MT6589 specific initialization:
+ * - Enable the color module via BIT(29) in CFG_MAIN
+ * - Setup the color space conversion matrix (BT.601 YUV->RGB)
+ * - Enable R2Y and CCOR stages
+ */
+static void mt6589_color_init(struct mtk_disp_color *color)
+{
+	void __iomem *regs = color->regs;
+	unsigned int i;
+
+	/*
+	 * Register sequence of the downstream DpEngine_COLORonInit(): one
+	 * contiguous coefficient table at 0xf64..0xfdc holding the R2Y
+	 * matrix, its RGB gains and input offsets (+128), the Y2R enable
+	 * bit at 0xfa0 and the Y2R matrix with U/V offsets of -128 at
+	 * 0xfcc/0xfd0.
+	 */
+	static const u32 coef[] = {
+		306, 601, 117, -173, -339, 512,		/* 0xf64: R2Y */
+		512, -429, -83,
+		0, 0, 0, 0,				/* reserved   */
+		128, 128,				/* R/G offsets */
+		1,					/* 0xfa0: Y2R_EN */
+		1024, -1, 1436,				/* 0xfa4: Y2R */
+		1024,
+		-353, -731,
+		1024, 1814,
+		1, 0,					/* gains tail */
+		-128, -128,				/* U/V offsets */
+		0, 0, 0,
+	};
+
+	for (i = 0; i < ARRAY_SIZE(coef); i++)
+		writel(coef[i], regs + DISP_COLOR_R2Y_MATRIX_BASE + i * 4);
+
+	/* Enable the R2Y stage (0xf60) */
+	writel(1, regs + DISP_COLOR_R2Y_EN);
+
+	/*
+	 * Use the same 10-bit to 8-bit rounding pattern as the downstream
+	 * kernel.  The interrupt mask at 0xf04 is intentionally left alone:
+	 * this driver does not service COLOR interrupts.
+	 */
+	writel(0x333, regs + DISP_COLOR_START_MT2701 + 0x0c);
+	/* Match DpEngine_COLORonInit(): this driver has no PQ demo mode. */
+	writel(0, regs + 0x420);
 }
 
 void mtk_color_start(struct device *dev)
 {
 	struct mtk_disp_color *color = dev_get_drvdata(dev);
+	u32 cfg_main = COLOR_BYPASS_ALL | COLOR_SEQ_SEL;
 
-	writel(COLOR_BYPASS_ALL | COLOR_SEQ_SEL,
-	       color->regs + DISP_COLOR_CFG_MAIN);
+	/*
+	 * BIT(29) is color_dbuf_en ("Enables vs update"), which every path
+	 * wants.  BIT(7) is all_bypass, "All engine bypass".
+	 *
+	 * Which one MT6589 should use is settled by the one configuration
+	 * known to light this panel: the bootloader's (LK) display path, whose
+	 * live CFG_MAIN reads 0x20002080 - BIT(29) | BIT(7), i.e. COLOR
+	 * bypassed and not even in the data path (LK routes OVL -> BLS with
+	 * DISP_OVL_MOUT_EN = 0x2 and BLS_SEL = 0).
+	 *
+	 * The Android kernel driver does enable COLOR (DpEngine_COLORonInit()
+	 * writes BIT(29) alone unless pq_debug_flag == 1), so both are used
+	 * somewhere.  But with COLOR enabled on this board we have a full,
+	 * self-consistent pipe - OVL run=1, RDMA0 frame-end interrupts
+	 * arriving, DSI transmitting - and no picture, so the additional
+	 * R2Y colour-space conversion that COLOR performs on an RGB888 stream
+	 * is worth ruling out before trusting it.  Follow LK.
+	 */
+	if (color->data->bypass_all)
+		cfg_main = COLOR_MAIN_EN | COLOR_BYPASS_ALL;
+	else if (color->data->enable_main_bit29)
+		cfg_main = COLOR_MAIN_EN;
+
+	writel(cfg_main, color->regs + DISP_COLOR_CFG_MAIN);
+
+	/* SoC-specific extra initialization */
+	if (color->data->init)
+		color->data->init(color);
+
 	writel(0x1, color->regs + DISP_COLOR_START(color));
+	if (color->data->enable_main_bit29)
+		dev_dbg(dev,
+			"MT6589 COLOR start: cfg_main=%#x start=%#x width=%#x height=%#x win_x=%#x r2y_en=%#x\n",
+			 readl(color->regs + DISP_COLOR_CFG_MAIN),
+			 readl(color->regs + DISP_COLOR_START(color)),
+			 readl(color->regs + DISP_COLOR_WIDTH(color)),
+			 readl(color->regs + DISP_COLOR_HEIGHT(color)),
+			 readl(color->regs + DISP_COLOR_WIN_X_MAIN),
+			 readl(color->regs + DISP_COLOR_R2Y_EN));
 }
 
 static int mtk_disp_color_bind(struct device *dev, struct device *master,
@@ -96,6 +201,7 @@ static int mtk_disp_color_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct mtk_disp_color *priv;
+	struct reset_control *rstc;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -118,6 +224,32 @@ static int mtk_disp_color_probe(struct platform_device *pdev)
 #endif
 
 	priv->data = of_device_get_match_data(dev);
+	if (!priv->data)
+		return -ENODEV;
+
+	/*
+	 * MT6589 declares a COLOR reset in the Device Tree.  Pulse it before
+	 * registering the component, while its functional clock is running,
+	 * so stale COLOR state cannot break the OVL -> COLOR -> RDMA0 path.
+	 * Other compatibles do not declare a reset and must not look one up.
+	 */
+	if (priv->data->has_reset) {
+		rstc = devm_reset_control_get(dev, NULL);
+		if (IS_ERR(rstc))
+			return dev_err_probe(dev, PTR_ERR(rstc),
+					     "failed to get color reset\n");
+
+		ret = clk_prepare_enable(priv->clk);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "failed to enable color clock for reset\n");
+
+		ret = reset_control_reset(rstc);
+		clk_disable_unprepare(priv->clk);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to reset color\n");
+	}
+
 	platform_set_drvdata(pdev, priv);
 
 	ret = component_add(dev, &mtk_disp_color_component_ops);
@@ -144,6 +276,18 @@ static const struct mtk_disp_color_data mt8173_color_driver_data = {
 	.color_offset = DISP_COLOR_START_MT8173,
 };
 
+static const struct mtk_disp_color_data mt6589_color_driver_data = {
+	.color_offset = DISP_COLOR_START_MT2701,	/* same as MT2701: 0x0f00 */
+	.enable_main_bit29 = true,
+	/*
+	 * Match the bootloader, which is the only configuration observed to
+	 * light this panel: CFG_MAIN = BIT(29) | BIT(7).  See mtk_color_start().
+	 */
+	.bypass_all = true,
+	.init = mt6589_color_init,
+	.has_reset = true,
+};
+
 static const struct of_device_id mtk_disp_color_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt2701-disp-color",
 	  .data = &mt2701_color_driver_data},
@@ -151,6 +295,8 @@ static const struct of_device_id mtk_disp_color_driver_dt_match[] = {
 	  .data = &mt8167_color_driver_data},
 	{ .compatible = "mediatek,mt8173-disp-color",
 	  .data = &mt8173_color_driver_data},
+	{ .compatible = "mediatek,mt6589-disp-color",
+	  .data = &mt6589_color_driver_data},
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_disp_color_driver_dt_match);

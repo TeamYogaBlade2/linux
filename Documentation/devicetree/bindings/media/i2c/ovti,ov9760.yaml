@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/ovti,ov9760.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: OmniVision OV9760 MIPI CSI-2 sensor
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+description: |
+  The OV9760 is an OmniVision 1.2 megapixel raw CMOS image sensor with a
+  MIPI CSI-2 output and an I2C control interface.  It is the sub camera of
+  the Lenovo YOGA Tablet 8/10 (MT6589), where its lens entry is dummy_lens
+  because the module has no autofocus actuator.
+
+  Registers are 16-bit addressed and 8-bit wide.
+
+  Note on the I2C address: the vendor driver probes two write addresses in
+  turn, 0x6c and 0x20, and adopts whichever answers with sensor ID 0x9760.
+  The strapping on any given board is therefore a board property and must be
+  given by reg.
+
+properties:
+  compatible:
+    const: ovti,ov9760
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: extclk
+
+  vdd-supply:
+    description:
+      Digital core supply.
+
+  vddio-supply:
+    description:
+      I/O supply.
+
+  reset-gpios:
+    description: Reset line, active low.
+    maxItems: 1
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    unevaluatedProperties: false
+    description: |
+      Video output port.
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          bus-type:
+            const: 4
+          data-lanes:
+            description:
+              The vendor register tables are built for a single lane,
+              matching the "MIPI_1_LANE" note above OV9760MIPIPreview().
+            items:
+              - const: 1
+          link-frequencies: true
+
+        required:
+          - bus-type
+          - data-lanes
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - vdd-supply
+  - vddio-supply
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@6c {
+            compatible = "ovti,ov9760";
+            reg = <0x6c>;
+
+            clocks = <&camclk 1>;
+            clock-names = "extclk";
+
+            vdd-supply = <&cam_2v8>;
+            vddio-supply = <&cam_1v8>;
+
+            reset-gpios = <&pio 124 GPIO_ACTIVE_LOW>;
+
+            port {
+                ov9760_out: endpoint {
+                    remote-endpoint = <&csi2_in>;
+                    bus-type = <4>;
+                    data-lanes = <1>;
+                };
+            };
+        };
+    };
+...

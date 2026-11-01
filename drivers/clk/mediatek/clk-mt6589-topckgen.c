@@ -17,7 +17,18 @@ static const struct mtk_fixed_clk top_fixed_clks[] = {
 };
 
 static const struct mtk_fixed_factor top_divs[] = {
-	FACTOR(CLK_TOP_CLKPH_MCK, "clkph_mck", "clk_null", 1, 1),
+	/*
+	 * clkph_mck is the MEMPLL output (MEMPLL_MCK), the DRAM clock.
+	 * It was parented to clk_null, a fixed clock of rate 0, so this
+	 * clock and mempll_mck_d4 below it both reported 0 Hz.  Parent it
+	 * to the real MEMPLL instead (clk-mt6589-mempll.c); CCF reparents
+	 * it when that driver registers.
+	 *
+	 * clk_null remains the parent of cpum_tck_in, which nothing in this
+	 * tree consumes or sets a rate on, so leaving it at 0 Hz is honest
+	 * rather than a fabricated number.
+	 */
+	FACTOR(CLK_TOP_CLKPH_MCK, "clkph_mck", "mempll", 1, 1),
 	FACTOR(CLK_TOP_CPUM_TCK_IN, "cpum_tck_in", "clk_null", 1, 1),
 
 	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "mainpll_806m", 1, 2),
@@ -56,6 +67,12 @@ static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_LVDSPLL_D4, "lvdspll_d4", "lvdspll", 1, 4),
 	FACTOR(CLK_TOP_LVDSPLL_D8, "lvdspll_d8", "lvdspll", 1, 8),
 
+	/*
+	 * MEMPLL_MCK_D4 is MEMPLL divided by four.  The datasheet names it
+	 * directly as "MEMPLL_MCK_D4 (266.5/4)" in the clk_mem_sel and
+	 * clk_pmicspi_sel descriptions (p. 402), confirming both the /4 and
+	 * the 266.5 MHz MEMPLL_MCK feeding it.
+	 */
 	FACTOR(CLK_TOP_MEMPLL_MCK_D4, "mempll_mck_d4", "clkph_mck", 1, 4),
 };
 

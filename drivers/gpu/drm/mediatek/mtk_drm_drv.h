@@ -6,6 +6,7 @@
 #ifndef MTK_DRM_DRV_H
 #define MTK_DRM_DRV_H
 
+#include <drm/drm_ioctl.h>
 #include <linux/io.h>
 #include "mtk_ddp_comp.h"
 
@@ -25,6 +26,7 @@ struct device_node;
 struct drm_crtc;
 struct drm_device;
 struct drm_fb_helper;
+struct drm_framebuffer;
 struct drm_property;
 struct regmap;
 
@@ -44,6 +46,7 @@ struct mtk_mmsys_driver_data {
 	unsigned int num_conn_routes;
 
 	bool shadow_register;
+	bool defer_start_until_bridge;
 	unsigned int mmsys_id;
 	unsigned int mmsys_dev_num;
 
@@ -76,9 +79,11 @@ extern struct platform_driver mtk_disp_merge_driver;
 extern struct platform_driver mtk_disp_ovl_adaptor_driver;
 extern struct platform_driver mtk_disp_ovl_driver;
 extern struct platform_driver mtk_disp_rdma_driver;
+extern struct platform_driver mtk_disp_tdshp_driver;
 extern struct platform_driver mtk_dpi_driver;
 extern struct platform_driver mtk_dsi_driver;
 extern struct platform_driver mtk_ethdr_driver;
 extern struct platform_driver mtk_mdp_rdma_driver;
 extern struct platform_driver mtk_padding_driver;
+
 #endif /* MTK_DRM_DRV_H */

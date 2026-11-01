@@ -42,6 +42,7 @@ static const struct i2c_device_id bmc150_magn_i2c_id[] = {
 	{ "bmc150_magn" },
 	{ "bmc156_magn" },
 	{ "bmm150_magn" },
+	{ "bmm050" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, bmc150_magn_i2c_id);
@@ -51,6 +52,7 @@ static const struct of_device_id bmc150_magn_of_match[] = {
 	{ .compatible = "bosch,bmc156_magn" },
 	{ .compatible = "bosch,bmm150_magn" }, /* deprecated compatible */
 	{ .compatible = "bosch,bmm150" },
+	{ .compatible = "bosch,bmm050" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, bmc150_magn_of_match);

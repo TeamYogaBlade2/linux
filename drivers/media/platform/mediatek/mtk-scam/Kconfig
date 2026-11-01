@@ -1,0 +1,25 @@
+config VIDEO_MTK_SCAM
+	tristate "MediaTek MT6589 sensor-CAM adaptor"
+	depends on HAS_IOMEM && OF
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_ASYNC
+	select VIDEO_MTK_CAM_GRAPH
+	help
+	  Say Y here if you want to use the MediaTek MT6589 sensor-CAM
+	  (SCAM) adaptor.
+
+	  The SCAM blocks sit between each CSI-2 receiver and the CAM/ISP.
+	  They carry the unpacked byte stream and the frame/line
+	  synchronisation across to the ISP and raise the frame and line
+	  interrupts the ISP uses.
+
+	  WARNING: this driver is partial.  The reset/enable/size path is
+	  implemented and it will probe, but the pixel-format handling and
+	  the media-controller glue towards the ISP are not written, and
+	  there is no vendor reference driver for this block in the
+	  available tree.  It will not yet produce frames.  See the file
+	  header and README.md.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mtk-scam.
