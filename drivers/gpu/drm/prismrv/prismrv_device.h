@@ -129,6 +129,9 @@ enum prismrv_cmd_type {
  * 12, which does not match the uKernel: it would have polled the wrong word
  * for "init complete" and treated InitStatus as interrupt flags.
  */
+/* sizeof(SGXMKIF_HOST_CTL): the uKernel reports 0x8c in its struct-size table (Misc[+0x2c]) */
+#define PRISMRV_HOST_CTL_SIZE	0x8c
+
 struct prismrv_host_ctl {
 	__le32 ui32InitStatus;			/* dword 0: uKernel -> host */
 	__le32 ui32PowerStatus;			/* 1 */
@@ -146,14 +149,14 @@ struct prismrv_host_ctl {
 	__le32 ui32HostClock;			/* 13: host clock at power-up */
 	__le32 ui32AssertFail;			/* 14: uKernel assert code */
 	/* performance-counter selectors, OpenCL delay, InterruptCount ... */
-	u8 pad[256 - 15 * 4];
+	u8 pad[PRISMRV_HOST_CTL_SIZE - 15 * 4];
 } __packed;
 static_assert(offsetof(struct prismrv_host_ctl, ui32InitStatus) == 0);
 static_assert(offsetof(struct prismrv_host_ctl, ui32InterruptFlags) == 8 * 4);
 static_assert(offsetof(struct prismrv_host_ctl, ui32InterruptClearFlags) == 9 * 4);
 static_assert(offsetof(struct prismrv_host_ctl, ui32HostClock) == 13 * 4);
 static_assert(offsetof(struct prismrv_host_ctl, ui32AssertFail) == 14 * 4);
-static_assert(sizeof(struct prismrv_host_ctl) == 256);
+static_assert(sizeof(struct prismrv_host_ctl) == PRISMRV_HOST_CTL_SIZE);
 
 /* uKernel timing: vendor sysconfig.h for MT6589 */
 #define PRISMRV_UKERNEL_FREQ_HZ		1000	/* SYS_SGX_PDS_TIMER_FREQ */
