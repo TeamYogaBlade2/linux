@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
+ *
+ * Based on MT6397 clock driver:
  * Copyright (c) 2014 MediaTek Inc.
  * Author: Flora Fu <flora.fu@mediatek.com>
- *
- * Author: Akari Tsuyukusa <akkun11.open@gmail.com>
  */
 
 #include <linux/clk-provider.h>
@@ -122,7 +123,11 @@ static const struct mtk_gate mt6320_gates[] = {
 	GATE_TOP2(MT6320_TOPCKPDN2_RTC_75K_CK, "top2-rtc75k", "pmu75k", 14),
 	GATE_TOP2(MT6320_TOPCKPDN2_RSV_15, "top2-rsv", "smps24m",15),
 
+	// TOP_GPIO_CKPDN
+
 	GATE_WRP(MT6320_WRPCKPDN_32K, "wrap-32k", "rtc32k", 6),
+
+	// AUDENCCLKSQ_CON0
 };
 
 struct mt6320_clk_composite {
@@ -268,6 +273,7 @@ struct mt6320_comp_desc {
 		.flags = CLK_IGNORE_UNUSED | CLK_GET_RATE_NOCACHE,	\
 	}
 
+/* unknown parent */
 static const char * const accdet_parents[] = {
 	"rtc32k", "pmu12m", "top-accdet", "aud26m",
 };
@@ -283,10 +289,12 @@ static const struct mt6320_comp_desc mt6320_composites[] = {
 		 fgadc_ana_parents, ARRAY_SIZE(fgadc_ana_parents),
 		 MT6320_TOP_CKPDN, 6,
 		 MT6320_TOP_CKCON1, 12, 1),
+	// PMIC_RG_CLKSQ_HW_AUTO_EN?
 
 	COMP_GATE_DIV(MT6320_TOPCKPDN_RTC_MCLK, "top-rtc-mclk",
 		      "smps24m", MT6320_TOP_CKPDN, 8,
 		      MT6320_TOP_CKCON2, 14, 2, 1, 1),
+	// PMIC_RG_ACCDET_CKSEL?
 
 	COMP_GATE_DIV(MT6320_TOPCKPDN_SPK_PWM_DIV, "top-spkpwm",
 		      "smps1m", MT6320_TOP_CKPDN, 9,
@@ -299,18 +307,20 @@ static const struct mt6320_comp_desc mt6320_composites[] = {
 	COMP_GATE_DIV(MT6320_TOPCKPDN_AUXADC_CK, "top-auxadc",
 		      "pmu12m", MT6320_TOP_CKPDN, 13,
 		      MT6320_TOP_CKCON2, 0, 2, 6, 1),
+	// [0:3]?
 
 	COMP_MUX(MT6320_TOPCKPDN_ACCDET_CK, "top-accdet",
 		 accdet_parents, ARRAY_SIZE(accdet_parents),
 		 MT6320_TOP_CKPDN, 14,
-		 MT6320_TOP_CKCON1, 13, 2),
+		 MT6320_TOP_CKCON2, 13, 2),
 
 	COMP_MUX(MT6320_TOPCKPDN2_FQMTR, "top2-fqmtr",
 		 fgmtr_parents, ARRAY_SIZE(fgmtr_parents),
 		 MT6320_TOP_CKPDN2, 1,
-		 MT6320_TOP_CKCON1, 15, 1),
+		 MT6320_TOP_CKCON2, 15, 1),
 
 	/* WRAP clocks (gate + divider only) */
+	// FIXME: shred div, accdet area?
 	COMP_GATE_DIV(MT6320_WRPCKPDN_I2C0, "wrap-i2c0",
 		      "smps24m", MT6320_WRP_CKPDN, 0,
 		      MT6320_TOP_CKCON2, 14, 2, 1, 1),
@@ -329,10 +339,22 @@ static const struct mt6320_comp_desc mt6320_composites[] = {
 	COMP_GATE_DIV(MT6320_WRPCKPDN_EINT, "wrap-eint",
 		      "smps24m", MT6320_WRP_CKPDN, 5,
 		      MT6320_TOP_CKCON2, 14, 2, 1, 1),
+	// PMIC_RG_WRP_32K_PDN 6
 	COMP_GATE_DIV(MT6320_WRPCKPDN_WRP, "wrap-wrp",
 		      "smps24m", MT6320_WRP_CKPDN, 7,
 		      MT6320_TOP_CKCON2, 14, 2, 1, 1),
 };
+
+// NCP_CLKDIV_CON0
+// NCP_CLKDIV_CON1
+// TOP_CKTST1
+// TOP_CKTST2
+// PMIC_FQMTR_TCKSEL
+
+// resets
+// TOP_RST_CON
+// WRP_RST_CON
+// TOP_RST_MISC
 
 static const struct of_device_id mt6320_clk_match_table[] = {
 	{ .compatible = "mediatek,mt6320-clk" },
