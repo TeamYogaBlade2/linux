@@ -283,3 +283,8 @@ CONFIG_DEVTMPFS=y
 CONFIG_SYSVIPC=y
 CONFIG_TMPFS_POSIX_ACL=y
 CONFIG_CGROUPS=y
+
+# Each CPU has its own arch timer tick now that time stays on the GPT:
+# no periodic tick on idle CPUs, and timers finer than the 1 ms tick.
+CONFIG_NO_HZ_IDLE=y
+CONFIG_HIGH_RES_TIMERS=y

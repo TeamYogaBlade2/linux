@@ -613,6 +613,10 @@ static int arch_timer_shutdown_phys(struct clock_event_device *clk)
 	return arch_timer_shutdown(ARCH_TIMER_PHYS_ACCESS, clk);
 }
 
+/* MT6589: the GPT block; reading GPT6 latches CNTPCT's high word. */
+static void __iomem *mt6589_gpt;
+#define MT6589_WRAP_GUARD	65000	/* 5 ms at 13 MHz */
+
 static __always_inline void set_next_event(const int access, unsigned long evt,
 					   struct clock_event_device *clk)
 {
@@ -623,10 +627,32 @@ static __always_inline void set_next_event(const int access, unsigned long evt,
 	ctrl |= ARCH_TIMER_CTRL_ENABLE;
 	ctrl &= ~ARCH_TIMER_CTRL_IT_MASK;
 
+	if (mt6589_gpt) {
+		readl_relaxed(mt6589_gpt + 0x78);	/* GPT6 CNT_H */
+		readl(mt6589_gpt + 0x68);		/* GPT6 CNT_L */
+	}
+
 	if (access == ARCH_TIMER_PHYS_ACCESS)
 		cnt = __arch_counter_get_cntpct();
 	else
 		cnt = __arch_counter_get_cntvct();
+
+	/*
+	 * Keep the event 5 ms clear of the wrap of the visible low word. The
+	 * compare condition only holds until the wrap (then the count is back
+	 * at H:0), so an event on the last tick was lost by a CPU that had
+	 * interrupts off at that moment: k23w hung at the 8th wrap. Within the
+	 * last 5 ms, fire at once; the CPU reprograms until the wrap has passed
+	 * and the GPT6 read above has moved the high word on.
+	 */
+	if (mt6589_gpt) {
+		u32 left = 0xffffffffU - (u32)cnt;
+
+		if (left <= MT6589_WRAP_GUARD)
+			evt = 0;
+		else if (evt > left - MT6589_WRAP_GUARD)
+			evt = left - MT6589_WRAP_GUARD;
+	}
 
 	arch_timer_reg_write_cp15(access, ARCH_TIMER_REG_CVAL, evt + cnt);
 	arch_timer_reg_write_cp15(access, ARCH_TIMER_REG_CTRL, ctrl);
@@ -931,6 +957,18 @@ static void __init arch_counter_register(void)
 	}
 
 	arch_timer_read_counter = rd;
+
+	/*
+	 * MT6589: CNTPCT's high word only follows GPT6 when GPT6 is read, so
+	 * the count jumps back 2^32 at each wrap of the low word. Ticks are
+	 * fine (the comparators see the same count); time is not. Leave the
+	 * clocksource and sched_clock to the MediaTek GPT.
+	 */
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		pr_info("arch_timer: MT6589, clockevents only; time from the GPT\n");
+		return;
+	}
+
 	clocksource_counter.vdso_clock_mode = vdso_default;
 
 	width = arch_counter_get_width();
@@ -1154,6 +1192,16 @@ static int __init arch_timer_of_init(struct device_node *np)
 	arch_timer_of_configure_rate(rate, np);
 
 	arch_timer_c3stop = !of_property_read_bool(np, "always-on");
+
+	if (of_machine_is_compatible("mediatek,mt6589")) {
+		struct device_node *gpt;
+
+		gpt = of_find_compatible_node(NULL, NULL, "mediatek,mt6577-timer");
+		mt6589_gpt = gpt ? of_iomap(gpt, 0) : NULL;
+		of_node_put(gpt);
+		if (!mt6589_gpt)
+			pr_warn("MT6589 without its GPT: events may stall at a counter wrap\n");
+	}
 
 	/* Check for globally applicable workarounds */
 	arch_timer_check_ool_workaround(ate_match_dt, np);
