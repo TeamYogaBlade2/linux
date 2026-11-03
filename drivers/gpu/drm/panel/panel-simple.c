@@ -372,6 +372,9 @@ static int panel_simple_enable(struct drm_panel *panel)
 	return 0;
 }
 
+
+
+
 static int panel_simple_get_modes(struct drm_panel *panel,
 				  struct drm_connector *connector)
 {
@@ -438,6 +441,7 @@ static const struct drm_panel_funcs panel_simple_funcs = {
 	.get_orientation = panel_simple_get_orientation,
 	.get_timings = panel_simple_get_timings,
 };
+
 
 static struct panel_desc *panel_dpi_probe(struct device *dev)
 {
@@ -682,6 +686,23 @@ static struct panel_simple *panel_simple_probe(struct device *dev)
 		return ERR_CAST(panel);
 
 	panel->desc = desc;
+
+	/*
+	 * A DSI panel's prepare() talks to it over the DSI link, so the host
+	 * controller has to be powered and the PHY running before prepare()
+	 * runs.  Bridge pre-enable normally walks the chain from the sink
+	 * backwards, which would call this panel first and the DSI host after
+	 * it - the DCS command then goes out on a link that is not up yet and
+	 * fails with a timeout (observed as "Wait DSI IRQ(...) Timeout" and
+	 * "failed to exit sleep mode: -62", with the PHY coming up 70 ms too
+	 * late).
+	 *
+	 * prepare_prev_first reverses pre-enable for this chain, so the host is
+	 * ready first.  It is the standard opt-in for exactly this ordering and
+	 * is what the DSI panels in this tree already use.
+	 */
+	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI) && dev_is_mipi_dsi(dev))
+		panel->base.prepare_prev_first = true;
 
 	panel->supply = devm_regulator_get(dev, "power");
 	if (IS_ERR(panel->supply))
@@ -5815,7 +5836,7 @@ static const struct panel_desc_dsi boe_hx8896_a01 = {
 			.disable = 320,
 		},
 	},
-	.flags = MIPI_DSI_MODE_VIDEO,
+	.flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS,
 	.format = MIPI_DSI_FMT_RGB888,
 	.lanes = 4,
 };
@@ -5850,7 +5871,16 @@ static const struct panel_desc_dsi boe_tv080wum_nl0 = {
 	.lanes = 4,
 };
 
-static const struct drm_display_mode innolux_hx8896_a01_mode = {
+/*
+ * CMI variant of the HX8896 panel, which the vendor calls
+ * cm_hx8896a01_dsi_vdo.  Timings verified against lcm_get_params_0() in
+ * kernel_blade10_row_wifi.elf @ c0461a2c: hfp 186, hsw 5, hbp 50,
+ * vfp 21, vsw 2, vbp 10 over 1280x800.
+ *
+ * This entry was previously named innolux_hx8896_a01; "innolux" does not
+ * appear anywhere in the vendor tree, and the timings are the CMI ones.
+ */
+static const struct drm_display_mode cmi_hx8896_a01_mode = {
 	.clock		= 76019, /* 1521 * 833 * 60 / 1000 kHz */
 	.hdisplay	= 1280,
 	.hsync_start	= 1280 + 186, /* + HFP */
@@ -5862,9 +5892,9 @@ static const struct drm_display_mode innolux_hx8896_a01_mode = {
 	.vtotal		= 800 + 21 + 2 + 10, /* + VBP */
 };
 
-static const struct panel_desc_dsi innolux_hx8896_a01 = {
+static const struct panel_desc_dsi cmi_hx8896_a01 = {
 	.desc = {
-		.modes = &innolux_hx8896_a01_mode,
+		.modes = &cmi_hx8896_a01_mode,
 		.num_modes = 1,
 		.bpc = 8,
 		.size = { .width = 217, .height = 136 }, /* TODO */
@@ -5875,7 +5905,7 @@ static const struct panel_desc_dsi innolux_hx8896_a01 = {
 			.disable = 320,
 		},
 	},
-	.flags = MIPI_DSI_MODE_VIDEO,
+	.flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS,
 	.format = MIPI_DSI_FMT_RGB888,
 	.lanes = 4,
 };
@@ -6007,8 +6037,12 @@ static const struct of_device_id dsi_of_match[] = {
 		.compatible = "boe,tv080wum-nl0",
 		.data = &boe_tv080wum_nl0
 	}, {
+		.compatible = "cmi,hx8896-a01-panel",
+		.data = &cmi_hx8896_a01
+	}, {
+		/* Name used before the CMI/BOE distinction was established. */
 		.compatible = "innolux,hx8896-a01-panel",
-		.data = &innolux_hx8896_a01
+		.data = &cmi_hx8896_a01
 	}, {
 		.compatible = "lg,lh500wx1-sd03",
 		.data = &lg_lh500wx1_sd03

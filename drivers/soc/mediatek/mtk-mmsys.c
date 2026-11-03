@@ -194,10 +194,14 @@ void mtk_mmsys_ddp_connect(struct device *dev,
 			   enum mtk_ddp_comp_id next)
 {
 	struct mtk_mmsys *mmsys = dev_get_drvdata(dev);
-	const struct mtk_mmsys_routes *routes = mmsys->data->routes;
+	const struct mtk_mmsys_routes *routes;
+	unsigned int nroutes;
 	int i;
 
-	for (i = 0; i < mmsys->data->num_routes; i++)
+	routes = mmsys->data->routes;
+	nroutes = mmsys->data->num_routes;
+
+	for (i = 0; i < nroutes; i++)
 		if (cur == routes[i].from_comp && next == routes[i].to_comp)
 			mtk_mmsys_update_bits(mmsys, routes[i].addr, routes[i].mask,
 					      routes[i].val, NULL);
@@ -213,10 +217,14 @@ void mtk_mmsys_ddp_disconnect(struct device *dev,
 			      enum mtk_ddp_comp_id next)
 {
 	struct mtk_mmsys *mmsys = dev_get_drvdata(dev);
-	const struct mtk_mmsys_routes *routes = mmsys->data->routes;
+	const struct mtk_mmsys_routes *routes;
+	unsigned int nroutes;
 	int i;
 
-	for (i = 0; i < mmsys->data->num_routes; i++)
+	routes = mmsys->data->routes;
+	nroutes = mmsys->data->num_routes;
+
+	for (i = 0; i < nroutes; i++)
 		if (cur == routes[i].from_comp && next == routes[i].to_comp)
 			if (!(routes[i].flags &
 			      MTK_MMSYS_ROUTE_F_KEEP_ON_DISCONNECT))

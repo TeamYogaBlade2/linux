@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/soc/mediatek/mediatek,mt6589-emi.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6589 EMI (External Memory Interface)
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+description: |
+  The MT6589 EMI block sits between the bus and the DRAM controller and
+  provides three things this driver exposes:
+
+  - a bus monitor that samples DRAM bandwidth and transaction counts, both
+    in total and for one selected master;
+  - a memory protection unit with eight regions, each with a base and end
+    address in 64KB units and four 3-bit permissions, one per bus domain
+    (AP, modem 0, modem 1, multimedia), plus a violation interrupt;
+  - per-master bandwidth filter and page-miss controls.
+
+  The register window is 0x1020_3000.  Downstream names the same block at
+  0xF0203000 (mt_reg_base.h "EMI_BASE"), which maps back to 0x1020_3000.
+
+  No MPU region is programmed unless the board describes one, because
+  setting a region's permissions wrongly on this block stops the CPU from
+  reading its own memory and there is no way back at runtime.  The
+  downstream default table needs the modem image memory map, which a mainline
+  board does not have.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-emi
+
+  reg:
+    maxItems: 1
+    description: The EMI configuration window, 0x1020_3000.
+
+  interrupts:
+    maxItems: 1
+    description: |
+      The bus-protection violation line, GIC SPI 94.  On MT6589 this line is
+      shared: the device APC raises it for its own violations and the SMI
+      does for its, which is why the downstream driver requests it with
+      IRQF_SHARED.  The interrupt is optional; without it the monitor and the
+      MPU region API still work, and violations are still latched in the
+      status registers.
+
+  mediatek,mpu-region:
+    description: |
+      Optionally pre-program one or more MPU regions.  Each entry is
+      <region start end ap md0 md1 mm>, where region is 0..7, start and end
+      are physical addresses and are rounded down to 64KB, and the four
+      permissions are values from the table in the datasheet (p. 615):
+      0 = no protection, 1 = secure read/write, 2 = secure read/write plus
+      non-secure read, 3 = secure read/write plus non-secure write,
+      4 = read only, 5 = forbidden.
+
+      Omit it to leave the hardware as the bootloader configured it, which
+      is the safe default and the only one that is right without knowing the
+      board's memory layout.
+    $ref: /schemas/types.yaml#/definitions/uint32-matrix
+    items:
+      items:
+        - description: region index, 0..7
+          minimum: 0
+          maximum: 7
+        - description: start address, physical
+        - description: end address, physical
+        - description: permission for the application processor domain
+          minimum: 0
+          maximum: 5
+        - description: permission for the modem 0 domain
+          minimum: 0
+          maximum: 5
+        - description: permission for the modem 1 domain
+          minimum: 0
+          maximum: 5
+        - description: permission for the multimedia domain
+          minimum: 0
+          maximum: 5
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+
+    emi: memory-controller@10203000 {
+        compatible = "mediatek,mt6589-emi";
+        reg = <0x10203000 0x1000>;
+        interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_LOW>;
+    };

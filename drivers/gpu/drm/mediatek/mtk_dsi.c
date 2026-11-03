@@ -30,9 +30,28 @@
 
 #include "mtk_ddp_comp.h"
 #include "mtk_disp_drv.h"
+#include "mtk_crtc.h"
 #include "mtk_drm_drv.h"
 
 #define DSI_START		0x00
+
+/*
+ * DSI_STA / DSI_STATUS (0x004). The MT6589 datasheet's DSI chapter confirms
+ * these status bit positions; the downstream bootloader header uses the same
+ * bit names (lk/include/platform/dsi_reg.h:266-274):
+ *
+ *	rsv_0:1 BUF_UNDERRUN:1 rsv_2:2 ESC_ENTRY_ERR:1
+ *	LPDT_SYNC_ERR:1 CTRL_ERR:1 CONTENT_ERR:1
+ *
+ * All six error bits are sticky status, cleared by writing the DSI_RACK
+ * handshake; they are read-only for diagnostics here.
+ */
+#define DSI_STA		0x04
+#define BUF_UNDERRUN	BIT(1)
+#define ESC_ENTRY_ERR	BIT(4)
+#define LPDT_SYNC_ERR	BIT(5)
+#define CTRL_ERR	BIT(6)
+#define CONTENT_ERR	BIT(7)
 
 #define DSI_INTEN		0x08
 
@@ -85,6 +104,9 @@
 #define DSI_SIZE_CON		0x38
 #define DSI_HEIGHT				GENMASK(30, 16)
 #define DSI_WIDTH				GENMASK(14, 0)
+/* Only present on parts that set has_mem_conti; upstream programs none. */
+#define DSI_MEM_CONTI		0x90
+#define DSI_WMEM_CONTI			0x3c
 #define DSI_HSA_WC		0x50
 #define DSI_HBP_WC		0x54
 #define DSI_HFP_WC		0x58
@@ -106,12 +128,52 @@
 #define DSI_RACK		0x84
 #define RACK				BIT(0)
 
+/*
+ * DSI_TRIG_STA (0088 in the vendor header's numbering).  dsi_reg.h:450-458
+ * names each bit; TRIG2 is the LPRX acknowledgement, i.e. the panel
+ * acknowledging a turnaround.
+ */
+#define DSI_TRIG_STA		0x88
+#define TRIG_ACK			BIT(2)
+
+/*
+ * DSI_STATE_DBG0 (0148) holds the controller/D-PHY state machines;
+ * dsi_reg.h:551-561 and datasheet p. 1854 place CTL_STATE_C at [8:0] and
+ * HX_TX_STATE_C at [15:12]; bits [11:9] are reserved. These are diagnostic
+ * only.
+ */
+#define DSI_STATE_DBG0		0x148
+#define DSI_STATE_DBG1		0x14c
+#define DSI_STATE_DBG2		0x150
+#define DSI_STATE_DBG3		0x154
+#define DSI_STATE_DBG4		0x158
+#define DSI_STATE_DBG6		0x160
+#define DSI_STATE_DBG7		0x164
+#define DSI_STATE_DBG8		0x168
+#define DSI_STATE_DBG9		0x16c
+/*
+ * Field masks for DSI_STATE_DBG0.  These are spelled as u32 constants rather
+ * than GENMASK() because GENMASK() expands to an unsigned long expression,
+ * which FIELD_GET() rejects as a non-constant mask on this kernel.
+ */
+#define CTL_STATE_C		0x000001ff
+#define HX_TX_STATE_C		0x0000f000
+
 #define DSI_PHY_LCCON		0x104
 #define LC_HS_TX_EN			BIT(0)
 #define LC_ULPM_EN			BIT(1)
 #define LC_WAKEUP_EN			BIT(2)
 
 #define DSI_PHY_LD0CON		0x108
+/*
+ * Bit 0: the vendor header calls this L0_HS_TX_EN (dsi_reg.h:426) while the
+ * data sheet's field table calls bit 0 of 0x108 L0_RM_TRIG_EN, "Sends
+ * application trigger to slave side".  Either way it is not what puts the
+ * lane into high speed: downstream's DSI_lane0_ULP_mode() only ever *clears*
+ * it, and never sets it on the resume path, so a healthy link reads
+ * LD0CON == 0.  The actual HS state is
+ * DSI_STATE_DBG0.DPHY_HS_TX_STATE_C.  Do not "fix" a zero here.
+ */
 #define LD0_HS_TX_EN			BIT(0)
 #define LD0_ULPM_EN			BIT(1)
 #define LD0_WAKEUP_EN			BIT(2)
@@ -130,6 +192,12 @@
 
 #define DSI_PHY_TIMECON2	0x118
 #define CONT_DET			GENMASK(7, 0)
+/*
+ * DSI_PHY_TIMCON2[15:8].  On MT6589 this byte is reserved: the register has
+ * only CLK_HS_TRAIL[31:24], CLK_HS_ZERO[23:16] and CONT_DET[7:0], and the
+ * downstream register struct names this byte RSV8.  So the field is written
+ * only on the parts where it exists.
+ */
 #define DA_HS_SYNC			GENMASK(15, 8)
 #define CLK_ZERO			GENMASK(23, 16)
 #define CLK_TRAIL			GENMASK(31, 24)
@@ -190,10 +258,38 @@ struct mtk_dsi_driver_data {
 	const u32 reg_cmdq_off;
 	const u32 reg_vm_cmd_off;
 	const u32 reg_shadow_dbg_off;
+	/*
+	 * Optional control bits in DSI_CON_CTRL.
+	 *
+	 * MT6589 calls register 0x10 DSI_COM_CTRL and implements only
+	 * DSI_RESET at bit 0. DSI_EN and DPHY_RESET are not defined
+	 * there, so leave these masks zero on MT6589.
+	 */
+	const u32 dsi_en_mask;
+	const u32 dphy_reset_mask;
 	bool has_shadow_ctl;
 	bool has_size_ctl;
 	bool cmdq_long_packet_ctl;
 	bool support_per_frame_lp;
+	bool use_downstream_vdo_porch_timing;
+	/*
+	 * Use the bootloader's D-PHY timing words instead of the generic
+	 * formulas; see mtk_dsi_phy_timconfig().
+	 */
+	bool use_downstream_phy_timing;
+	/*
+	 * On this SoC DSI_PHY_TIMCON2[15:8] is reserved, not DA_HS_SYNC.
+	 * The real CONT_DET field is at [7:0].
+	 */
+	bool timcon2_no_da_hs_sync;
+	/*
+	 * Whether DSI_MEM_CONTI (0x90) exists and holds the read/write memory
+	 * continue command.  Upstream never programs this register on any
+	 * SoC, so it must stay off unless a part is known to have it.
+	 */
+	bool has_mem_conti;
+	bool has_lane_clk;
+	bool has_reset;
 };
 
 struct mtk_dsi {
@@ -209,6 +305,7 @@ struct mtk_dsi {
 
 	struct clk *engine_clk;
 	struct clk *digital_clk;
+	struct clk *lane_clk;
 	struct clk *hs_clk;
 
 	u32 data_rate;
@@ -236,6 +333,8 @@ static inline struct mtk_dsi *host_to_dsi(struct mipi_dsi_host *h)
 	return container_of(h, struct mtk_dsi, host);
 }
 
+static void mtk_dsi_wait_for_idle(struct mtk_dsi *dsi);
+
 static void mtk_dsi_mask(struct mtk_dsi *dsi, u32 offset, u32 mask, u32 data)
 {
 	u32 temp = readl(dsi->regs + offset);
@@ -249,6 +348,94 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	u32 data_rate_mhz = DIV_ROUND_UP(dsi->data_rate, HZ_PER_MHZ);
 	struct mtk_phy_timing *timing = &dsi->phy_timing;
 
+	/*
+	 * MT6589: the vendor's D-PHY timing computation, which differs from
+	 * the generic one above in both its constants and its inputs.
+	 *
+	 * This is not cosmetic.  The generic formulas produce a set that
+	 * differs from the bootloader's on 9 of the 13 fields - HS_TRAIL 5
+	 * against 16, CLK_TRAIL 3 against 16, CLK_ZERO 12 against 18 - and
+	 * HS_TRAIL/CLK_TRAIL are the high-speed trailer periods, i.e. how long
+	 * a lane stays in HS after the last bit before releasing to low power.
+	 * With those wrong the link reports itself as transmitting (START set,
+	 * BUSY high, state machine advancing) while the panel receives
+	 * something it cannot decode.  That was this board's black screen.
+	 *
+	 * All of it derives from two numbers, per DSI_PHY_TIMCONFIG()
+	 * (dsi_drv.c:1453-1495):
+	 *
+	 *	cycle_time = 8000 / lane_rate_mhz	  [ns per PLL cycle]
+	 *	ui         = 1000 / lane_rate_mhz + 1	  [unit interval]
+	 *
+	 * lane_rate is the *achieved* rate the MIPI TX PLL produces, not the
+	 * requested one: the PLL table is coarse, and dsi->data_rate is read
+	 * back from the PHY for exactly that reason.  For this panel that is
+	 * 416 MHz, giving cycle_time 19 and ui 3, and the fields below then
+	 * come out at the values the bootloader runs - which is the check
+	 * that this is a derivation and not a table copied from one dump.
+	 */
+	if (dsi->driver_data->use_downstream_phy_timing) {
+		unsigned int lane_mhz = data_rate_mhz;
+		unsigned int cycle_time, ui;
+
+		/* NS_TO_CYCLE(): integer division, rounded up. */
+#define MTK_DSI_NS_TO_CYCLE(n, c)	((n) / (c) + (((n) % (c)) ? 1 : 0))
+
+		cycle_time = 8000 / lane_mhz;
+		ui = 1000 / lane_mhz + 1;
+
+		if (!cycle_time)
+			cycle_time = 1;
+
+		/* HS_TRAIL: max(lanes, time for 4 UI per lane + 60 ns) + 0x0a.
+		 * The +0x0a is the vendor's "HW latency" margin.
+		 */
+		timing->da_hs_trail =
+			max((unsigned int)dsi->lanes,
+			    MTK_DSI_NS_TO_CYCLE(dsi->lanes * 4 * ui + 60,
+						cycle_time)) + 0x0a;
+
+		timing->da_hs_prepare = MTK_DSI_NS_TO_CYCLE(60 + 5 * ui,
+							    cycle_time);
+		if (!timing->da_hs_prepare)
+			timing->da_hs_prepare = 1;
+
+		timing->da_hs_zero = MTK_DSI_NS_TO_CYCLE(
+			0xC8 + 0x0a * ui - timing->da_hs_prepare * cycle_time,
+			cycle_time);
+
+		timing->lpx = MTK_DSI_NS_TO_CYCLE(65, cycle_time);
+		if (!timing->lpx)
+			timing->lpx = 1;
+
+		/* Note these are not the generic path's multiples of LPX. */
+		timing->ta_get		= 5 * timing->lpx;
+		timing->ta_sure		= 3 * timing->lpx / 2;
+		timing->ta_go		= 4 * timing->lpx;
+		timing->da_hs_exit	= 2 * timing->lpx;
+
+		/* CLK_TRAIL carries the same +0x0a margin, floor of 2. */
+		timing->clk_hs_trail =
+			MTK_DSI_NS_TO_CYCLE(0x64, cycle_time) + 0x0a;
+		if (timing->clk_hs_trail < 2)
+			timing->clk_hs_trail = 2;
+
+		timing->clk_hs_prepare = MTK_DSI_NS_TO_CYCLE(0x40,
+							     cycle_time);
+		if (!timing->clk_hs_prepare)
+			timing->clk_hs_prepare = 1;
+
+		/* CLK_ZERO comes from 0x190 ns minus the prepare time. */
+		timing->clk_hs_zero = MTK_DSI_NS_TO_CYCLE(
+			0x190 - timing->clk_hs_prepare * cycle_time,
+			cycle_time);
+
+		timing->clk_hs_exit = 2 * timing->lpx;
+		timing->clk_hs_post = MTK_DSI_NS_TO_CYCLE(80 + 52 * ui,
+							  cycle_time);
+
+#undef MTK_DSI_NS_TO_CYCLE
+	} else {
 	timing->lpx = (60 * data_rate_mhz / (8 * 1000)) + 1;
 	timing->da_hs_prepare = (80 * data_rate_mhz + 4 * 1000) / 8000;
 	timing->da_hs_zero = (170 * data_rate_mhz + 10 * 1000) / 8000 + 1 -
@@ -265,6 +452,7 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 	timing->clk_hs_trail = timing->clk_hs_prepare;
 	timing->clk_hs_zero = timing->clk_hs_trail * 4;
 	timing->clk_hs_exit = 2 * timing->clk_hs_trail;
+	}
 
 	timcon0 = FIELD_PREP(LPX, timing->lpx) |
 		  FIELD_PREP(HS_PREP, timing->da_hs_prepare) |
@@ -276,9 +464,13 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 		  FIELD_PREP(TA_GET, timing->ta_get) |
 		  FIELD_PREP(DA_HS_EXIT, timing->da_hs_exit);
 
-	timcon2 = FIELD_PREP(DA_HS_SYNC, 1) |
-		  FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
-		  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
+	if (dsi->driver_data->timcon2_no_da_hs_sync)
+		timcon2 = FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
+			  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
+	else
+		timcon2 = FIELD_PREP(DA_HS_SYNC, 1) |
+			  FIELD_PREP(CLK_ZERO, timing->clk_hs_zero) |
+			  FIELD_PREP(CLK_TRAIL, timing->clk_hs_trail);
 
 	timcon3 = FIELD_PREP(CLK_HS_PREP, timing->clk_hs_prepare) |
 		  FIELD_PREP(CLK_HS_POST, timing->clk_hs_post) |
@@ -292,12 +484,18 @@ static void mtk_dsi_phy_timconfig(struct mtk_dsi *dsi)
 
 static void mtk_dsi_enable(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_EN, DSI_EN);
+	u32 mask = dsi->driver_data->dsi_en_mask;
+
+	if (mask)
+		mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, mask);
 }
 
 static void mtk_dsi_disable(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DSI_EN, 0);
+	u32 mask = dsi->driver_data->dsi_en_mask;
+
+	if (mask)
+		mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, 0);
 }
 
 static void mtk_dsi_reset_engine(struct mtk_dsi *dsi)
@@ -308,8 +506,13 @@ static void mtk_dsi_reset_engine(struct mtk_dsi *dsi)
 
 static void mtk_dsi_reset_dphy(struct mtk_dsi *dsi)
 {
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DPHY_RESET, DPHY_RESET);
-	mtk_dsi_mask(dsi, DSI_CON_CTRL, DPHY_RESET, 0);
+	u32 mask = dsi->driver_data->dphy_reset_mask;
+
+	if (!mask)
+		return;
+
+	mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, mask);
+	mtk_dsi_mask(dsi, DSI_CON_CTRL, mask, 0);
 }
 
 static void mtk_dsi_clk_ulp_mode_enter(struct mtk_dsi *dsi)
@@ -535,7 +738,31 @@ static void mtk_dsi_config_vdo_timing_per_line_lp(struct mtk_dsi *dsi)
 	horizontal_front_back_byte = horizontal_frontporch_byte + horizontal_backporch_byte;
 	data_phy_cycles_byte = data_phy_cycles * dsi->lanes + delta;
 
-	if (horizontal_front_back_byte > data_phy_cycles_byte) {
+	if (dsi->driver_data->use_downstream_vdo_porch_timing) {
+		/*
+		 * Match downstream DSI_Config_VDO_Timing()
+		 * (dsi_drv.c:1360-1381) exactly. Three things differ from the
+		 * generic path above, and all three are load-bearing:
+		 *
+		 *  - HSA_WC is ZERO in sync-event mode.  Downstream declares
+		 *    horizontal_sync_active_byte = 0 and assigns it only in the
+		 *    sync-pulse/else branch, so for SYNC_EVENT (which this panel
+		 *    is) it writes ALIGN_TO(0, 4) == 0.  The generic formula
+		 *    above yields (hsync_len * bpp - 10), which is 2 for this
+		 *    panel, and a non-zero HSA on a sync-event link puts a sync
+		 *    active packet where the panel expects none.
+		 *  - HFP subtracts 12 before aligning, not the per-line D-PHY
+		 *    transition budget.  Without it HBP/HFP come out as
+		 *    0x44/0xd1 instead of the known-good 0x64/0x120.
+		 *  - All three word counts are aligned to 4 bytes.
+		 *
+		 * Keep this MT6589-specific: no other SoC here shares the
+		 * vendor sequence this is transcribed from.
+		 */
+		horizontal_sync_active_byte = 0;
+		horizontal_backporch_byte = roundup(horizontal_backporch_byte, 4);
+		horizontal_frontporch_byte = roundup(horizontal_frontporch_byte - 12, 4);
+	} else if (horizontal_front_back_byte > data_phy_cycles_byte) {
 		horizontal_frontporch_byte -= data_phy_cycles_byte *
 					      horizontal_frontporch_byte /
 					      horizontal_front_back_byte;
@@ -609,6 +836,32 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 	writel(inten, dsi->regs + DSI_INTEN);
 }
 
+/*
+ * Log the link state at stream on.  Kept because a dark panel is otherwise
+ * indistinguishable between "the engine never started" and "the link came up
+ * and the panel is not showing it", and DSI_STA reads 0 in both cases.  One
+ * line, at debug level: the boot log has no room for more, and the values are
+ * only wanted while something is wrong.
+ */
+static void mtk_dsi_dump_status(struct mtk_dsi *dsi, const char *when)
+{
+	u32 dbg0 = readl(dsi->regs + DSI_STATE_DBG0);
+
+	dev_dbg(dsi->host.dev,
+		"DSI %s: mode=%#x txrx=%#x start=%#x sta=%#x intsta=%#x "
+		"dbg0=%#x ctl_state=%#x hx_state=%#x lccon=%#x ld0con=%#x "
+		"ps=%#x hsa=%#x hbp=%#x hfp=%#x\n",
+		when, readl(dsi->regs + DSI_MODE_CTRL),
+		readl(dsi->regs + DSI_TXRX_CTRL), readl(dsi->regs + DSI_START),
+		readl(dsi->regs + DSI_STA), readl(dsi->regs + DSI_INTSTA),
+		dbg0, FIELD_GET(CTL_STATE_C, dbg0),
+		FIELD_GET(HX_TX_STATE_C, dbg0),
+		readl(dsi->regs + DSI_PHY_LCCON),
+		readl(dsi->regs + DSI_PHY_LD0CON),
+		readl(dsi->regs + DSI_PSCTRL), readl(dsi->regs + DSI_HSA_WC),
+		readl(dsi->regs + DSI_HBP_WC), readl(dsi->regs + DSI_HFP_WC));
+}
+
 static void mtk_dsi_irq_data_set(struct mtk_dsi *dsi, u32 irq_bit)
 {
 	dsi->irq_data |= irq_bit;
@@ -628,33 +881,49 @@ static s32 mtk_dsi_wait_for_irq_done(struct mtk_dsi *dsi, u32 irq_flag,
 	ret = wait_event_interruptible_timeout(dsi->irq_wait_queue,
 					       dsi->irq_data & irq_flag,
 					       jiffies);
+	if (ret < 0)
+		return ret;
+
 	if (ret == 0) {
 		DRM_WARN("Wait DSI IRQ(0x%08x) Timeout\n", irq_flag);
 
 		mtk_dsi_enable(dsi);
 		mtk_dsi_reset_engine(dsi);
+
+		return -ETIME;
 	}
 
-	return ret;
+	return 0;
 }
 
 static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
 {
 	struct mtk_dsi *dsi = dev_id;
-	u32 status, tmp;
+	u32 status, tmp = 0;
+	int ret;
 	u32 flag = LPRX_RD_RDY_INT_FLAG | CMD_DONE_INT_FLAG | VM_DONE_INT_FLAG;
 
 	status = readl(dsi->regs + DSI_INTSTA) & flag;
 
 	if (status) {
-		do {
-			mtk_dsi_mask(dsi, DSI_RACK, RACK, RACK);
-			tmp = readl(dsi->regs + DSI_INTSTA);
-		} while (tmp & DSI_BUSY);
+		/*
+		 * DSI_BUSY is a status bit.  Never spin on it indefinitely from
+		 * hard-IRQ context: a wedged engine would otherwise keep a CPU in
+		 * this handler forever and take the system down with it.
+		 */
+		mtk_dsi_mask(dsi, DSI_RACK, RACK, RACK);
+		ret = readl_poll_timeout_atomic(dsi->regs + DSI_INTSTA, tmp,
+						!(tmp & DSI_BUSY), 1, 1000);
+		if (ret)
+			dev_warn_ratelimited(dsi->host.dev,
+					     "DSI IRQ: engine stayed busy for 1 ms (INTSTA=0x%08x)\n",
+					     tmp);
 
 		mtk_dsi_mask(dsi, DSI_INTSTA, status, 0);
-		mtk_dsi_irq_data_set(dsi, status);
-		wake_up_interruptible(&dsi->irq_wait_queue);
+		if (!ret) {
+			mtk_dsi_irq_data_set(dsi, status);
+			wake_up_interruptible(&dsi->irq_wait_queue);
+		}
 	}
 
 	return IRQ_HANDLED;
@@ -662,15 +931,17 @@ static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
 
 static s32 mtk_dsi_switch_to_cmd_mode(struct mtk_dsi *dsi, u8 irq_flag, u32 t)
 {
+	s32 ret;
+
 	mtk_dsi_irq_data_clear(dsi, irq_flag);
 	mtk_dsi_set_cmd_mode(dsi);
 
-	if (!mtk_dsi_wait_for_irq_done(dsi, irq_flag, t)) {
+	ret = mtk_dsi_wait_for_irq_done(dsi, irq_flag, t);
+	if (ret) {
 		DRM_ERROR("failed to switch cmd mode\n");
-		return -ETIME;
-	} else {
-		return 0;
 	}
+
+	return ret;
 }
 
 static void mtk_dsi_lane_ready(struct mtk_dsi *dsi)
@@ -691,6 +962,7 @@ static void mtk_dsi_lane_ready(struct mtk_dsi *dsi)
 static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 {
 	struct device *dev = dsi->host.dev;
+	struct reset_control *rstc;
 	int ret;
 	u32 bit_per_pixel;
 
@@ -700,7 +972,7 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	ret = mipi_dsi_pixel_format_to_bpp(dsi->format);
 	if (ret < 0) {
 		dev_err(dev, "Unknown MIPI DSI format %d\n", dsi->format);
-		return ret;
+		goto err_refcount;
 	}
 	bit_per_pixel = ret;
 
@@ -713,7 +985,25 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		goto err_refcount;
 	}
 
-	phy_power_on(dsi->phy);
+	/*
+	 * Replace the requested rate with the one the PLL actually produces.
+	 *
+	 * The MIPI TX PLL table is coarse - 50 discrete entries - so a
+	 * requested lane rate is almost never reachable exactly: this panel
+	 * asks for 419.022 Mbps and gets 416.  Everything downstream of here
+	 * that computes a time from the rate must use the achieved value, and
+	 * mtk_dsi_phy_timconfig() is exactly that consumer: its cycle_time is
+	 * 8000/rate, so a 3 Mbps error moves every D-PHY timing field.  The
+	 * PHY's set_rate() stores the achieved rate, so reading it back here
+	 * is what makes the timing match the hardware.
+	 */
+	dsi->data_rate = clk_get_rate(dsi->hs_clk);
+
+	ret = phy_power_on(dsi->phy);
+	if (ret) {
+		dev_err(dev, "Failed to power on DPHY: %d\n", ret);
+		goto err_refcount;
+	}
 
 	ret = clk_prepare_enable(dsi->engine_clk);
 	if (ret < 0) {
@@ -727,7 +1017,62 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		goto err_disable_engine_clk;
 	}
 
+	/* MT6589 has a separate gate for the digital DSI data-lane logic. */
+	if (dsi->lane_clk) {
+		ret = clk_prepare_enable(dsi->lane_clk);
+		if (ret < 0) {
+			dev_err(dev, "Failed to enable lane clock: %d\n", ret);
+			goto err_disable_digital_clk;
+		}
+	}
+
+	/*
+	 * MT6589 has a separate DISPSYS reset for the DSI controller.
+	 * Resetting DSI_COM_CTRL alone does not release this external
+	 * reset.  Pulse it with the engine clocks enabled before
+	 * programming the controller registers.  Acquire the handle here,
+	 * rather than in probe, so it does not conflict with device_reset()
+	 * during component binding.
+	 */
+	if (dsi->driver_data->has_reset) {
+		rstc = reset_control_get_exclusive(dev, NULL);
+		if (IS_ERR(rstc)) {
+			ret = PTR_ERR(rstc);
+			dev_err(dev, "Failed to get DSI reset control: %d\n",
+				ret);
+			goto err_disable_lane_clk;
+		}
+
+		ret = reset_control_acquire(rstc);
+		if (ret) {
+			dev_err(dev, "Failed to acquire DSI reset control: %d\n",
+				ret);
+			reset_control_put(rstc);
+			goto err_disable_lane_clk;
+		}
+
+		ret = reset_control_reset(rstc);
+		reset_control_release(rstc);
+		reset_control_put(rstc);
+		if (ret) {
+			dev_err(dev, "Failed to reset DSI controller: %d\n",
+				ret);
+			goto err_disable_lane_clk;
+		}
+	}
+
 	mtk_dsi_enable(dsi);
+
+	/*
+	 * Set the lane count and the packet flags in DSI_TXRX_CTRL before the
+	 * engine is restarted.  mtk_dsi_rxtx_control() was only ever called
+	 * from mtk_dsi_stop(), so on enable LANE_NUM stayed at its reset
+	 * value of 0 and the DSI drove no lanes at all - the overlay and RDMA
+	 * completed frames without underflow and the panel stayed dark.
+	 * The bootloader writes the same field the same way (dsi_drv.c:
+	 * LANE_NUM = 0xF for four lanes) before starting video.
+	 */
+	mtk_dsi_rxtx_control(dsi);
 
 	if (dsi->driver_data->has_shadow_ctl)
 		writel(FORCE_COMMIT | BYPASS_SHADOW,
@@ -736,14 +1081,20 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 	mtk_dsi_reset_engine(dsi);
 	mtk_dsi_phy_timconfig(dsi);
 
+	if (dsi->driver_data->has_mem_conti)
+		writel(DSI_WMEM_CONTI, dsi->regs + DSI_MEM_CONTI);
+
 	mtk_dsi_ps_control(dsi, true);
 	mtk_dsi_set_vm_cmd(dsi);
 	mtk_dsi_config_vdo_timing(dsi);
 	mtk_dsi_set_interrupt_enable(dsi);
-	mtk_dsi_lane_ready(dsi);
-	mtk_dsi_clk_hs_mode(dsi, 1);
 
 	return 0;
+err_disable_lane_clk:
+	if (dsi->lane_clk)
+		clk_disable_unprepare(dsi->lane_clk);
+err_disable_digital_clk:
+	clk_disable_unprepare(dsi->digital_clk);
 err_disable_engine_clk:
 	clk_disable_unprepare(dsi->engine_clk);
 err_phy_power_off:
@@ -781,6 +1132,8 @@ static void mtk_dsi_poweroff(struct mtk_dsi *dsi)
 
 	clk_disable_unprepare(dsi->engine_clk);
 	clk_disable_unprepare(dsi->digital_clk);
+	if (dsi->lane_clk)
+		clk_disable_unprepare(dsi->lane_clk);
 
 	phy_power_off(dsi->phy);
 
@@ -791,6 +1144,21 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 {
 	if (dsi->enabled)
 		return;
+
+	/*
+	 * Make sure the last transmission has drained before programming a
+	 * new mode and pulsing START.  Downstream does exactly this before
+	 * every start (DSI_StartTransfer() -> _WaitForEngineNotBusy(), and
+	 * dsi_drv.c:942 "while(DSI_REG->DSI_INTSTA.BUSY);"), and for good
+	 * reason: DSI_START is a level the engine samples, so a start issued
+	 * while the controller is still busy is dropped and the engine then
+	 * sits with DSI_BUSY asserted and no interrupt ever following.  That
+	 * is the observed failure - INTSTA reading 0x80000000 for the rest of
+	 * the boot with the DSI interrupt count at zero.
+	 *
+	 * mtk_dsi_wait_for_idle() was written for this and never called.
+	 */
+	mtk_dsi_wait_for_idle(dsi);
 
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_start(dsi);
@@ -842,7 +1210,24 @@ static void mtk_dsi_bridge_atomic_enable(struct drm_bridge *bridge,
 	if (dsi->refcount == 0)
 		return;
 
+	/*
+	 * MT6589 defers the complete DDP start until this point, after the panel
+	 * bridge's atomic_pre_enable has enabled its supply/GPIO and the DSI PHY
+	 * is configured.  The CRTC then starts the components in OF graph order,
+	 * source to sink, so DSI - the last element of the path - is started
+	 * last, exactly as the downstream path does it.
+	 *
+	 * mtk_output_dsi_enable() below is therefore the first START pulse for
+	 * this enable: the DDP hook has not run for DSI yet.
+	 */
+	mtk_crtc_ddp_start_pending(dsi->encoder.crtc);
 	mtk_output_dsi_enable(dsi);
+	/*
+	 * Keep a final snapshot here to compare the link after every component
+	 * has started.  mtk_output_dsi_enable() is idempotent, so this call is
+	 * a no-op for the case where the DDP hook already got here first.
+	 */
+	mtk_dsi_dump_status(dsi, "post-start");
 }
 
 static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
@@ -852,14 +1237,49 @@ static void mtk_dsi_bridge_atomic_pre_enable(struct drm_bridge *bridge,
 	int ret;
 
 	ret = mtk_dsi_poweron(dsi);
-	if (ret < 0)
-		DRM_ERROR("failed to power on dsi\n");
+	if (ret < 0) {
+		/*
+		 * Abort the enable here.  mtk_dsi_poweron() has already undone
+		 * whatever it managed to do (it drops the refcount and unwinds
+		 * clocks/phy on every error path), so the link is not powered and
+		 * must not be poked further: putting the lanes into HS mode and
+		 * dumping registers of an unpowered DSI only produces a second,
+		 * more confusing set of secondary errors on top of the real one.
+		 *
+		 * atomic_pre_enable() has no error return - drm_bridge has no way
+		 * to abort an atomic commit from it - so the failure is recorded
+		 * by leaving dsi->refcount at 0.  mtk_dsi_bridge_atomic_enable()
+		 * already skips mtk_output_dsi_enable() in that case, so the
+		 * engine is never started and the display pipe comes up dark but
+		 * intact, exactly as mtk_dsi_poweroff()'s WARN_ON(refcount == 0)
+		 * guard expects.  Nothing calls mtk_dsi_poweron() speculatively,
+		 * and refcount was 0 coming in, so the counter is back to where it
+		 * started either way.
+		 */
+		DRM_ERROR("failed to power on dsi: %d\n", ret);
+		return;
+	}
+
+	mtk_dsi_lane_ready(dsi);
+	mtk_dsi_clk_hs_mode(dsi, 1);
+	mtk_dsi_dump_status(dsi, "pre-start");
 }
 
 static void mtk_dsi_bridge_atomic_post_disable(struct drm_bridge *bridge,
 					       struct drm_atomic_state *state)
 {
 	struct mtk_dsi *dsi = bridge_to_dsi(bridge);
+
+	/*
+	 * drm_atomic_bridge_chain_post_disable() calls this unconditionally,
+	 * including for the enable that atomic_pre_enable() failed to power on
+	 * - there is no way to tell the core to skip it.  mtk_dsi_poweroff()
+	 * would correctly WARN_ON(refcount == 0) and return, but a WARN splat
+	 * for a failure already reported is pure noise, so check here and stay
+	 * silent: nothing was powered on, so there is nothing to power off.
+	 */
+	if (dsi->refcount == 0)
+		return;
 
 	mtk_dsi_poweroff(dsi);
 }
@@ -898,8 +1318,32 @@ static const struct drm_bridge_funcs mtk_dsi_bridge_funcs = {
 void mtk_dsi_ddp_start(struct device *dev)
 {
 	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	int ret;
 
-	mtk_dsi_poweron(dsi);
+	ret = mtk_dsi_poweron(dsi);
+	if (ret < 0) {
+		DRM_ERROR("failed to power on DSI display path: %d\n", ret);
+		return;
+	}
+
+	/*
+	 * The CRTC starts the MT6589 DDP components in OF graph order, so this
+	 * is the sink-side hook and runs last, after OVL, COLOR and RDMA0 have
+	 * been configured and started.  Powering DSI on alone is not enough:
+	 * the DSI_START pulse is what makes the controller begin pulling frames
+	 * out of RDMA0, and it belongs at the end of the sequence.  It used to
+	 * wait for the bridge atomic_enable callback, which runs after the same
+	 * point but cannot be relied on to come first.
+	 *
+	 * atomic_pre_enable normally did the lane setup already.  Keep it
+	 * idempotent here because the DDP hook can also handle a retried
+	 * power-on.
+	 */
+	mtk_dsi_lane_ready(dsi);
+	mtk_dsi_clk_hs_mode(dsi, true);
+	mtk_dsi_dump_status(dsi, "ddp-pre-start");
+	mtk_output_dsi_enable(dsi);
+	mtk_dsi_dump_status(dsi, "ddp-post-start");
 }
 
 void mtk_dsi_ddp_stop(struct device *dev)
@@ -1105,15 +1549,18 @@ static void mtk_dsi_cmdq(struct mtk_dsi *dsi, const struct mipi_dsi_msg *msg)
 static ssize_t mtk_dsi_host_send_cmd(struct mtk_dsi *dsi,
 				     const struct mipi_dsi_msg *msg, u8 flag)
 {
+	s32 ret;
+
 	mtk_dsi_wait_for_idle(dsi);
 	mtk_dsi_irq_data_clear(dsi, flag);
 	mtk_dsi_cmdq(dsi, msg);
 	mtk_dsi_start(dsi);
 
-	if (!mtk_dsi_wait_for_irq_done(dsi, flag, 2000))
-		return -ETIME;
-	else
-		return 0;
+	ret = mtk_dsi_wait_for_irq_done(dsi, flag, 2000);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
@@ -1145,7 +1592,7 @@ static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
 		goto restore_dsi_mode;
 
 	if (!MTK_DSI_HOST_IS_READ(msg->type)) {
-		recv_cnt = 0;
+		recv_cnt = msg->tx_len;
 		goto restore_dsi_mode;
 	}
 
@@ -1217,6 +1664,13 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(dsi->digital_clk),
 				     "Failed to get digital clock\n");
 
+	if (dsi->driver_data->has_lane_clk) {
+		dsi->lane_clk = devm_clk_get(dev, "lane");
+		if (IS_ERR(dsi->lane_clk))
+			return dev_err_probe(dev, PTR_ERR(dsi->lane_clk),
+					     "Failed to get lane clock\n");
+	}
+
 	dsi->hs_clk = devm_clk_get(dev, "hs");
 	if (IS_ERR(dsi->hs_clk))
 		return dev_err_probe(dev, PTR_ERR(dsi->hs_clk), "Failed to get hs clock\n");
@@ -1268,19 +1722,40 @@ static void mtk_dsi_remove(struct platform_device *pdev)
 static const struct mtk_dsi_driver_data mt8173_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
-	.reg_shadow_dbg_off = 0x190
+	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 };
 
 static const struct mtk_dsi_driver_data mt2701_dsi_driver_data = {
 	.reg_cmdq_off = 0x180,
 	.reg_vm_cmd_off = 0x130,
-	.reg_shadow_dbg_off = 0x190
+	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
+};
+
+static const struct mtk_dsi_driver_data mt6589_dsi_driver_data = {
+	.reg_cmdq_off = 0x180,
+	.reg_vm_cmd_off = 0x130,
+	/*
+	 * DSI_COM_CTRL at 0x10 only implements DSI_RESET on MT6589.
+	 * Do not access the generic DSI_EN or DPHY_RESET bits here.
+	 */
+	.timcon2_no_da_hs_sync = true,
+	.has_mem_conti = true,
+	.has_lane_clk = true,
+	.has_reset = true,
+	.use_downstream_vdo_porch_timing = true,
+	.use_downstream_phy_timing = true,
 };
 
 static const struct mtk_dsi_driver_data mt8183_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
 	.reg_vm_cmd_off = 0x130,
 	.reg_shadow_dbg_off = 0x190,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 };
@@ -1289,6 +1764,8 @@ static const struct mtk_dsi_driver_data mt8186_dsi_driver_data = {
 	.reg_cmdq_off = 0xd00,
 	.reg_vm_cmd_off = 0x200,
 	.reg_shadow_dbg_off = 0xc00,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 };
@@ -1297,6 +1774,8 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 	.reg_cmdq_off = 0xd00,
 	.reg_vm_cmd_off = 0x200,
 	.reg_shadow_dbg_off = 0xc00,
+	.dsi_en_mask = DSI_EN,
+	.dphy_reset_mask = DPHY_RESET,
 	.has_shadow_ctl = true,
 	.has_size_ctl = true,
 	.cmdq_long_packet_ctl = true,
@@ -1305,6 +1784,8 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 
 static const struct of_device_id mtk_dsi_of_match[] = {
 	{ .compatible = "mediatek,mt2701-dsi", .data = &mt2701_dsi_driver_data },
+	{ .compatible = "mediatek,mt6589-dsi", .data = &mt6589_dsi_driver_data },
+	{ .compatible = "mediatek,mt8167-dsi", .data = &mt2701_dsi_driver_data },
 	{ .compatible = "mediatek,mt8173-dsi", .data = &mt8173_dsi_driver_data },
 	{ .compatible = "mediatek,mt8183-dsi", .data = &mt8183_dsi_driver_data },
 	{ .compatible = "mediatek,mt8186-dsi", .data = &mt8186_dsi_driver_data },

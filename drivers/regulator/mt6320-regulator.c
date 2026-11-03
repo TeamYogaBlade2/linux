@@ -710,11 +710,60 @@ static int mt6320_regulator_probe(struct platform_device *pdev)
 	dev_info(&pdev->dev, "Chip ID = 0x%x\n", reg_value);
 
 	for (i = 0; i < MT6320_MAX_REGULATOR; i++) {
+		struct regulator_init_data *init_data;
+		struct device_node *node = NULL;
+
 		config.dev = &pdev->dev;
 		config.driver_data = &mt6320_regulators[i];
 		config.regmap = mt6320->regmap;
+		config.of_node = NULL;
+
+		/*
+		 * Find this regulator's own node under the "regulators"
+		 * container, matching it by the node name each table entry
+		 * already carries in desc.of_match, and hand it to the core as
+		 * config.of_node.
+		 *
+		 * Without this, every regulator is registered against the MFD
+		 * cell's node - the "regulators" container itself - because
+		 * config.of_node is left NULL and the core then inherits the
+		 * parent device's node (core.c). A consumer that names its
+		 * supply by phandle looks the regulator up with
+		 * class_find_device_by_of_node() on the ldo_vibr node, finds
+		 * nothing, and gets -ENODEV. That is exactly what the MT6320
+		 * vibrator hit on hardware:
+		 *
+		 *	mt6320-vibrator: error -ENODEV: failed to get vibr regulator
+		 *
+		 * The match is by node name, so a regulator the device tree
+		 * does not describe simply gets no node, which is what the
+		 * optional-lookup path expects.
+		 */
+		node = of_get_child_by_name(pdev->dev.of_node,
+					    mt6320_regulators[i].desc.of_match);
+		if (node) {
+			config.of_node = node;
+
+			init_data = of_get_regulator_init_data(&pdev->dev,
+							     node,
+							&mt6320_regulators[i].desc);
+			if (!init_data) {
+				of_node_put(node);
+				dev_err(&pdev->dev,
+					"failed to parse DT for regulator %s\n",
+					mt6320_regulators[i].desc.name);
+				return -EINVAL;
+			}
+		}
+
 		rdev = devm_regulator_register(&pdev->dev,
 				&mt6320_regulators[i].desc, &config);
+		/*
+		 * The core took its own reference while registering, and the
+		 * init data is consumed inside that call, so this probe's
+		 * reference is done with either way.
+		 */
+		of_node_put(node);
 		if (IS_ERR(rdev)) {
 			dev_err(&pdev->dev, "failed to register %s\n",
 				mt6320_regulators[i].desc.name);

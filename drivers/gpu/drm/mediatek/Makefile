@@ -10,6 +10,7 @@ mediatek-drm-y := mtk_crtc.o \
 		  mtk_disp_ovl.o \
 		  mtk_disp_ovl_adaptor.o \
 		  mtk_disp_rdma.o \
+		  mtk_disp_tdshp.o \
 		  mtk_drm_drv.o \
 		  mtk_dsi.o \
 		  mtk_dpi.o \
@@ -19,6 +20,8 @@ mediatek-drm-y := mtk_crtc.o \
 		  mtk_plane.o
 
 obj-$(CONFIG_DRM_MEDIATEK) += mediatek-drm.o
+
+obj-$(CONFIG_DRM_MEDIATEK_WDMA) += mtk_disp_wdma.o
 
 obj-$(CONFIG_DRM_MEDIATEK_HDMI_COMMON) += mtk_hdmi_common.o
 obj-$(CONFIG_DRM_MEDIATEK_HDMI) += mtk_cec.o

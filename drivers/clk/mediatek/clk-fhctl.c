@@ -40,6 +40,35 @@ static const struct fhctl_offset fhctl_offset_v2 = {
 	.offset_mon = 0x10,
 };
 
+/*
+ * MT6589: the per-channel registers are laid out as FHCTLx_CFG
+ * (0x4c + i * 0x10), UPDNLMT, DDS, MON with no DVFS register; hopping
+ * is triggered through DDS bit 31.  The global "handoff permission"
+ * register is PLL_HP_CON0 at apmixed offset 0x14 and the two slope
+ * values live in the hopping SRAM at 0x20 / 0x24.
+ *
+ * The channel registers are addressed through fhx_base, which is already
+ * the channel's own base (fhx_offset is 0x4c for FHCTL0, 0x5c for FHCTL1,
+ * and so on, matching OFFSET_FHCTLx_CFG in the stock mt_fhreg.h).  These
+ * offsets are therefore relative to that base and must be the per-register
+ * delta from the channel's CFG - not the absolute offsets.  Carrying the
+ * absolute values here added the channel base twice and every access landed
+ * 0x4c past the intended register, which is how hopping ended up writing a
+ * zero to some other block and then timing out on the DDS monitor.
+ */
+static const struct fhctl_offset fhctl_offset_v3 = {
+	.offset_hp_en = 0x14,
+	.offset_clk_con = 0x20,
+	.offset_rst_con = 0x24,
+	.offset_slope0 = 0x20,
+	.offset_slope1 = 0x24,
+	.offset_cfg = 0x0,
+	.offset_updnlmt = 0x4,
+	.offset_dds = 0x8,
+	.offset_dvfs = 0x8,
+	.offset_mon = 0xc,
+};
+
 const struct fhctl_offset *fhctl_get_offset_table(enum fhctl_variant v)
 {
 	switch (v) {
@@ -47,6 +76,8 @@ const struct fhctl_offset *fhctl_get_offset_table(enum fhctl_variant v)
 		return &fhctl_offset_v1;
 	case FHCTL_PLLFH_V2:
 		return &fhctl_offset_v2;
+	case FHCTL_PLLFH_V3:
+		return &fhctl_offset_v3;
 	default:
 		return ERR_PTR(-EINVAL);
 	};
@@ -56,8 +87,10 @@ static void dump_hw(struct mtk_clk_pll *pll, struct fh_pll_regs *regs,
 		    const struct fh_pll_data *data)
 {
 	pr_info("hp_en<%x>,clk_con<%x>,slope0<%x>,slope1<%x>\n",
-		readl(regs->reg_hp_en), readl(regs->reg_clk_con),
-		readl(regs->reg_slope0), readl(regs->reg_slope1));
+		readl(regs->reg_hp_en),
+		regs->reg_clk_con ? readl(regs->reg_clk_con) : 0,
+		regs->reg_slope0 ? readl(regs->reg_slope0) : 0,
+		regs->reg_slope1 ? readl(regs->reg_slope1) : 0);
 	pr_info("cfg<%x>,lmt<%x>,dds<%x>,dvfs<%x>,mon<%x>\n",
 		readl(regs->reg_cfg), readl(regs->reg_updnlmt),
 		readl(regs->reg_dds), readl(regs->reg_dvfs),
@@ -130,8 +163,10 @@ static int hopping_hw_flow(struct mtk_clk_pll *pll, struct fh_pll_regs *regs,
 
 	writel(readl(regs->reg_cfg) | data->sfstrx_en, regs->reg_cfg);
 	writel(readl(regs->reg_cfg) | data->fhctlx_en, regs->reg_cfg);
-	writel(data->slope0_value, regs->reg_slope0);
-	writel(data->slope1_value, regs->reg_slope1);
+	if (regs->reg_slope0)
+		writel(data->slope0_value, regs->reg_slope0);
+	if (regs->reg_slope1)
+		writel(data->slope1_value, regs->reg_slope1);
 
 	writel(readl(regs->reg_hp_en) | BIT(data->fh_id), regs->reg_hp_en);
 	writel((new_dds) | (data->dvfs_tri), regs->reg_dvfs);
@@ -190,6 +225,55 @@ static int fhctl_hopping(struct mtk_fh *fh, unsigned int new_dds,
 	unsigned long flags = 0;
 	int ret;
 
+	/*
+	 * Frequency hopping and spread spectrum are two independent things.
+	 * FH means changing the PLL frequency through the FHCTL hardware;
+	 * SSC means modulating the emitted clock around the nominal
+	 * frequency.  The vendor API spells this out with three states -
+	 * FH_FH_DISABLE, FH_FH_ENABLE_SSC and FH_FH_ENABLE_DFH, the last
+	 * being hopping with no SSC at all (mt_freqhopping.h:42-46) - and
+	 * lists ARMPLL, MAINPLL, MSDCPLL, TVDPLL and LVDSPLL as FH_PLL_ENABLE
+	 * with "default SSC disable" (mt_freqhopping.c:87-92), i.e. their
+	 * hopping path is expected to exist but to be off by default.
+	 *
+	 * So the hop is gated on state->fh_capable, which the device tree
+	 * sets per PLL, and state->ssc_rate only ever decides whether the
+	 * spread-spectrum modulation is programmed around the hop.
+	 *
+	 * A channel that is wired to an FHCTL channel but is not marked
+	 * capable falls back to reprogramming the PCW field directly, which
+	 * is what the data sheet prescribes for these non-SDM PLLs anyway.
+	 * That fallback is not a nicety: running the hop on a channel that
+	 * is not capable does not complete.  On this part every FHCTL
+	 * channel register read back zero and the DDS monitor never reached
+	 * the new value, so boot spent a second per attempt in "FHCTL
+	 * hopping timeout".
+	 */
+	if (!state->fh_capable) {
+		unsigned int pcw;
+		u32 val;
+
+		/*
+		 * new_dds is the postdiv-adjusted PCW value already computed
+		 * by mtk_fhctl_set_rate(); apply it directly rather than
+		 * running the hop.
+		 *
+		 * The postdiv handling below is deliberately not reached: it
+		 * only does anything for a PLL that has a postdiv divider
+		 * table, and the channels that reach this branch on this part -
+		 * ARMPLL, MAINPLL, TVDPLL, LVDSPLL - are declared without one.
+		 */
+		pcw = new_dds & data->dds_mask;
+
+		spin_lock_irqsave(lock, flags);
+		val = readl(pll->pcw_addr);
+		writel((val & ~data->dds_mask) | pcw | data->pcwchg,
+		       pll->pcw_addr);
+		spin_unlock_irqrestore(lock, flags);
+
+		return 0;
+	}
+
 	if (postdiv) {
 		pll_postdiv = __get_postdiv(pll);
 
@@ -246,13 +330,15 @@ void fhctl_hw_init(struct mtk_fh *fh)
 	u32 val;
 
 	/* initial hw register */
-	val = readl(regs.reg_clk_con) | BIT(data.fh_id);
-	writel(val, regs.reg_clk_con);
+	if (regs.reg_clk_con && regs.reg_rst_con) {
+		val = readl(regs.reg_clk_con) | BIT(data.fh_id);
+		writel(val, regs.reg_clk_con);
 
-	val = readl(regs.reg_rst_con) & ~BIT(data.fh_id);
-	writel(val, regs.reg_rst_con);
-	val = readl(regs.reg_rst_con) | BIT(data.fh_id);
-	writel(val, regs.reg_rst_con);
+		val = readl(regs.reg_rst_con) & ~BIT(data.fh_id);
+		writel(val, regs.reg_rst_con);
+		val = readl(regs.reg_rst_con) | BIT(data.fh_id);
+		writel(val, regs.reg_rst_con);
+	}
 
 	writel(0x0, regs.reg_cfg);
 	writel(0x0, regs.reg_updnlmt);

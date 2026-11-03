@@ -294,7 +294,21 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
 	spin_unlock_irq(&mq->lock);
 
 	if (!(req->rq_flags & RQF_DONTPREP)) {
-		req_to_mmc_queue_req(req)->retries = 0;
+		struct mmc_queue_req *mqrq = req_to_mmc_queue_req(req);
+
+		mqrq->retries = 0;
+		/*
+		 * MQRQ_XFER_SINGLE_BLOCK is set by mmc_blk_mq_rw_recovery()
+		 * and by the error path just below it when a large transfer
+		 * has to be retried one 512-byte block at a time.  The
+		 * mmc_queue_req lives per tag and is reused, so without this
+		 * reset the flag outlives the request that set it: every
+		 * later request issued on that tag is split into single-block
+		 * transfers (hundreds of commands instead of one).  The tag
+		 * set only has a handful of tags, so one recovered error
+		 * slows the whole card down until reboot.
+		 */
+		mqrq->flags = 0;
 		req->rq_flags |= RQF_DONTPREP;
 	}
 

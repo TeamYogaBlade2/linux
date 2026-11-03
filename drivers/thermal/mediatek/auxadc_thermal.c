@@ -1201,11 +1201,30 @@ static int mtk_thermal_extract_efuse_mt6589(struct mtk_thermal *mt, u32 *buf)
 	mt->o_slope_sign = 0;
 
 	if (!(buf[0] & 0x00000001)) {
-		/* not calibrated, fall back to defaults */
+		/*
+		 * Not calibrated: fall back to the defaults the vendor kernel
+		 * uses (thermal_late_init() in the shipped blade10 image, i.e.
+		 * the APMIXED branch that runs when the calibration-enable bit
+		 * is clear: adc_ge/adc_oe 128, degc_cali 40, vtsabb 272).
+		 *
+		 * vts[VTS1] must be reset too, and that is what was missing.
+		 * The two lines above the branch unconditionally decode
+		 * vts[VTS1] from buf[0], so on a blank fuse it becomes 0 - and
+		 * raw_to_mcelsius_v1_5() computes from it as
+		 *
+		 *     tmp *= raw - vts[sensno] - 3350
+		 *
+		 * which with vts = 0 and a realistic raw of ~3819 returns about
+		 * -36.7 C.  The thermal core then rejects that as below
+		 * TEMP_MIN, the zone never reports a usable temperature, and
+		 * throttling never engages.  Resetting only VTSABB left the
+		 * sensor that actually feeds the cpu-thermal zone wrong.
+		 */
 		mt->adc_ge = 128;
 		mt->adc_oe = 128;
 		mt->degc_cali = 40;
 		mt->o_slope = 0;
+		mt->vts[VTS1] = 272;
 		mt->vts[VTSABB] = 272;
 	}
 

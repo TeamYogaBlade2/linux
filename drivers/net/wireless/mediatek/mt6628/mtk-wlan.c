@@ -1,0 +1,1044 @@
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+/*
+ * MediaTek MT6628 WLAN driver
+ *
+ * Copyright (c) 2026 Akari Tsuyukusa <akkun11.open@gmail.com>
+ *
+ * Brings the WLAN function of the MT6628 combo chip (SDIO function 1)
+ * up to the point where its firmware is running.  The chip is a full
+ * MAC: the firmware generates 802.11 headers, the host hands it plain
+ * ethernet frames.
+ *
+ * Bring-up sequence:
+ *   1. verify the WCIR chip ID
+ *   2. take driver ownership through WHLPCR
+ *   3. push the firmware image with DOWNLOAD_BUF commands (address,
+ *      length, CRC32 per chunk)
+ *   4. issue WIFI_START
+ *   5. wait for WCIR_WLAN_READY
+ *
+ * The cfg80211/netdev and interrupt-driven runtime path is brought up
+ * after firmware start.
+ */
+
+#include <linux/bitfield.h>
+#include <linux/crc32.h>
+#include <linux/delay.h>
+#include <linux/firmware.h>
+#include <linux/jiffies.h>
+#include <linux/kernel.h>
+#include <linux/mfd/mt6628-pwrseq.h>
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/pm.h>
+#include <linux/slab.h>
+#include <linux/mmc/sdio_func.h>
+#include <linux/mmc/sdio_ids.h>
+#include <linux/unaligned.h>
+
+#include "mtk-wlan-hif.h"
+#include "mtk-wlan.h"
+
+/*
+ * Experiment switch, readable at runtime through
+ * /sys/module/mtk_wlan/parameters/no_qos so the two configurations can be
+ * compared without rebuilding.
+ */
+static bool no_qos;
+module_param(no_qos, bool, 0644);
+MODULE_PARM_DESC(no_qos,
+		 "Refuse QoS so the firmware opens no Block Ack session (experiment)");
+
+#define MT6628_FW_NAME			"WIFI_RAM_CODE_MT6628"
+#define MT6628_FW_DL_CHUNK		2048
+/* CFG_FW_LOAD_ADDRESS of the downstream config.h */
+#define MT6628_FW_LOAD_ADDRESS		0x00060000
+#define MT6628_FW_SIGNATURE		0x574b544d
+#define MT6628_FW_HEADER_SIZE		16
+#define MT6628_FW_SECTION_SIZE		16
+#define MT6628_FW_DL_MODE_ENCRYPTION	BIT(0)
+#define MT6628_FW_DL_MODE_ACK		BIT(31)
+#define MT6628_INIT_EVENT_CMD_RESULT	1
+#define MT6628_INIT_EVENT_SIZE		8
+#define MT6628_INIT_TX_TC0_RESOURCES	8
+#define MT6628_INIT_TX_TIMEOUT_MS	1000
+
+struct mt6628_fw_section {
+	__le32 offset;
+	__le32 reserved;
+	__le32 length;
+	__le32 dest_addr;
+} __packed;
+
+size_t mt6628_sdio_xfer_len(size_t len)
+{
+	if (len <= MT6628_WLAN_SDIO_BLK_SIZE)
+		return len;
+
+	return roundup(len, MT6628_WLAN_SDIO_BLK_SIZE);
+}
+
+static u32 mt6628_crc32(const u8 *data, size_t len)
+{
+	return ~crc32_le(~0, data, len);
+}
+
+static int mt6628_read32(struct mt6628_wlan *wl, u32 reg, u32 *val)
+{
+	u32 value;
+	int ret;
+
+	sdio_claim_host(wl->func);
+	value = sdio_readl(wl->func, reg, &ret);
+	if (!ret)
+		*val = value;
+	sdio_release_host(wl->func);
+
+	return ret;
+}
+
+static int mt6628_write32(struct mt6628_wlan *wl, u32 reg, u32 val)
+{
+	int ret;
+
+	sdio_claim_host(wl->func);
+	sdio_writel(wl->func, val, reg, &ret);
+	sdio_release_host(wl->func);
+
+	return ret;
+}
+
+/*
+ * WHLPCR interrupt-enable changes use CMD52 in the downstream driver.
+ * Keep those byte-wide writes separate from the 32-bit ownership commands.
+ */
+static int mt6628_write8(struct mt6628_wlan *wl, u32 reg, u8 val)
+{
+	int ret;
+
+	sdio_claim_host(wl->func);
+	sdio_writeb(wl->func, val, reg, &ret);
+	sdio_release_host(wl->func);
+
+	return ret;
+}
+
+/*
+ * INIT commands use TC0. The downstream driver reserves eight TC0 credits
+ * and polls the release counters before sending another INIT command.
+ * Only the low byte of WTSR0 belongs to TC0; still read WTSR1 so that the
+ * status registers are consumed consistently while the INIT path is active.
+ */
+static int mt6628_init_read_tx_released(struct mt6628_wlan *wl)
+{
+	u32 wtsr0, wtsr1;
+	int ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WTSR0, &wtsr0);
+	if (ret)
+		return ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WTSR1, &wtsr1);
+	if (ret) {
+		/*
+		 * WTSR0 has already been read and WTSR is read-and-consume, so
+		 * its releases are gone from the hardware whether or not this
+		 * read succeeded.  Returning without crediting them loses INIT
+		 * TC0 credits permanently, and this runs in the resource-wait
+		 * loop that exists precisely to recover them.
+		 */
+		wl->init_tx_free = min_t(unsigned int,
+					 wl->init_tx_free + (wtsr0 & 0xff),
+					 MT6628_INIT_TX_TC0_RESOURCES);
+		return ret;
+	}
+
+	wl->init_tx_free = min_t(unsigned int,
+				 wl->init_tx_free + (wtsr0 & 0xff),
+				 MT6628_INIT_TX_TC0_RESOURCES);
+
+	return 0;
+}
+
+static int mt6628_init_acquire_resource(struct mt6628_wlan *wl)
+{
+	unsigned long timeout;
+	int ret;
+
+	timeout = jiffies + msecs_to_jiffies(MT6628_INIT_TX_TIMEOUT_MS);
+
+	do {
+		ret = mt6628_init_read_tx_released(wl);
+		if (ret)
+			return ret;
+
+		if (wl->init_tx_free) {
+			wl->init_tx_free--;
+			return 0;
+		}
+
+		usleep_range(50, 100);
+	} while (time_before(jiffies, timeout));
+
+	return -ETIMEDOUT;
+}
+
+static void mt6628_init_release_resource(struct mt6628_wlan *wl)
+{
+	wl->init_tx_free = min_t(unsigned int, wl->init_tx_free + 1,
+				 MT6628_INIT_TX_TC0_RESOURCES);
+}
+
+static int mt6628_poll_ready(struct mt6628_wlan *wl)
+{
+	unsigned int tries = 512;
+	u32 val = 0;
+	int ret;
+
+	while (tries--) {
+		ret = mt6628_read32(wl, MT6628_MCR_WCIR, &val);
+		if (ret)
+			return ret;
+		if (val & MT6628_WCIR_WLAN_READY) {
+			dev_info(&wl->func->dev, "WLAN ready\n");
+			return 0;
+		}
+		msleep(10);
+	}
+
+	dev_err(&wl->func->dev, "timed out waiting for WLAN_READY\n");
+	return -ETIMEDOUT;
+}
+
+static int mt6628_driver_own(struct mt6628_wlan *wl)
+{
+	unsigned int tries = 0;
+	unsigned long timeout = jiffies + msecs_to_jiffies(8192);
+	u32 val = 0, wcir;
+	int ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
+	if (ret)
+		return ret;
+
+	dev_dbg(&wl->func->dev,
+		"driver-own start: WCIR=%#010x, chip_id=%#lx, WLAN_READY=%u\n",
+		wcir, wcir & MT6628_WCIR_CHIP_ID,
+		!!(wcir & MT6628_WCIR_WLAN_READY));
+
+	ret = mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_CLR);
+	if (ret)
+		return ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret) {
+		/* INT_EN_CLR above must not outlive this failure; see below. */
+		mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
+		return ret;
+	}
+
+	while (time_before(jiffies, timeout)) {
+		ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
+		if (ret) {
+			mt6628_write8(wl, MT6628_MCR_WHLPCR,
+				      MT6628_INT_EN_SET);
+			return ret;
+		}
+
+		if (val & MT6628_IS_DRIVER_OWN) {
+			dev_dbg(&wl->func->dev,
+				"driver ownership acquired: WHLPCR=%#010x\n",
+				val);
+			/*
+			 * Re-enable the SDIO interrupt that the
+			 * MT6628_INT_EN_CLR above turned off.
+			 *
+			 * This function is the reclaim path as well as the
+			 * initial bring-up, and it runs every time the driver
+			 * takes the chip back from the firmware.  Leaving
+			 * BIT(0) clear meant that after the first hand-off no
+			 * SDIO interrupt was ever delivered again, so a
+			 * command whose completion is only reported by
+			 * CMD_RESULT (the WPA2 key install) waited out its
+			 * full timeout while non-blocking commands still
+			 * appeared to work.
+			 */
+			ret = mt6628_write8(wl, MT6628_MCR_WHLPCR,
+					    MT6628_INT_EN_SET);
+			if (ret)
+				return ret;
+			return 0;
+		}
+
+		/*
+		 * Match nicpmSetDriverOwn(): refresh the ownership request
+		 * periodically while the LP engine is completing its transition.
+		 */
+		if (!(tries & 0x3ff))
+			dev_dbg(&wl->func->dev,
+				"waiting for driver ownership: "
+				"WCIR=%#010x WHLPCR=%#010x iteration=%u\n",
+				wcir, val, tries);
+
+		if (tries && !(tries & 0xff)) {
+			ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+					     MT6628_FW_OWN_REQ_CLR);
+			if (ret) {
+				mt6628_write8(wl, MT6628_MCR_WHLPCR,
+					      MT6628_INT_EN_SET);
+				return ret;
+			}
+		}
+
+		tries++;
+		usleep_range(900, 1100);
+	}
+
+	dev_err(&wl->func->dev,
+		"timed out waiting for driver ownership: "
+		"WCIR=%#010x WHLPCR=%#010x\n", wcir, val);
+	/*
+	 * Put the interrupt enable back before failing.
+	 *
+	 * INT_EN_CLR was written above to quiet the line while the ownership
+	 * transition is in flight, and every path out of here has to undo it.
+	 * Returning with it still clear leaves the SDIO interrupt disabled for
+	 * good: nothing else writes INT_EN_SET except a successful reclaim or a
+	 * full restart, and the failure path is exactly the one a recovery
+	 * retry goes through.  The chip then stays alive and owned by the
+	 * firmware with the host deaf to it - the interface keeps its address
+	 * and stops carrying traffic, with an empty dmesg.
+	 */
+	mt6628_write8(wl, MT6628_MCR_WHLPCR, MT6628_INT_EN_SET);
+	return -ETIMEDOUT;
+}
+
+int mt6628_wlan_take_driver_own(struct mt6628_wlan *wl)
+{
+	return mt6628_driver_own(wl);
+}
+
+static int mt6628_fw_own(struct mt6628_wlan *wl)
+{
+	u32 val;
+	int ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_SET);
+	if (ret)
+		return ret;
+
+	ret = mt6628_read32(wl, MT6628_MCR_WHLPCR, &val);
+	if (ret)
+		return ret;
+
+	/*
+	 * The downstream driver treats a still-set FW-own request as a
+	 * failed ownership transition and rolls it back immediately.
+	 */
+	if (!(val & MT6628_FW_OWN_REQ_SET))
+		return 0;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret)
+		return ret;
+
+	dev_warn(&wl->func->dev,
+		 "firmware ownership request was not accepted\n");
+	return -EBUSY;
+}
+
+int mt6628_wlan_force_firmware_reset(struct mt6628_wlan *wl)
+{
+	int ret;
+
+	ret = mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			     MT6628_FW_OWN_REQ_CLR);
+	if (ret)
+		return ret;
+
+	msleep(10);
+
+	ret = mt6628_write32(wl, MT6628_MCR_WSICR,
+			     MT6628_WSICR_H2D_SW_INT_SET);
+	if (ret)
+		return ret;
+
+	msleep(10);
+
+	return mt6628_write32(wl, MT6628_MCR_WHLPCR,
+			      MT6628_FW_OWN_REQ_SET);
+}
+
+static int mt6628_wait_init_cmd_result(struct mt6628_wlan *wl, u8 seq_num)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
+
+	while (time_before(jiffies, timeout)) {
+		u32 rx_len_reg;
+		u16 rx_len;
+		u8 *resp;
+		int ret;
+
+		ret = mt6628_read32(wl, MT6628_MCR_WRPLR, &rx_len_reg);
+		if (ret)
+			return ret;
+
+		rx_len = (u16)rx_len_reg;
+		if (!rx_len) {
+			usleep_range(50, 100);
+			continue;
+		}
+
+		if (rx_len != MT6628_INIT_EVENT_SIZE) {
+			dev_err(&wl->func->dev,
+				"invalid init event length: %u bytes\n", rx_len);
+			return -EMSGSIZE;
+		}
+
+		resp = kzalloc(rx_len, GFP_KERNEL);
+		if (!resp)
+			return -ENOMEM;
+
+		/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+		ret = mt6628_wlan_pm_busy(wl);
+		if (ret) {
+			kfree(resp);
+			return ret;
+		}
+
+		sdio_claim_host(wl->func);
+		ret = sdio_readsb(wl->func, resp, MT6628_MCR_WRDR0, rx_len);
+		sdio_release_host(wl->func);
+		if (ret) {
+			kfree(resp);
+			return ret;
+		}
+
+		/*
+		 * INIT_HIF_RX_HEADER:
+		 *   +0: u2RxByteCount
+		 *   +2: ucEID
+		 *   +3: ucSeqNum
+		 *   +4: ucStatus
+		 */
+		if (get_unaligned_le16(resp) != rx_len ||
+		    resp[2] != MT6628_INIT_EVENT_CMD_RESULT ||
+		    resp[3] != seq_num) {
+			dev_err(&wl->func->dev,
+				"invalid init event response: len=%u eid=%u seq=%u\n",
+				get_unaligned_le16(resp), resp[2], resp[3]);
+			kfree(resp);
+			return -EPROTO;
+		}
+
+		ret = resp[4] ? -EIO : 0;
+		kfree(resp);
+		return ret;
+	}
+
+	dev_err(&wl->func->dev,
+		"timeout waiting for init command result\n");
+	return -ETIMEDOUT;
+}
+
+/* Send one init command with a payload buffer. */
+static int mt6628_init_cmd(struct mt6628_wlan *wl, u8 cid,
+			   void *extra, size_t extra_len,
+			   const u8 *data, size_t data_len,
+			   bool wait_result)
+{
+	struct sdio_func *func = wl->func;
+	size_t hdr_len = sizeof(struct mt6628_init_hif_tx_hdr);
+	size_t pkt_len = ALIGN(hdr_len + extra_len + data_len, 4);
+	size_t tx_len = mt6628_sdio_xfer_len(pkt_len);
+	u8 seq_num;
+	u8 *pkt;
+	bool resource_reserved = false;
+	int ret;
+
+	pkt = kzalloc(tx_len, GFP_KERNEL);
+	if (!pkt)
+		return -ENOMEM;
+
+	/*
+	 * Match the downstream kalDevPortWrite() transfer rules:
+	 * packets shorter than one SDIO block use byte mode, while transfers
+	 * of at least one block are rounded up to a whole-block length.
+	 * u2TxByteCount still describes the real 4-byte-aligned HIF packet;
+	 * any zeroed tail is transport padding, not part of that packet.
+	 */
+	put_unaligned_le16(pkt_len, pkt);
+	pkt[2] = 0;			/* ether type offset */
+	pkt[3] = 0;			/* checksum flags: none */
+	pkt[4] = cid;
+	seq_num = ++wl->cmd_seq_num;
+	pkt[5] = seq_num;
+	put_unaligned_le16(0, pkt + 6);
+
+	if (extra_len)
+		memcpy(pkt + hdr_len, extra, extra_len);
+	if (data_len)
+		memcpy(pkt + hdr_len + extra_len, data, data_len);
+
+	/*
+	 * Reserve an INIT TC0 credit before writing WTDR0. Keep that credit
+	 * consumed until firmware reports it released in WTSR0.
+	 */
+	ret = mt6628_init_acquire_resource(wl);
+	if (ret)
+		goto out_free;
+	resource_reserved = true;
+
+	/* Bulk transfer: reclaim Driver Own, the 32-bit helpers are bypassed. */
+	ret = mt6628_wlan_pm_busy(wl);
+	if (ret)
+		goto out_free;
+
+	sdio_claim_host(func);
+	ret = sdio_writesb(func, MT6628_MCR_WTDR0, pkt, tx_len);
+	sdio_release_host(func);
+
+out_free:
+	if (ret && resource_reserved)
+		mt6628_init_release_resource(wl);
+	kfree(pkt);
+
+	if (ret)
+		return ret;
+
+	if (!wait_result)
+		return 0;
+
+	return mt6628_wait_init_cmd_result(wl, seq_num);
+}
+
+static int mt6628_download_blob(struct mt6628_wlan *wl, u32 dest_addr,
+				const u8 *data, size_t len)
+{
+	while (len) {
+		struct mt6628_init_cmd_download_buf dl;
+		size_t chunk = min_t(size_t, len, MT6628_FW_DL_CHUNK);
+		u32 crc;
+		int ret;
+
+		if (chunk > U32_MAX - dest_addr)
+			return -EOVERFLOW;
+
+		/*
+		 * The firmware protocol carries the real section length.
+		 * mt6628_init_cmd() takes care of the 4-byte HIF packet
+		 * alignment and zero padding separately.
+		 */
+		crc = mt6628_crc32(data, chunk);
+
+		dl.address = cpu_to_le32(dest_addr);
+		dl.length = cpu_to_le32(chunk);
+		dl.crc32 = cpu_to_le32(crc);
+		/*
+		 * Request firmware encryption and a CMD_RESULT response for
+		 * each download chunk.  The latter is consumed by
+		 * mt6628_wait_init_cmd_result().
+		 */
+		dl.data_mode = cpu_to_le32(MT6628_FW_DL_MODE_ENCRYPTION |
+					   MT6628_FW_DL_MODE_ACK);
+
+		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_DOWNLOAD_BUF,
+				      &dl, sizeof(dl), data, chunk, true);
+		if (ret)
+			return ret;
+
+		dest_addr += chunk;
+		data += chunk;
+		len -= chunk;
+	}
+
+	return 0;
+}
+
+static int mt6628_download_firmware(struct mt6628_wlan *wl)
+{
+	const struct firmware *fw;
+	char fwname[64];
+	u32 num_sections;
+	size_t section_data_start;
+	unsigned int offset;
+	int ret;
+
+	/*
+	 * The firmware image name follows the downstream convention; the
+	 * actual RAM code image has to be supplied out-of-tree.
+	 */
+	snprintf(fwname, sizeof(fwname), "%s", MT6628_FW_NAME);
+
+	ret = firmware_request_nowarn(&fw, fwname, &wl->func->dev);
+	if (ret) {
+		dev_err(&wl->func->dev, "failed to load %s: %d\n",
+			fwname, ret);
+		return ret;
+	}
+
+	/*
+	 * Start the firmware-init command sequence at 1 and keep the final
+	 * sequence number for subsequent runtime commands.
+	 */
+	wl->cmd_seq_num = 0;
+	wl->init_tx_free = MT6628_INIT_TX_TC0_RESOURCES;
+
+	dev_info(&wl->func->dev, "firmware %s (%zu bytes)\n", fwname,
+		 fw->size);
+
+	if (!fw->size) {
+		dev_err(&wl->func->dev, "firmware image is empty\n");
+		ret = -EINVAL;
+		goto out_restore_seq;
+	}
+
+	/*
+	 * MT6628 uses divided firmware images:
+	 *
+	 *   0x00 signature
+	 *   0x04 whole-file CRC32
+	 *   0x08 section count
+	 *   0x0c reserved
+	 *   0x10 section table
+	 *
+	 * The downstream checks the CRC over everything from u4NumOfEntries
+	 * (offset 8) to the end of the image.
+	 */
+	if (fw->size >= MT6628_FW_HEADER_SIZE &&
+	    get_unaligned_le32(fw->data) == MT6628_FW_SIGNATURE) {
+		u32 expected_crc = get_unaligned_le32(fw->data + 4);
+		u32 actual_crc = mt6628_crc32(fw->data + 8, fw->size - 8);
+
+		if (expected_crc != actual_crc) {
+			dev_err(&wl->func->dev,
+				"divided firmware CRC mismatch: expected %#x, got %#x\n",
+				expected_crc, actual_crc);
+			ret = -EBADMSG;
+			goto out_restore_seq;
+		}
+
+		num_sections = get_unaligned_le32(fw->data + 8);
+
+		if (!num_sections) {
+			dev_err(&wl->func->dev,
+				"firmware contains no sections\n");
+			ret = -EINVAL;
+			goto out_restore_seq;
+		}
+
+		if (num_sections >
+		    (fw->size - MT6628_FW_HEADER_SIZE) /
+			MT6628_FW_SECTION_SIZE) {
+			dev_err(&wl->func->dev,
+				"invalid firmware section count: %u\n",
+				num_sections);
+			ret = -EINVAL;
+			goto out_restore_seq;
+		}
+
+		section_data_start = MT6628_FW_HEADER_SIZE +
+			(size_t)num_sections * MT6628_FW_SECTION_SIZE;
+
+		for (offset = 0; offset < num_sections; offset++) {
+			const struct mt6628_fw_section *section;
+			u32 data_offset;
+			u32 data_len;
+			u32 dest_addr;
+
+			section = (const struct mt6628_fw_section *)
+				(fw->data + MT6628_FW_HEADER_SIZE +
+				 offset * MT6628_FW_SECTION_SIZE);
+
+			data_offset = le32_to_cpu(section->offset);
+			data_len = le32_to_cpu(section->length);
+			dest_addr = le32_to_cpu(section->dest_addr);
+
+			if (data_offset < section_data_start ||
+			    data_offset > fw->size ||
+			    data_len > fw->size - data_offset) {
+				dev_err(&wl->func->dev,
+					"invalid firmware section %u: offset %#x length %#x\n",
+					offset, data_offset, data_len);
+				ret = -EINVAL;
+				goto out_restore_seq;
+			}
+
+			if (data_len > U32_MAX - dest_addr) {
+				dev_err(&wl->func->dev,
+					"firmware section %u address overflow: %#x + %#x\n",
+					offset, dest_addr, data_len);
+				ret = -EOVERFLOW;
+				goto out_restore_seq;
+			}
+
+			ret = mt6628_download_blob(wl, dest_addr,
+						   fw->data + data_offset,
+						   data_len);
+			if (ret) {
+				dev_err(&wl->func->dev,
+					"firmware section %u failed: %d\n",
+					offset, ret);
+				goto out_restore_seq;
+			}
+		}
+	} else {
+		/*
+		 * Keep the downstream fallback for a legacy/raw RAM-code image.
+		 * This path still uses the real unpadded length for CRC/firmware
+		 * metadata and only pads the HIF packet itself.
+		 */
+		ret = mt6628_download_blob(wl, MT6628_FW_LOAD_ADDRESS,
+					   fw->data, fw->size);
+		if (ret)
+			goto out_restore_seq;
+	}
+
+	{
+		/* INIT_CMD_WIFI_START { u4Override, u4Address } */
+		struct {
+			__le32 override;
+			__le32 address;
+		} __packed start = {
+			.override = cpu_to_le32(0),	/* no override */
+			.address = cpu_to_le32(0),
+		};
+
+		ret = mt6628_init_cmd(wl, MT6628_INIT_CMD_WIFI_START,
+				      &start, sizeof(start), NULL, 0, false);
+		if (ret) {
+			dev_err(&wl->func->dev, "WIFI_START failed: %d\n",
+				ret);
+			goto out_restore_seq;
+		}
+
+		ret = mt6628_poll_ready(wl);
+		if (ret)
+			goto out_restore_seq;
+	}
+
+	wl->fw_running = true;
+	dev_info(&wl->func->dev, "firmware started\n");
+
+out_restore_seq:
+	release_firmware(fw);
+	return ret;
+}
+
+int mt6628_wlan_reload_firmware(struct mt6628_wlan *wl)
+{
+	return mt6628_download_firmware(wl);
+}
+
+static int mt6628_wlan_sdio_probe(struct sdio_func *func,
+				  const struct sdio_device_id *id)
+{
+	struct mt6628_wlan *wl;
+	struct mt6628_pwrseq *pwrseq;
+	u32 wcir;
+	u8 raw[4] = {};
+	int raw_ret[4] = {};
+	unsigned int retry, i;
+	int ret;
+
+	if (func->num != 1) {
+		dev_dbg(&func->dev, "ignoring function %d\n", func->num);
+		return -ENODEV;
+	}
+
+	pwrseq = devm_mt6628_pwrseq_get(&func->dev);
+	if (IS_ERR(pwrseq))
+		return dev_err_probe(&func->dev, PTR_ERR(pwrseq),
+				     "waiting for MT6628 power sequence\n");
+
+	/*
+	 * Only boards with a physical UART STP connection set "mediatek,stp".
+	 * On those boards, WMT must finish initialization before WLAN downloads
+	 * firmware. Returning -EPROBE_DEFER here lets the successful UART
+	 * transport probe trigger a retry; SDIO-STP boards need no UART gate.
+	 */
+	if (func->dev.of_node &&
+	    of_find_property(func->dev.of_node, "mediatek,stp", NULL) &&
+	    (!pwrseq || !mt6628_pwrseq_is_stp_ready(pwrseq)))
+		return -EPROBE_DEFER;
+
+	wl = devm_kzalloc(&func->dev, sizeof(*wl), GFP_KERNEL);
+	if (!wl)
+		return -ENOMEM;
+
+	wl->func = func;
+	wl->force_no_qos = no_qos;
+	sdio_set_drvdata(func, wl);
+
+	/* enable the SDIO function; MMC core does not do it for us */
+	sdio_claim_host(func);
+	ret = sdio_enable_func(func);
+	sdio_release_host(func);
+	if (ret)
+		goto err_disable;
+
+	/*
+	 * Allow the WLAN block to finish starting.  Also preserve the
+	 * raw WCIR value so a failed identification can be distinguished
+	 * from a failed SDIO transfer.
+	 */
+	for (retry = 0; retry < 10; retry++) {
+		msleep(50);
+		ret = mt6628_read32(wl, MT6628_MCR_WCIR, &wcir);
+		if (ret)
+			goto err_disable;
+
+		if ((wcir & MT6628_WCIR_CHIP_ID) == 0x6628)
+			break;
+
+		msleep(10);
+	}
+
+	if ((wcir & MT6628_WCIR_CHIP_ID) != 0x6628) {
+		/*
+		 * WCIR should contain CHIP_ID=0x6628 in bits 15:0.
+		 * Compare the 32-bit read with byte reads to distinguish
+		 * a register/window issue from a broader startup problem.
+		 */
+		sdio_claim_host(func);
+		for (i = 0; i < ARRAY_SIZE(raw); i++)
+			raw[i] = sdio_readb(func,
+					    MT6628_MCR_WCIR + i,
+					    &raw_ret[i]);
+		sdio_release_host(func);
+
+		dev_err(&func->dev,
+			"unexpected chip ID %#x; WCIR=%#010x, "
+			"func=%u device=%04x:%04x, "
+			"CMD52 bytes=%02x/%d %02x/%d %02x/%d %02x/%d\n",
+			(u32)(wcir & MT6628_WCIR_CHIP_ID), wcir,
+			func->num, func->vendor, func->device,
+			raw[0], raw_ret[0], raw[1], raw_ret[1],
+			raw[2], raw_ret[2], raw[3], raw_ret[3]);
+		ret = -ENODEV;
+		goto err_disable;
+	}
+
+	ret = mt6628_driver_own(wl);
+	if (ret)
+		goto err_disable;
+	wl->driver_owned = true;
+
+	sdio_claim_host(func);
+	ret = sdio_set_block_size(func, 512);
+	sdio_release_host(func);
+	if (ret)
+		goto err_disable;
+
+	/*
+	 * Program the interrupt mask before starting firmware, like
+	 * nicInitializeAdapter() in the downstream driver. Global interrupts
+	 * remain disabled until the runtime path has drained startup status.
+	 */
+	ret = mt6628_write32(wl, MT6628_MCR_WHIER, MT6628_WHIER_RUNTIME);
+	if (ret)
+		goto err_disable;
+
+	ret = mt6628_download_firmware(wl);
+	if (ret)
+		goto err_disable;
+
+	ret = mt6628_wlan_runtime_start(wl);
+	if (ret)
+		goto err_disable;
+
+	return 0;
+
+err_disable:
+	{
+		int probe_err = ret;
+
+	if (wl->driver_owned) {
+		/*
+		 * A failed start may already have seen an abnormal-interrupt
+		 * report and queued the recovery worker.  Cancel it before
+		 * stopping the runtime: recovery_work touches the queues and
+		 * the cfg80211 state that runtime_stop tears down, so letting
+		 * it run afterwards is a use-after-free, not just a stray
+		 * reset.
+		 */
+		cancel_work_sync(&wl->recovery_work);
+		mt6628_wlan_runtime_stop(wl);
+
+		ret = mt6628_fw_own(wl);
+		if (ret)
+			dev_warn(&func->dev,
+				 "failed to return firmware ownership: %d\n",
+				 ret);
+		else
+			wl->driver_owned = false;
+	}
+
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
+
+		return dev_err_probe(&func->dev, probe_err,
+				     "MT6628 WLAN probe failed\n");
+	}
+}
+
+static void mt6628_wlan_sdio_remove(struct sdio_func *func)
+{
+	struct mt6628_wlan *wl = sdio_get_drvdata(func);
+
+	if (!wl)
+		return;
+
+	cancel_work_sync(&wl->recovery_work);
+	mt6628_wlan_runtime_stop(wl);
+
+	if (wl->driver_owned) {
+		int ret = mt6628_fw_own(wl);
+
+		if (ret)
+			dev_warn(&func->dev,
+				 "failed to return firmware ownership: %d\n",
+				 ret);
+		else
+			wl->driver_owned = false;
+	}
+
+	sdio_claim_host(func);
+	sdio_disable_func(func);
+	sdio_release_host(func);
+	sdio_set_drvdata(func, NULL);
+}
+
+/*
+ * System suspend/resume.
+ *
+ * The runtime idle path already hands the chip back to the firmware
+ * whenever the queues drain, so there is no separate "low power" state to
+ * program here.  Suspend only has to make that handoff happen at a point
+ * of our choosing, and cancel the idle countdown so the delayed work does
+ * not fire into a suspended system.
+ */
+static int mt6628_wlan_suspend(struct device *dev)
+{
+	struct sdio_func *func = dev_get_drvdata(dev);
+	struct mt6628_wlan *wl;
+	int ret;
+
+	if (!func)
+		return 0;
+
+	wl = sdio_get_drvdata(func);
+	if (!wl)
+		return 0;
+
+	/*
+	 * Cancel first: the idle work takes the SDIO host lock, and letting
+	 * it run while we are suspending would race the handoff below.
+	 */
+	WRITE_ONCE(wl->pm_suspending, true);
+	cancel_delayed_work_sync(&wl->pm_work);
+
+	if (!wl->runtime_started)
+		return 0;
+
+	/* Already idle: the firmware owns the chip and there is nothing to do. */
+	if (wl->pm_idle)
+		return 0;
+
+	ret = mt6628_wlan_give_firmware_own(wl);
+	if (ret == -EBUSY) {
+		/*
+		 * Traffic is still in flight, so the firmware refused to take
+		 * the chip.  Refusing the suspend is the only honest answer:
+		 * carrying on would leave the radio owned by the driver with
+		 * no way to service it while the rest of the system sleeps.
+		 */
+		dev_warn_ratelimited(dev,
+				     "deferring suspend, traffic still in flight\n");
+		WRITE_ONCE(wl->pm_suspending, false);
+		mt6628_wlan_pm_idle(wl);
+		return -EBUSY;
+	}
+
+	if (ret) {
+		dev_warn_ratelimited(dev,
+				     "failed to hand the chip to the firmware: %d\n",
+				     ret);
+		WRITE_ONCE(wl->pm_suspending, false);
+		mt6628_wlan_pm_idle(wl);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int mt6628_wlan_resume(struct device *dev)
+{
+	struct sdio_func *func = dev_get_drvdata(dev);
+	struct mt6628_wlan *wl;
+
+	if (!func)
+		return 0;
+
+	wl = sdio_get_drvdata(func);
+	if (!wl)
+		return 0;
+
+	/*
+	 * Reclaim Driver Own before anything else touches the chip.
+	 *
+	 * The failure is reported rather than swallowed: the driver stays with
+	 * the firmware, pm_idle is left set so that the next real access
+	 * retries through mt6628_wlan_pm_busy() (which aborts rather than
+	 * touching a chip the firmware owns), and the PM core leaves the
+	 * device suspended.  Returning 0 here told the upper layers that
+	 * resume had succeeded for a chip this driver still cannot use.
+	 *
+	 * There is deliberately no power_off() on the error path: the chip is
+	 * already running and owned by the firmware, and forcing it off would
+	 * tear down a working state that a later reclaim can recover.
+	 */
+	{
+		int ret = mt6628_wlan_pm_resume(wl);
+
+		if (ret)
+			return ret;
+	}
+
+	WRITE_ONCE(wl->pm_suspending, false);
+	mt6628_wlan_pm_idle(wl);
+	return 0;
+}
+
+static const struct dev_pm_ops mt6628_wlan_pm_ops = {
+	.suspend = mt6628_wlan_suspend,
+	.resume = mt6628_wlan_resume,
+	.freeze = mt6628_wlan_suspend,
+	.thaw = mt6628_wlan_resume,
+	.restore = mt6628_wlan_resume,
+};
+
+static const struct sdio_device_id mt6628_wlan_sdio_ids[] = {
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, SDIO_DEVICE_ID_MEDIATEK_MT6628) },
+	{ }
+};
+MODULE_DEVICE_TABLE(sdio, mt6628_wlan_sdio_ids);
+
+static struct sdio_driver mt6628_wlan_driver = {
+	.name = KBUILD_MODNAME,
+	.probe = mt6628_wlan_sdio_probe,
+	.remove = mt6628_wlan_sdio_remove,
+	.id_table = mt6628_wlan_sdio_ids,
+	.drv.pm = &mt6628_wlan_pm_ops,
+};
+module_sdio_driver(mt6628_wlan_driver);
+
+MODULE_AUTHOR("Akari Tsuyukusa <akkun11.open@gmail.com>");
+MODULE_DESCRIPTION("MediaTek MT6628 WLAN driver");
+MODULE_LICENSE("GPL");
+MODULE_FIRMWARE(MT6628_FW_NAME);

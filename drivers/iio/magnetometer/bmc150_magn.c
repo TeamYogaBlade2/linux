@@ -30,7 +30,16 @@
 #include "bmc150_magn.h"
 
 #define BMC150_MAGN_REG_CHIP_ID			0x40
+/* BMC150/BMM150 answer with 0x32 on chip-id register 0x40. */
 #define BMC150_MAGN_CHIP_ID_VAL			0x32
+/*
+ * The BMM050 uses the same register map - chip id at 0x40, data from 0x42,
+ * RHALL 0x48, INT_STATUS 0x4A, POWER 0x4B, OPMODE/ODR 0x4C, REP_XY 0x51,
+ * REP_Z 0x52 (vendor bmm050.h) - and differs only in the value it reports
+ * for its own id.  Verified against that header register by register; there
+ * is no layout difference to model here.
+ */
+#define BMM050_CHIP_ID_VAL			0x40
 
 #define BMC150_MAGN_REG_X_L			0x42
 #define BMC150_MAGN_REG_X_M			0x43
@@ -144,6 +153,8 @@ struct bmc150_magn_data {
 	bool dready_trigger_on;
 	int max_odr;
 	int irq;
+	/* Value this part reports on BMC150_MAGN_REG_CHIP_ID. */
+	unsigned int chip_id_val;
 };
 
 static const struct {
@@ -708,8 +719,9 @@ static int bmc150_magn_init(struct bmc150_magn_data *data)
 		dev_err(data->dev, "Failed reading chip id\n");
 		goto err_poweroff;
 	}
-	if (chip_id != BMC150_MAGN_CHIP_ID_VAL) {
-		dev_err(data->dev, "Invalid chip id 0x%x\n", chip_id);
+	if (chip_id != data->chip_id_val) {
+		dev_err(data->dev, "Invalid chip id 0x%x, expected 0x%x\n",
+			chip_id, data->chip_id_val);
 		ret = -ENODEV;
 		goto err_poweroff;
 	}
@@ -855,6 +867,13 @@ int bmc150_magn_probe(struct device *dev, struct regmap *regmap,
 	data->regmap = regmap;
 	data->irq = irq;
 	data->dev = dev;
+	/*
+	 * BMM050 shares this register map and differs only in the id it
+	 * reports, so pick the expected value from the matched name rather
+	 * than growing the probe signature for one constant.
+	 */
+	data->chip_id_val = (name && !strcmp(name, "bmm050")) ?
+			    BMM050_CHIP_ID_VAL : BMC150_MAGN_CHIP_ID_VAL;
 
 	data->regulators[0].supply = "vdd";
 	data->regulators[1].supply = "vddio";

@@ -60,6 +60,12 @@
 #define RTC_PDN2               0x002e
 #define RTC_PDN2_PWRON_ALARM   BIT(4)
 
+#define RTC_PDN1               0x002c
+#define RTC_PDN1_GPIO_GPS      BIT(9)
+
+#define RTC_CON                0x003e
+#define RTC_CON_F32KOB         BIT(5)
+
 #define MTK_RTC_POLL_DELAY_US  10
 #define MTK_RTC_POLL_TIMEOUT   (jiffies_to_usecs(HZ))
 
@@ -77,5 +83,13 @@ struct mt6397_rtc {
 	u32                     addr_base;
 	const struct mtk_rtc_data *data;
 };
+
+struct device;
+
+/*
+ * Enable the PMIC RTC's 32 kHz output for the GPS/combo-chip consumer.
+ * The RTC device must have completed the relevant part of its probe.
+ */
+int mt6397_rtc_enable_32k_gpio(struct device *dev);
 
 #endif /* _LINUX_MFD_MT6397_RTC_H_ */

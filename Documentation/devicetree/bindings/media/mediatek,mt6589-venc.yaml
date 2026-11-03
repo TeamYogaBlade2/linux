@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR MIT)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mediatek,mt6589-venc.yaml#
+$schema: http://devicetree.org/schemas/bindings.yaml#
+
+title: MediaTek MT6589 H.264/VP8 Video Encoder (VENC)
+
+description: |
+  The MT6589 video encoder is a hardwired RTL accelerator at 0x17002000 with no
+  coprocessor and no firmware, described in data sheet chapter 60 (H.264/VP8) and
+  chapter 61 (MPEG-4, inside the same window).  Unlike the later MediaTek VPU/IPI
+  generations, the block is programmed entirely through MMIO and power is a plain
+  clock gate in the VEN power domain.
+
+  This node is the encoder half of what was previously one combined
+  "mediatek,mt6589-vcodec" node also covering the decoder.  VENC and VDEC are
+  separate hardware blocks - separate register window, separate interrupt
+  (MT_VENC_IRQ_ID = GIC SPI 136 against MT_VDEC_IRQ_ID = SPI 140), separate clock
+  controller and separate power domain - and separating them is what allows each to
+  attach its single power domain: genpd_dev_pm_attach() attaches nothing at all
+  unless the "power-domains" property has exactly one phandle.
+
+  DRAFT DRIVER - SCOPE OF WHAT ACTUALLY WORKS
+  ------------------------------------------
+  This driver implements the chapter-60 H.264 datapath.  Read this before assuming
+  a conformant codec is present.
+
+  What it does do:
+
+  - Probes the register window, the VENC clock and the encoder interrupt.
+  - Brings the engine out of reset and gates its clock through runtime PM.
+  - Programs the H.264 datapath: the bitstream, source, reference and
+    reconstruction address registers, and the quantiser triple, target bit rate,
+    CBR/initial-QP mode bits, frame rate and P/B QP adjust limiters, rejecting
+    quantisers outside the documented 0..51 range.
+  - Allocates and owns the bitstream, reference, reconstruction and rate control
+    scratch buffers those address registers need.  The reference and
+    reconstruction planes are a two-buffer ping-pong within one coherent
+    allocation of frame_size * 3 / 2 per buffer, with frame_size remaining the
+    luma size because it is also the chroma offset.
+  - Acknowledges the encoder frame-done interrupt, handles a bitstream-buffer
+    overflow, and reports the coded bitstream length; a watchdog
+    (MTK_VENC_TIMEOUT_MS) retires a frame the hardware never completes, so a
+    wedged engine cannot pin a clock reference forever.
+  - Exposes the H.264 datapath as a V4L2 memory-to-memory codec node (NV12 in,
+    bitstream out).
+
+  What it does NOT do:
+
+  - Conformant bitstreams.  Entropy coding, motion estimation and the coefficient
+    buffer exist only in the vendor's closed userspace libraries and were not
+    ported, and the bitrate algorithm behind the rate control registers is the
+    vendor's.  The registers are programmed; the codec is not implemented.
+    Userspace must treat the output as opaque.
+  - Slice control (a frame larger than one MB row is never split into slices),
+    and SPS/PPS emission (no parameter-set buffer is allocated).
+  - MPEG-4 encoding: its address programming and interrupt exist, but the three
+    chroma planes and the per-MB side-information buffer at VENC_MP4_SIDE_ADDR
+    are not allocated, so a submit is rejected with -ENODEV.
+  - VP8 beyond what mtk_venc_bitstream_size() restricts it to.
+
+  There is no hardware to test against, so none of this is claimed to work end
+  to end.
+
+  Status: the node in arch/arm/boot/dts/mediatek/mt6589-vcodec.dtsi is disabled,
+  because the VEN power-on is undiagnosed.  See
+  drivers/pmdomain/mediatek/mt6589-power-domains.md.
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+properties:
+  compatible:
+    oneOf:
+      - items:
+          - const: mediatek,mt6589-venc
+
+  reg:
+    maxItems: 1
+    description: |
+      The encoder register window: 4 KiB at 0x17002000, documented twice over as
+      data sheet chapter 60 (H.264 and VP8) and chapter 61 (MPEG-4, starting at
+      offset 0x600 inside the same window).
+
+  interrupts:
+    maxItems: 1
+    description: |
+      One interrupt line: MT_VENC_IRQ_ID = GIC_PRIVATE_SIGNALS(32) + 136 = SPI 136
+      (kernel/core/include/mach/mt_irq.h:101).
+
+      It is asserted LOW.  The vendor driver registers it with IRQF_TRIGGER_LOW
+      (videocodec_kernel_driver.c:2104), and the decoder's line is the opposite
+      polarity, so IRQ_TYPE_LEVEL_HIGH here would silently never fire.
+
+  clocks:
+    maxItems: 1
+    description: |
+      One clock gate: the encoder engine, CLK_VENC_VEN from the vencsys provider.
+
+  clock-names:
+    items:
+      - const: venc
+    description: |
+      Required rather than implied.  vencsys and vdecsys each number their gates
+      from zero, so the provider-local clock ids are not a unique key and
+      index-based lookup cannot tell the two providers apart.
+
+  power-domains:
+    maxItems: 1
+    description: |
+      The encoder power domain, VEN.  It arrives powered off at reset (PWR_STATUS
+      bit 7 is 0) and has to be raised by the SCM power sequence.
+
+      This property must name exactly ONE domain.  genpd_dev_pm_attach() attaches
+      a domain only when the phandle count is exactly 1 (drivers/pmdomain/core.c),
+      so a node naming two domains gets no domain at all and no deferred probe -
+      which is why this block is a node of its own rather than a second window in
+      a combined node.
+
+  iommus:
+    minItems: 1
+    items:
+      description: |
+        M4U port for an encoder DMA engine.  All of the encoder's ports are on
+        larb0, and they must be: mtk_iommu_v1_probe_device() rejects a device
+        whose master ids span two larbs.
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - power-domains
+
+additionalProperties: false

@@ -213,6 +213,7 @@ struct mtk_clk_divider {
 	unsigned char div_width;
 	unsigned char clk_divider_flags;
 	const struct clk_div_table *clk_div_table;
+	const struct clk_ops *ops;
 };
 
 #define DIV_ADJ(_id, _name, _parent, _reg, _shift, _width) {	\

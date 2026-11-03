@@ -162,11 +162,33 @@ static int rmi_i2c_read_block(struct rmi_transport_dev *xport, u16 addr,
 			goto exit;
 	}
 
-	retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
-	if (retval == ARRAY_SIZE(msgs))
-		retval = 0; /* success */
-	else if (retval >= 0)
-		retval = -EIO;
+	if (client->adapter->quirks &&
+	    client->adapter->quirks->max_comb_2nd_msg_len &&
+	    len > client->adapter->quirks->max_comb_2nd_msg_len) {
+		/*
+		 * The adapter rejects a combined write-then-read message whose
+		 * read half is longer than it can handle in one transfer (the
+		 * MT6577/MT6589 controller used by this SoC: 31 bytes). RMI4
+		 * keeps the register address, so the address can be sent on
+		 * its own and the data read with a second, plain read. Doing
+		 * that here rather than letting i2c_check_quirks() reject the
+		 * combined message is what makes function queries of more
+		 * than 31 bytes work at all.
+		 */
+		retval = i2c_transfer(client->adapter, &msgs[0], 1);
+		if (retval == 1)
+			retval = i2c_transfer(client->adapter, &msgs[1], 1);
+		if (retval == 1)
+			retval = 0; /* success */
+		else if (retval >= 0)
+			retval = -EIO;
+	} else {
+		retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
+		if (retval == ARRAY_SIZE(msgs))
+			retval = 0; /* success */
+		else if (retval >= 0)
+			retval = -EIO;
+	}
 
 exit:
 	rmi_dbg(RMI_DEBUG_XPORT, &client->dev,

@@ -72,6 +72,13 @@ static unsigned long __mtk_pll_recalc_rate(struct mtk_clk_pll *pll, u32 fin,
 	return ((unsigned long)vco + postdiv - 1) / postdiv;
 }
 
+static bool mtk_pll_postdiv_is_valid(const struct mtk_clk_pll *pll,
+				     u32 val)
+{
+	return !pll->data->pd_valid_mask ||
+	       (pll->data->pd_valid_mask & BIT(val));
+}
+
 static void __mtk_pll_tuner_enable(struct mtk_clk_pll *pll)
 {
 	u32 r;
@@ -152,6 +159,8 @@ void mtk_pll_calc_values(struct mtk_clk_pll *pll, u32 *pcw, u32 *postdiv,
 	u64 _pcw;
 	int ibits;
 	u32 val;
+	u32 last_val = 0;
+	bool found = false;
 
 	if (freq > pll->data->fmax)
 		freq = pll->data->fmax;
@@ -167,9 +176,26 @@ void mtk_pll_calc_values(struct mtk_clk_pll *pll, u32 *pcw, u32 *postdiv,
 		*postdiv = 1 << val;
 	} else {
 		for (val = 0; val < 5; val++) {
+			if (!mtk_pll_postdiv_is_valid(pll, val))
+				continue;
+
 			*postdiv = 1 << val;
+			last_val = val;
 			if ((u64)freq * *postdiv >= fmin)
+				found = true;
+			if (found)
 				break;
+		}
+
+		/*
+		 * If the requested rate is below the minimum VCO constraint,
+		 * use the largest valid post-divider instead of leaving @val
+		 * past the end of the loop. This also keeps SoCs with reserved
+		 * post-divider encodings from selecting an invalid value.
+		 */
+		if (!found) {
+			val = last_val;
+			*postdiv = 1 << val;
 		}
 	}
 
@@ -202,6 +228,9 @@ unsigned long mtk_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
 	u32 mask = pll->data->pd_mask ?: POSTDIV_MASK;
 
 	postdiv = (readl(pll->pd_addr) >> pll->data->pd_shift) & mask;
+	if (!mtk_pll_postdiv_is_valid(pll, postdiv))
+		return 0;
+
 	postdiv = 1 << postdiv;
 
 	pcw = readl(pll->pcw_addr) >> pll->data->pcw_shift;
