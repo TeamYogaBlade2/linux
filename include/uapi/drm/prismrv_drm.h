@@ -97,6 +97,7 @@ struct drm_prismrv_get_param {
 #define PRISMRV_PARAM_UAPI_VERSION	6
 #define PRISMRV_PARAM_CMD_ABI		7
 #define PRISMRV_CMD_ABI_STREAM_V1	1
+#define PRISMRV_PARAM_VENDOR_ABI	8	/* 1: DRM_PRISMRV_SUBMIT_VENDOR is enabled (vendor_abi=1) */
 
 /*
  * Surface formats used by SET_RT / SET_TEXTURE packets of STREAM_V1
@@ -141,6 +142,7 @@ struct drm_prismrv_get_param {
 #define DRM_PRISMRV_SUBMIT		0x02
 #define DRM_PRISMRV_GET_PARAM		0x03
 #define DRM_PRISMRV_GEM_WAIT		0x04
+#define DRM_PRISMRV_SUBMIT_VENDOR	0x05
 
 #define DRM_IOCTL_PRISMRV_GEM_CREATE \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_CREATE, struct drm_prismrv_gem_create)
@@ -166,6 +168,37 @@ struct drm_prismrv_gem_wait {
 
 #define DRM_IOCTL_PRISMRV_GEM_WAIT \
 	_IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_WAIT, struct drm_prismrv_gem_wait)
+/*
+ * Stock-uKernel TA kick.  Userspace builds the whole vendor command (the SGXMKIF_CMDTA block in its
+ * client-CCB BO, TA stream, PDS/USSE programs, 3DREGISTERS, HWRTData); the kernel only fills what the
+ * vendor kernel module filled (SGXMKIF_CMDTA_SHARED: completion status entries) and the CCB entry
+ * (ServiceAddress, CacheControl, ui32Data[6] = {data0, hwrc_va, 0...}).  The GPU address space is
+ * shared by all clients and the command can point anywhere in it, so this ioctl is root-only
+ * (CAP_SYS_RAWIO) and disabled unless the module is loaded with vendor_abi=1.
+ */
+#define PRISMRV_VKICK_FIRST		(1U << 0)	/* bFirstKickOrResume */
+#define PRISMRV_VKICK_LAST_IN_SCENE	(1U << 1)	/* bLastInScene: a 3D render follows */
+#define PRISMRV_VKICK_ALL		(PRISMRV_VKICK_FIRST | PRISMRV_VKICK_LAST_IN_SCENE)
+
+struct drm_prismrv_submit_vendor {
+	__u32 ccb_handle;	/* GEM handle of the client CCB holding the CMDTA */
+	__u32 ccb_offset;	/* byte offset of the CMDTA in that BO (4-aligned, 0x508 bytes must fit) */
+	__u32 data0;		/* sCommand.ui32Data[0], passed through */
+	__u32 hwrc_va;		/* sCommand.ui32Data[1]: device VA of the HW render context */
+	__u32 flags;		/* PRISMRV_VKICK_* */
+	__u32 pad0;		/* must be zero */
+
+	__u32 num_bos;		/* every other BO the GPU will touch (stream, PDS, USSE, RT, textures...) */
+	__u32 num_in_fences;
+	__u64 bos;		/* pointer to __u32 GEM handle array */
+	__u64 in_fences;	/* pointer to __s32 sync_file fd array */
+
+	__s32 out_fence_fd;	/* out: sync_file fd (TA done; the 3D render when LAST_IN_SCENE) */
+	__u32 pad1;		/* must be zero */
+};
+
+#define DRM_IOCTL_PRISMRV_SUBMIT_VENDOR \
+	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_SUBMIT_VENDOR, struct drm_prismrv_submit_vendor)
 #define DRM_IOCTL_PRISMRV_GET_PARAM \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GET_PARAM, struct drm_prismrv_get_param)
 

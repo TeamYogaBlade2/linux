@@ -77,6 +77,16 @@ struct prismrv_uk_obj {
 	dma_addr_t	dma;
 };
 
+/* kernel-owned completion page: {TA done counter, 3D done counter}, written by the uKernel (CMDTA status entries) */
+#define PRISMRV_VFENCE_VADDR	0x00c00000u
+
+/* SGXMKIF_CMDTA_SHARED layout (non-generalised syncs, uKernel size table: CMDTA 0x508, CMDTA_SHARED 0x468) */
+#define PRISMRV_CMDTA_SIZE		0x508
+#define PRISMRV_CMDTA_SHARED_SIZE	0x468
+#define PRISMRV_CMDTA_TA_STATUS		0x348	/* CTL_STATUS sCtlTAStatusInfo[32]: {dev addr, value} */
+#define PRISMRV_CMDTA_3D_STATUS		0x448	/* CTL_STATUS sCtl3DStatusInfo[4] */
+#define PRISMRV_CMDTA_CTRLFLAGS_READY	0x00000001
+
 /* GPU VA of the 2 x HWRTData scratch area (not part of the loader output) */
 #define PRISMRV_HWRTDATA_VADDR	0x00a00000u
 
@@ -215,6 +225,15 @@ struct prismrv_fence {
 	u16 ccb_slot;
 
 	/*
+	 * Vendor-ABI kick: retired when the uKernel has written vseq into the
+	 * completion page (TA counter, or the 3D counter when v3d), instead of
+	 * by CCB read-offset advance.
+	 */
+	bool vendor;
+	bool v3d;
+	u32 vseq;
+
+	/*
 	 * 32-bit monotonic CCB command counter value of this command
 	 * (see prismrv_handle_completion()).  The fence is retired once
 	 * the consumed-command counter has advanced past it.
@@ -316,6 +335,9 @@ struct prismrv_device {
 	/* kernel CCB + HWRTData render contexts */
 	struct prismrv_ccb_cmd *ccb;	/* role CCB */
 	struct prismrv_ccb_ctl *ccb_ctl;	/* role CCBCTL */
+	__le32 *vfence;			/* completion page (see PRISMRV_VFENCE_VADDR) */
+	dma_addr_t vfence_dma;
+	atomic_t vendor_seq;
 	spinlock_t ccb_lock;
 	u32 ccb_submitted;	/* commands published; protected by ccb_lock */
 	u32 ccb_completed;	/* commands consumed by the uKernel; event_lock */
@@ -430,6 +452,10 @@ void prismrv_power_down_irq(struct prismrv_device *pv);
 void prismrv_devfreq_pause(struct prismrv_device *pv);
 void prismrv_devfreq_resume(struct prismrv_device *pv);
 void prismrv_bo_sync_for_device(struct drm_gem_object *obj);
+int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src, size_t len);
+extern bool prismrv_vendor_abi;
+struct drm_prismrv_submit_vendor;
+int prismrv_submit_vendor_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj);
 void prismrv_recovery_work(struct work_struct *work);
 bool prismrv_ccb_sync_locked(struct prismrv_device *pv);

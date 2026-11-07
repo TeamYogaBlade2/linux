@@ -191,6 +191,58 @@ int prismrv_fw_map_objects(struct prismrv_device *pv)
 	return 0;
 }
 
+
+/*
+ * uKernel immediate cross-check.  The container is produced by running the vendor loader against a
+ * *simulated* heap map, and the loader writes object addresses into `mov rN,#imm32` sites of the
+ * uKernel (analysis/UKERNEL_PATCHING.md).  If the object table and those immediates disagree the
+ * uKernel would read the wrong structures, silently.  Only sites whose meaning is VERIFIED are
+ * enforced; the rest are reported.
+ *
+ * mov-imm32 layout: imm[20:0] = w[20:0], imm[25:21] = w[40:36], imm[31:26] = w[49:44].
+ */
+static u32 prismrv_uk_imm(const void *img, u32 instr)
+{
+	u64 w = le64_to_cpu(((const __le64 *)img)[instr]);
+
+	return (u32)(w & 0x1fffff) | (u32)(((w >> 36) & 0x1f) << 21) | (u32)(((w >> 44) & 0x3f) << 26);
+}
+
+static int prismrv_fw_check_immediates(struct prismrv_device *pv)
+{
+	const struct prismrv_uk_obj *uk = prismrv_uk_find(pv, PRISMRV_UKR_UKERNEL);
+	const struct prismrv_uk_obj *ccb = prismrv_uk_find(pv, PRISMRV_UKR_CCB);
+	const struct prismrv_uk_obj *ta3d = prismrv_uk_find(pv, PRISMRV_UKR_TA3DCTL);
+	const struct prismrv_uk_obj *hc = prismrv_uk_find(pv, PRISMRV_UKR_HOSTCTL);
+	const u8 *img;
+	int err = 0;
+
+	if (!uk || !ccb || !ta3d || !hc || uk->size < 8 * 1294)
+		return -EINVAL;
+	img = (const u8 *)pv->uk_fw->data + uk->data_off;
+
+	/* VERIFIED: instr 1255 = kernel CCB VA, instr 1193 = TA3DCtl VA (loader patch list, analysis/UKERNEL_IMMEDIATES.md) */
+	if (prismrv_uk_imm(img, 1255) != ccb->va) {
+		dev_err(pv->drm.dev, "uKernel instr 1255 = %#x but the kernel CCB is at %#x\n",
+			prismrv_uk_imm(img, 1255), ccb->va);
+		err = -EINVAL;
+	}
+	if (prismrv_uk_imm(img, 1193) != ta3d->va) {
+		dev_err(pv->drm.dev, "uKernel instr 1193 = %#x but TA3DCtl is at %#x\n",
+			prismrv_uk_imm(img, 1193), ta3d->va);
+		err = -EINVAL;
+	}
+	/*
+	 * ASSUMED (not verified): instr 1190 carries the HostCtl address in some word form.  The real-device capture has
+	 * 0x00101000 (= HostCtl at 0x00101000), this container 0x01001000 with HostCtl at hc->va.  Warn, do not refuse.
+	 */
+	if (prismrv_uk_imm(img, 1190) != (hc->va >> 4) && prismrv_uk_imm(img, 1190) != hc->va)
+		dev_warn(pv->drm.dev,
+			 "uKernel instr 1190 = %#x does not match HostCtl VA %#x (>>4 %#x): container is for a simulated layout, not verified on hardware\n",
+			 prismrv_uk_imm(img, 1190), hc->va, hc->va >> 4);
+	return err;
+}
+
 int prismrv_fw_load(struct prismrv_device *pv)
 {
 	char fw_ukernel[128];
@@ -226,6 +278,12 @@ int prismrv_fw_load(struct prismrv_device *pv)
 			fw_ukernel);
 		prismrv_fw_release(pv);
 		return -EINVAL;
+	}
+	ret = prismrv_fw_check_immediates(pv);
+	if (ret) {
+		dev_err(pv->drm.dev, "%s: object table and uKernel immediates disagree; refusing to start\n", fw_ukernel);
+		prismrv_fw_release(pv);
+		return ret;
 	}
 	pv->ukernel_size = uk->size;
 

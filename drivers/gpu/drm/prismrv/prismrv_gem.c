@@ -374,6 +374,26 @@ void prismrv_bo_sync_for_device(struct drm_gem_object *obj)
 					    DMA_BIDIRECTIONAL);
 }
 
+/*
+ * Write into a BO's backing pages.  The caller holds the reservation (drm_exec); used by the
+ * vendor kick to fill SGXMKIF_CMDTA_SHARED in the user's client-CCB BO.
+ */
+int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src, size_t len)
+{
+	struct iosys_map map;
+	int ret;
+
+	if (off > bo->size || len > bo->size - off)
+		return -EINVAL;
+	dma_resv_assert_held(bo->resv);
+	ret = drm_gem_shmem_vmap_locked(to_drm_gem_shmem_obj(bo), &map);
+	if (ret)
+		return ret;
+	iosys_map_memcpy_to(&map, off, src, len);
+	drm_gem_shmem_vunmap_locked(to_drm_gem_shmem_obj(bo), &map);
+	return 0;
+}
+
 void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj)
 {
 	struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(obj);
