@@ -131,6 +131,18 @@ int prismrv_ccb_init(struct prismrv_device *pv)
 			      pv->hwrt_dma, 2 * HWRTDATA_SIZE);
 	if (ret)
 		return ret;
+
+	/* completion page for vendor-ABI kicks: {TA done, 3D done}; the uKernel writes it */
+	if (!pv->vfence) {
+		pv->vfence = dma_alloc_coherent(pv->drm.dev, PAGE_SIZE,
+						&pv->vfence_dma, GFP_KERNEL);
+		if (!pv->vfence)
+			goto err_nomem;
+	}
+	memset(pv->vfence, 0, PAGE_SIZE);
+	ret = prismrv_mmu_map(pv, PRISMRV_VFENCE_VADDR, pv->vfence_dma, PAGE_SIZE);
+	if (ret)
+		return ret;
 	return 0;
 
 err_nomem:
@@ -149,6 +161,10 @@ void prismrv_ccb_fini(struct prismrv_device *pv)
 		dma_free_coherent(pv->drm.dev, 2 * HWRTDATA_SIZE, pv->hwrt,
 				  pv->hwrt_dma);
 		pv->hwrt = NULL;
+	}
+	if (pv->vfence) {
+		dma_free_coherent(pv->drm.dev, PAGE_SIZE, pv->vfence, pv->vfence_dma);
+		pv->vfence = NULL;
 	}
 }
 
@@ -469,11 +485,50 @@ static int prismrv_wait_ccb_space(struct prismrv_device *pv)
 	}
 }
 
-int prismrv_submit_ioctl(struct drm_device *dev, void *data,
-			 struct drm_file *file)
+/*
+ * Vendor-ABI kick (DRM_PRISMRV_SUBMIT_VENDOR).  NULL for the legacy STREAM_V1 path.
+ * The kernel's duties follow the vendor kernel module (analysis/KERNEL_KICK_ABI.md): ServiceAddress +
+ * CacheControl, the SGXMKIF_CMDTA_SHARED block, ui32Data[0..1]; the UMD part of the CMDTA is left alone.
+ */
+struct prismrv_vkick {
+	u32 ccb_offset;
+	u32 data0;
+	u32 hwrc_va;
+	u32 flags;
+};
+
+/*
+ * Fill SGXMKIF_CMDTA_SHARED in the CCB BO: two completion status entries ({dev addr, value} written by
+ * the uKernel when the TA / the 3D render finishes) and, LAST, ui32CtrlFlags = READY: the uKernel tests
+ * READY (CMDTA+0, instr 3401), so every other field must be visible first.  The BO's reservation is held.
+ */
+static int prismrv_vendor_prepare_cmdta(struct prismrv_fence *f, const struct prismrv_vkick *vk)
+{
+	__le32 sh[PRISMRV_CMDTA_SHARED_SIZE / 4] = {};
+	int ret;
+
+	sh[1] = cpu_to_le32(1);					/* ui32NumTAStatusVals */
+	sh[2] = cpu_to_le32(f->v3d ? 1 : 0);			/* ui32Num3DStatusVals */
+	sh[PRISMRV_CMDTA_TA_STATUS / 4 + 0] = cpu_to_le32(PRISMRV_VFENCE_VADDR + 0);
+	sh[PRISMRV_CMDTA_TA_STATUS / 4 + 1] = cpu_to_le32(f->vseq);
+	if (f->v3d) {
+		sh[PRISMRV_CMDTA_3D_STATUS / 4 + 0] = cpu_to_le32(PRISMRV_VFENCE_VADDR + 4);
+		sh[PRISMRV_CMDTA_3D_STATUS / 4 + 1] = cpu_to_le32(f->vseq);
+	}
+	/* all fields first, READY last (the write below is in two steps so READY cannot be seen early) */
+	ret = prismrv_bo_write_locked(f->bos[0], vk->ccb_offset + 4, &sh[1],
+				      PRISMRV_CMDTA_SHARED_SIZE - 4);
+	if (ret)
+		return ret;
+	wmb();
+	sh[0] = cpu_to_le32(PRISMRV_CMDTA_CTRLFLAGS_READY);
+	return prismrv_bo_write_locked(f->bos[0], vk->ccb_offset, &sh[0], 4);
+}
+
+static int prismrv_submit_common(struct drm_device *dev, struct drm_prismrv_submit *args,
+				 const struct prismrv_vkick *vk, struct drm_file *file)
 {
 	struct prismrv_device *pv = to_prismrv(dev);
-	struct drm_prismrv_submit *args = data;
 	struct drm_gem_object **objs = NULL;
 	struct prismrv_fence *f = NULL;
 	struct sync_file *sf = NULL;
@@ -535,7 +590,9 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto err_objs;
 	}
-	if (args->cmd_size > objs[0]->size) {
+	if (args->cmd_size > objs[0]->size ||
+	    (vk && ((vk->ccb_offset & 3) || vk->ccb_offset > objs[0]->size ||
+		    objs[0]->size - vk->ccb_offset < PRISMRV_CMDTA_SIZE))) {
 		ret = -EINVAL;
 		drm_gem_object_put(objs[0]);
 		objs[0] = NULL;
@@ -559,9 +616,11 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	 * Validate + snapshot the stream.  The snapshot is a kernel-owned
 	 * BO that has no handle; from here on objs[0] is that snapshot.
 	 */
-	ret = prismrv_snapshot_stream(pv, objs, args->num_bos, args->cmd_size);
-	if (ret)
-		goto err_objs;
+	if (!vk) {
+		ret = prismrv_snapshot_stream(pv, objs, args->num_bos, args->cmd_size);
+		if (ret)
+			goto err_objs;
+	}
 
 	/* ----------------------------------------------------------------
 	 * Phase 2 — still no submit_rwsem.  Everything that can sleep for a
@@ -594,6 +653,12 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	spin_lock_init(&f->lock);
 	INIT_LIST_HEAD(&f->node);
 	f->ccb_slot = 0xFFFF;
+	if (vk) {
+		/* submit_order is held: sequence numbers follow CCB order */
+		f->vendor = true;
+		f->v3d = !!(vk->flags & PRISMRV_VKICK_LAST_IN_SCENE);
+		f->vseq = (u32)atomic_inc_return(&pv->vendor_seq);
+	}
 	/*
 	 * One timeline for the whole device: the CCB runs jobs in order, so
 	 * fences share a context and seqno order equals CCB order
@@ -677,10 +742,18 @@ int prismrv_submit_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto err_unlock;
 
-	cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(f->bos[0]));
-	cmd_data[1] = cpu_to_le32(args->cmd_size);
-	if (args->num_bos >= 1 && f->bos[1])
-		cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(f->bos[1]));
+	if (vk) {
+		ret = prismrv_vendor_prepare_cmdta(f, vk);
+		if (ret)
+			goto err_unlock;
+		cmd_data[0] = cpu_to_le32(vk->data0);
+		cmd_data[1] = cpu_to_le32(vk->hwrc_va);
+	} else {
+		cmd_data[0] = cpu_to_le32(prismrv_bo_gpuva(f->bos[0]));
+		cmd_data[1] = cpu_to_le32(args->cmd_size);
+		if (args->num_bos >= 1 && f->bos[1])
+			cmd_data[2] = cpu_to_le32(prismrv_bo_gpuva(f->bos[1]));
+	}
 
 	for (i = 0; i < f->num_bos; i++)
 		dma_resv_add_fence(f->bos[i]->resv, &f->base,
@@ -764,5 +837,35 @@ err_objs:
 err_pm:
 	pm_runtime_mark_last_busy(pv->drm.dev);
 	pm_runtime_put_autosuspend(pv->drm.dev);
+	return ret;
+}
+
+int prismrv_submit_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	return prismrv_submit_common(dev, data, NULL, file);
+}
+
+/* DRM_PRISMRV_SUBMIT_VENDOR: translate to the common core (root-only gating is done by the caller) */
+int prismrv_submit_vendor_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct drm_prismrv_submit_vendor *a = data;
+	struct drm_prismrv_submit args = {
+		.cmd_handle = a->ccb_handle,
+		.cmd_size = 0,
+		.cmd_type = PRISMRV_CMD_TA,
+		.num_bos = a->num_bos,
+		.num_in_fences = a->num_in_fences,
+		.bos = a->bos,
+		.in_fences = a->in_fences,
+		.out_fence_fd = -1,
+	};
+	const struct prismrv_vkick vk = {
+		.ccb_offset = a->ccb_offset, .data0 = a->data0,
+		.hwrc_va = a->hwrc_va, .flags = a->flags,
+	};
+	int ret = prismrv_submit_common(dev, &args, &vk, file);
+
+	if (!ret)
+		a->out_fence_fd = args.out_fence_fd;
 	return ret;
 }

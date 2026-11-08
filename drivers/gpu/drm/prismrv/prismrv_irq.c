@@ -122,7 +122,18 @@ static unsigned int prismrv_handle_completion(struct prismrv_device *pv)
 			list_first_entry(&pv->pending_fences,
 					 struct prismrv_fence, node);
 
-		if ((s32)(pf->ccb_seq - pv->ccb_completed) >= 0)
+		/*
+		 * Vendor-ABI kicks complete when the uKernel has written the sequence number into the
+		 * completion page (TA counter, or the 3D counter for the last kick of a scene); the CCB
+		 * read offset only says the command was consumed.
+		 */
+		if (pf->vendor) {
+			u32 done = pv->vfence ?
+				   le32_to_cpu(READ_ONCE(pv->vfence[pf->v3d ? 1 : 0])) : 0;
+
+			if ((s32)(done - pf->vseq) < 0)
+				break;
+		} else if ((s32)(pf->ccb_seq - pv->ccb_completed) >= 0)
 			break;
 
 		list_move_tail(&pf->node, &signalled);

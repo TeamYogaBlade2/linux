@@ -99,6 +99,33 @@ static int prismrv_submit_ioctl_guarded(struct drm_device *dev, void *data,
 	drm_dev_exit(idx);
 	return ret;
 }
+/*
+ * Vendor-ABI kick: the command can make the GPU read/write anywhere in the (shared) device address
+ * space, so it is off by default and, when enabled, limited to CAP_SYS_RAWIO.
+ */
+bool prismrv_vendor_abi;
+module_param_named(vendor_abi, prismrv_vendor_abi, bool, 0444);
+MODULE_PARM_DESC(vendor_abi, "Enable DRM_PRISMRV_SUBMIT_VENDOR (root-only stock-uKernel kick; default off)");
+
+static int prismrv_submit_vendor_ioctl_guarded(struct drm_device *dev, void *data,
+					       struct drm_file *file)
+{
+	struct drm_prismrv_submit_vendor *a = data;
+	int idx, ret;
+
+	if (!prismrv_vendor_abi || !capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (a->pad0 || a->pad1 || (a->flags & ~PRISMRV_VKICK_ALL))
+		return -EINVAL;
+	ret = prismrv_wait_in_fences(a->num_in_fences, u64_to_user_ptr(a->in_fences));
+	if (ret)
+		return ret;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+	ret = prismrv_submit_vendor_ioctl(dev, data, file);
+	drm_dev_exit(idx);
+	return ret;
+}
 PRISMRV_GUARDED_IOCTL(prismrv_get_param_ioctl)
 PRISMRV_GUARDED_IOCTL(prismrv_gem_wait_ioctl)
 
@@ -112,6 +139,8 @@ static const struct drm_ioctl_desc prismrv_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(PRISMRV_GET_PARAM, prismrv_get_param_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_WAIT, prismrv_gem_wait_ioctl_guarded,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(PRISMRV_SUBMIT_VENDOR, prismrv_submit_vendor_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 };
 

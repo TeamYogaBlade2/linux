@@ -346,6 +346,9 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 	case PRISMRV_PARAM_UAPI_VERSION:
 		args->value = PRISMRV_UAPI_VERSION;
 		break;
+	case PRISMRV_PARAM_VENDOR_ABI:
+		args->value = prismrv_vendor_abi ? 1 : 0;
+		break;
 	case PRISMRV_PARAM_CMD_ABI:
 		args->value = PRISMRV_CMD_ABI_STREAM_V1;
 		break;
