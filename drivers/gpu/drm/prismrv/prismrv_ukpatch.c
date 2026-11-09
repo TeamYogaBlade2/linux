@@ -172,3 +172,27 @@ int prismrv_ukp_apply(const struct prismrv_ukp_obj *objs, unsigned int n, const 
 	return 0;
 #undef FAIL
 }
+
+static const struct { u16 reg; u8 role; } init_fixups[] = {
+	{ 0x0ac4, 3 },		/* event kicker */
+	{ 0x0a68, 18 },		/* PDS program (role 18) */
+	{ 0x8a68, 19 },		/* PDS program (role 19), bank-1 window */
+};
+
+int prismrv_ukp_init_fixup(const struct prismrv_ukp_obj *objs, unsigned int n, u32 reg, u32 *val)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(init_fixups); i++) {
+		const struct prismrv_ukp_obj *t;
+
+		if (init_fixups[i].reg != reg)
+			continue;
+		t = find(objs, n, init_fixups[i].role);
+		if (!t)
+			return -EINVAL;
+		*val = t->va;
+		return 1;
+	}
+	return 0;
+}

@@ -158,10 +158,16 @@ static int prismrv_run_script_range(struct prismrv_device *pv,
 		}
 
 		switch (op) {
-		case PRISMRV_INIT_OP_WRITE:
-			writel(le32_to_cpu(rec->value), pv->regs + off);
+		case PRISMRV_INIT_OP_WRITE: {
+			u32 val = le32_to_cpu(rec->value);
+			int r = prismrv_fw_init_fixup(pv, off, &val);
+
+			if (r < 0)
+				return r;
+			writel(val, pv->regs + off);
 			readl(pv->regs + off);
 			break;
+		}
 		case PRISMRV_INIT_OP_READ:
 			readl(pv->regs + off);
 			break;

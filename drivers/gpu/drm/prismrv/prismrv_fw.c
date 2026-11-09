@@ -102,6 +102,8 @@ static void prismrv_uk_free_objs(struct prismrv_device *pv)
 		if (pv->uk_obj[i].cpu)
 			dma_free_coherent(pv->drm.dev, PAGE_ALIGN(pv->uk_obj[i].size),
 					  pv->uk_obj[i].cpu, pv->uk_obj[i].dma);
+	kfree(pv->uk_ukp);
+	pv->uk_ukp = NULL;
 	kfree(pv->uk_obj);
 	pv->uk_obj = NULL;
 	pv->uk_nobj = 0;
@@ -135,6 +137,12 @@ static int prismrv_uk_parse(struct prismrv_device *pv, const struct firmware *fw
 	pv->uk_obj = kcalloc(n, sizeof(*pv->uk_obj), GFP_KERNEL);
 	if (!pv->uk_obj)
 		return -ENOMEM;
+	pv->uk_ukp = kcalloc(n, sizeof(*pv->uk_ukp), GFP_KERNEL);
+	if (!pv->uk_ukp) {
+		kfree(pv->uk_obj);
+		pv->uk_obj = NULL;
+		return -ENOMEM;
+	}
 	pv->uk_nobj = n;
 
 	for (i = 0; i < n; i++) {
@@ -161,6 +169,7 @@ static int prismrv_uk_parse(struct prismrv_device *pv, const struct firmware *fw
 			ret = -ENOMEM;
 			goto err;
 		}
+		pv->uk_ukp[i] = (struct prismrv_ukp_obj){ .role = o->role, .va = va, .size = size, .data = o->cpu };
 	}
 	return 0;
 err:
@@ -174,20 +183,15 @@ err:
  */
 int prismrv_fw_map_objects(struct prismrv_device *pv)
 {
-	struct prismrv_ukp_obj *po;
 	const char *why = NULL;
 	unsigned int i;
 	int ret;
 
-	po = kcalloc(pv->uk_nobj, sizeof(*po), GFP_KERNEL);
-	if (!po)
-		return -ENOMEM;
 	for (i = 0; i < pv->uk_nobj; i++) {
 		struct prismrv_uk_obj *o = &pv->uk_obj[i];
 
 		memset(o->cpu, 0, PAGE_ALIGN(o->size));
 		memcpy(o->cpu, pv->uk_fw->data + o->data_off, o->size);
-		po[i] = (struct prismrv_ukp_obj){ .role = o->role, .va = o->va, .size = o->size, .data = o->cpu };
 	}
 	/*
 	 * The stock vendor uKernel (container version 2) still carries every 0xDEADBEEF placeholder; resolve them,
@@ -195,8 +199,7 @@ int prismrv_fw_map_objects(struct prismrv_device *pv)
 	 * exactly what the vendor loader does (prismrv_ukpatch.c).  A version-1 container is accepted only if
 	 * its already-patched sites equal what we would write.
 	 */
-	ret = prismrv_ukp_apply(po, pv->uk_nobj, &why);
-	kfree(po);
+	ret = prismrv_ukp_apply(pv->uk_ukp, pv->uk_nobj, &why);
 	if (ret) {
 		dev_err(pv->drm.dev, "uKernel patching failed: %s\n", why ? why : "?");
 		return ret;
@@ -214,6 +217,16 @@ int prismrv_fw_map_objects(struct prismrv_device *pv)
 	return 0;
 }
 
+
+/* layout-dependent init-script values (see prismrv_ukp_init_fixup) */
+int prismrv_fw_init_fixup(struct prismrv_device *pv, u32 reg, u32 *val)
+{
+	int ret = prismrv_ukp_init_fixup(pv->uk_ukp, pv->uk_nobj, reg, val);
+
+	if (ret < 0)
+		dev_err(pv->drm.dev, "init script: object for register %#x missing from the uKernel container\n", reg);
+	return ret;
+}
 
 int prismrv_fw_load(struct prismrv_device *pv)
 {

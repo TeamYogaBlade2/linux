@@ -68,6 +68,7 @@ struct prismrv_ukfw_obj {
 	__le32	role;
 } __packed;
 
+struct prismrv_ukp_obj;
 struct prismrv_uk_obj {
 	u32		va;
 	u32		size;
@@ -320,6 +321,7 @@ struct prismrv_device {
 	size_t ukernel_size;		/* master uKernel object size */
 	const struct firmware *uk_fw;	/* PRVUKFW1 container, kept for restores */
 	struct prismrv_uk_obj *uk_obj;
+	struct prismrv_ukp_obj *uk_ukp;	/* same objects as seen by prismrv_ukpatch.c */
 	unsigned int uk_nobj;
 	/*
 	 * Init-script firmware name derived at fw_load time from the
@@ -422,6 +424,7 @@ void prismrv_bif_reset(struct prismrv_device *pv);
 int  prismrv_fw_load(struct prismrv_device *pv);
 int  prismrv_fw_map_objects(struct prismrv_device *pv);
 struct prismrv_uk_obj *prismrv_uk_find(struct prismrv_device *pv, u32 role);
+int prismrv_fw_init_fixup(struct prismrv_device *pv, u32 reg, u32 *val);
 void prismrv_fw_release(struct prismrv_device *pv);
 void prismrv_errata_init(struct prismrv_device *pv);
 int prismrv_errata_apply(struct prismrv_device *pv);

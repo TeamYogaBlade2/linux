@@ -41,4 +41,15 @@ struct prismrv_ukp_obj {
 /* returns 0, or a negative errno; *why names the failing rule (static string) */
 int prismrv_ukp_apply(const struct prismrv_ukp_obj *objs, unsigned int n, const char **why);
 
+/*
+ * Init-script (-init.bin) values that depend on the layout.  Derived like the uKernel rules
+ * (derive_patches.py --init): across randomised layouts exactly three WRITE records change -
+ *   reg 0xac4  = VA of the event-kicker object (role 3)
+ *   reg 0xa68  = VA of PDS program role 18,   reg 0x8a68 = VA of PDS program role 19
+ * Everything else in the script is layout independent.  Call for every WRITE record before it is
+ * issued; returns 1 and sets *val if the register is layout dependent, 0 if the record is used as is,
+ * negative errno if the needed object is missing.
+ */
+int prismrv_ukp_init_fixup(const struct prismrv_ukp_obj *objs, unsigned int n, u32 reg, u32 *val);
+
 #endif
