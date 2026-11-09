@@ -4,6 +4,7 @@ prismrv-y := \
 	prismrv_device.o \
 	prismrv_errata.o \
 	prismrv_fw.o \
+	prismrv_ukpatch.o \
 	prismrv_init.o \
 	prismrv_mmu.o \
 	prismrv_gem.o \
