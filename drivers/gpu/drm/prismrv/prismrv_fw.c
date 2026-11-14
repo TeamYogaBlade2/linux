@@ -170,6 +170,9 @@ static int prismrv_uk_parse(struct prismrv_device *pv, const struct firmware *fw
 			goto err;
 		}
 		pv->uk_ukp[i] = (struct prismrv_ukp_obj){ .role = o->role, .va = va, .size = size, .data = o->cpu };
+		ret = prismrv_va_reserve(pv, va, size);
+		if (ret)
+			goto err;
 	}
 	return 0;
 err:

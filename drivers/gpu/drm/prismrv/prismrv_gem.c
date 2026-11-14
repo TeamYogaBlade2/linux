@@ -31,6 +31,24 @@
 #define PRISMRV_VA_BASE		0x10000000u
 #define PRISMRV_VA_SIZE		0x30000000u
 
+/* Vendor heap table (sgxconfig.h; measured: analysis/GPU_MEMORY_MODEL.md section 3).  Heap 0 is the pre-v6 window below. */
+static const struct { u32 base, size; } prismrv_heaps[11] = {
+	[PRISMRV_HEAP_TA_DATA]		= { 0xd0000000u, 0x0cfff000u },
+	[PRISMRV_HEAP_KERNEL_DATA]	= { 0xf0000000u, 0x02fff000u },
+	[PRISMRV_HEAP_PIXEL_USSE]	= { 0xf4000000u, 0x04fff000u },
+	[PRISMRV_HEAP_VERTEX_USSE]	= { 0xfc000000u, 0x01fff000u },
+	[PRISMRV_HEAP_PDS_PIXEL]	= { 0xe4000000u, 0x01fff000u },
+	[PRISMRV_HEAP_PDS_VERTEX]	= { 0xec000000u, 0x01bff000u },
+	[PRISMRV_HEAP_SYNC]		= { 0xe0000000u, 0x00fff000u },
+	[PRISMRV_HEAP_3DPARAM_CTX]	= { 0xc8000000u, 0x07fff000u },
+};
+
+static bool prismrv_heap_valid(u32 heap)
+{
+	return heap == PRISMRV_HEAP_DEFAULT ||
+	       (heap < ARRAY_SIZE(prismrv_heaps) && prismrv_heaps[heap].size);
+}
+
 struct prismrv_bo {
 	struct drm_gem_shmem_object base;
 	struct drm_mm_node va_node;	/* GPU VA range, fixed for BO life */
@@ -41,13 +59,60 @@ struct prismrv_bo {
 
 int prismrv_va_init(struct prismrv_device *pv)
 {
+	unsigned int i;
+
 	mutex_init(&pv->va_lock);
 	drm_mm_init(&pv->va_mm, PRISMRV_VA_BASE, PRISMRV_VA_SIZE);
+	for (i = 0; i < ARRAY_SIZE(prismrv_heaps); i++)
+		if (prismrv_heaps[i].size)
+			drm_mm_init(&pv->heap_mm[i], prismrv_heaps[i].base, prismrv_heaps[i].size);
+	return 0;
+}
+
+/*
+ * Reserve a firmware object's fixed GPU VA range inside the vendor heap that contains it, so GEM_CREATE never hands it
+ * out.  Idempotent (firmware reload).  Ranges outside the heap table (kernel-code heap 2, the 0x0C000000 image) need no
+ * reservation: no BO can be allocated there.
+ */
+int prismrv_va_reserve(struct prismrv_device *pv, u32 va, u32 size)
+{
+	unsigned int h, i;
+	int ret = 0;
+
+	for (h = 1; h < ARRAY_SIZE(prismrv_heaps); h++) {
+		if (!prismrv_heaps[h].size || va < prismrv_heaps[h].base ||
+		    va - prismrv_heaps[h].base >= prismrv_heaps[h].size)
+			continue;
+		mutex_lock(&pv->va_lock);
+		for (i = 0; i < ARRAY_SIZE(pv->va_resv); i++) {
+			if (drm_mm_node_allocated(&pv->va_resv[i])) {
+				if (pv->va_resv[i].start == va)
+					goto out;	/* already reserved */
+				continue;
+			}
+			pv->va_resv[i].start = va;
+			pv->va_resv[i].size = PAGE_ALIGN(size);
+			ret = drm_mm_reserve_node(&pv->heap_mm[h], &pv->va_resv[i]);
+			goto out;
+		}
+		ret = -ENOSPC;
+out:
+		mutex_unlock(&pv->va_lock);
+		return ret;
+	}
 	return 0;
 }
 
 void prismrv_va_fini(struct prismrv_device *pv)
 {
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(pv->va_resv); i++)
+		if (drm_mm_node_allocated(&pv->va_resv[i]))
+			drm_mm_remove_node(&pv->va_resv[i]);
+	for (i = 0; i < ARRAY_SIZE(prismrv_heaps); i++)
+		if (prismrv_heaps[i].size)
+			drm_mm_takedown(&pv->heap_mm[i]);
 	drm_mm_takedown(&pv->va_mm);
 }
 
@@ -135,6 +200,12 @@ prismrv_gem_create_object(struct drm_device *dev, size_t size)
 struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
 					 size_t size, u32 flags)
 {
+	return prismrv_bo_create_heap(pv, size, flags, PRISMRV_HEAP_DEFAULT);
+}
+
+struct drm_gem_object *prismrv_bo_create_heap(struct prismrv_device *pv,
+					      size_t size, u32 flags, u32 heap)
+{
 	struct drm_gem_shmem_object *shmem;
 	struct prismrv_bo *bo;
 	int ret;
@@ -146,8 +217,12 @@ struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
 
 	bo = to_prbo(&shmem->base);
 	mutex_lock(&pv->va_lock);
-	ret = drm_mm_insert_node_generic(&pv->va_mm, &bo->va_node, size,
-					 SZ_4K, 0, DRM_MM_INSERT_BEST);
+	if (heap == PRISMRV_HEAP_DEFAULT)
+		ret = drm_mm_insert_node_generic(&pv->va_mm, &bo->va_node, size,
+						 SZ_4K, 0, DRM_MM_INSERT_BEST);
+	else	/* a vendor heap: lowest free range, like the vendor's bump allocator (first object at the bare base) */
+		ret = drm_mm_insert_node_generic(&pv->heap_mm[heap], &bo->va_node, size,
+						 SZ_4K, 0, DRM_MM_INSERT_LOW);
 	mutex_unlock(&pv->va_lock);
 	if (ret) {
 		drm_gem_object_put(&shmem->base);
@@ -169,18 +244,17 @@ int prismrv_gem_create_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object *obj;
 	int ret;
 
-	if (args->flags & ~PRISMRV_BO_UNCACHED || args->pad)
+	if (args->flags & ~PRISMRV_BO_UNCACHED || !prismrv_heap_valid(args->heap))
 		return -EINVAL;
 	if (args->size == 0 || args->size > SZ_256M)
 		return -EINVAL;
 	args->size = PAGE_ALIGN(args->size);
 
-	obj = prismrv_bo_create(pv, args->size, args->flags);
+	obj = prismrv_bo_create_heap(pv, args->size, args->flags, args->heap);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
 	args->gpu_va = to_prbo(obj)->va_node.start;
-	args->pad = 0;
 	ret = drm_gem_handle_create(file, obj, &args->handle);
 	drm_gem_object_put(obj);
 	return ret;
@@ -352,6 +426,15 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 	case PRISMRV_PARAM_CMD_ABI:
 		args->value = PRISMRV_CMD_ABI_STREAM_V1;
 		break;
+	case PRISMRV_PARAM_HEAPS: {
+		unsigned int h;
+
+		args->value = 1;	/* default window */
+		for (h = 1; h < ARRAY_SIZE(prismrv_heaps); h++)
+			if (prismrv_heaps[h].size)
+				args->value |= 1ull << h;
+		break;
+	}
 	default:
 		return -EINVAL;
 	}

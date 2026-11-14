@@ -12,7 +12,7 @@
 #include <linux/types.h>
 
 /* Incremented when ABI-incompatible changes are made. */
-#define PRISMRV_UAPI_VERSION		5
+#define PRISMRV_UAPI_VERSION		6
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -22,11 +22,28 @@ struct drm_prismrv_gem_create {
 	__u32 flags;		/* PRISMRV_BO_* */
 	__u32 handle;		/* out: GEM handle */
 	__u32 gpu_va;		/* out: fixed GPU virtual address of the BO */
-	__u32 pad;		/* must be zero on input, zeroed on output */
+	__u32 heap;		/* PRISMRV_HEAP_* (v6+); 0 = the default window.  Older kernels reject != 0 (-EINVAL) */
 };
 
 #define PRISMRV_BO_CACHED	0x0	/* normal cached mapping (default) */
 #define PRISMRV_BO_UNCACHED	(1U << 31) /* write-combine */
+
+/*
+ * GPU heaps (UAPI v6).  The vendor uKernel path is load-bearing on the heap layout: shader code must lie in the USSE code
+ * heap (a PDS binding word is ((va - 0xf4000000) / 8) << 4 | 7), PDS objects in the PDS heaps, the CCB and the HW
+ * render-data objects in the kernel-data heap.  Ids and bases are the vendor's (sgxconfig.h, measured in the captures:
+ * analysis/GPU_MEMORY_MODEL.md).  A BO created with a heap gets the lowest free page-aligned range inside it; the
+ * firmware's own objects are already reserved.  PRISMRV_PARAM_HEAPS reports the usable ids as a bitmask.
+ */
+#define PRISMRV_HEAP_DEFAULT		0	/* the pre-v6 window */
+#define PRISMRV_HEAP_TA_DATA		1	/* 0xd0000000, 0x0cfff000 */
+#define PRISMRV_HEAP_KERNEL_DATA	3	/* 0xf0000000, 0x02fff000 */
+#define PRISMRV_HEAP_PIXEL_USSE		4	/* 0xf4000000, 0x04fff000 */
+#define PRISMRV_HEAP_VERTEX_USSE	5	/* 0xfc000000, 0x01fff000 */
+#define PRISMRV_HEAP_PDS_PIXEL		6	/* 0xe4000000, 0x01fff000 */
+#define PRISMRV_HEAP_PDS_VERTEX		7	/* 0xec000000, 0x01bff000 */
+#define PRISMRV_HEAP_SYNC		8	/* 0xe0000000, 0x00fff000 */
+#define PRISMRV_HEAP_3DPARAM_CTX	10	/* 0xc8000000, 0x07fff000 */
 
 struct drm_prismrv_gem_mmap_offset {
 	__u32 handle;
@@ -98,6 +115,7 @@ struct drm_prismrv_get_param {
 #define PRISMRV_PARAM_CMD_ABI		7
 #define PRISMRV_CMD_ABI_STREAM_V1	1
 #define PRISMRV_PARAM_VENDOR_ABI	8	/* 1: DRM_PRISMRV_SUBMIT_VENDOR is enabled (vendor_abi=1) */
+#define PRISMRV_PARAM_HEAPS		9	/* UAPI v6: bitmask of PRISMRV_HEAP_* ids GEM_CREATE accepts (bit 0 = default) */
 
 /*
  * Surface formats used by SET_RT / SET_TEXTURE packets of STREAM_V1

@@ -315,6 +315,8 @@ struct prismrv_device {
 
 	/* GPU virtual address heap for BOs (prismrv_gem.c) */
 	struct drm_mm va_mm;
+	struct drm_mm heap_mm[11];		/* per vendor heap (PRISMRV_HEAP_*), index = heap id */
+	struct drm_mm_node va_resv[64];	/* firmware objects reserved inside those heaps */
 	struct mutex va_lock;
 
 	/* uKernel */
@@ -484,6 +486,8 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 int prismrv_gem_populate(struct prismrv_device *pv,
 			 struct drm_gem_object **objs, u32 count);
 u32 prismrv_bo_gpuva(struct drm_gem_object *obj);
+int prismrv_va_reserve(struct prismrv_device *pv, u32 va, u32 size);
+struct drm_gem_object *prismrv_bo_create_heap(struct prismrv_device *pv, size_t size, u32 flags, u32 heap);
 struct drm_gem_object *prismrv_bo_create(struct prismrv_device *pv,
 					 size_t size, u32 flags);
 typedef int (*prismrv_read_bo_fn)(void *ctx, struct drm_gem_object *bo,
