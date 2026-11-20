@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+name: sync
+
+on:
+  schedule:
+    - cron: 10 13 * * *
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Sync
+    runs-on: ubuntu-latest
+    steps:
+      - run: git clone --bare --filter=blob:none https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
+      - run: git remote add torvalds https://github.com/torvalds/linux
+      - run: git remote add linux-next https://github.com/external-mirrors/linux-next
+      - run: git fetch --no-tags torvalds refs/heads/master:refs/heads/upstream
+      - run: git fetch --no-tags linux-next refs/heads/master:refs/heads/next
+      - run: git push origin refs/heads/upstream:refs/heads/upstream
+      - run: git push origin --force refs/heads/next:refs/heads/next
