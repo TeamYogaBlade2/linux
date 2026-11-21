@@ -638,6 +638,7 @@ static const struct mtk_gate_regs top_aud_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &top_aud_cg_regs, _shift, &mtk_clk_gate_ops_no_setclr)
 
 static const struct mtk_gate top_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "topck_dummy"),
 	GATE_TOP_AUD(CLK_TOP_AUD_48K_TIMING, "a1sys_hp_ck", "aud_mux1_div",
 		21),
 	GATE_TOP_AUD(CLK_TOP_AUD_44K_TIMING, "a2sys_hp_ck", "aud_mux2_div",
@@ -680,6 +681,7 @@ static const struct mtk_gate_regs infra_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &infra_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate infra_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "infra_dummy"),
 	GATE_ICG(CLK_INFRA_DBG, "dbgclk", "axi_sel", 0),
 	GATE_ICG(CLK_INFRA_SMI, "smi_ck", "mm_sel", 1),
 	GATE_ICG(CLK_INFRA_QAXI_CM4, "cm4_ck", "axi_sel", 2),
@@ -742,6 +744,7 @@ static const struct mtk_gate_regs peri1_cg_regs = {
 	GATE_MTK(_id, _name, _parent, &peri1_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate peri_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "peri_dummy"),
 	GATE_PERI0(CLK_PERI_USB0_MCU, "usb0_mcu_ck", "axi_sel", 31),
 	GATE_PERI0(CLK_PERI_ETH, "eth_ck", "clk26m", 30),
 	GATE_PERI0(CLK_PERI_SPI0, "spi0_ck", "spi0_sel", 29),
@@ -874,7 +877,13 @@ static const struct mtk_fixed_factor apmixed_fixed_divs[] = {
 	FACTOR(CLK_APMIXED_HDMI_REF, "hdmi_ref", "tvdpll", 1, 1),
 };
 
+static const struct mtk_gate apmixed_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "apmixed_dummy"),
+};
+
 static const struct mtk_clk_desc apmixedsys_desc = {
+	.clks = apmixed_clks,
+	.num_clks = ARRAY_SIZE(apmixed_clks),
 	.plls = apmixed_plls,
 	.num_plls = ARRAY_SIZE(apmixed_plls),
 	.factor_clks = apmixed_fixed_divs,
