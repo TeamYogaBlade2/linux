@@ -47,6 +47,7 @@ static const struct mtk_fixed_factor infra_divs[] = {
 };
 
 static const struct mtk_gate infra_gates[] = {
+	GATE_DUMMY(CLK_DUMMY, "infra_dummy"),
 	GATE_ICG(CLK_INFRA_DBGCLK, "infra_dbgclk", "axi_sel", 0),
 	GATE_ICG(CLK_INFRA_SMI, "infra_smi", "mm_sel", 1),
 	GATE_ICG(CLK_INFRA_AUDIO, "infra_audio", "aud_intbus_sel", 5),

@@ -17,6 +17,12 @@
 
 static DEFINE_SPINLOCK(mt6779_clk_lock);
 
+static const struct mtk_gate topck_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "topck_dummy"),
+	GATE_DUMMY(CLK_TOP_MSDC30_2, "topck_msdc30_2_dummy"),
+	GATE_DUMMY(CLK_TOP_PMICSPI, "topck_pmicspi_dummy"),
+};
+
 static const struct mtk_fixed_clk top_fixed_clks[] = {
 	FIXED_CLK(CLK_TOP_CLK26M, "f_f26m_ck", "clk26m", 26000000),
 };
@@ -1114,6 +1120,8 @@ static const struct mtk_gate_regs apmixed_cg_regs = {
  * apmixed_appll26m is the toppest clock gate of all PLLs.
  */
 static const struct mtk_gate apmixed_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "apmixed_dummy"),
+	GATE_DUMMY(CLK_APMIXED_ARMPLL_BB, "apmixed_armpll_bb_dummy"),
 	GATE_APMIXED(CLK_APMIXED_SSUSB26M, "apmixed_ssusb26m",
 		     "f_f26m_ck", 4),
 	GATE_APMIXED_FLAGS(CLK_APMIXED_APPLL26M, "apmixed_appll26m",
@@ -1218,6 +1226,8 @@ static const struct mtk_clk_desc apmixed_desc = {
 };
 
 static const struct mtk_clk_desc topck_desc = {
+	.clks = topck_clks,
+	.num_clks = ARRAY_SIZE(topck_clks),
 	.fixed_clks = top_fixed_clks,
 	.num_fixed_clks = ARRAY_SIZE(top_fixed_clks),
 	.factor_clks = top_divs,
