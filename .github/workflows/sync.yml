@@ -19,6 +19,6 @@ jobs:
       - run: git remote add torvalds https://github.com/torvalds/linux
       - run: git remote add linux-next https://github.com/external-mirrors/linux-next
       - run: git fetch --no-tags torvalds refs/heads/master:refs/heads/mainline
-      - run: git fetch --no-tags linux-next refs/heads/master:refs/heads/next
+      - run: git fetch --force --no-tags linux-next refs/heads/master:refs/heads/next
       - run: git push origin refs/heads/mainline:refs/heads/mainline
       - run: git push origin --force refs/heads/next:refs/heads/next
