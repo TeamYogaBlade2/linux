@@ -479,7 +479,7 @@ static const char * const cpu_parents[] = {
 	"mmpll"
 };
 
-static const struct mtk_composite cpu_muxes[] __initconst = {
+static const struct mtk_composite cpu_muxes[] = {
 	MUX(CLK_INFRA_CPUSEL, "infra_cpu_sel", cpu_parents, 0x0000, 2, 2),
 };
 
