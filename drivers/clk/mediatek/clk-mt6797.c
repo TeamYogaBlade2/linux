@@ -21,6 +21,11 @@
 
 static DEFINE_SPINLOCK(mt6797_clk_lock);
 
+static const struct mtk_gate top_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "topck_dummy"),
+	GATE_DUMMY(CLK_TOP_MUX_MEM, "topck_mux_mem_dummy"),
+};
+
 static const struct mtk_fixed_factor top_fixed_divs[] = {
 	FACTOR(CLK_TOP_SYSPLL_CK, "syspll_ck", "mainpll", 1, 1),
 	FACTOR(CLK_TOP_SYSPLL_D2, "syspll_d2", "mainpll", 1, 2),
@@ -380,6 +385,8 @@ static const struct mtk_composite top_muxes[] = {
 };
 
 static const struct mtk_clk_desc topckgen_desc = {
+	.clks = top_clks,
+	.num_clks = ARRAY_SIZE(top_clks),
 	.factor_clks = top_fixed_divs,
 	.num_factor_clks = ARRAY_SIZE(top_fixed_divs),
 	.composite_clks = top_muxes,
@@ -427,6 +434,7 @@ static const struct mtk_gate_regs infra2_cg_regs = {
  * We mark them as critical as otherwise the system will hang after boot.
  */
 static const struct mtk_gate infra_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "infra_dummy"),
 	GATE_ICG0(CLK_INFRA_PMIC_TMR, "infra_pmic_tmr", "ulposc", 0),
 	GATE_ICG0(CLK_INFRA_PMIC_AP, "infra_pmic_ap", "pmicspi_sel", 1),
 	GATE_ICG0(CLK_INFRA_PMIC_MD, "infra_pmic_md", "pmicspi_sel", 2),
@@ -584,7 +592,13 @@ static const struct mtk_pll_data plls[] = {
 	    0x2B4, 4, 0x2BC, 0x2B8, 0),
 };
 
+static const struct mtk_gate apmixed_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "apmixed_dummy"),
+};
+
 static const struct mtk_clk_desc apmixedsys_desc = {
+	.clks = apmixed_clks,
+	.num_clks = ARRAY_SIZE(apmixed_clks),
 	.plls = plls,
 	.num_plls = ARRAY_SIZE(plls),
 };
