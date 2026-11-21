@@ -182,6 +182,16 @@ properties:
 
       clock-names: true
 
+      amp-en-gpios:
+        maxItems: 1
+        description:
+          Enable line of an external speaker amplifier, where the board
+          drives its speaker through one instead of the PMIC's own Class-D
+          output.  The codec asserts it after the analogue path has settled
+          and releases it before powering down, so the amplifier is only on
+          while audio is playing.  Omitted on boards that use the PMIC
+          speaker output directly.
+
     required:
       - compatible
 

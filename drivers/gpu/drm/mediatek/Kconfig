@@ -21,6 +21,28 @@ config DRM_MEDIATEK
 	  This driver provides kernel mode setting and
 	  buffer management to userspace.
 
+config DRM_MEDIATEK_WDMA
+	tristate "MediaTek DISP_WDMA write DMA engine"
+	depends on DRM_MEDIATEK
+	depends on HAS_IOMEM
+	depends on RESET_CONTROLLER
+	help
+	  DISP_WDMA is the display subsystem's write-DMA engine: it takes a
+	  pixel stream from an upstream block and writes it out to memory.
+	  It is the counterpart of RDMA, which reads from memory instead, and
+	  the two are separate blocks.
+
+	  WDMA is not a CRTC path component and never carries a display
+	  plane.  It appears in no mtk_ddp_ext array on any SoC this tree
+	  supports, so selecting this option on its own will not put anything
+	  on a display pipeline; it registers the component and gives the
+	  DDP_COMPONENT_WDMA0/1 entries in mtk_ddp_comp.c something to call
+	  into.
+
+	  Say Y here if you want the driver built in, M to build it as a
+	  module named mtk_disp_wdma, or N to leave WDMA unregistered, which
+	  is the same state the MT6589 display driver is in by default.
+
 config DRM_MEDIATEK_DP
 	tristate "DRM DPTX Support for MediaTek SoCs"
 	depends on DRM_MEDIATEK

@@ -25,6 +25,8 @@ struct mtk_smi_larb_iommu {
 	unsigned char  bank[32];
 };
 
+int mtk_smi_larb_config_mmu_ports(struct device *dev);
+
 #endif
 
 #endif

@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Emulator-only variant of the B8000 device tree.
+ *
+ * This exists for exactly one reason: the Renode ARM CPU model used for the
+ * MT6589 emulator does not service the CP15 generic timer. Measured with two
+ * bare-metal stubs on the same machine file:
+ *
+ *     nop + b .                              PC reaches 0x80000004 normally
+ *     mrc p15,0,r0,c14,c0,0  (read CNTVCT)   hangs, no PC ever reported
+ *
+ * So `arm,armv7-timer` cannot be used there. The kernel binds the first timer in
+ * the tree for the sched clock and then reads CNTVCT in hrtimers_init() /
+ * timekeeping_init(), which is precisely where the emulated boot stops (the log
+ * ends at srcu_init, the statement immediately before hrtimers_init()).
+ *
+ * Disabling the node here makes timer_probe() fall through to
+ * `mediatek,mt6577-timer`, which is a normal MMIO peripheral served by the
+ * emulator's GPT model.
+ *
+ * `arm,armv7-timer` is CORRECT for real MT6589 hardware, so this must not be
+ * folded into mt6589.dtsi or into the board dts. The real trees stay honest and
+ * this file carries the workaround, which is also the thing to delete once the
+ * CPU model grows a generic timer.
+ */
+
+#include "mt6589-lenovo-b8000-f.dts"
+
+/ {
+	model = "Lenovo YOGA Tablet 10 (Wi-Fi) (emulator)";
+};
+
+/* The generic timer node has no label in mt6589.dtsi, so it is addressed by
+ * path. Note `timer` as a label belongs to timer@10008000 (the GPT) - using
+ * &timer here would disable the wrong device. */
+&{/timer} {
+	/* see the file header: the emulated CPU does not implement CNTVCT */
+	status = "disabled";
+};
+
+/*
+ * calibrate_delay() spins a busy loop timed against the clock to derive
+ * loops_per_jiffy. On an interpreted CPU model that takes an enormous amount of
+ * emulated time - the boot sits in calibrate_delay_converge() and looks hung.
+ *
+ * lpj= sets preset_lpj, which makes calibrate_delay() skip the measurement. It
+ * has to be here rather than in the ATAG command line: the ATAG line is merged
+ * into /chosen/bootargs by atags_to_fdt(), and the merge did not take effect
+ * (the kernel's reported command line showed no lpj=).
+ */
+&{/chosen} {
+	/*
+	 * `console=ttyS0` alone does not survive on this SoC. univ8250_console_init
+	 * is a console_initcall, so it registers the ttyS console before any
+	 * DT-discovered 8250 port exists; with nothing to match it, the console is
+	 * never registered and printk stops as soon as the earlycon is replaced.
+	 *
+	 * The mmio form below is the documented escape: univ8250_console_match()
+	 * explicitly handles
+	 *
+	 *     console=uart8250,mmio32,<addr>
+	 *
+	 * which lets the console bind by address instead of by ttyS index. Both are
+	 * given: ttyS0 for the normal case and the mmio form for the case where the
+	 * port is only discovered later.
+	 *
+	 * Measured without it: printk ends at 4.341801 s while the PC sampler shows
+	 * the kernel still executing at vt=14 s.
+	 *
+	 * ORDER MATTERS, and the measurement contradicts the obvious guess.
+	 * __add_preferred_console() sets preferred_console to the LAST console= on
+	 * the command line, so putting the address form last should make it
+	 * preferred - but "uart8250" is not a name any driver registers, so that
+	 * ordering only reached 3.261907 s, WORSE than ttyS0 alone. Keeping
+	 * `console=ttyS0` last reaches 4.613663 s, which is the best measured so
+	 * far. So the address form helps as a supplement, not as the preference.
+	 */
+	bootargs = "console=ttyS0,115200n8 console=uart8250,mmio32,0x11006000 earlycon=uart8250,mmio32,0x11006000 lpj=1000000 maxcpus=1 initcall_debug ignore_loglevel loglevel=8 clk_ignore_unused printk.always_kmsg_dump=1 log_buf_len=16M";
+	/*
+	 * `console=ttyS0` above is not enough on its own: when the 8250 driver
+	 * unbinds and rebinds ttyS0 during probe, the kernel drops the boot console
+	 * and needs stdout-path to know which device to pick up again. Without it
+	 * printk simply stops - measured, the log ended at fb0 device_add while the
+	 * guest was still running, sitting in cpu_v7_do_idle.
+	 *
+	 * MT6589-aquaris5.dts, same SoC, uses stdout-path = &uart0.
+	 */
+	stdout-path = &uart0;
+};

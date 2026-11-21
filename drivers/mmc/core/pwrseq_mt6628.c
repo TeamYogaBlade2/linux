@@ -1,0 +1,581 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * pwrseq_mt6628.c - power sequence support for the MT6628 combo chip
+ *
+ * The MT6628 is a MediaTek WLAN/BT/FM/GNSS companion ("combo") chip that
+ * attaches to the host over SDIO, with the STP transport used for BT/FM/GNSS.
+ * On the boards this driver was written for the chip is not always left in a
+ * usable state across a warm reboot or after an aborted suspend, so SDIO
+ * enumeration fails.  The chip simply never answers: the host times out on
+ * the very first SDIO commands instead of getting a CRC error back.
+ *
+ * This driver brackets the card with the sequence the chip's vendor DFT
+ * (Design For Test) flow uses, which is where the timing below comes from.
+ *
+ * The MMC core invokes pre_power_on() before enabling the host's card
+ * supply and post_power_on() after it has been enabled. Keep MT6628 powered
+ * off and held in reset while the host brings the supply up; enable PMU_EN
+ * and release RESET only afterwards.
+ *
+ * This driver controls PMU_EN and RESET only. It does not switch any
+ * additional boot-strap pinmux states.
+ *
+ *      pmu low -> rst low -> DFT_OFF_STABLE_TIME
+ *              -> host enables VMMC
+ *              -> pmu high -> DFT_ON_STABLE_TIME
+ *              -> rst high -> DFT_RST_STABLE_TIME
+ *
+ * The three delays are named after the downstream DFT_OFF_STABLE_TIME,
+ * DFT_ON_STABLE_TIME and DFT_RST_STABLE_TIME constants that specify how long
+ * the chip needs to settle after each of those steps.
+ *
+ * The GPIO numbers are deliberately NOT hardcoded here.  Which MT6589 pins
+ * drive a given board's pmu and reset lines is board-specific, so they are
+ * taken from the "pmu" and "reset" DT properties and the board DTS decides.
+ */
+
+#include <linux/delay.h>
+#include <linux/device.h>
+#include <linux/completion.h>
+#include <linux/err.h>
+#include <linux/gpio/consumer.h>
+#include <linux/kernel.h>
+#include <linux/mfd/mt6628-pwrseq.h>
+#include <linux/mfd/mt6397/rtc.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
+#include <linux/slab.h>
+
+#include <linux/mmc/host.h>
+
+#include "pwrseq.h"
+
+/*
+ * Settling delays, in milliseconds, for the DFT power sequence.  See the
+ * comment at the top of the file for how they map onto the sequence steps.
+ */
+#define MT6628_DFT_OFF_STABLE_TIME	10	/* pmu/rst asserted low */
+#define MT6628_DFT_ON_STABLE_TIME	30	/* supply enabled */
+#define MT6628_DFT_RST_STABLE_TIME	30	/* released out of reset */
+#define MT6628_DFT_RTC_STABLE_TIME	100	/* RTC 32 kHz output */
+#define MT6628_POWER_READY_TIMEOUT_MS	10000
+
+/*
+ * The MMC host owns the normal supply reference. This provider takes a
+ * second reference while UART STP or another non-MMC consumer is active.
+ *
+ * power_ready describes completion of the electrical power sequence.
+ * stp_ready describes completion of WMT initialization and transport setup.
+ * They are deliberately separate: a powered chip is not necessarily ready
+ * to accept WLAN firmware download.
+ */
+struct mt6628_pwrseq {
+	struct mmc_pwrseq pwrseq;
+	struct gpio_desc *pmu_gpio;
+	struct gpio_desc *reset_gpio;
+	struct mutex lock;
+	struct completion power_ready;
+	unsigned int consumers;
+	bool power_ready_state;
+	bool power_transition;
+	bool skip_power_cycle;
+	bool power_off_pending;
+	bool stp_ready_state;
+};
+
+static void mmc_pwrseq_mt6628_pre_power_on(struct mmc_host *host)
+{
+	struct mt6628_pwrseq *pwrseq =
+		container_of(host->pwrseq, struct mt6628_pwrseq, pwrseq);
+	unsigned int consumers;
+
+	mutex_lock(&pwrseq->lock);
+	consumers = pwrseq->consumers;
+	/*
+	 * "A lease exists" is not the same as "the chip is already powered".
+	 *
+	 * Consumers take their lease from probe (devm_mt6628_pwrseq_get() hands
+	 * it out unconditionally since this provider stopped deferring, so that
+	 * UART/STP binding would not depend on the MMC host having powered the
+	 * chip), and their probe runs before the host gets here.  So consumers
+	 * != 0 is the normal state of the very first power-up, and testing the
+	 * lease count alone skipped the whole sequence there: PMU_EN stayed low
+	 * and RESET asserted, the chip never answered SDIO (CMD5/CMD52 timeout,
+	 * "Failed to initialize a non-removable card"), and a consumer waiting
+	 * on power_ready for a completion that is only posted at the end of the
+	 * sequence gave up with -ETIMEDOUT.
+	 *
+	 * Retain power only when a sequence has actually run, which is the case
+	 * a consumer can depend on: the chip is up, and restarting the card
+	 * interface must not reset it underneath a live UART/STP transfer.
+	 */
+	if (consumers && pwrseq->power_ready_state) {
+		/*
+		 * A shared consumer owns the powered combo chip. The MMC host
+		 * may be restarting its card interface, but must not reset the
+		 * UART/STP side in the middle of an operation.
+		 */
+		pwrseq->skip_power_cycle = true;
+		pwrseq->power_off_pending = false;
+		mutex_unlock(&pwrseq->lock);
+		dev_warn_ratelimited(pwrseq->pwrseq.dev,
+				     "retaining MT6628 power for %u active consumer(s)\n",
+				     consumers);
+		return;
+	}
+
+	pwrseq->skip_power_cycle = false;
+	pwrseq->power_ready_state = false;
+	pwrseq->power_transition = true;
+	reinit_completion(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	/*
+	 * PMU_EN is active-high, while RESET is active-low. Use logical
+	 * values here: 0 turns PMU_EN off, and 1 asserts RESET.
+	 */
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+
+}
+
+static void mmc_pwrseq_mt6628_post_power_on(struct mmc_host *host)
+{
+	struct mt6628_pwrseq *pwrseq =
+		container_of(host->pwrseq, struct mt6628_pwrseq, pwrseq);
+
+	mutex_lock(&pwrseq->lock);
+	if (pwrseq->skip_power_cycle) {
+		/*
+		 * pre_power_on() already established that the chip is up and left
+		 * power_ready_state set; it only cleared skip_power_cycle here, so
+		 * the sequence is not run again.  Keep the remaining state
+		 * consistent on the way out anyway: this callback is the only
+		 * place that reports power-up completion, and a stale
+		 * power_transition would make every later
+		 * mt6628_pwrseq_wait_powered() caller time out.
+		 */
+		pwrseq->skip_power_cycle = false;
+		pwrseq->power_transition = false;
+		complete_all(&pwrseq->power_ready);
+		mutex_unlock(&pwrseq->lock);
+		return;
+	}
+	mutex_unlock(&pwrseq->lock);
+
+	/* VMMC is enabled by the host before this callback is invoked. */
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 1);
+	msleep(MT6628_DFT_ON_STABLE_TIME);
+
+	/* Release active-low RESET only after PMU_EN has settled. */
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
+	msleep(MT6628_DFT_RST_STABLE_TIME);
+
+	mutex_lock(&pwrseq->lock);
+	pwrseq->power_transition = false;
+	pwrseq->power_ready_state = true;
+	complete_all(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+}
+
+static void mmc_pwrseq_mt6628_power_off(struct mmc_host *host)
+{
+	struct mt6628_pwrseq *pwrseq =
+		container_of(host->pwrseq, struct mt6628_pwrseq, pwrseq);
+	unsigned int consumers;
+
+	mutex_lock(&pwrseq->lock);
+	consumers = pwrseq->consumers;
+	if (consumers) {
+		/*
+		 * Keep PMU_EN and RESET until the last consumer releases the
+		 * combo chip, so a card-interface restart cannot reset a live
+		 * UART/STP or SDIO transfer.
+		 */
+		pwrseq->power_off_pending = true;
+		mutex_unlock(&pwrseq->lock);
+		dev_warn_ratelimited(pwrseq->pwrseq.dev,
+				     "deferring MT6628 power-off for %u active consumer(s)\n",
+				     consumers);
+		return;
+	}
+
+	pwrseq->power_ready_state = false;
+	pwrseq->power_transition = true;
+	reinit_completion(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	/* Assert active-low RESET before removing power. */
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
+
+	mutex_lock(&pwrseq->lock);
+	pwrseq->power_transition = false;
+	mutex_unlock(&pwrseq->lock);
+}
+
+static void mmc_pwrseq_mt6628_consumer_put(void *data)
+{
+	struct mt6628_pwrseq *pwrseq = data;
+	struct device *provider_dev = pwrseq->pwrseq.dev;
+	struct module *owner = pwrseq->pwrseq.owner;
+	bool power_off;
+
+	mutex_lock(&pwrseq->lock);
+	if (WARN_ON(!pwrseq->consumers)) {
+		mutex_unlock(&pwrseq->lock);
+		goto out_put;
+	}
+
+	if (--pwrseq->consumers) {
+		mutex_unlock(&pwrseq->lock);
+		goto out_put;
+	}
+
+	/*
+	 * Serialize the last release with a new acquisition, so a consumer
+	 * that takes a lease concurrently never sees a half-torn-down chip.
+	 */
+	pwrseq->power_transition = true;
+	reinit_completion(&pwrseq->power_ready);
+	power_off = pwrseq->power_off_pending;
+	pwrseq->power_off_pending = false;
+
+	if (power_off) {
+		pwrseq->power_ready_state = false;
+		gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+		msleep(MT6628_DFT_OFF_STABLE_TIME);
+		gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
+	}
+
+	pwrseq->power_transition = false;
+	if (pwrseq->power_ready_state)
+		complete_all(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+out_put:
+	/*
+	 * The GPIO provider must remain alive until the consumer drops its
+	 * lease. Save the module and device references above before releasing
+	 * them here.
+	 */
+	put_device(provider_dev);
+	module_put(owner);
+}
+
+struct mt6628_pwrseq *devm_mt6628_pwrseq_get(struct device *dev)
+{
+	struct device_node *np;
+	struct device_link *link;
+	struct platform_device *pdev;
+	struct mt6628_pwrseq *pwrseq;
+	struct module *owner;
+	int ret;
+
+	if (!dev->of_node)
+		return NULL;
+
+	np = of_parse_phandle(dev->of_node, "mediatek,combo-pwrseq", 0);
+	if (!np)
+		return NULL;
+
+	pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!pdev)
+		return ERR_PTR(-EPROBE_DEFER);
+
+	if (!pdev->dev.driver) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	/*
+	 * The lease below stores a pointer into the provider's devm state.
+	 * Order unbind so this consumer releases its lease before the
+	 * supplier's remove callback can free that state.
+	 */
+	link = device_link_add(dev, &pdev->dev,
+			       DL_FLAG_AUTOREMOVE_CONSUMER);
+	if (!link) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	owner = pdev->dev.driver->owner;
+	if (!try_module_get(owner)) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	pwrseq = platform_get_drvdata(pdev);
+	if (!pwrseq) {
+		ret = -EPROBE_DEFER;
+		goto err_put;
+	}
+
+	/*
+	 * Do NOT gate this on power_ready_state.
+	 *
+	 * power_ready_state is set only by mmc_pwrseq_mt6628_post_power_on(),
+	 * i.e. when the MMC host powers the combo chip up.  Three drivers call
+	 * this function from their probe (mtk-stp-uart, mtk-stp, mtk-wlan), so
+	 * refusing them until the host has powered up makes their binding
+	 * depend on the host and the host's power-up depend on them having
+	 * bound - a probe-order cycle.  Every retry re-runs the full consumer
+	 * probe (including the serdev 4 Mbaud setup and the pwrseq's RTC 32 kHz
+	 * enable), which on a single core looks exactly like a boot hang.
+	 *
+	 * Returning the handle unconditionally breaks the cycle.  Consumers
+	 * that need the chip powered wait at *use* time instead, on the
+	 * power_ready completion via mt6628_pwrseq_wait_powered(), which is
+	 * the point at which the MMC host has actually finished the sequence.
+	 */
+	mutex_lock(&pwrseq->lock);
+
+	/*
+	 * Take the lease.  The provider deliberately does not touch the PMIC
+	 * beyond this bookkeeping - see the note in probe().
+	 */
+	pwrseq->consumers++;
+	mutex_unlock(&pwrseq->lock);
+
+	ret = devm_add_action_or_reset(dev,
+				       mmc_pwrseq_mt6628_consumer_put,
+				       pwrseq);
+	if (ret)
+		return ERR_PTR(ret);
+
+	return pwrseq;
+
+err_put:
+	put_device(&pdev->dev);
+	module_put(owner);
+	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_GPL(devm_mt6628_pwrseq_get);
+
+/*
+ * Restore a known chip startup state after a failed WMT/STP initialization.
+ * The caller must hold the only power lease: resetting the combo chip while
+ * WLAN or another STP client is active would break that client's transport.
+ */
+int mt6628_pwrseq_recover(struct mt6628_pwrseq *pwrseq)
+{
+	if (!pwrseq)
+		return -EINVAL;
+
+	mutex_lock(&pwrseq->lock);
+	if (pwrseq->consumers != 1 || pwrseq->power_transition ||
+	    pwrseq->power_off_pending) {
+		mutex_unlock(&pwrseq->lock);
+		return -EBUSY;
+	}
+
+	pwrseq->power_transition = true;
+	pwrseq->power_ready_state = false;
+	reinit_completion(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	/* RESET is active-low. Keep VMMC enabled through the recovery cycle. */
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 1);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 0);
+	msleep(MT6628_DFT_OFF_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->pmu_gpio, 1);
+	msleep(MT6628_DFT_ON_STABLE_TIME);
+	gpiod_set_value_cansleep(pwrseq->reset_gpio, 0);
+	msleep(MT6628_DFT_RST_STABLE_TIME);
+
+	mutex_lock(&pwrseq->lock);
+	pwrseq->power_ready_state = true;
+	pwrseq->power_transition = false;
+	complete_all(&pwrseq->power_ready);
+	mutex_unlock(&pwrseq->lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_recover);
+
+void mt6628_pwrseq_set_stp_ready(struct mt6628_pwrseq *pwrseq, bool ready)
+{
+	if (!pwrseq)
+		return;
+
+	mutex_lock(&pwrseq->lock);
+	pwrseq->stp_ready_state = ready;
+	mutex_unlock(&pwrseq->lock);
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_set_stp_ready);
+
+bool mt6628_pwrseq_is_stp_ready(struct mt6628_pwrseq *pwrseq)
+{
+	bool ready;
+
+	if (!pwrseq)
+		return false;
+
+	mutex_lock(&pwrseq->lock);
+	ready = pwrseq->stp_ready_state;
+	mutex_unlock(&pwrseq->lock);
+	return ready;
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_is_stp_ready);
+
+/**
+ * mt6628_pwrseq_wait_powered() - wait until the MMC host has powered the chip
+ * @pwrseq: handle from devm_mt6628_pwrseq_get()
+ * @timeout_ms: how long to wait
+ *
+ * Consumers bind before the MMC host runs its power sequence, so they cannot
+ * check the state at probe time - doing so is what made their probe depend on
+ * the host and the host depend on them.  Call this at the point where the chip
+ * is actually needed (first WMT transaction, first SDIO access) instead.
+ *
+ * Returns 0 once powered, -ETIMEDOUT otherwise.
+ */
+int mt6628_pwrseq_wait_powered(struct mt6628_pwrseq *pwrseq,
+			       unsigned int timeout_ms)
+{
+	unsigned long remaining;
+	int ret = 0;
+
+	if (!pwrseq)
+		return 0;
+
+	mutex_lock(&pwrseq->lock);
+	if (pwrseq->power_ready_state && !pwrseq->power_transition) {
+		mutex_unlock(&pwrseq->lock);
+		return 0;
+	}
+	mutex_unlock(&pwrseq->lock);
+
+	remaining = wait_for_completion_timeout(&pwrseq->power_ready,
+						msecs_to_jiffies(timeout_ms));
+	if (!remaining)
+		return -ETIMEDOUT;
+
+	/* Re-check: the completion may have fired for a later power cycle. */
+	mutex_lock(&pwrseq->lock);
+	if (!pwrseq->power_ready_state || pwrseq->power_transition)
+		ret = -ETIMEDOUT;
+	mutex_unlock(&pwrseq->lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mt6628_pwrseq_wait_powered);
+
+static const struct mmc_pwrseq_ops mmc_pwrseq_mt6628_ops = {
+	.pre_power_on = mmc_pwrseq_mt6628_pre_power_on,
+	.post_power_on = mmc_pwrseq_mt6628_post_power_on,
+	.power_off = mmc_pwrseq_mt6628_power_off,
+};
+
+static int mmc_pwrseq_mt6628_probe(struct platform_device *pdev)
+{
+	struct mt6628_pwrseq *pwrseq;
+	struct device *dev = &pdev->dev;
+	struct device_node *rtc_np;
+	struct platform_device *rtc_pdev;
+	int ret;
+
+	pwrseq = devm_kzalloc(dev, sizeof(*pwrseq), GFP_KERNEL);
+	if (!pwrseq)
+		return -ENOMEM;
+
+	/*
+	 * This provider drives PMU_EN and RESET only; it does not hold, enable
+	 * or disable any PMIC rail.
+	 *
+	 * It used to take a second reference on the combo chip's supply so an
+	 * MMC power-off could not drop the rail under a live UART/STP
+	 * transport.  That reference was the only thing this driver ever did
+	 * to the MT6320, and enabling the node started breaking unrelated
+	 * peripherals (USB among them) on hardware - so the supply is gone and
+	 * the rail is left to the MMC host, which already names it as vmmc.
+	 * The combo chip is fixed at 1.8 V I/O, so nothing here needs to gate
+	 * it.
+	 */
+	mutex_init(&pwrseq->lock);
+	init_completion(&pwrseq->power_ready);
+
+	/*
+	 * The GPIO descriptors use logical values. PMU_EN is active-high
+	 * and starts low; RESET is active-low and must start asserted,
+	 * which requires logical 1 (physical low).
+	 */
+	pwrseq->pmu_gpio = devm_gpiod_get(dev, "pmu", GPIOD_OUT_LOW);
+	if (IS_ERR(pwrseq->pmu_gpio))
+		return dev_err_probe(dev, PTR_ERR(pwrseq->pmu_gpio),
+				     "can't get pmu gpio\n");
+
+	pwrseq->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(pwrseq->reset_gpio))
+		return dev_err_probe(dev, PTR_ERR(pwrseq->reset_gpio),
+				     "can't get reset gpio\n");
+
+	/*
+	 * The vendor MT6589 sequence explicitly enables RTC_GPIO 32 kHz
+	 * for RTC_GPIO_USER_GPS and waits for it to stabilize before
+	 * powering up the combo chip. Defer until the RTC provider is
+	 * usable so the first SDIO enumeration cannot race RTC setup.
+	 */
+	rtc_np = of_parse_phandle(dev->of_node, "mediatek,rtc", 0);
+	if (!rtc_np)
+		return dev_err_probe(dev, -EINVAL,
+				     "missing mediatek,rtc phandle\n");
+
+	rtc_pdev = of_find_device_by_node(rtc_np);
+	of_node_put(rtc_np);
+	if (!rtc_pdev)
+		return -EPROBE_DEFER;
+
+	ret = mt6397_rtc_enable_32k_gpio(&rtc_pdev->dev);
+	put_device(&rtc_pdev->dev);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to enable RTC 32 kHz output\n");
+
+	msleep(MT6628_DFT_RTC_STABLE_TIME);
+
+	pwrseq->pwrseq.dev = dev;
+	pwrseq->pwrseq.ops = &mmc_pwrseq_mt6628_ops;
+	pwrseq->pwrseq.owner = THIS_MODULE;
+	platform_set_drvdata(pdev, pwrseq);
+
+	ret = mmc_pwrseq_register(&pwrseq->pwrseq);
+	if (ret)
+		platform_set_drvdata(pdev, NULL);
+
+	return ret;
+}
+
+static void mmc_pwrseq_mt6628_remove(struct platform_device *pdev)
+{
+	struct mt6628_pwrseq *pwrseq = platform_get_drvdata(pdev);
+
+	mmc_pwrseq_unregister(&pwrseq->pwrseq);
+}
+
+static const struct of_device_id mmc_pwrseq_mt6628_of_match[] = {
+	{ .compatible = "mediatek,mt6628-pwrseq" },
+	{/* sentinel */},
+};
+MODULE_DEVICE_TABLE(of, mmc_pwrseq_mt6628_of_match);
+
+static struct platform_driver mmc_pwrseq_mt6628_driver = {
+	.probe = mmc_pwrseq_mt6628_probe,
+	.remove = mmc_pwrseq_mt6628_remove,
+	.driver = {
+		.name = "pwrseq_mt6628",
+		.of_match_table = mmc_pwrseq_mt6628_of_match,
+	},
+};
+
+module_platform_driver(mmc_pwrseq_mt6628_driver);
+MODULE_DESCRIPTION("Power sequence support for MT6628 combo chip");
+MODULE_LICENSE("GPL");

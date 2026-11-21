@@ -5,8 +5,18 @@
 
 #include "mt6589-lenovo-blade.dtsi"
 
+/*
+ * Geometry confirmed from both candidate panels in the shipped kernel: the
+ * two lcm_get_params() implementations both report width 800 and
+ * height 0x500 = 1280
+ *
+ *   lcm_get_params_2 (nt35521_cmi_080)    800 x 1280
+ *   lcm_get_params_3 (s6d7aa0x04_cpt_080) 800 x 1280
+ *
+ * so a 16-bit r5g6b5 framebuffer of 800 * 2 bytes per line is right for
+ * either part, and the previous "TODO: recheck it" is resolved.
+ */
 / {
-	// TODO: recheck it
 	framebuffer0: framebuffer@bf600000 {
 		compatible = "simple-framebuffer";
 		memory-region = <&framebuffer_reserved>;
@@ -50,4 +60,72 @@
 
 &bq24196 {
 	monitored-battery = <&battery>;
+};
+
+/*
+ * Panel pins.  The equivalent group for the B8000 lives in
+ * mt6589-lenovo-b8000.dtsi, which this board does not include, so it is
+ * declared here rather than referenced across files.
+ */
+&pio {
+	b6000_panel_pins: b6000-panel-pins {
+		pins_power_en {
+			pinmux = <MT6589_GPIO137__FUNC_GPIO137>;
+		};
+	};
+};
+
+/*
+ * The B6000 uses a different panel from the B8000 tablet and it is not a
+ * "simple panel" - both candidate parts need a manufacturer init sequence,
+ * so they are handled by panel-lenovo-b6000.c rather than panel-simple.
+ *
+ * The vendor kernel picks between two parts at runtime by reading board-ID
+ * GPIO 0x9a (154) in lcm_compare_id_2().  This tree names the part in DT
+ * instead; a board that can carry either should override
+ * "lenovo,b6000-nt35521-cmi" with "lenovo,b6000-s6d7aa0x04-cpt".
+ */
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "lenovo,b6000-nt35521-cmi";
+		reg = <0>;
+
+		vdd-supply = <&mt6320_ldo_vrf28_2>;
+		vddi-supply = <&mt6320_ldo_vrf28_2>;
+		backlight = <&backlight_lcd>;
+		/*
+		 * Two separate panel lines, both recovered from the B6000
+		 * vendor kernel:
+		 *
+		 *   GPIO137  power enable, driven high and left there
+		 *            (lcd_power_en_constprop_2 @ c03a2f08:
+		 *             hwPowerOn(LDO 0x12, 1800mV), then GPIO 0x89 out=1)
+		 *   GPIO131  reset, asserted low then released high
+		 *            (lcd_reset @ c03a2ea4 drives GPIO 0x83)
+		 *
+		 * GPIO131 is also listed as MSDC4_DAT1 in the SoC dtsi, but
+		 * mmc4 is never enabled on this board so that pinmux state is
+		 * not in force; the panel owns the pin here.  If an SD slot is
+		 * ever wired to mmc4 this conflict has to be resolved.
+		 */
+		enable-gpios = <&pio 137 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 131 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&b6000_panel_pins>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+/* The panel's DSI output endpoint is declared by the SoC dtsi. */
+&dsi_out {
+	remote-endpoint = <&panel_in>;
 };

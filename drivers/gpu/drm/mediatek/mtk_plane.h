@@ -20,9 +20,10 @@ struct mtk_plane_pending_state {
 	bool				enable;
 	dma_addr_t			addr;
 	dma_addr_t			hdr_addr;
-	unsigned int			pitch;
+	unsigned int			pitch;		/* bytes per line */
 	unsigned int			hdr_pitch;
 	unsigned int			format;
+	unsigned int			cpp;		/* bytes per pixel */
 	unsigned long long		modifier;
 	unsigned int			x;
 	unsigned int			y;
@@ -39,6 +40,9 @@ struct mtk_plane_state {
 	struct drm_plane_state		base;
 	struct mtk_plane_pending_state	pending;
 };
+
+void mtk_plane_update_new_state(struct drm_plane_state *new_state,
+				struct mtk_plane_state *mtk_plane_state);
 
 static inline struct mtk_plane_state *
 to_mtk_plane_state(struct drm_plane_state *state)

@@ -235,3 +235,17 @@ source "drivers/memory/samsung/Kconfig"
 source "drivers/memory/tegra/Kconfig"
 
 endif
+
+config MTK_MT6589_DRAMC
+	bool "MediaTek MT6589 DRAMC / DDRPHY (read-only)"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	help
+	  Say yes here to expose the MT6589 DRAM controller configuration -
+	  DRAM type, geometry, size and the AC timing counts programmed by
+	  the bootloader - through debugfs, and to provide a small API for
+	  other drivers to read it.
+
+	  This driver is read-only by design.  It does not change the DRAM
+	  clock or any timing, because a wrong write to this block is not
+	  recoverable from software running out of the DRAM it just
+	  mis-timed.

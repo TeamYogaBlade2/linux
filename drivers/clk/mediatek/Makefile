@@ -10,6 +10,7 @@ obj-$(CONFIG_COMMON_CLK_MT6589_IMGSYS) += clk-mt6589-img.o
 obj-$(CONFIG_COMMON_CLK_MT6589_MFGSYS) += clk-mt6589-mfg.o
 obj-$(CONFIG_COMMON_CLK_MT6589_VDECSYS) += clk-mt6589-vdec.o
 obj-$(CONFIG_COMMON_CLK_MT6589_VENCSYS) += clk-mt6589-venc.o
+obj-$(CONFIG_COMMON_CLK_MT6589_MEMPLL) += clk-mt6589-mempll.o
 obj-$(CONFIG_COMMON_CLK_MT6735) += clk-mt6735-apmixedsys.o clk-mt6735-infracfg.o clk-mt6735-pericfg.o clk-mt6735-topckgen.o
 obj-$(CONFIG_COMMON_CLK_MT6735_IMGSYS) += clk-mt6735-imgsys.o
 obj-$(CONFIG_COMMON_CLK_MT6735_MFGCFG) += clk-mt6735-mfgcfg.o

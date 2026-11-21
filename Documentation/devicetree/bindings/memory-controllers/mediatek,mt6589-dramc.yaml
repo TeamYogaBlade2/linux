@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/memory-controllers/mediatek,mt6589-dramc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: MediaTek MT6589 DRAM controller and DDR PHY
+
+maintainers:
+  - Akari Tsuyukusa <akkun11.open@gmail.com>
+
+description: |
+  The MT6589 DRAM controller is deliberately split across three register
+  windows, which the datasheet names in its DRAMC chapter:
+
+    DRAMC AO   base +0x1000_4000  - timings, configuration, MRS
+    DRAMC NAO  base +0x1020_F000  - always-on bank counters
+    DDRPHY     base +0x1001_1000  - pad and DLL controls, and MEMPLL
+
+  Downstream agrees exactly (mt_reg_base.h: DRAMC0_BASE 0xF0004000,
+  DDRPHY_BASE 0xF0011000, DRAMC_NAO_BASE 0xF020F000) and its accessors
+  deliberately OR and write all three windows at the same offset, which
+  makes a register that is only implemented in one of them look present in
+  all three.  This binding lists them separately so a driver can say which
+  window a value came from.
+
+  The driver is read-only and takes the DDRPHY window only for the
+  controls it reads - it does not claim the MEMPLL registers at 0x600.. of
+  that window, which belong to the "mediatek,mt6589-mempll" clock node.
+  The two nodes therefore both reference 0x1001_1000 but map separate reg
+  entries, so neither takes ownership of the other's registers.
+
+properties:
+  compatible:
+    const: mediatek,mt6589-dramc
+
+  reg:
+    minItems: 1
+    maxItems: 3
+    description: |
+      The DRAMC AO window at 0x1000_4000 is required and comes first.
+      Optionally followed by the NAO window at 0x1020_F000 and the DDRPHY
+      window at 0x1001_1000, in that order.
+
+  reg-names:
+    minItems: 1
+    items:
+      - const: ao
+      - const: nao
+      - const: ddrphy
+
+  clocks:
+    maxItems: 1
+    description: The DRAM clock, MEMPLL_MCK_D4.  Informational only.
+
+  clock-names:
+    const: ddr
+
+  mediatek,emi:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: |
+      Phandle to the EMI node, from which the address-mapping register
+      EMI_CONA is read to derive the DRAM geometry.  Optional: without it
+      the timing registers are still reported, but the size and geometry
+      cannot be derived.
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/mediatek,mt6589-clk.h>
+
+    dramc: memory-controller@10004000 {
+        compatible = "mediatek,mt6589-dramc";
+        reg = <0x10004000 0x1000>,
+              <0x1020f000 0x1000>,
+              <0x10011000 0x1000>;
+        reg-names = "ao", "nao", "ddrphy";
+        clocks = <&topckgen CLK_TOP_MEMPLL_MCK_D4>;
+        clock-names = "ddr";
+    };
