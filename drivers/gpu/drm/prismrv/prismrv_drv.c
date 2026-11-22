@@ -136,6 +136,19 @@ static int prismrv_submit_vendor_ioctl_guarded(struct drm_device *dev, void *dat
 	drm_dev_exit(idx);
 	return ret;
 }
+static int prismrv_hwrc_create_ioctl_guarded(struct drm_device *dev, void *data,
+					     struct drm_file *file)
+{
+	int idx, ret;
+
+	if (!prismrv_vendor_abi || !capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+	ret = prismrv_hwrc_create_ioctl(dev, data, file);
+	drm_dev_exit(idx);
+	return ret;
+}
 PRISMRV_GUARDED_IOCTL(prismrv_get_param_ioctl)
 PRISMRV_GUARDED_IOCTL(prismrv_gem_wait_ioctl)
 
@@ -151,6 +164,8 @@ static const struct drm_ioctl_desc prismrv_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(PRISMRV_GEM_WAIT, prismrv_gem_wait_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(PRISMRV_SUBMIT_VENDOR, prismrv_submit_vendor_ioctl_guarded,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(PRISMRV_HWRC_CREATE, prismrv_hwrc_create_ioctl_guarded,
 			  DRM_RENDER_ALLOW),
 };
 

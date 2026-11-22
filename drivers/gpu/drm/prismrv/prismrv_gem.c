@@ -482,6 +482,57 @@ int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src,
 	return 0;
 }
 
+/*
+ * DRM_PRISMRV_HWRC_CREATE: port of SGXRegisterHWRenderContextKM.  Vendor order: allocate in the kernel-data heap, copy the user
+ * image, look up the PD address, shift it into DirList-register format, patch it in at the user-given offset.  Here
+ * pv->pd_gpu_addr already is the value programmed into EUR_CR_BIF_DIR_LIST_BASE0, i.e. exactly that format.
+ */
+int prismrv_hwrc_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct prismrv_device *pv = to_prismrv(dev);
+	struct drm_prismrv_hwrc_create *args = data;
+	struct drm_gem_object *obj;
+	__le32 pd;
+	void *img;
+	int ret;
+
+	if (args->size < 8 || args->size > SZ_4K || (args->size & 3) ||
+	    (args->pd_offset & 3) || args->pd_offset > args->size - 4)
+		return -EINVAL;
+	if (!pv->pd_cpu)
+		return -ENODEV;
+
+	img = kzalloc(args->size, GFP_KERNEL);
+	if (!img)
+		return -ENOMEM;
+	if (args->data && copy_from_user(img, u64_to_user_ptr(args->data), args->size)) {
+		kfree(img);
+		return -EFAULT;
+	}
+	pd = cpu_to_le32(pv->pd_gpu_addr);
+	memcpy(img + args->pd_offset, &pd, sizeof(pd));
+
+	obj = prismrv_bo_create_heap(pv, args->size, 0, PRISMRV_HEAP_KERNEL_DATA);
+	if (IS_ERR(obj)) {
+		kfree(img);
+		return PTR_ERR(obj);
+	}
+	ret = dma_resv_lock_interruptible(obj->resv, NULL);
+	if (!ret) {
+		ret = prismrv_bo_write_locked(obj, 0, img, args->size);
+		dma_resv_unlock(obj->resv);
+	}
+	kfree(img);
+	if (ret) {
+		drm_gem_object_put(obj);
+		return ret;
+	}
+	args->gpu_va = to_prbo(obj)->va_node.start;
+	ret = drm_gem_handle_create(file, obj, &args->handle);
+	drm_gem_object_put(obj);
+	return ret;
+}
+
 void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj)
 {
 	struct drm_gem_shmem_object *shmem = to_drm_gem_shmem_obj(obj);

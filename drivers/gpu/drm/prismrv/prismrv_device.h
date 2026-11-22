@@ -461,6 +461,7 @@ int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src,
 extern bool prismrv_vendor_abi;
 extern bool prismrv_legacy_stream;
 struct drm_prismrv_submit_vendor;
+int prismrv_hwrc_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int prismrv_submit_vendor_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj);
 void prismrv_recovery_work(struct work_struct *work);

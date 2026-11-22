@@ -12,7 +12,7 @@
 #include <linux/types.h>
 
 /* Incremented when ABI-incompatible changes are made. */
-#define PRISMRV_UAPI_VERSION		6
+#define PRISMRV_UAPI_VERSION		7
 
 /* GPU virtual addresses are 32-bit (BIF MMU, 4 GiB space). */
 typedef __u32 prismrv_dev_addr_t;
@@ -166,6 +166,7 @@ struct drm_prismrv_get_param {
 #define DRM_PRISMRV_GET_PARAM		0x03
 #define DRM_PRISMRV_GEM_WAIT		0x04
 #define DRM_PRISMRV_SUBMIT_VENDOR	0x05
+#define DRM_PRISMRV_HWRC_CREATE		0x06
 
 #define DRM_IOCTL_PRISMRV_GEM_CREATE \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_GEM_CREATE, struct drm_prismrv_gem_create)
@@ -220,6 +221,24 @@ struct drm_prismrv_submit_vendor {
 	__u32 pad1;		/* must be zero */
 };
 
+/*
+ * UAPI v7: DRM_PRISMRV_HWRC_CREATE - the vendor SGXRegisterHWRenderContextKM (services4 sgxutils.c).  The kernel allocates the HW
+ * render context in the kernel-data heap (PRISMRV_HEAP_KERNEL_DATA, 32-byte aligned; this kernel gives page alignment), copies the
+ * user-built context image into it and overwrites the dword at pd_offset with the page-directory address in the format the
+ * uKernel inserts into the BIF DirList registers.  User space cannot know that address, which is why this is a kernel service.
+ * Needs the vendor ABI and CAP_SYS_RAWIO like SUBMIT_VENDOR.  Pass the returned handle in submit_vendor.bos[] so the GPU mapping
+ * is populated; pass gpu_va as submit_vendor.hwrc_va.
+ */
+struct drm_prismrv_hwrc_create {
+	__u64 data;		/* user pointer to the context image; 0 = zero-filled */
+	__u32 size;		/* image size in bytes: 4-aligned, 8..4096 (vendor: ui32Sizeof_HWRENDERCONTEXT = 0x54) */
+	__u32 pd_offset;	/* byte offset of the PD dword (vendor ui32OffsetToPDDevPAddr; 4-aligned, pd_offset + 4 <= size) */
+	__u32 handle;		/* out: GEM handle of the context BO */
+	__u32 gpu_va;		/* out: device VA of the context (sHWRenderContextDevVAddr) */
+};
+
+#define DRM_IOCTL_PRISMRV_HWRC_CREATE \
+	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_HWRC_CREATE, struct drm_prismrv_hwrc_create)
 #define DRM_IOCTL_PRISMRV_SUBMIT_VENDOR \
 	_IOWR(DRM_IOCTL_BASE, DRM_COMMAND_BASE + DRM_PRISMRV_SUBMIT_VENDOR, struct drm_prismrv_submit_vendor)
 #define DRM_IOCTL_PRISMRV_GET_PARAM \
