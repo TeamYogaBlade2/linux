@@ -842,6 +842,9 @@ err_pm:
 
 int prismrv_submit_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
+	/* the stock uKernel does not understand STREAM_V1 (see legacy_stream in prismrv_drv.c) */
+	if (!prismrv_legacy_stream)
+		return -EOPNOTSUPP;
 	return prismrv_submit_common(dev, data, NULL, file);
 }
 

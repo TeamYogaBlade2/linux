@@ -108,12 +108,17 @@ struct drm_prismrv_get_param {
  *     (or the PrismRV emulator).  The stock vendor uKernel does NOT
  *     understand it: real-hardware rendering needs a uKernel that does,
  *     or a userspace that emits vendor TA/3D CCB commands.
+ *   PRISMRV_CMD_ABI_VENDOR_TA (default): the loaded uKernel is the unmodified vendor one; the kernel patches its 0xDEADBEEF
+ *     immediates itself and accepts only DRM_PRISMRV_SUBMIT_VENDOR (CAP_SYS_RAWIO).  DRM_PRISMRV_SUBMIT fails with
+ *     -EOPNOTSUPP because the stock uKernel would read the STREAM_V1 words as a HW render context.
+ *     Value 0: vendor_abi=0 and legacy_stream=0 - nothing can be submitted.
  *   All GPU addresses embedded in a command stream must be taken from
  *   drm_prismrv_gem_create.gpu_va; GEM handles mean nothing to the GPU.
  */
 #define PRISMRV_PARAM_UAPI_VERSION	6
 #define PRISMRV_PARAM_CMD_ABI		7
 #define PRISMRV_CMD_ABI_STREAM_V1	1
+#define PRISMRV_CMD_ABI_VENDOR_TA	2	/* stock vendor uKernel: DRM_PRISMRV_SUBMIT_VENDOR only; DRM_PRISMRV_SUBMIT returns -EOPNOTSUPP */
 #define PRISMRV_PARAM_VENDOR_ABI	8	/* 1: DRM_PRISMRV_SUBMIT_VENDOR is enabled (vendor_abi=1) */
 #define PRISMRV_PARAM_HEAPS		9	/* UAPI v6: bitmask of PRISMRV_HEAP_* ids GEM_CREATE accepts (bit 0 = default) */
 

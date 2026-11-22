@@ -103,9 +103,19 @@ static int prismrv_submit_ioctl_guarded(struct drm_device *dev, void *data,
  * Vendor-ABI kick: the command can make the GPU read/write anywhere in the (shared) device address
  * space, so it is off by default and, when enabled, limited to CAP_SYS_RAWIO.
  */
-bool prismrv_vendor_abi;
+bool prismrv_vendor_abi = true;
 module_param_named(vendor_abi, prismrv_vendor_abi, bool, 0444);
-MODULE_PARM_DESC(vendor_abi, "Enable DRM_PRISMRV_SUBMIT_VENDOR (root-only stock-uKernel kick; default off)");
+MODULE_PARM_DESC(vendor_abi, "Enable DRM_PRISMRV_SUBMIT_VENDOR (root-only stock-uKernel kick; default on)");
+
+/*
+ * STREAM_V1 is a command format only a custom uKernel (or the PrismRV emulator) understands.  The stock vendor uKernel this
+ * driver loads reads sCommand.ui32Data[1] as a HW render context and splices it into its context lists, so feeding it a V1 submit
+ * (data[0] = command VA, data[1] = size) would corrupt uKernel state.  The legacy submit is therefore refused unless the
+ * module is explicitly told that the loaded uKernel is a custom one.
+ */
+bool prismrv_legacy_stream;
+module_param_named(legacy_stream, prismrv_legacy_stream, bool, 0444);
+MODULE_PARM_DESC(legacy_stream, "Accept DRM_PRISMRV_SUBMIT (STREAM_V1) - only for a custom uKernel/emulator, NEVER with the stock uKernel (default off)");
 
 static int prismrv_submit_vendor_ioctl_guarded(struct drm_device *dev, void *data,
 					       struct drm_file *file)

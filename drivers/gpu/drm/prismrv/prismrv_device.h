@@ -459,6 +459,7 @@ void prismrv_devfreq_resume(struct prismrv_device *pv);
 void prismrv_bo_sync_for_device(struct drm_gem_object *obj);
 int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src, size_t len);
 extern bool prismrv_vendor_abi;
+extern bool prismrv_legacy_stream;
 struct drm_prismrv_submit_vendor;
 int prismrv_submit_vendor_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 void prismrv_bo_sync_for_cpu(struct drm_gem_object *obj);

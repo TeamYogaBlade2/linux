@@ -424,7 +424,9 @@ int prismrv_get_param_ioctl(struct drm_device *dev, void *data,
 		args->value = prismrv_vendor_abi ? 1 : 0;
 		break;
 	case PRISMRV_PARAM_CMD_ABI:
-		args->value = PRISMRV_CMD_ABI_STREAM_V1;
+		/* what a submit can actually use: STREAM_V1 only on a custom uKernel; otherwise the stock-uKernel vendor kick */
+		args->value = prismrv_legacy_stream ? PRISMRV_CMD_ABI_STREAM_V1 :
+			      prismrv_vendor_abi ? PRISMRV_CMD_ABI_VENDOR_TA : 0;
 		break;
 	case PRISMRV_PARAM_HEAPS: {
 		unsigned int h;
