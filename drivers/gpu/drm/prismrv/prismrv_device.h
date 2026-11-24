@@ -458,6 +458,18 @@ void prismrv_devfreq_pause(struct prismrv_device *pv);
 void prismrv_devfreq_resume(struct prismrv_device *pv);
 void prismrv_bo_sync_for_device(struct drm_gem_object *obj);
 int prismrv_bo_write_locked(struct drm_gem_object *bo, u64 off, const void *src, size_t len);
+/*
+ * USE code banks (analysis/MEMORY_MAP.md).  EUR_CR_USE_CODE_BASE_n = (bank VA >> 6) | DM << 26 (sgx544defs.h: ADDR bits 25:0, DM bits
+ * 27:26), one bank per 1 << SGX_USE_CODE_SEGMENT_RANGE_BITS bytes of its code heap (vendor sgxinit.c: heap size = banks << BITS, minus
+ * one page).  The stock init script writes banks 0..9 = pixel heap (DM 1), 10..13 = vertex heap (DM 0), 14 untouched, 15 = uKernel (DM 3).
+ */
+#define PRISMRV_USE_CODE_SEGMENT_BITS	23
+#define PRISMRV_USE_CODE_PIXEL_BASE	0xf4000000u
+#define PRISMRV_USE_CODE_PIXEL_BANKS	10
+#define PRISMRV_USE_CODE_VERTEX_BASE	0xfc000000u
+#define PRISMRV_USE_CODE_VERTEX_BANKS	4
+#define PRISMRV_USE_CODE_KERNEL_BASE	0xe8000000u
+
 extern bool prismrv_vendor_abi;
 extern bool prismrv_legacy_stream;
 struct drm_prismrv_submit_vendor;

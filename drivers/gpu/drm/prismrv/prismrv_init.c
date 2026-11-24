@@ -138,6 +138,34 @@ void prismrv_bif_reset(struct prismrv_device *pv)
  * Returns the index of the next unexecuted record (== n when the whole
  * script ran), or a negative errno.
  */
+/*
+ * Value the stock init script is expected to write to EUR_CR_USE_CODE_BASE_<bank> (MEMORY_MAP.md).  The registers hold VA >> 6 with the
+ * data master in bits 27:26, one 1 << PRISMRV_USE_CODE_SEGMENT_BITS segment per bank.  Returns false for registers that are not code banks.
+ */
+static bool prismrv_expected_code_base(u32 off, u32 *val)
+{
+	unsigned int bank;
+	u64 va;
+	u32 dm;
+
+	if (off < EUR_CR_USE_CODE_BASE_0 || off > EUR_CR_USE_CODE_BASE_0 + 15 * 4 || off == EUR_CR_USE_CODE_BASE_0 + 14 * 4)
+		return false;
+	bank = (off - EUR_CR_USE_CODE_BASE_0) / 4;
+	if (bank < PRISMRV_USE_CODE_PIXEL_BANKS) {
+		va = PRISMRV_USE_CODE_PIXEL_BASE + ((u64)bank << PRISMRV_USE_CODE_SEGMENT_BITS);
+		dm = 1;
+	} else if (bank < PRISMRV_USE_CODE_PIXEL_BANKS + PRISMRV_USE_CODE_VERTEX_BANKS) {
+		va = PRISMRV_USE_CODE_VERTEX_BASE +
+		     ((u64)(bank - PRISMRV_USE_CODE_PIXEL_BANKS) << PRISMRV_USE_CODE_SEGMENT_BITS);
+		dm = 0;
+	} else {
+		va = PRISMRV_USE_CODE_KERNEL_BASE;	/* bank 15 */
+		dm = 3;
+	}
+	*val = (u32)(va >> 6) | (dm << 26);
+	return true;
+}
+
 static int prismrv_run_script_range(struct prismrv_device *pv,
 				    const struct firmware *fw,
 				    size_t start_rec)
@@ -164,6 +192,15 @@ static int prismrv_run_script_range(struct prismrv_device *pv,
 
 			if (r < 0)
 				return r;
+			{
+				u32 want;
+
+				/* the script's code banks must match the heap layout the driver hands to user space */
+				if (prismrv_expected_code_base(off, &want) && want != val)
+					dev_warn(pv->drm.dev,
+						 "init script: USE_CODE_BASE bank %u = %#x, heap layout expects %#x\n",
+						 (off - EUR_CR_USE_CODE_BASE_0) / 4, val, want);
+			}
 			writel(val, pv->regs + off);
 			readl(pv->regs + off);
 			break;

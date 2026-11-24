@@ -43,6 +43,10 @@ static const struct { u32 base, size; } prismrv_heaps[11] = {
 	[PRISMRV_HEAP_3DPARAM_CTX]	= { 0xc8000000u, 0x07fff000u },
 };
 
+/* the code heaps are exactly their banks' worth of address space, minus the guard page (vendor sgxinit.c) */
+static_assert(0x04fff000u == (PRISMRV_USE_CODE_PIXEL_BANKS << PRISMRV_USE_CODE_SEGMENT_BITS) - 0x1000u);
+static_assert(0x01fff000u == (PRISMRV_USE_CODE_VERTEX_BANKS << PRISMRV_USE_CODE_SEGMENT_BITS) - 0x1000u);
+
 static bool prismrv_heap_valid(u32 heap)
 {
 	return heap == PRISMRV_HEAP_DEFAULT ||
