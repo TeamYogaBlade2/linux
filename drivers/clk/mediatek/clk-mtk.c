@@ -11,7 +11,6 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -497,27 +496,24 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 
 	/* Composite and divider clocks needs us to pass iomem pointer */
 	if (mcd->composite_clks || mcd->divider_clks) {
-		if (!mcd->shared_io)
-			base = devm_platform_ioremap_resource(pdev, 0);
-		else
-			base = of_iomap(node, 0);
+		base = devm_platform_ioremap_resource(pdev, 0);
 
-		if (IS_ERR_OR_NULL(base))
-			return IS_ERR(base) ? PTR_ERR(base) : -ENOMEM;
+		if (IS_ERR(base))
+			return PTR_ERR(base);
 	}
 
 
 	if (mcd->need_runtime_pm) {
 		r = devm_pm_runtime_enable(&pdev->dev);
 		if (r)
-			goto unmap_io;
+			return r;
 		/*
 		 * Do a pm_runtime_resume_and_get() to workaround a possible
 		 * deadlock between clk_register() and the genpd framework.
 		 */
 		r = pm_runtime_resume_and_get(&pdev->dev);
 		if (r)
-			goto unmap_io;
+			return r;
 	}
 
 	/* Calculate how many clk_hw_onecell_data entries to allocate */
@@ -667,9 +663,6 @@ free_data:
 free_base:
 	if (mcd->need_runtime_pm)
 		pm_runtime_put(&pdev->dev);
-unmap_io:
-	if (mcd->shared_io && base)
-		iounmap(base);
 	return r;
 }
 
