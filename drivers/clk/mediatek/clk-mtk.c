@@ -466,25 +466,34 @@ void mtk_clk_unregister_dividers(const struct mtk_clk_divider *mcds, int num,
 }
 EXPORT_SYMBOL_GPL(mtk_clk_unregister_dividers);
 
+static const struct mtk_clk_desc *mtk_clk_get_desc(struct platform_device *pdev)
+{
+	const struct platform_device_id *id;
+	const struct mtk_clk_desc *mcd;
+
+	mcd = device_get_match_data(&pdev->dev);
+	if (mcd)
+		return mcd;
+
+	/* Clock driver wasn't registered from devicetree */
+	id = platform_get_device_id(pdev);
+	if (id)
+		return (const struct mtk_clk_desc *)id->driver_data;
+
+	return NULL;
+}
+
 static int __mtk_clk_simple_probe(struct platform_device *pdev,
 				  struct device_node *node)
 {
-	const struct platform_device_id *id;
 	const struct mtk_clk_desc *mcd;
 	struct clk_hw_onecell_data *clk_data;
 	void __iomem *base = NULL;
 	int num_clks, r;
 
-	mcd = device_get_match_data(&pdev->dev);
-	if (!mcd) {
-		/* Clock driver wasn't registered from devicetree */
-		id = platform_get_device_id(pdev);
-		if (id)
-			mcd = (const struct mtk_clk_desc *)id->driver_data;
-
-		if (!mcd)
+	mcd = mtk_clk_get_desc(pdev);
+	if (!mcd)
 			return -EINVAL;
-	}
 
 	/* Composite and divider clocks needs us to pass iomem pointer */
 	if (mcd->composite_clks || mcd->divider_clks) {
@@ -668,7 +677,7 @@ static void __mtk_clk_simple_remove(struct platform_device *pdev,
 				   struct device_node *node)
 {
 	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
-	const struct mtk_clk_desc *mcd = device_get_match_data(&pdev->dev);
+	const struct mtk_clk_desc *mcd = mtk_clk_get_desc(pdev);
 
 	if (mcd->populate_children)
 		of_platform_depopulate(&pdev->dev);
