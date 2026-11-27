@@ -158,7 +158,7 @@ static struct mtk_pllfh_data pllfhs[] = {
 	FH(CLK_APMIXED_MSDCPLL, FH_MSDCPLL, 0x118),
 	FH(CLK_APMIXED_IMGPLL, FH_IMGPLL, 0x12c),
 	FH(CLK_APMIXED_VDECPLL, FH_VDECPLL, 0x140),
-	FH(CLK_APMIXED_TVDPLL2, FH_TVDPLL1, 0x154),
+	FH(CLK_APMIXED_TVDPLL1, FH_TVDPLL1, 0x154),
 };
 
 static const struct of_device_id of_match_clk_mt8195_apmixed[] = {
