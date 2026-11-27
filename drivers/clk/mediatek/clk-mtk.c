@@ -612,8 +612,7 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->populate_children) {
-		r = of_platform_populate(pdev->dev.of_node, NULL, NULL,
-					 &pdev->dev);
+		r = of_platform_populate(node, NULL, NULL, &pdev->dev);
 		if (r) {
 			of_platform_depopulate(&pdev->dev);
 			goto unregister_provider;
