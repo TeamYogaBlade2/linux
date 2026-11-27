@@ -519,7 +519,7 @@ static const char * const nfiecc_parents[] = {
 	"csw_nfiecc_sel"
 };
 
-static struct mtk_composite top_muxes[] __initdata = {
+static struct mtk_composite top_muxes[] = {
 	/* CLK_MUX_SEL0 */
 	MUX(CLK_TOP_UART0_SEL, "uart0_sel", uart0_parents,
 		0x000, 0, 1),
