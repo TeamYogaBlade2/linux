@@ -20,13 +20,13 @@
 
 static DEFINE_SPINLOCK(mt8516_clk_lock);
 
-static const struct mtk_fixed_clk fixed_clks[] __initconst = {
+static const struct mtk_fixed_clk fixed_clks[] = {
 	FIXED_CLK(CLK_TOP_CLK_NULL, "clk_null", NULL, 0),
 	FIXED_CLK(CLK_TOP_I2S_INFRA_BCK, "i2s_infra_bck", "clk_null", 26000000),
 	FIXED_CLK(CLK_TOP_MEMPLL, "mempll", "clk26m", 800000000),
 };
 
-static const struct mtk_fixed_factor top_divs[] __initconst = {
+static const struct mtk_fixed_factor top_divs[] = {
 	FACTOR(CLK_TOP_DMPLL, "dmpll_ck", "mempll", 1, 1),
 	FACTOR(CLK_TOP_MAINPLL_D2, "mainpll_d2", "mainpll", 1, 2),
 	FACTOR(CLK_TOP_MAINPLL_D4, "mainpll_d4", "mainpll", 1, 4),
@@ -360,7 +360,7 @@ static const char * const nfiecc_parents[] __initconst = {
 	"csw_nfiecc_sel"
 };
 
-static struct mtk_composite top_muxes[] __initdata = {
+static struct mtk_composite top_muxes[] = {
 	/* CLK_MUX_SEL0 */
 	MUX(CLK_TOP_UART0_SEL, "uart0_sel", uart0_parents,
 		0x000, 0, 1),
@@ -453,7 +453,7 @@ static const char * const ifr_i2c0_parents[] __initconst = {
 	"rg_i2c"
 };
 
-static const struct mtk_composite ifr_muxes[] __initconst = {
+static const struct mtk_composite ifr_muxes[] = {
 	MUX(CLK_IFR_MUX1_SEL, "ifr_mux1_sel", ifr_mux1_parents, 0x000,
 		2, 2),
 	MUX(CLK_IFR_ETH_25M_SEL, "ifr_eth_25m_sel", ifr_eth_25m_parents, 0x080,
