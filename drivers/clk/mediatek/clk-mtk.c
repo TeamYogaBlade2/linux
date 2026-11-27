@@ -591,16 +591,24 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->clk_notifier_func) {
-		struct clk *mfg_mux = clk_data->hws[mcd->mfg_clk_idx]->clk;
+		struct clk *mfg_mux;
+
+		if (!devres_open_group(&pdev->dev, clk_data, GFP_KERNEL)) {
+			r = -ENOMEM;
+			goto unregister_clks;
+		}
+
+		mfg_mux = clk_data->hws[mcd->mfg_clk_idx]->clk;
 
 		r = mcd->clk_notifier_func(&pdev->dev, mfg_mux);
+		devres_close_group(&pdev->dev, clk_data);
 		if (r)
-			goto unregister_clks;
+			goto unregister_notifier;
 	}
 
 	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
 	if (r)
-		goto unregister_clks;
+		goto unregister_notifier;
 
 	platform_set_drvdata(pdev, clk_data);
 
@@ -627,6 +635,9 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 unregister_provider:
 	of_clk_del_provider(node);
 	platform_set_drvdata(pdev, NULL);
+unregister_notifier:
+	if (mcd->clk_notifier_func)
+		devres_release_group(&pdev->dev, clk_data);
 unregister_clks:
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
@@ -675,6 +686,8 @@ static void __mtk_clk_simple_remove(struct platform_device *pdev,
 		of_platform_depopulate(&pdev->dev);
 
 	of_clk_del_provider(node);
+	if (mcd->clk_notifier_func)
+		devres_release_group(&pdev->dev, clk_data);
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
 	if (mcd->divider_clks)
