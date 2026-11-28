@@ -11,7 +11,6 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -466,49 +465,55 @@ void mtk_clk_unregister_dividers(const struct mtk_clk_divider *mcds, int num,
 }
 EXPORT_SYMBOL_GPL(mtk_clk_unregister_dividers);
 
+static const struct mtk_clk_desc *mtk_clk_get_desc(struct platform_device *pdev)
+{
+	const struct platform_device_id *id;
+	const struct mtk_clk_desc *mcd;
+
+	mcd = device_get_match_data(&pdev->dev);
+	if (mcd)
+		return mcd;
+
+	/* Clock driver wasn't registered from devicetree */
+	id = platform_get_device_id(pdev);
+	if (id)
+		return (const struct mtk_clk_desc *)id->driver_data;
+
+	return NULL;
+}
+
 static int __mtk_clk_simple_probe(struct platform_device *pdev,
 				  struct device_node *node)
 {
-	const struct platform_device_id *id;
 	const struct mtk_clk_desc *mcd;
 	struct clk_hw_onecell_data *clk_data;
 	void __iomem *base = NULL;
 	int num_clks, r;
 
-	mcd = device_get_match_data(&pdev->dev);
-	if (!mcd) {
-		/* Clock driver wasn't registered from devicetree */
-		id = platform_get_device_id(pdev);
-		if (id)
-			mcd = (const struct mtk_clk_desc *)id->driver_data;
-
-		if (!mcd)
+	mcd = mtk_clk_get_desc(pdev);
+	if (!mcd)
 			return -EINVAL;
-	}
 
 	/* Composite and divider clocks needs us to pass iomem pointer */
-	if (mcd->composite_clks || mcd->divider_clks || mcd->plls) {
-		if (!mcd->shared_io)
-			base = devm_platform_ioremap_resource(pdev, 0);
-		else
-			base = of_iomap(node, 0);
+	if (mcd->composite_clks || mcd->divider_clks) {
+		base = devm_platform_ioremap_resource(pdev, 0);
 
-		if (IS_ERR_OR_NULL(base))
-			return IS_ERR(base) ? PTR_ERR(base) : -ENOMEM;
+		if (IS_ERR(base))
+			return PTR_ERR(base);
 	}
 
 
 	if (mcd->need_runtime_pm) {
 		r = devm_pm_runtime_enable(&pdev->dev);
 		if (r)
-			goto unmap_io;
+			return r;
 		/*
 		 * Do a pm_runtime_resume_and_get() to workaround a possible
 		 * deadlock between clk_register() and the genpd framework.
 		 */
 		r = pm_runtime_resume_and_get(&pdev->dev);
 		if (r)
-			goto unmap_io;
+			return r;
 	}
 
 	/* Calculate how many clk_hw_onecell_data entries to allocate */
@@ -586,16 +591,24 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->clk_notifier_func) {
-		struct clk *mfg_mux = clk_data->hws[mcd->mfg_clk_idx]->clk;
+		struct clk *mfg_mux;
+
+		if (!devres_open_group(&pdev->dev, clk_data, GFP_KERNEL)) {
+			r = -ENOMEM;
+			goto unregister_clks;
+		}
+
+		mfg_mux = clk_data->hws[mcd->mfg_clk_idx]->clk;
 
 		r = mcd->clk_notifier_func(&pdev->dev, mfg_mux);
+		devres_close_group(&pdev->dev, clk_data);
 		if (r)
-			goto unregister_clks;
+			goto unregister_notifier;
 	}
 
 	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
 	if (r)
-		goto unregister_clks;
+		goto unregister_notifier;
 
 	platform_set_drvdata(pdev, clk_data);
 
@@ -607,8 +620,7 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 	}
 
 	if (mcd->populate_children) {
-		r = of_platform_populate(pdev->dev.of_node, NULL, NULL,
-					 &pdev->dev);
+		r = of_platform_populate(node, NULL, NULL, &pdev->dev);
 		if (r) {
 			of_platform_depopulate(&pdev->dev);
 			goto unregister_provider;
@@ -623,6 +635,9 @@ static int __mtk_clk_simple_probe(struct platform_device *pdev,
 unregister_provider:
 	of_clk_del_provider(node);
 	platform_set_drvdata(pdev, NULL);
+unregister_notifier:
+	if (mcd->clk_notifier_func)
+		devres_release_group(&pdev->dev, clk_data);
 unregister_clks:
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
@@ -658,9 +673,6 @@ free_data:
 free_base:
 	if (mcd->need_runtime_pm)
 		pm_runtime_put(&pdev->dev);
-unmap_io:
-	if (mcd->shared_io && base)
-		iounmap(base);
 	return r;
 }
 
@@ -668,12 +680,14 @@ static void __mtk_clk_simple_remove(struct platform_device *pdev,
 				   struct device_node *node)
 {
 	struct clk_hw_onecell_data *clk_data = platform_get_drvdata(pdev);
-	const struct mtk_clk_desc *mcd = device_get_match_data(&pdev->dev);
+	const struct mtk_clk_desc *mcd = mtk_clk_get_desc(pdev);
 
 	if (mcd->populate_children)
 		of_platform_depopulate(&pdev->dev);
 
 	of_clk_del_provider(node);
+	if (mcd->clk_notifier_func)
+		devres_release_group(&pdev->dev, clk_data);
 	if (mcd->clks)
 		mtk_clk_unregister_gates(mcd->clks, mcd->num_clks, clk_data);
 	if (mcd->divider_clks)

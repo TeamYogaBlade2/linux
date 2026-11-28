@@ -11,6 +11,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
+#include "clk-gate.h"
 #include "clk-mtk.h"
 #include "clk-pll.h"
 
@@ -47,7 +48,13 @@ static const struct mtk_pll_data plls[] = {
 	PLL(CLK_APMIXED_VDECPLL, "vdecpll", 0x304, 0x31c, 0x80000000, 0, 21, 0x2b0, 6, 0x0, 0x308, 0),
 };
 
+static const struct mtk_gate apmixed_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "apmixed_dummy"),
+};
+
 static const struct mtk_clk_desc apmixed_desc = {
+	.clks = apmixed_clks,
+	.num_clks = ARRAY_SIZE(apmixed_clks),
 	.plls = plls,
 	.num_plls = ARRAY_SIZE(plls),
 };
