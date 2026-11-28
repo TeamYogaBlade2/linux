@@ -101,7 +101,13 @@ static void fhctl_parse_dt(const u8 *compatible_node,
 
 		offset = i * 2;
 
-		of_property_read_u32_index(node, "clocks", offset + 1, &pll_id);
+		if (of_property_read_u32_index(node, "clocks", offset + 1,
+					       &pll_id)) {
+			pr_err("%s(): invalid clocks entry %d\n", __func__, i);
+			continue;
+		}
+
+		ssc_rate = 0;
 		of_property_read_u32_index(node,
 					   "mediatek,hopping-ssc-percent",
 					   i, &ssc_rate);
